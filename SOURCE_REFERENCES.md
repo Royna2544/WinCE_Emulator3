@@ -549,6 +549,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     CE `winuser.h` defines `TPM_CENTERALIGN`, `TPM_RIGHTALIGN`,
     `TPM_VCENTERALIGN`, and `TPM_BOTTOMALIGN`; v3 now applies those anchor
     transforms to top-level popup placement before painting and hit-testing.
+    CE `menu.h` keeps menu size and screen size as part of `CMenu` placement;
+    v3 now clamps normal top-level popup origins against `SM_CXSCREEN`/
+    `SM_CYSCREEN` after applying alignment and before painting, hit-testing,
+    or recording tracking state.
     CE `winuser.h` also defines `TPMPARAMS.rcExclude` as a screen-coordinate
     rectangle to exclude while positioning `TrackPopupMenuEx`; v3 applies that
     rectangle after initial alignment, including the below-candidate placement,
@@ -557,6 +561,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     candidate clamps back into the excluded region, and the final
     first-clamped-candidate fallback when every placement still intersects the
     excluded rectangle.
+    v3 also funnels cascading child submenu placement through the same screen
+    clamp model used by top-level popup placement, so left-flipped and
+    bottom-shifted child panes stay inside the current screen/framebuffer
+    bounds before live modal state is pushed or the highlighted child pane is
+    rendered.
     A full nested modal menu pump and remaining live submenu cancellation/routing
     edge cases remain queued.
 
@@ -2232,6 +2241,19 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - The Rust `Presenter` and `Desktop` traits are host architecture boundaries
     layered around that generic byte-surface model. They deliberately do not
     define CE/MFC message, class, HWND, HDC, or GDI semantics.
+  - CE `wingdi.h` defines the `GetDeviceCaps` indices, including
+    `RASTERCAPS`, `SIZEPALETTE`, and `NUMRESERVED`. CE
+    `dc.cpp::passNull2DC(EGetDeviceCaps)` and `GetDeviceCapsBadParamTest`
+    expect bad HDCs to fail with `ERROR_INVALID_HANDLE`, invalid index `-1` to
+    fail with `ERROR_INVALID_PARAMETER`, and, under CE, a null HDC to use the
+    primary display. `dcdata.h` includes object-count caps, `CLIPCAPS`,
+    `ASPECTX`, `ASPECTY`, `ASPECTXY`, `SIZEPALETTE`, and `NUMRESERVED` in the
+    device-capability sweep, and `dc.cpp::DeviceCapsGPERegTest` verifies the
+    aspect-ratio cap indices for the CE secondary test display. Raw
+    `GetDeviceCaps` now follows those validation edges, reports conventional
+    square-pixel display aspect ratios, and reports the RGB565 display as
+    non-paletted while keeping the stock default palette readable through the
+    palette APIs.
 
 - GDI DIB/color-table and DIB brush surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
@@ -2246,6 +2268,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     stock selections, plus a nondeletable default bitmap slot for memory DCs,
     so `SelectObject` returns restorable previous objects instead of `0` for
     newly created DCs.
+  - CE `global.cpp::myStockObj` enumerates the twelve GDIAPI stock-object
+    indexes used by `do.cpp::GetStockObjectTest` and
+    `do.cpp::DeleteGetStockObjectTest`. The latter expects
+    `DeleteObject(GetStockObject(...))` to report success while leaving the
+    stock handle reusable, with `DEFAULT_PALETTE` treated as a non-`SelectObject`
+    stock handle.
+  - CE `wingdi.h` also publishes `BORDERX_PEN == 32` and `BORDERY_PEN == 33`
+    as `GetStockObject` indexes. Rust now recognizes both as stock pens for
+    object-type queries, `SelectObject`, and stock-delete no-op behavior; deeper
+    driver-specific border drawing style remains outside the raw fixture scope.
   - Rust now stores RGBQUAD color-table entries on bitmap objects selected into
     memory DCs, routes raw `SetDIBColorTable`/`GetDIBColorTable` through guest
     memory, and uses the selected bitmap table when indexed blits write RGB565
@@ -2259,11 +2291,111 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     into selected memory DIBs through the shared bitmap ROP3 renderer, accepts
     CE GDIPRINT-style indexed 2 bpp `DIB_RGB_COLORS` sources and
     `DIB_PAL_COLORS` palette-index tables for direct indexed DIB sources,
-    rejects bad HDCs and ROP4-shaped values before reporting success, and raw
+    decodes CE header-described 8 bpp `BI_RLE8` and 4 bpp `BI_RLE4`
+    compressed caller DIB bits for `StretchDIBits`/`SetDIBitsToDevice` when
+    `biSizeImage` bounds the payload, rejects bad HDCs and ROP4-shaped values
+    before reporting success, and follows
+    `draw.cpp::passNull2Draw(ESetDIBitsToDevice)` by returning
+    `ERROR_INVALID_PARAMETER` for null DIB payloads before HDC validation. Raw
     `SetDIBitsToDevice` now renders into selected memory DIBs while converting
     bottom-up source scanline arguments into the renderer's normalized top-left
-    coordinate space. Remaining indexed-DIB work is broader
-    palette/device-color behavior as trace evidence reaches it.
+    coordinate space. Remaining indexed-DIB work is other compression plus
+    broader palette/device-color behavior as trace evidence reaches it.
+  - CE `wingdi.h` defines `DIBSECTION` as the 24-byte `BITMAP` prefix followed
+    by `BITMAPINFOHEADER`, three RGB bitfields, a section handle, and an
+    offset. CE `do.cpp::GetObjectDIBTest` creates a top-down 1 bpp
+    `CreateDIBSection`, expects `GetObject(hBmp, sizeof(DIBSECTION), ...)` to
+    report the DIB width/height metadata, and still expects
+    `GetObject(hBmp, sizeof(BITMAP), ...)` to expose a non-null `bmBits`.
+    Raw `GetObjectW` now preserves that split for DIB-section handles while
+    keeping ordinary bitmaps on the 24-byte `BITMAP` path.
+  - The same CE `wingdi.h` `CreateDIBSection` signature accepts a non-null
+    section handle and offset, and the `DIBSECTION` layout exposes those values
+    through `dshSection` and `dsOffset`. Raw `CreateDIBSection` now accepts
+    file-mapping handles for `hSection`, registers the DIB bits as a mapping
+    view, seeds file-backed DIB-section bits from the mapped file, writes
+    `FlushViewOfFile` updates through to the mapping backing, sibling
+    DIB-section views, and file-backed storage, commits dirty DIB bits during
+    `DeleteObject` teardown before removing the implicit view, preserves live
+    DIB views when the caller closes the original unnamed mapping handle, and
+    reports the section handle/offset in `GetObjectW(DIBSECTION)`.
+  - CE `verify.cpp::myCreateRGBDIBSection` keeps `BI_BITFIELDS` intact for
+    24 bpp DIBs under CE while only forcing desktop builds back to `BI_RGB`.
+    `draw.cpp::CreateDIBSection24bppDIBTest` then creates 24 bpp
+    `BI_BITFIELDS` DIB sections with multiple masks and expects `SetPixel` to
+    write plain BGR 24 bpp bytes. Raw `CreateDIBSection` now accepts that CE
+    quirk by ignoring the masks for 24 bpp instead of rejecting the header.
+  - CE `draw.cpp::SimpleCreateDIBSectionTest2` creates a top-down 2 bpp DIB
+    twice: once with `ppvBits` pointing at storage and once with `ppvBits ==
+    NULL`. Both must return valid bitmaps. Raw `CreateDIBSection` now treats
+    the output bits pointer as optional while still allocating owned bitmap
+    storage and preserving the checked write path when a non-null pointer is
+    supplied.
+  - CE public `wingdi.h` defines the 12-byte `BITMAPCOREHEADER` and
+    `BITMAPCOREINFO` with RGBTRIPLE color-table entries. Raw
+    `CreateDIBSection` now accepts that header variant for uncompressed indexed
+    RGB sections instead of rejecting it before the shared DIB parser can read
+    width, height, planes, bit depth, and color-table data.
+  - CE `draw.cpp::passNull2Draw(ECreateDIBSection)` rejects bad nonzero HDC
+    handles for `DIB_RGB_COLORS` with `ERROR_INVALID_HANDLE`, while
+    `verify.cpp::myCreateDIBSection` still allows null HDCs for RGB DIB-section
+    creation. Raw `CreateDIBSection` now preserves that split.
+  - CE `draw.cpp::CreateDIBSectionPalBadUsage` only allows
+    `DIB_PAL_COLORS` for indexed `BI_RGB` DIB sections. The raw
+    `CreateDIBSection` path now rejects non-indexed/high-bpp
+    `DIB_PAL_COLORS` requests with `ERROR_INVALID_PARAMETER`, while leaving
+    the indexed 1/2/4/8 bpp palette-index path available.
+  - The same CE `CreateDIBSectionPalBadUsage` matrix rejects indexed
+    `DIB_RGB_COLORS` DIB sections when `biClrUsed > 256`, but keeps a
+    `DIB_PAL_COLORS` exception for indexed `BI_RGB` sections. Raw
+    `CreateDIBSection` now enforces that count limit before allocating bitmap
+    storage.
+  - CE `draw.cpp::CreateDIBSectionPalBadUsage` also limits successful
+    `CreateDIBSection` bit depths to `1`, `2`, `4`, `8`, `16`, `24`, and
+    `32`. Raw `CreateDIBSection` now rejects unsupported bit depths before
+    allocating backing storage or writing the output bits pointer.
+  - The same CE-supported DIB bit-depth set is now shared by raw direct-DIB
+    `StretchDIBits`/`SetDIBitsToDevice` source parsing, so unsupported caller
+    DIB depths fail before rendering into selected DIBs or framebuffers.
+  - CE `verify.cpp::myCreateDIBSection` expects an 8 bpp `DIB_PAL_COLORS`
+    DIB section to fail when the caller passes a null HDC, because the palette
+    indexes need a valid DC palette context. Raw `CreateDIBSection` now checks
+    that HDC only for `DIB_PAL_COLORS`; `DIB_RGB_COLORS` callers can still use
+    a null HDC.
+  - CE `pal.cpp::passNull2Pal` expects invalid palette handles to fail
+    `GetNearestPaletteIndex`, `GetPaletteEntries`, and `SetPaletteEntries`
+    with `ERROR_INVALID_HANDLE`, expects `SetPaletteEntries` with a null entry
+    pointer or zero count to fail with `ERROR_INVALID_PARAMETER`, and expects
+    bad HDCs to fail `GetNearestColor` and `GetSystemPaletteEntries` with
+    `ERROR_INVALID_HANDLE`. `GetSystemPaletteEntriesTest2` expects non-8bpp or
+    memory-DC surfaces to return zero entries, and `global.cpp::myDeletePal`
+    selects the stock `DEFAULT_PALETTE` back into the DC after using a custom
+    palette. CE `wingdi.h` defines `OBJ_PAL` as 5 and `OBJ_MEMDC` as 10; CE
+    `do.cpp::GetObjectTypeTest`/`passNull2DObject` expects screen DCs, memory
+    DCs, palettes, and invalid handles to report those CE object-type and
+    error shapes. `do.cpp::passNull2DObject` also expects `GetStockObject(-1)`
+    to fail with `ERROR_INVALID_PARAMETER` and `SelectObject` to reject null
+    HDCs, bad HDCs, null objects, and unknown objects with
+    `ERROR_INVALID_HANDLE`. CE `do.cpp::GetCurrentObjectTest`,
+    `do.cpp::passNull2DObject`, and `pal.cpp::SimpleGetNearestColorTest` expect
+    `GetCurrentObject(OBJ_PAL)` to report the selected/default palette while
+    invalid HDCs fail with `ERROR_INVALID_HANDLE` and unknown object types on
+    valid HDCs fail with `ERROR_INVALID_PARAMETER`. CE `global.cpp::myCreatePal`
+    obtains the current/default palette, reads its entry count with
+    `GetObject`, and copies entries with `GetPaletteEntries` before creating a
+    256-entry test palette. CE `pal.cpp::GetPaletteEntriesTest`,
+    `SetGetPaletteEntriesTest`, and `SimpleGetNearestPaletteIndexTest` then
+    exercise 256-entry create/set/get/nearest-index behavior. Raw palette APIs
+    now cover those tested CE edges for the emulator's RGB565 display while
+    retaining user-palette entry round-trip, nearest-index, and true-color
+    nearest-color behavior.
+  - CE `wingdi.h` defines region status values `NULLREGION == 1`,
+    `SIMPLEREGION == 2`, and `COMPLEXREGION == 3`. CE
+    `do.cpp::SelectObjectTest` selects the same simple region into a compatible
+    DC twice and expects the second `SelectObject` return value to equal
+    `SIMPLEREGION`, so raw `SelectObject` now routes region handles through the
+    tracked region-status helper instead of returning the previous generic GDI
+    selection.
   - CE `brush.cpp::CreateDIBPatternBrushPtNULL` expects
     `CreateDIBPatternBrushPt(NULL, DIB_PAL_COLORS)`,
     `CreateDIBPatternBrushPt(NULL, DIB_RGB_COLORS)`, and unsupported color-use
@@ -2294,6 +2426,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     raw `StretchBlt` now uses the same ordered destination-rectangle and
     signed source-coordinate helper as `BitBlt`/`MaskBlt` selected-DIB draws.
     Broader ROP4 combinations remain future work.
+  - CE `draw.cpp::TransparentBltPatBltTest` seeds source and destination
+    pixels on the same screen HDC with `PatBlt`, then expects
+    `TransparentBlt` to leave the destination unchanged when the source pixel
+    equals the transparent color and to copy the source pixel when it differs.
+    `TransparentBltSetPixelTest` repeats the same black/white checks after
+    seeding with `SetPixel`. Raw `TransparentImage` now mirrors those
+    same-framebuffer HDC copies with a source framebuffer snapshot, preserving
+    CE color-key behavior even when source and destination are the same HDC.
   - CE `draw.cpp::passNull2Draw(EMaskBlt)` expects `MaskBlt` to fail null/bad
     destination DCs with `ERROR_INVALID_HANDLE`, fail null/bad source DCs with
     `ERROR_INVALID_HANDLE`, reject bad mask handles with `ERROR_INVALID_HANDLE`,
@@ -3067,6 +3207,47 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     modifier, vkey, and HKL output pointers cleared so callers do not observe
     stale guest memory as a configured hotkey.
 
+- CE GDI `GradientFill` and shade/blend capability authority:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\winddi.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\GPE\ddi_if.cpp`, and
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
+  - `wingdi.h` defines `SB_CONST_ALPHA` (`0x1`), `SB_PIXEL_ALPHA`
+    (`0x2`), `SB_PREMULT_ALPHA` (`0x4`), `SB_GRAD_RECT` (`0x10`), and
+    `SB_GRAD_TRI` (`0x20`). CE GPE `ddi_if.cpp::DrvEnableDriver` advertises
+    the three alpha bits and adds `SB_GRAD_RECT` when `pfnDrvGradientFill` is
+    available; the reviewed GPE path did not add `SB_GRAD_TRI`. `winddi.h`
+    declares the driver `DrvGradientFill` entry point, and CE GDIAPI
+    `draw.cpp::passNull2Draw(EGradientFill)` expects null/bad HDC, null
+    vertex/mesh pointers, zero mesh count, and `GRADIENT_FILL_TRIANGLE` calls
+    to fail. Rust now reports `SHADEBLENDCAPS` as `0x17`, rejects those invalid
+    raw `GradientFill` cases, and keeps the existing horizontal/vertical
+    rectangle rendering path.
+
+- CE GDI polygon/polyline validation authority:
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
+  - `draw.cpp::passNull2Draw(EPolygon/EPolyline)` expects null and bad HDCs to
+    fail with `ERROR_INVALID_HANDLE` and null point arrays to fail with
+    `ERROR_INVALID_PARAMETER`. The same fixture expects `Polyline` with
+    negative or single-point counts to fail with `ERROR_INVALID_PARAMETER`, but
+    `draw.cpp::SimplePolyTest` accepts `Polyline` count zero as a successful
+    no-op. `Polygon` counts `-1`, `0`, and `1` fail while leaving last error at
+    success. Rust now mirrors those raw validation and last-error edges before
+    reading guest point arrays or drawing.
+
+- CE GDI shape-HDC validation authority:
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
+  - `draw.cpp::passNull2Draw(ERectangle/EEllipse/ERoundRect)` expects null and
+    bad HDC handles to fail with `ERROR_INVALID_HANDLE`. Rust now applies the
+    same `is_valid_hdc` guard to raw `Rectangle`, `Ellipse`, and `RoundRect`
+    before any degenerate/no-op shape path can report success.
+
+- CE GDI miscellaneous draw validation authority:
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
+- `draw.cpp::passNull2Draw(ERectVisible/EFillRect/EDrawFocusRect/EDrawEdge/EMoveToEx/ELineTo/EGetPixel/ESetPixel/EGetROP2/ESetROP2/EGetDIBColorTable/ESetDIBColorTable/ESetBitmapBits/EPatBlt/ETransparentImage)` expects null and bad HDC handles to fail with `ERROR_INVALID_HANDLE`, with `RectVisible` returning `-1` for those handle failures and `GetPixel` returning `CLR_INVALID`. The same fixture expects valid-HDC null rectangles to fail with `ERROR_INVALID_PARAMETER` for `RectVisible`, `FillRect`, `DrawFocusRect`, and `DrawEdge`, invalid `FillRect` brushes to fail with `ERROR_INVALID_HANDLE`, `SetROP2(NULL, 0)` to report the invalid handle before validating the unsupported ROP2 value, null DIB color-table pointers to fail with `ERROR_INVALID_PARAMETER`, out-of-range selected-DIB color-table starts to fail with `ERROR_INVALID_HANDLE`, null/bad `SetBitmapBits` bitmap handles to fail with `ERROR_INVALID_HANDLE`, valid bitmap calls with null source or zero byte count to fail with `ERROR_INVALID_PARAMETER`, CE-invalid ROP4 `PatBlt` values to fail with `ERROR_INVALID_PARAMETER`, and null/bad `TransparentBlt` destination/source HDCs to fail with `ERROR_INVALID_HANDLE`. CE `draw.cpp::SetBitmapBits_T` drives `CreateBitmapSquares*` and `SetBitmapBitsOnePixel` cases where `CreateBitmap(..., NULL)` is followed by `SetBitmapBits` and then selected/blitted; raw `SetBitmapBits` now allocates owned backing for pointerless bitmaps, bounds copies to bitmap storage, and returns the copied byte count so those writes are visible to later blits. The same CE fixture calls `WritableBitmapTest(ESetBitmapBits)`, which expects `SetBitmapBits` against loaded/resource-style bitmaps to fail without modifying their pixels; Rust now records bitmap-bit writability and marks BMP/DIB loaders read-only for that path. `WritableBitmapTest(EBitBlt)` expects `BitBlt` into a loaded/resource bitmap selected in a compatible DC to fail without modifying its pixels; raw `BitBlt` now rejects read-only selected bitmap destinations after CE HDC, extent, and ROP validation and before source-copy or destination-invert rendering. `WritableBitmapTest(EPatBlt)` also expects `PatBlt` into a loaded/resource bitmap selected in a compatible DC to fail without modifying its pixels; raw `PatBlt` now rejects read-only selected bitmap destinations before rendering. `WritableBitmapTest(EStretchBlt)` expects `StretchBlt` into the same read-only selected-bitmap destination to fail without modifying pixels; raw `StretchBlt` now rejects read-only selected bitmap destinations after CE HDC, extent, and ROP validation and before stretched rendering. `WritableBitmapTest(EMaskBlt)` expects `MaskBlt` into the same read-only selected-bitmap destination to fail without modifying pixels; raw `MaskBlt` now rejects read-only selected bitmap destinations after CE HDC/mask/extent validation and before masked rendering. `WritableBitmapTest(ETransparentImage)` expects `TransparentBlt` into the same read-only selected-bitmap destination to fail without modifying pixels; raw `TransparentImage` now rejects read-only selected bitmap destinations after CE HDC and positive-extent validation and before source snapshotting or color-key rendering. `WritableBitmapTest(EGradientFill)` expects `GradientFill` into the same read-only selected-bitmap destination to fail without modifying pixels; raw `GradientFill` now rejects read-only selected bitmap destinations after CE HDC, pointer/count, and mode validation and before reading caller vertex/mesh payloads or rendering rectangle gradients. `WritableBitmapTest(EAlphaBlend)` expects `AlphaBlend` into the same read-only selected-bitmap destination to fail without modifying pixels; raw `AlphaBlend` now rejects read-only selected bitmap destinations after CE HDC, blend-function, and nonzero-extent validation and before source bitmap validation or blending. `WritableBitmapTest(EFillRect)` expects `FillRect` on the same read-only selected-bitmap destination to fail without modifying pixels; raw `FillRect` now rejects read-only selected bitmap destinations before filling. `WritableBitmapTest(EInvertRect)` likewise expects `InvertRect` against the read-only selected-bitmap destination to fail without changing pixels; raw `InvertRect` now rejects read-only selected bitmap destinations before inversion. `WritableBitmapTest(ESetPixel)` probes a four-pixel block and expects each `SetPixel` call against a loaded/read-only selected bitmap to return `-1` without modifying pixels; raw `SetPixel` now rejects read-only selected bitmap destinations before filling the target pixel. `WritableBitmapTest(ELineTo)` expects `MoveToEx` to succeed but the following `LineTo` against the read-only selected-bitmap destination to return `FALSE` without modifying pixels; raw `LineTo` now rejects read-only selected bitmap destinations before drawing or advancing the current point. `WritableBitmapTest(EPolyline)` expects a two-point `Polyline` against the read-only selected-bitmap destination to return `FALSE` without modifying pixels; raw `Polyline` now rejects read-only selected bitmap destinations after reading the caller's point array and before drawing or advancing the current point. `WritableBitmapTest(EPolygon)` expects a two-point `Polygon` against the read-only selected-bitmap destination to return `FALSE` without modifying pixels; raw `Polygon` now rejects read-only selected bitmap destinations after reading the caller's point array and before fill/stroke rendering. `WritableBitmapTest(ERectangle)` expects `Rectangle` against the read-only selected-bitmap destination to return `FALSE` without modifying pixels; raw `Rectangle` now rejects read-only selected bitmap destinations before brush fill or pen stroke rendering. `WritableBitmapTest(EEllipse)` expects `Ellipse` against the read-only selected-bitmap destination to return `FALSE` without modifying pixels; raw `Ellipse` now rejects read-only selected bitmap destinations before brush fill or pen outline rendering. `WritableBitmapTest(ERoundRect)` expects `RoundRect` against the read-only selected-bitmap destination to return `FALSE` without modifying pixels; raw `RoundRect` now rejects read-only selected bitmap destinations before rounded fill or pen outline rendering. `WritableBitmapTest(EDrawFocusRect)` expects `DrawFocusRect` against the read-only selected-bitmap destination to return `FALSE` without modifying pixels; raw `DrawFocusRect` now rejects read-only selected bitmap destinations before XOR perimeter rendering. `WritableBitmapTest(EDrawEdge)` expects `DrawEdge` against the read-only selected-bitmap destination to return `FALSE` without modifying pixels; raw `DrawEdge` now rejects read-only selected bitmap destinations after CE parameter validation and before border/fill rendering or `BF_ADJUST` rectangle mutation. CE `draw.cpp::PatBltBadRopTest` classifies a ROP3 as source-dependent with `((((rop >> 16) >> 2) ^ (rop >> 16)) & 0x33) != 0`; those `PatBlt` calls fail with `ERROR_INVALID_HANDLE` because no source DC exists, while source-free ROP3 values remain valid. The same CE `gnvRop3Array` includes source-free pattern/destination values such as `0x00A00000` (`DPa`), so raw `PatBlt` now renders them through the shared ROP3 truth table for selected-DIB and framebuffer destinations. CE `draw.cpp::TryShapes` expects zero-width/height `PatBlt` calls to return success without painting and `PatBlt(..., -1, -1, BLACKNESS)` to paint one pixel, while `PatBltSimple` uses a negative `PATCOPY` extent as a mirrored draw; raw `PatBlt` now normalizes signed extents for selected-DIB and framebuffer destinations. CE `draw.cpp::DrawFocusRectTest` draws the same focus rectangle on a screen HDC twice and then verifies the screen halves, which requires XOR-style framebuffer toggling rather than a no-op. CE `draw.cpp::DrawEdgeTest1` also expects `DrawEdge(hdc, &rc, 0xFFFFFFFF, BF_RECT)` to fail with `ERROR_INVALID_PARAMETER` on non-printer color display targets, while noting 1 bpp targets enforce monochrome/flat behavior differently. Rust now mirrors those raw validation and last-error edges before drawing or mutating DC/bitmap state.
+- `draw.cpp::WritableBitmapTest(EStretchDIBits/ESetDIBitsToDevice)` expects direct-DIB drawing into a loaded/resource bitmap selected in a compatible DC to fail without modifying the selected bitmap. Raw `StretchDIBits` now rejects read-only selected bitmap destinations after CE HDC, extent/pointer/usage, and ROP validation but before reading the caller DIB payload. Raw `SetDIBitsToDevice` preserves CE's null-DIB-payload-before-HDC ordering, then rejects read-only selected bitmap destinations after HDC validation and before reading the caller DIB payload.
+- `text.cpp::ExtTextOut_T` and `text.cpp::DrawTextW_T` import `draw.cpp::WritableBitmapTest(EExtTextOut/EDrawTextW)`. Those cases expect text drawing into a loaded/resource bitmap selected in a compatible DC to fail without modifying the selected bitmap. Raw `DrawTextW` now rejects read-only selected bitmap destinations after it has validated the caller rectangle and nonempty text run but before glyph rendering. Raw `ExtTextOutW` now rejects read-only selected bitmap destinations after HDC/text/optional-rectangle validation but before `ETO_OPAQUE` fill or glyph rendering.
+
 - CE kernel string-compression wrapper authority:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\compr2.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kwin32.c`, and
@@ -3081,10 +3262,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `StringCompress`/`StringDecompress`, including low-byte-only and
     high-byte-only packets, odd-length padded output, size-only compression
     queries, compressed-half fail-closed behavior, and the non-shrinking raw
-    failure rule. `CECompress`/`CEDecompress` are declared and called in the
+    failure rule. It also exercises the non-raw packet branch with an
+    emulator-owned deterministic opaque stream encoding for shrinkable nonzero
+    half-streams. `CECompress`/`CEDecompress` are declared and called in the
     reviewed tree, but the engine body was not present in the searched CE source
-    files, so that opaque payload path remains unsupported instead of being
-    guessed.
+    files, so byte-for-byte engine parity remains unverified and unknown
+    external non-raw payloads fail closed.
 
 - CE GDI display escape authority:
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwingdi.h`,
@@ -3097,10 +3280,35 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     gamma and screen rotation. `dispperf.h` defines the display-performance
     escape IDs, query-support list, and 32-entry `DISPPERF_TIMING` table shape
     used by `DispPerfDrvEscape`. The CE GDIAPI `dc.cpp`
-    `ExtEscapeInvalidAccess` test expects direct private display escapes to
-    return `EXTESC_ERROR` with invalid-access status, while
+    `ExtEscapeInvalidAccess` test expects direct private display escapes for
+    get/set rotation, get/set video protection, save/restore video memory, and
+    get/set gamma to return `EXTESC_ERROR` with invalid-access status, while
     `QUERYESCSUPPORT` for the raw-framebuffer escape reports not supported.
-    Rust now implements that query/protected-error surface and the CE-sized
-    zeroed `DISPPERF_EXTESC_GETSIZE`/`GETTIMING`/`CLEARTIMING`/`GETUNHANDLED`
-    payload contract for raw `ExtEscape` while leaving real driver escape
-    payload execution unsupported.
+    Rust now implements that query/protected-error surface, including get/set
+    gamma and get/set rotation query support, CE GPE direct get/set gamma
+    payloads with `ddi_if.cpp`'s `cjIn` gamma value and `pvIn` BOOL-buffer ABI,
+    the `aablt.cpp` 2330 default and 1000..3000 clamp range, CE VGAFLAT/SMI3DR
+    direct get/set screen-rotation payloads with the packed supported-mask plus
+    current-mode output and `cjIn` mode input, and the CE-sized
+    `DISPPERF_EXTESC_GETSIZE`/`GETTIMING`/`CLEARTIMING`/`GETUNHANDLED` payload
+    contract for raw `ExtEscape`, including local nonzero GPE timing rows for
+    raw `BitBlt`, `StretchBlt`, `PatBlt`, non-copy `MaskBlt`,
+    `TransparentImage`, explicit `ImageList_Draw*` `ILD_MASK`/`ILD_IMAGE`,
+    and direct-DIB `StretchDIBits`/`SetDIBitsToDevice` calls. The
+    `TransparentImage` row is anchored in CE
+    `ddi_if.cpp::DrvTransparentBlt`, which routes through `AnyBlt` with ROP4
+    `0xCCCC`; the display-driver `BltPrepare` records that ROP4 via
+    `DispPerfStart`. CE `imagelist.cpp` routes explicit `ILD_MASK` and
+    `ILD_IMAGE` draw passes through `Gdi::StretchBlt_I` with either the caller
+    `dwRop`, `SRCAND`, or `SRCCOPY`, and `ddi_if.cpp::AnyBlt` carries that
+    ROP4 into the same display-driver timing path. CE direct-DIB drawing also
+    reaches the GPE blit machinery through `AnyBlt`/`BltPrepare`, so raw
+    `StretchDIBits` records the caller ROP and raw `SetDIBitsToDevice` records
+    the copy-style `SRCCOPY` row. CE `winddi.h` exposes `DrvAlphaBlend` as a
+    `BLT_ALPHABLEND` blit using `BLENDFUNCTION`, and `ddi_if.cpp::AnyBlt`
+    carries the `0xCCCC` copy ROP4 into `BltPrepare`; raw `AlphaBlend` now
+    records that row and marks the CE stretch parameter when source and
+    destination extents differ. The table also includes CE VGAFLAT
+    `ROP_LINE` timing rows for raw `LineTo`/`Polyline`. Real video-protection,
+    framebuffer-access, and broader DISPPERF payload execution outside those
+    raw draw paths remains unsupported.

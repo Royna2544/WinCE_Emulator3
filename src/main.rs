@@ -341,7 +341,10 @@ fn run_cpu_loop(
     let mut reported_blocked_message_wait = false;
     let run_started = Instant::now();
     loop {
-        cpu.prune_active_process_from_parked(kernel);
+        cpu.prune_exited_and_active_processes_from_parked_with_framebuffer(
+            kernel,
+            Some(desktop.framebuffer_mut()),
+        );
         if cpu.complete_escaped_saved_get_message_sent_callout(kernel) {
             reported_blocked_message_wait = false;
             continue;
@@ -380,6 +383,11 @@ fn run_cpu_loop(
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.prepare_active_orphaned_visible_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if cpu.prepare_active_sent_message_callout(kernel) {
@@ -493,6 +501,11 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
+        if cpu.prepare_active_orphaned_visible_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if cpu.prepare_active_sent_message_callout(kernel) {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
@@ -539,6 +552,11 @@ fn run_cpu_loop(
             && cpu.has_runnable_parked_process(kernel)
             && cpu.rotate_to_next_parked_process(kernel)
         {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if switch_completed_active_context(cpu, kernel) {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -669,34 +687,18 @@ fn run_cpu_loop(
         }
         let total_wall_clock_expired =
             wall_clock_limit_expired(args.cpu_wall_clock_limit_ms, run_started.elapsed());
-        let active_process_exited = cpu
-            .last_debug_snapshot()
-            .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some());
-        let active_context_returned_without_continuation =
-            cpu.last_stop_is_guest_thread_return_stub();
         if total_wall_clock_expired {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 print_unicorn_stop(snapshot);
             }
             break;
         }
-        let process_handoff_switched = if active_process_exited {
-            cpu.switch_to_next_parked_child_process(kernel)
-        } else if active_context_returned_without_continuation {
-            if cpu.preserve_current_on_process_handoff(kernel) {
-                cpu.rotate_to_next_parked_process(kernel)
-            } else {
-                cpu.switch_to_next_parked_child_process(kernel)
-            }
-        } else {
-            false
-        };
-        if process_handoff_switched {
+        if switch_completed_active_context(cpu, kernel) {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if active_process_exited {
+        if active_process_exited(cpu) {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 print_unicorn_stop(snapshot);
             }
@@ -942,6 +944,25 @@ fn should_rotate_remote_input_receiver_parked_process(
     active_has_visible_receiver_work: bool,
 ) -> bool {
     !active_has_visible_receiver_work
+}
+
+fn active_process_exited(cpu: &UnicornMips) -> bool {
+    cpu.last_debug_snapshot()
+        .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some())
+}
+
+fn switch_completed_active_context(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
+    if active_process_exited(cpu) {
+        return cpu.switch_to_next_parked_child_process(kernel);
+    }
+    if !cpu.last_stop_is_guest_thread_return_stub() {
+        return false;
+    }
+    if cpu.preserve_current_on_process_handoff(kernel) {
+        cpu.rotate_to_next_parked_process(kernel)
+    } else {
+        cpu.switch_to_next_parked_child_process(kernel)
+    }
 }
 
 fn snapshot_is_create_process_w_stop(snapshot: &UnicornDebugSnapshot) -> bool {
@@ -1347,7 +1368,10 @@ fn service_remote_endpoint(
     desktop: &mut DesktopRuntime,
     blocked_get_message: Option<&BlockedRemoteInputTarget>,
 ) -> RemoteEndpointDrain {
-    cpu.prune_active_process_from_parked(kernel);
+    cpu.prune_exited_and_active_processes_from_parked_with_framebuffer(
+        kernel,
+        Some(desktop.framebuffer_mut()),
+    );
     let mut remote_target = blocked_get_message.cloned();
     if remote_target.is_none()
         && !cpu.active_process_has_visible_receiver_work(kernel)
@@ -1400,6 +1424,7 @@ fn publish_remote_endpoint(
         server.publish_framebuffer(framebuffer);
         server.publish_debug_text("windows", live_kernel_windows_text(kernel));
         server.publish_debug_text("messages", live_kernel_messages_text(kernel));
+        server.publish_debug_text("processes-live", live_kernel_processes_text(kernel));
         server.publish_debug_text("message-boxes", live_kernel_message_boxes_text(kernel));
         server.publish_debug_text("devices", live_kernel_devices_text(kernel));
         if let Some(cpu) = cpu {
@@ -1476,7 +1501,7 @@ fn live_active_process_text(cpu: &UnicornMips, kernel: &CeKernel) -> String {
         cpu.has_saved_context(),
         cpu.active_process_has_visible_receiver_work(kernel),
         cpu.active_process_has_receiver_work(kernel),
-        cpu.parked_child_process_count(),
+        cpu.parked_child_process_count_for_kernel(kernel),
         cpu.saved_context_debug_text(),
         last_stop
     );
@@ -2228,6 +2253,12 @@ fn live_kernel_messages_text(kernel: &CeKernel) -> String {
     out
 }
 
+fn live_kernel_processes_text(kernel: &CeKernel) -> String {
+    let mut out = String::new();
+    push_monitor_records(&mut out, "live process ops", kernel.recent_process_ops());
+    out
+}
+
 fn live_kernel_message_boxes_text(kernel: &CeKernel) -> String {
     let mut out = String::new();
     let records = kernel.shell.message_boxes().collect::<Vec<_>>();
@@ -2239,7 +2270,7 @@ fn live_kernel_message_boxes_text(kernel: &CeKernel) -> String {
     for (index, record) in records.iter().enumerate() {
         let _ = writeln!(
             out,
-            "    {index}: tid={} owner=0x{:08x} dialog=0x{:08x} style=0x{:08x} result={} rendered={} active={} caption={:?} text={:?}",
+            "    {index}: tid={} owner=0x{:08x} dialog=0x{:08x} style=0x{:08x} result={} rendered={} active={} caller_pc={} trap_pc={} caller_module={:?} caption={:?} text={:?}",
             record.thread_id,
             record.owner_hwnd,
             record.dialog_hwnd,
@@ -2247,6 +2278,15 @@ fn live_kernel_message_boxes_text(kernel: &CeKernel) -> String {
             record.result,
             record.rendered,
             record.dialog_was_active,
+            record
+                .caller_pc
+                .map(|pc| format!("0x{pc:08x}"))
+                .unwrap_or_else(|| "none".to_owned()),
+            record
+                .trap_pc
+                .map(|pc| format!("0x{pc:08x}"))
+                .unwrap_or_else(|| "none".to_owned()),
+            record.caller_module,
             record.caption,
             record.text
         );
@@ -2725,13 +2765,14 @@ struct RemoteLiveFramebuffer<'a> {
 
 impl<'a> RemoteLiveFramebuffer<'a> {
     fn new(framebuffer: &'a mut VirtualFramebuffer, remote_server: RemoteServer) -> Self {
+        let publish_interval = remote_server.video_frame_interval();
         Self {
             framebuffer,
             remote_server,
             last_publish: Instant::now()
                 .checked_sub(Duration::from_millis(16))
                 .unwrap_or_else(Instant::now),
-            publish_interval: Duration::from_millis(16),
+            publish_interval,
             pending_guest_dirty: false,
         }
     }
@@ -2801,6 +2842,10 @@ impl<'a> HostLiveFramebuffer<'a> {
         presenter: &'a mut wince_emulation_v3::ce::win32_desktop::Win32Presenter,
         remote_server: Option<RemoteServer>,
     ) -> Self {
+        let blit_interval = remote_server
+            .as_ref()
+            .map(RemoteServer::video_frame_interval)
+            .unwrap_or_else(|| Duration::from_millis(16));
         Self {
             framebuffer,
             presenter,
@@ -2808,7 +2853,7 @@ impl<'a> HostLiveFramebuffer<'a> {
             last_blit: Instant::now()
                 .checked_sub(Duration::from_millis(16))
                 .unwrap_or_else(Instant::now),
-            blit_interval: Duration::from_millis(16),
+            blit_interval,
             pending_guest_dirty: false,
             pending_error: None,
         }
@@ -2889,6 +2934,10 @@ impl<'a> LinuxHostLiveFramebuffer<'a> {
         presenter: &'a mut wince_emulation_v3::ce::linux_x11_desktop::LinuxX11Presenter,
         remote_server: Option<RemoteServer>,
     ) -> Self {
+        let blit_interval = remote_server
+            .as_ref()
+            .map(RemoteServer::video_frame_interval)
+            .unwrap_or_else(|| Duration::from_millis(16));
         Self {
             framebuffer,
             presenter,
@@ -2896,7 +2945,7 @@ impl<'a> LinuxHostLiveFramebuffer<'a> {
             last_blit: Instant::now()
                 .checked_sub(Duration::from_millis(16))
                 .unwrap_or_else(Instant::now),
-            blit_interval: Duration::from_millis(16),
+            blit_interval,
             pending_guest_dirty: false,
             pending_error: None,
         }

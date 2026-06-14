@@ -2821,6 +2821,65 @@ fn coredll_raw_string_compress_decompress_matches_ce_raw_packet_edges() -> Resul
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
+    memory.write_bytes(input_ptr, b"AAAAAAAAAAAAAAAA");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRING_COMPRESS,
+            [input_ptr, 16, packet_ptr, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(10),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let compressed_header = memory.read_u16(packet_ptr)?;
+    assert_eq!(compressed_header & 0xc000, 0);
+    assert_eq!(compressed_header & 0x3fff, 4);
+    assert_eq!(
+        memory.read_bytes(packet_ptr + 2, 4),
+        [0xce, 0x53, 0x87, b'A']
+    );
+    assert_eq!(
+        memory.read_bytes(packet_ptr + 6, 4),
+        [0xce, 0x53, 0x87, b'A']
+    );
+
+    memory.write_bytes(output_ptr, &[0xff; 16]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRING_DECOMPRESS,
+            [packet_ptr, 10, output_ptr, 16],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_bytes(output_ptr, 16), b"AAAAAAAAAAAAAAAA");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRING_COMPRESS,
+            [input_ptr, 16, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(10),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     memory.write_bytes(packet_ptr, &[0x04, 0x00, 1, 2, 3, 4]);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -10360,6 +10419,15 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         0xffe0,
         "ILD_ROP should apply dwRop instead of copying the source image"
     );
+    let timing = kernel.display_perf_timing_bytes();
+    assert_eq!(
+        u32::from_le_bytes(timing[0..4].try_into().unwrap()),
+        SRCINVERT,
+        "CE ImageList_DrawIndirect ILD_IMAGE|ILD_ROP routes through StretchBlt_I with dwRop"
+    );
+    assert_eq!(u32::from_le_bytes(timing[4..8].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(timing[8..12].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(timing[12..16].try_into().unwrap()), 0);
 
     // CE's private ILD_BLENDMASK includes ILD_BLEND75 (0x0008). The CE blend
     // path treats non-BLEND50 styles as the 25% alpha branch for image-list DIBs.

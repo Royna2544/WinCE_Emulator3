@@ -2729,13 +2729,14 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   import arguments. Both focused tests pass, and
   `cargo test -j 1 --features unicorn,trace,win32-desktop` now passes again
   with the eVC4 MIPSII fixture still intentionally ignored.
-- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `ExtEscape` now
-  implements the CE `DispPerfDrvEscape` payload contract for
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: the initial raw
+  `ExtEscape` DISPPERF slice implemented the CE `DispPerfDrvEscape` payload
+  contract for
   `DISPPERF_EXTESC_GETSIZE`, `GETTIMING`, `CLEARTIMING`, and `GETUNHANDLED`.
   `GETSIZE` reports the CE 32-entry, 64-byte `DISPPERF_TIMING` table size
-  (2048 bytes), `GETTIMING` returns a zeroed table, `CLEARTIMING` succeeds as a
-  no-op, and `GETUNHANDLED` reports zero unhandled operations while preserving
-  CE invalid-output-buffer failures.
+  (2048 bytes), `GETTIMING` initially returned a zeroed table, `CLEARTIMING`
+  succeeded as a no-op, and `GETUNHANDLED` reported zero unhandled operations
+  while preserving CE invalid-output-buffer failures.
 - `src/ce/linux_x11_desktop.rs` now parses and formats as the Linux X11 host
   desktop backend behind the existing `linux-x11-desktop` feature wiring; the
   key-symbol range patterns were normalized to valid Rust literal ranges so
@@ -2757,3 +2758,1176 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `CEDecompress` engine. A source search found declarations/callers for
   `CECompress`/`CEDecompress`, but not the engine body, so the opaque branch is
   still intentionally unsupported rather than guessed.
+- `tests/coredll_raw_gwe.rs`: the raw `ExtEscape` regression now covers the
+  CE GDIAPI `ExtEscapeInvalidAccess` list for direct get/set rotation, get/set
+  video protection, save/restore video memory, and get/set gamma escapes, plus
+  the CE query-supported get/set gamma, get/set rotation, and
+  `DISPPERF_EXTESC_*` escape set. At that stage, the remaining display-driver
+  gap was real payload execution and nonzero display-performance
+  instrumentation.
+- Validation after the expanded `ExtEscape` coverage:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges`,
+  `cargo fmt --check`, `git diff --check`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` all pass. The cargo runs still emit the existing unused-code
+  warnings and a Windows incremental-cache cleanup warning.
+- `src/ce/coredll.rs`, `src/ce/resource.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw palette APIs now follow the CE GDIAPI `pal.cpp` edges for invalid
+  palette/HDC handles, `SetPaletteEntries` null-entry and zero-count
+  `ERROR_INVALID_PARAMETER`, non-paletted `GetSystemPaletteEntries` returning
+  zero entries on the RGB565 display, and `SelectPalette` accepting the stock
+  `DEFAULT_PALETTE` handle when restoring a DC. Raw `GetNearestColor` now
+  rejects invalid/null HDCs with `CLR_INVALID`/`ERROR_INVALID_HANDLE` while
+  preserving direct true-color return behavior for valid display DCs. Raw
+  `GetCurrentObject(OBJ_PAL)` now reports selected and restored stock palettes,
+  rejects invalid/null HDCs with `ERROR_INVALID_HANDLE`, and rejects unknown
+  object types on valid HDCs with `ERROR_INVALID_PARAMETER`. Raw
+  `GetObjectType` now follows the CE `wingdi.h` object constants for screen DC,
+  memory DC, and palettes while rejecting invalid handles with
+  `ERROR_INVALID_HANDLE`. Raw `GetStockObject` now reports
+  `ERROR_INVALID_PARAMETER` for unsupported stock indexes, covering the CE
+  `GetStockObject(-1)` edge. Raw `SelectObject` now rejects invalid/null HDCs
+  plus null or unknown GDI objects with `ERROR_INVALID_HANDLE` before mutating
+  DC state. The existing user-palette entry round-trip and nearest-index
+  coverage remains intact.
+- Validation after the CE palette slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_palette_entries_round_trip_and_select`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` all pass. The cargo runs still emit the existing unused-code
+  warnings and a Windows incremental-cache cleanup warning.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: stock
+  `DEFAULT_PALETTE` query paths now match the CE GDIAPI helper flow in
+  `global.cpp::myCreatePal`: `GetObjectW` reports the stock palette entry
+  count, `GetPaletteEntries` can copy those entries, and
+  `GetNearestPaletteIndex` treats the stock palette as a readable palette while
+  palette mutation remains restricted to created palettes. Raw palette coverage
+  also now mirrors `pal.cpp::GetPaletteEntriesTest`,
+  `SetGetPaletteEntriesTest`, and `SimpleGetNearestPaletteIndexTest` with a
+  256-entry `CreatePalette`/`SetPaletteEntries`/`GetPaletteEntries`/
+  nearest-index flow.
+- Validation after the stock/default and 256-entry palette slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe palette`, `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` all pass. The full raw GWE suite now has 292 passing tests;
+  the cargo runs still emit the existing unused-code warnings and a Windows
+  incremental-cache cleanup warning.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `GetDeviceCaps`
+  now follows CE GDIAPI `dc.cpp`/`dcdata.h` edges for display-capability
+  queries. Bad HDCs fail with `ERROR_INVALID_HANDLE`, invalid index `-1` fails
+  with `ERROR_INVALID_PARAMETER`, a null HDC uses the primary display like CE,
+  `DRIVERVERSION` returns a nonzero display-driver version, and
+  `SIZEPALETTE`/`NUMRESERVED` report zero for the emulator's RGB565
+  non-paletted display.
+- Validation after the `GetDeviceCaps` parity slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_get_device_caps_returns_ce_display_capabilities`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` all pass. The cargo runs still emit the existing unused-code
+  warnings and a Windows incremental-cache cleanup warning.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: the raw
+  `GetDeviceCaps` regression now covers the rest of the CE GDIAPI
+  `dcdata.h` display-capability sweep that is meaningful for the local primary
+  display: unlimited brush/pen/marker/font counts, rectangular `CLIPCAPS`, and
+  square-pixel `ASPECTX`/`ASPECTY`/`ASPECTXY` values. This keeps the primary
+  display aligned with the CE `DeviceCapsGPERegTest` aspect-ratio indices while
+  leaving real secondary-display registry reload behavior out of scope for the
+  raw path.
+- Validation after the expanded `GetDeviceCaps` cap-sweep slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_get_device_caps_returns_ce_display_capabilities`,
+  `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` all pass. The cargo runs still emit the existing unused-code
+  warnings and a Windows incremental-cache cleanup warning.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `SelectObject`
+  now follows the CE GDIAPI `do.cpp::SelectObjectTest` region return path for
+  simple regions. Selecting a region into a valid DC stores it as the tracked
+  clip region and returns the existing CE region complexity value, so selecting
+  the same `CreateRectRgn` handle twice reports `SIMPLEREGION` instead of the
+  previous pen/brush/bitmap object selection.
+- Validation after the CE region `SelectObject` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_select_object_returns_restorable_dc_defaults`
+  passed. `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `DeleteObject`
+  now treats stock GDI handles as CE no-op successes. This matches
+  `do.cpp::DeleteGetStockObjectTest`: deleting stock brush, pen, font, or
+  palette handles must not destroy the stable stock object, and subsequent
+  `GetStockObject`/`SelectObject` use of the brush and pen handles remains
+  valid. The `DEFAULT_PALETTE` path is covered as a stock handle that survives
+  deletion without using `SelectObject`.
+- Validation after the CE stock `DeleteObject` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_select_object_returns_restorable_dc_defaults`
+  passed. `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/resource.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw stock-object handling now includes the CE public `wingdi.h`
+  `BORDERX_PEN` and `BORDERY_PEN` indexes. Both resolve to stable stock pen
+  handles, report `OBJ_PEN` through `GetObjectType`, participate in
+  `SelectObject` previous-pen restoration, and survive the stock
+  `DeleteObject` no-op path.
+- Validation after the CE border stock-pen slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_select_object_returns_restorable_dc_defaults`
+  passed. `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/resource.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw bitmap objects now distinguish `CreateDIBSection` handles from ordinary
+  bitmaps. `GetObjectW` preserves the 24-byte `BITMAP` fallback for normal
+  bitmaps and BITMAP-sized DIB-section queries, while DIBSECTION-sized
+  DIB-section queries now return the CE `wingdi.h` 84-byte layout with
+  `BITMAPINFOHEADER` width, signed top-down height, bit depth, compression,
+  image size, color-table count, RGB masks, and null section/offset metadata.
+  This follows CE GDIAPI `do.cpp::GetObjectDIBTest`.
+- Validation after the CE DIBSECTION `GetObjectW` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_gdi_create_bitmap_and_get_object_w` passed.
+  `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The full raw GWE suite remains at 292 passing
+  tests; the cargo runs still emit the existing unused-code warnings and
+  Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now follows the CE-only 24 bpp `BI_BITFIELDS` behavior
+  documented in GDIAPI `verify.cpp::myCreateRGBDIBSection` and exercised by
+  `draw.cpp::CreateDIBSection24bppDIBTest`. For 24 bpp headers the parser now
+  accepts `BI_BITFIELDS` without storing masks, and selected-DIB `SetPixel`
+  writes plain BGR 24 bpp bytes for red, green, and blue.
+- Validation after the CE 24 bpp `BI_BITFIELDS` DIB-section slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_create_dibsection_accepts_ce_24bpp_bitfields_as_bgr`
+  passed. `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The full raw GWE suite now has 293 passing tests;
+  the cargo runs still emit the existing unused-code warnings and Windows
+  profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now follows CE GDIAPI
+  `draw.cpp::SimpleCreateDIBSectionTest2` by accepting a null `ppvBits`
+  output pointer. The implementation still allocates owned DIB backing storage
+  and still frees it if a non-null caller output pointer faults, while callers
+  that pass `NULL` simply receive the bitmap handle.
+- Validation after the CE null-`ppvBits` DIB-section slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_create_dibsection_accepts_null_bits_output`
+  passed. `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The full raw GWE suite now has 294 passing tests;
+  the cargo runs still emit the existing unused-code warnings and Windows
+  profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now follows CE GDIAPI
+  `draw.cpp::CreateDIBSectionPalBadUsage` for `DIB_PAL_COLORS` usage. The
+  implementation rejects non-indexed/high-bpp palette-index DIB-section
+  requests with `ERROR_INVALID_PARAMETER` before allocating backing storage or
+  touching `ppvBits`, while preserving the already-covered indexed
+  `DIB_PAL_COLORS` path.
+- Validation after the CE high-bpp `DIB_PAL_COLORS` DIB-section slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_create_dibsection_rejects_high_bpp_pal_colors` passed. `cargo
+  fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe` also pass. The full raw
+  GWE suite now has 295 passing tests; the cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now also follows CE GDIAPI
+  `verify.cpp::myCreateDIBSection` for the paletted-HDC requirement. An 8 bpp
+  `DIB_PAL_COLORS` DIB-section request with a null or invalid HDC now fails
+  with `ERROR_INVALID_HANDLE` before writing `ppvBits`, while the same header
+  still succeeds with a real DC and `DIB_RGB_COLORS` null-HDC callers remain
+  unaffected.
+- Validation after the CE null-HDC `DIB_PAL_COLORS` DIB-section slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_create_dibsection_rejects_pal_colors_without_hdc` passed.
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe` also pass. The full raw
+  GWE suite now has 296 passing tests; the cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now enforces another CE
+  `draw.cpp::CreateDIBSectionPalBadUsage` matrix edge by rejecting indexed
+  `DIB_RGB_COLORS` sections when `biClrUsed > 256` before allocating backing
+  storage or writing `ppvBits`. The CE indexed `BI_RGB`/`DIB_PAL_COLORS`
+  exception remains accepted with a valid HDC.
+- Validation after the CE oversized indexed RGB `biClrUsed` DIB-section slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_create_dibsection_rejects_oversized_indexed_rgb_color_count`
+  passed.
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe` also pass. The full raw
+  GWE suite now has 297 passing tests; the cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now follows the CE
+  `draw.cpp::CreateDIBSectionPalBadUsage` bit-depth matrix by accepting only
+  `1`, `2`, `4`, `8`, `16`, `24`, and `32` bpp section requests. Unsupported
+  depths such as `3`, `5`, `15`, and `33` now fail with
+  `ERROR_INVALID_PARAMETER` before allocating storage or writing `ppvBits`.
+- Validation after the CE unsupported-bit-depth DIB-section slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_create_dibsection_rejects_unsupported_bit_depths` passed.
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe` also pass. The full raw
+  GWE suite now has 298 passing tests; the cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: the same supported DIB
+  bit-depth predicate is now used for direct caller-DIB parsing. Raw
+  `StretchDIBits` and `SetDIBitsToDevice` reject unsupported source DIB depths
+  before rendering, preserving selected-DIB destination pixels on failure.
+- Validation after the direct-DIB unsupported-bit-depth slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_direct_dib_calls_reject_unsupported_bit_depths` passed.
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe` also pass. The full raw
+  GWE suite now has 299 passing tests; the cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs`, `src/ce/resource.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw `CreateDIBSection` now covers the first CE `wingdi.h` section-backed DIB
+  path. A non-null file-mapping `hSection` is validated, the DIB bits are
+  registered as a mapping view at `dwOffset`, `FlushViewOfFile` synchronizes
+  written pixels back to the mapping, `DeleteObject` removes the implicit view,
+  and `GetObjectW(DIBSECTION)` reports `dshSection` plus `dsOffset`.
+- Validation after the section-backed DIB-section slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_create_dibsection_backs_bits_with_file_mapping_section` passed.
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The full raw GWE suite now has 300 passing tests;
+  the cargo runs still emit the existing unused-code warnings and Windows
+  profile/incremental-cache cleanup noise.
+- `tests/coredll_raw_gwe.rs`: section-backed DIB-section coverage now verifies
+  two `CreateDIBSection` handles over the same file-mapping section/offset stay
+  coherent through `FlushViewOfFile`: the second DIB is seeded from mapping
+  bytes written by the first, later flushes from the second update the first
+  view, and `DeleteObject` removes both implicit views.
+- Validation after the shared section-backed DIB-section view slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_section_backed_dibsections_share_mapping_bytes` passed. `cargo
+  fmt --check`, `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The full raw GWE suite now has 301 passing tests;
+  cargo runs still emit the existing unused-code warnings and Windows
+  profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now follows CE GDIAPI `draw.cpp::passNull2Draw` by
+  rejecting bad nonzero HDC handles with `ERROR_INVALID_HANDLE`, even for
+  `DIB_RGB_COLORS`, while preserving the null-HDC RGB DIB-section creation path
+  covered by the existing null-`ppvBits` regression.
+- Validation after the CE bad-HDC DIB-section slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_create_dibsection_rejects_bad_nonzero_hdc` passed. `cargo
+  fmt --check`, `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The full raw GWE suite now has 302 passing tests;
+  cargo runs still emit the existing unused-code warnings and Windows
+  profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now accepts CE public `wingdi.h` 12-byte
+  `BITMAPCOREHEADER`/`BITMAPCOREINFO` inputs for indexed `DIB_RGB_COLORS`
+  sections. The path treats core headers as uncompressed `BI_RGB`, reads
+  RGBTRIPLE color-table entries through the existing DIB table parser, and
+  still allocates ordinary DIB-section backing plus an optional `ppvBits`
+  output.
+- Validation after the CE `BITMAPCOREHEADER` DIB-section slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_create_dibsection_accepts_bitmapcoreheader` passed. `cargo
+  fmt --check`, `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The full raw GWE suite now has 303 passing tests;
+  cargo runs still emit the existing unused-code warnings and Windows
+  profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: section-backed DIB-section
+  teardown now commits dirty DIB bits through the shared file-mapping backing
+  before `DeleteObject` removes the implicit mapping view. The shared commit
+  helper is reused by `FlushViewOfFile` and `UnmapViewOfFile`, so a sibling
+  DIB-section view over the same section/offset observes the final bytes even
+  when the caller never explicitly flushed the deleted DIB.
+- Validation after the section-backed DIB `DeleteObject` writeback slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_deleteobject_flushes_section_backed_dib_bits` passed. `cargo
+  fmt --check`, `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` also pass. The full raw GWE suite now has 304 passing tests;
+  cargo runs still emit the existing unused-code warnings and Windows
+  profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_kernel.rs`: raw
+  `StringCompress`/`StringDecompress` now cover the CE `compr2.c` non-raw
+  packet branch with an emulator-owned deterministic opaque stream encoding for
+  shrinkable nonzero half-streams. Unknown external non-raw payloads still fail
+  closed because the reviewed CE source tree exposes `CECompress`/
+  `CEDecompress` declarations/callers, but not the private engine body.
+- `src/emulator/unicorn.rs`: full-feature scheduler validation is green again.
+  Parked-process selection now preserves active-matching parked entries while
+  skipping them as candidates, and the affected scheduler fixtures now create
+  resumable parked CPUs with nonzero saved PCs.
+- Validation after the `StringCompress` opaque-payload and scheduler test-fix
+  slice: `cargo test --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel coredll_raw_string_compress_decompress_matches_ce_raw_packet_edges`,
+  `cargo test --features unicorn,trace,win32-desktop guest_thread_stack_tests`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The
+  full run still emits the existing unused-code warnings, PowerShell profile
+  noise, and Windows incremental-cache cleanup note.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw direct-DIB source
+  parsing now accepts CE 8 bpp `BI_RLE8` compressed caller bits for
+  `StretchDIBits` and `SetDIBitsToDevice` when `biSizeImage` supplies the
+  compressed payload size. The decoder handles encoded runs, EOL/EOB, delta,
+  and absolute-mode records before feeding ordinary 8 bpp indexed rows through
+  the existing selected-DIB/framebuffer renderer.
+- Validation after the direct-DIB `BI_RLE8` slice: `cargo test --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_direct_rle8_dib_decodes_for_dib_to_device_calls`,
+  `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The full
+  raw GWE suite now has 305 passing tests; cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw direct-DIB source
+  parsing now also accepts CE 4 bpp `BI_RLE4` compressed caller bits when
+  `biSizeImage` supplies the payload size. The decoder covers encoded runs,
+  EOL/EOB, delta, and absolute-mode packed nibbles before rendering through
+  ordinary 4 bpp indexed bitmap rows.
+- Validation after the direct-DIB `BI_RLE4` slice: `cargo test --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_direct_rle4_dib_decodes_for_dib_to_device_calls`, `cargo check
+  --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and `cargo test -j 1
+  --features unicorn,trace,win32-desktop` passed. The full raw GWE suite now
+  has 306 passing tests; cargo runs still emit the existing unused-code
+  warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/object.rs`, `src/ce/kernel.rs`, and `tests/coredll_raw_gwe.rs`:
+  unnamed file-mapping objects with live views now distinguish a closed public
+  handle from the still-retained mapping backing. Section-backed DIB views keep
+  flushing and synchronizing with sibling DIB views after the caller closes the
+  original mapping handle, while the closed handle is rejected for new
+  `MapViewOfFile` calls. The retained mapping object is removed once the last
+  live view/DIB section is deleted.
+- Validation after the closed mapping-handle DIB-section lifetime slice:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_section_backed_dib_survives_closed_mapping_handle`, `cargo check
+  --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The full
+  raw GWE suite now has 307 passing tests; cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/emulator/unicorn.rs`: while validating the DIB-section slice, the
+  scheduler parked-process pop path was corrected to preserve active-matching
+  parked entries that still carry blocked send/wait state, instead of treating
+  them like stale self-duplicates. This keeps a blocked sender queued until its
+  send result is ready while still dropping ordinary active duplicate entries.
+- `src/ce/object.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
+  file-backed mappings now start with no synthetic zero-filled mapping buffer,
+  so `CreateDIBSection` over a mapped file seeds DIB bits from the backing file
+  while still overlaying any already-populated dirty mapping bytes. The DIB
+  section path now caches the materialized range into the mapping and
+  `FlushViewOfFile` writes dirty DIB bytes back to the host-backed CE file.
+- Validation after the file-backed DIB-section mapping slice: `cargo test
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_file_backed_dibsection_seeds_and_flushes_file_bytes`, `cargo test
+  -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_memory_file`, `cargo check --features unicorn,trace,win32-desktop`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The full
+  raw GWE suite now has 308 passing tests; cargo runs still emit the existing
+  unused-code warnings and Windows profile/incremental-cache cleanup noise.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw `ExtEscape` now implements the CE GPE direct gamma payload path from
+  `ddi_if.cpp`: `DRVESC_GETGAMMAVALUE` writes the current `ULONG` gamma through
+  `pvOut`, and `DRVESC_SETGAMMAVALUE` takes the gamma value from `cjIn` while
+  validating the `pvIn` BOOL buffer. The display gamma state starts at the CE
+  AA text default from `aablt.cpp` (`2330`) and clamps to the CE 1000..3000
+  range, while the existing CE GDIAPI null-buffer invalid-access coverage stays
+  intact.
+- Validation after the direct gamma `ExtEscape` slice: `cargo fmt`, `cargo
+  test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The
+  full raw GWE suite remains at 308 passing tests; cargo runs still emit the
+  existing unused-code warnings and Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw `ExtEscape` now also implements the CE VGAFLAT/SMI3DR direct
+  screen-rotation payload path. `DRVESC_GETSCREENROTATION` writes the
+  supported `DMDO_0|90|180|270` mask in the high byte plus the current mode in
+  the low byte, and `DRVESC_SETSCREENROTATION` accepts the `cjIn` mode value,
+  updates local display-driver rotation state, and returns
+  `DISP_CHANGE_BADMODE` for unsupported modes while preserving the CE GDIAPI
+  all-zero/null invalid-access edge.
+- Validation after the direct rotation `ExtEscape` slice: `cargo fmt`, `cargo
+  test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The
+  full raw GWE suite remains at 308 passing tests; cargo runs still emit the
+  existing unused-code warnings and Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw `ExtEscape` now returns a CE-shaped `DISPPERF_TIMING` table backed by
+  local display-performance state instead of a permanently zeroed table. Raw
+  `BitBlt`, `StretchBlt`, `PatBlt`, non-copy `MaskBlt`, and
+  `TransparentImage` record nonzero GPE counts/timing rows keyed by ROP/ROP4,
+  raw `LineTo` and `Polyline` record the CE VGAFLAT `ROP_LINE` row,
+  `StretchBlt` marks the CE stretch parameter slot, and
+  `DISPPERF_EXTESC_CLEARTIMING` clears the table/unhandled counter.
+- Validation after the DISPPERF timing slice: `cargo fmt`, `cargo test
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The
+  full raw GWE suite remains at 308 passing tests; cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `TransparentImage` now records a CE `DrvTransparentBlt`-style DISPPERF GPE
+  row with ROP4 `0xCCCC` after routing a readable selected-bitmap source
+  through the transparent blit path; the framebuffer color-key regression now
+  asserts the timing row.
+- Validation after the `TransparentImage` DISPPERF slice: `cargo fmt`, `cargo
+  test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_transparent_image_copies_selected_bitmap_with_color_key`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The
+  full raw GWE suite remains at 308 passing tests; cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_kernel.rs`: raw
+  `ImageList_Draw`, `ImageList_DrawEx`, and `ImageList_DrawIndirect` now record
+  CE `StretchBlt_I`-style DISPPERF GPE rows when the explicit `ILD_MASK` or
+  `ILD_IMAGE` branches run, including caller `ILD_ROP`/`dwRop` values. The
+  `ImageList_DrawIndirect` regression now asserts the `SRCINVERT` timing row
+  for an `ILD_IMAGE | ILD_ROP` draw.
+- Validation after the image-list DISPPERF draw-pass slice: `cargo fmt`,
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel
+  image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill`, `cargo
+  fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel`, `cargo check --features unicorn,trace,win32-desktop`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Cargo
+  runs still emit the existing unused-code warnings plus Windows
+  profile/incremental-cache cleanup noise, and the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw direct-DIB
+  `StretchDIBits` and `SetDIBitsToDevice` now contribute CE display-blit-style
+  DISPPERF GPE rows after accepting a caller DIB source. `StretchDIBits`
+  records the caller ROP and marks the stretch parameter when the source and
+  destination extents differ; `SetDIBitsToDevice` records the copy-style
+  `SRCCOPY` row. The existing direct-DIB selected-memory-DIB regressions now
+  assert those timing rows.
+- Validation after the direct-DIB DISPPERF slice: `cargo fmt`, `cargo test
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_stretch_dibits_paints_selected_memory_dib_and_validates_ce_edges`,
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_set_dibits_to_device_paints_selected_memory_dib_from_bottom_up_source`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. Cargo runs still emit the existing
+  unused-code warnings plus Windows profile/incremental-cache cleanup noise,
+  and the eVC4 MIPSII fixture remains ignored because the toolchain is not
+  configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `AlphaBlend` now
+  contributes a CE `DrvAlphaBlend`/`AnyBlt`/`BltPrepare` DISPPERF GPE timing
+  row keyed by ROP4 `0xCCCC` after a readable selected-bitmap source reaches
+  the alpha blit path. The selected-DIB source-constant, selected-DIB stretch,
+  and framebuffer stretch alpha regressions now assert the timing row, GPE
+  count/time, no emulated count, and the CE stretch parameter slot for
+  non-matching source/destination extents.
+- Validation after the `AlphaBlend` DISPPERF slice: `cargo fmt`, `cargo test
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_alpha_blend_applies_source_constant_alpha_between_selected_dibs`,
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_alpha_blend_uses_ce_gpe_stretch_sampling_between_selected_dibs`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe alpha_blend` passed. Cargo runs still emit the existing
+  unused-code warnings plus Windows profile/incremental-cache cleanup noise.
+- Broader validation after the `AlphaBlend` DISPPERF slice: `cargo fmt
+  --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo check --features unicorn,trace,win32-desktop`,
+  `git diff --check`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. `git diff --check` output was limited
+  to existing CRLF normalization warnings, Cargo still emits the existing
+  unused-code warnings plus Windows incremental-cache cleanup noise, and the
+  eVC4 MIPSII fixture remains ignored because the toolchain is not configured.
+- After adding the framebuffer `AlphaBlend` DISPPERF assertion, `cargo fmt`
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe alpha_blend` passed.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `GradientFill`
+  now follows the CE rectangle-gradient contract from `draw.cpp`,
+  `wingdi.h`, `winddi.h`, and GPE `ddi_if.cpp`: null/bad HDCs fail with
+  `ERROR_INVALID_HANDLE`, null vertex/mesh pointers, zero counts, invalid mesh
+  indices, and `GRADIENT_FILL_TRIANGLE` fail with `ERROR_INVALID_PARAMETER`,
+  horizontal/vertical rectangle rendering remains covered, and
+  `GetDeviceCaps(SHADEBLENDCAPS)` now returns `0x17`
+  (`SB_CONST_ALPHA | SB_PIXEL_ALPHA | SB_PREMULT_ALPHA | SB_GRAD_RECT`) instead
+  of advertising unsupported triangle gradients.
+- Validation after the `GradientFill` capability/validation slice: `cargo
+  fmt`, `cargo test --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe gradient_fill`, and `cargo test --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_get_device_caps_returns_ce_display_capabilities` passed. Cargo
+  runs still emit the existing unused-code warnings plus Windows
+  profile/incremental-cache cleanup noise.
+- Broader validation after the `GradientFill` slice: `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff
+  --check` passed. `git diff --check` output was limited to the existing
+  LF-to-CRLF normalization warnings, Cargo still emits the existing unused-code
+  warnings plus Windows incremental-cache cleanup noise, and the eVC4 MIPSII
+  fixture remains ignored because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `Polygon` and
+  `Polyline` now follow CE `draw.cpp::passNull2Draw`/`SimplePolyTest`
+  validation. Null/bad HDCs fail with `ERROR_INVALID_HANDLE`, null point
+  arrays fail with `ERROR_INVALID_PARAMETER`, `Polyline` rejects negative and
+  single-point counts but accepts count zero as a successful no-op, and
+  `Polygon` rejects counts below two while preserving success last-error state
+  for those small-count failures.
+- Validation after the polygon/polyline validation slice: `cargo fmt`, `cargo
+  test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  polyline`, and `cargo test --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe polygon` passed. Cargo runs still emit the existing
+  unused-code warnings plus Windows profile/incremental-cache cleanup noise.
+- Broader validation after the polygon/polyline slice: `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff
+  --check` passed. The raw GWE suite is now at 311 passing tests. `git diff
+  --check` output was limited to the existing LF-to-CRLF normalization warnings,
+  Cargo still emits the existing unused-code warnings plus Windows
+  incremental-cache cleanup noise, and the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `Rectangle`,
+  `Ellipse`, and `RoundRect` now follow CE `draw.cpp::passNull2Draw` invalid
+  HDC behavior. Null and bad HDC handles fail with `ERROR_INVALID_HANDLE`
+  before any degenerate/no-op shape path, and the raw shape validation
+  regression now covers all three APIs plus valid-HDC success.
+- Validation after the shape-HDC validation slice: `cargo fmt` and `cargo test
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_gdi_shapes_validate_ce_hdc_edges` passed. Cargo runs still emit
+  the existing unused-code warnings plus Windows profile/incremental-cache
+  cleanup noise.
+- The full feature test build also exposed a test-profile compile break in
+  `src/emulator/unicorn.rs`: `persist_run_state` restored state and then called
+  escaped-send completion helpers that require `&mut CeKernel` while accepting
+  only `&CeKernel`. The helper now accepts the mutable kernel already supplied
+  by every call site, keeping persisted escaped callout cleanup available in
+  full `cargo test`.
+- Broader validation after the shape-HDC/test-profile fix slice: `cargo fmt
+  --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff
+  --check` passed. The raw GWE suite remains at 311 passing tests. `git diff
+  --check` output was limited to the existing LF-to-CRLF normalization warnings,
+  Cargo still emits the existing unused-code warnings plus Windows
+  incremental-cache cleanup noise, and the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw miscellaneous draw
+  APIs now follow CE `draw.cpp::passNull2Draw` validation ordering for
+  `RectVisible`, `FillRect`, `DrawFocusRect`, `DrawEdge`, `MoveToEx`, `LineTo`,
+  `SetPixel`, `GetROP2`, and `SetROP2`. Null and bad HDC handles now fail with
+  `ERROR_INVALID_HANDLE`, `RectVisible` returns CE's `-1` error value on HDC
+  failures, valid-HDC null rectangles fail with `ERROR_INVALID_PARAMETER` for
+  the checked APIs, invalid `FillRect` brushes fail with `ERROR_INVALID_HANDLE`,
+  and `SetROP2(NULL, 0)` now reports the invalid handle before the invalid ROP2
+  value.
+- Validation after the miscellaneous draw-validation slice: `cargo fmt`,
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_gdi_misc_draw_apis_validate_ce_pass_null_edges`, `cargo test -j
+  1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo fmt
+  --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 312 passing
+  tests. `git diff --check` output was limited to the existing LF-to-CRLF
+  normalization warnings, and Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: the same CE
+  `draw.cpp::passNull2Draw` validation work now covers `GetPixel`,
+  `GetDIBColorTable`, `SetDIBColorTable`, and `SetBitmapBits`. `GetPixel`
+  returns `CLR_INVALID` with `ERROR_INVALID_HANDLE` for null/bad HDCs, DIB
+  color-table calls check HDC validity before null table pointers, selected-DIB
+  color-table starts past the palette fail with `ERROR_INVALID_HANDLE`, and
+  `SetBitmapBits` now distinguishes null/bad bitmap handles from null or zero
+  source payloads before copying valid bitmap bytes.
+- Validation after the DIB color-table/bitmap-bits validation slice: `cargo
+  fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `git diff --check`, `cargo check
+  --features unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 313 passing
+  tests. `git diff --check` output was limited to the existing LF-to-CRLF
+  normalization warnings, and Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `PatBlt`
+  validation now joins the CE `draw.cpp::passNull2Draw` slice. Null and bad
+  destination HDCs fail with `ERROR_INVALID_HANDLE`, and CE-invalid ROP4 values
+  now fail with `ERROR_INVALID_PARAMETER` instead of reporting success.
+- Validation after the `PatBlt` validation slice: `cargo fmt`, `cargo fmt
+  --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test
+  -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The raw GWE
+  suite remains at 313 passing tests, and `git diff --check` output was limited
+  to the existing LF-to-CRLF normalization warnings. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `TransparentImage` now follows the CE `draw.cpp::passNull2Draw` validation
+  order for null/bad destination and source HDCs. Those calls now fail with
+  `ERROR_INVALID_HANDLE` before dimension validation, while valid-HDC zero
+  extents still fail with `ERROR_INVALID_PARAMETER`.
+- Validation after the `TransparentImage` validation slice: `cargo fmt`,
+  `cargo fmt --check`, `git diff --check`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_gdi_misc_draw_apis_validate_ce_pass_null_edges`, `cargo test -j
+  1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo
+  check --features unicorn,trace,win32-desktop`, and `cargo test -j 1
+  --features unicorn,trace,win32-desktop` passed. The raw GWE suite remains at
+  313 passing tests, and the full suite keeps the eVC4 MIPSII fixture ignored
+  because that toolchain is not configured. `git diff --check` output was
+  limited to the existing LF-to-CRLF normalization warnings. Cargo runs still
+  emit the existing unused-code warnings plus Windows profile/incremental-cache
+  cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `SetDIBitsToDevice` now follows CE `draw.cpp::passNull2Draw` for null DIB
+  payloads. Calls with null `lpvBits`/`lpbmi`, including the CE
+  null-HDC/null-payload case, now fail with `ERROR_INVALID_PARAMETER` before
+  HDC validation, while valid payloads still reach the existing HDC
+  validation/rendering path.
+- Validation after the `SetDIBitsToDevice` validation-order slice: `cargo
+  fmt`, `cargo fmt --check`, `git diff --check`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_set_dibits_to_device_paints_selected_memory_dib_from_bottom_up_source`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The raw GWE
+  suite remains at 313 passing tests, and the full suite keeps the eVC4 MIPSII
+  fixture ignored because that toolchain is not configured. `git diff --check`
+  output was limited to the existing LF-to-CRLF normalization warnings. Cargo
+  runs still emit the existing unused-code warnings plus Windows
+  profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `TransparentImage` now follows CE `draw.cpp::TransparentBltPatBltTest` and
+  `TransparentBltSetPixelTest` for same-framebuffer HDC copies. The framebuffer
+  fallback snapshots the source pixels before writing, skips source pixels that
+  match the transparent `COLORREF`, copies nonmatching source pixels, and
+  preserves the black/white skip/copy behavior CE verifies after `PatBlt` or
+  `SetPixel` setup.
+- Validation after the framebuffer `TransparentImage` color-key slice: `cargo
+  fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_transparent_image_copies_between_framebuffer_hdc_with_color_key`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `git diff --check`, `cargo check
+  --features unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 314 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. `git diff --check` output was limited to the
+  existing LF-to-CRLF normalization warnings. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `DrawEdge` now
+  follows CE `draw.cpp::DrawEdgeTest1` for invalid edge-type bits on color
+  display targets. `DrawEdge(hdc, &rc, 0xFFFFFFFF, BF_RECT)` now fails with
+  `ERROR_INVALID_PARAMETER` after the HDC and rectangle pointer are valid,
+  while retaining the existing monochrome selected-DIB exception path.
+- Validation after the `DrawEdge` invalid-edge slice: `cargo fmt`, `cargo test
+  -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_gdi_misc_draw_apis_validate_ce_pass_null_edges`, `cargo test -j
+  1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo fmt
+  --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite remains at 314 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. `git diff --check` output was limited to the
+  existing LF-to-CRLF normalization warnings. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `DrawFocusRect` now follows CE `draw.cpp::DrawFocusRectTest` for
+  framebuffer-backed HDCs. Screen/window HDC calls now XOR the dotted perimeter
+  through the visible framebuffer clips, mark the affected rectangle dirty, and
+  a second draw toggles the same pixels back to their original values instead
+  of returning success without drawing.
+- Validation after the framebuffer `DrawFocusRect` slice: `cargo fmt`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_draw_focus_rect_xors_framebuffer_and_toggles`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo fmt
+  --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 315 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. `git diff --check` output was limited to the
+  existing LF-to-CRLF normalization warnings. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `PatBlt` now
+  follows CE `draw.cpp::PatBltBadRopTest` for source-dependent ROP3 values.
+  After HDC, dimension, and ROP4 validation, `PatBlt` now applies the CE
+  source-dependency test to the ROP3 byte and fails source-dependent ROPs such
+  as `SRCCOPY`, `SRCINVERT`, and `PATPAINT` with `ERROR_INVALID_HANDLE`
+  because `PatBlt` has no source DC, while source-free ROPs like `BLACKNESS`,
+  `WHITENESS`, `DSTINVERT`, `PATCOPY`, and `NOP` remain valid.
+- Validation after the `PatBltBadRopTest` source-dependent ROP3 slice: `cargo
+  fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_pat_blt_rejects_source_dependent_rop3_without_source`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 316 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. `git diff --check` output was limited to the
+  existing LF-to-CRLF normalization warnings. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `PatBlt` now also
+  renders CE source-free pattern/destination ROP3 values through the shared
+  ROP3 truth-table evaluator instead of treating unrecognized successful ROPs
+  as no-op success. The regression uses CE `draw.cpp::gnvRop3Array` `DPa`
+  (`0x00A00000`) with a red brush over a white destination and verifies red
+  output for both selected memory DIB and framebuffer-backed HDC targets.
+- Validation after the source-free `PatBlt` ROP3 rendering slice: `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_pat_blt_applies_source_free_pattern_destination_rop3`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 317 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. `git diff --check` output was limited to the
+  existing LF-to-CRLF normalization warnings. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `PatBlt` now
+  accepts CE `draw.cpp::TryShapes`/`PatBltSimple` signed extents. Zero width or
+  height now succeeds as a no-op, and negative width/height normalizes into the
+  mirrored destination rectangle for both selected memory DIBs and
+  framebuffer-backed HDCs.
+- Validation after the `PatBlt` signed-extent slice: `cargo fmt`, `cargo test
+  -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_pat_blt_accepts_zero_and_negative_extents`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo fmt
+  --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 318 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. `git diff --check` output was limited to the
+  existing LF-to-CRLF normalization warnings. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `SetBitmapBits` now
+  allocates owned backing for pointerless `CreateBitmap(..., NULL)` handles
+  before copying, so CE `draw.cpp::CreateBitmapSquares*` and
+  `SetBitmapBitsOnePixel`-style writes are visible to later blits. Copies are
+  bounded to bitmap storage and return the copied byte count.
+- Validation after the `SetBitmapBits` pointerless `CreateBitmap` backing
+  slice: `cargo fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_set_bitmap_bits_allocates_createbitmap_backing`, `cargo test -j
+  1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo fmt
+  --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 319 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. `git diff --check` output was limited to the
+  existing LF-to-CRLF normalization warnings. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/resource.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
+  bitmap objects now track whether their backing bits are writable. BMP/DIB
+  loader paths create read-only owned backing, while caller-created bitmaps and
+  DIB sections remain writable. Raw `SetBitmapBits` now fails before copying
+  when the target bitmap is read-only, preserving the original backing bytes as
+  CE `draw.cpp::WritableBitmapTest(ESetBitmapBits)` expects for loaded
+  bitmaps.
+- Validation after the read-only loaded-bitmap `SetBitmapBits` slice: `cargo
+  fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_set_bitmap_bits_rejects_readonly_loaded_bitmap`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 320 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `PatBlt` now rejects
+  read-only selected bitmap destinations before rendering, preserving the
+  backing bytes for CE `draw.cpp::WritableBitmapTest(EPatBlt)`-style loaded
+  bitmap targets while leaving writable selected-DIB and framebuffer paths
+  intact.
+- Validation after the read-only selected-bitmap `PatBlt` slice: `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_pat_blt_rejects_readonly_selected_bitmap`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` passed. The raw GWE suite is now at 321 passing tests. Cargo
+  runs still emit the existing unused-code warnings plus Windows
+  profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `FillRect` now
+  rejects read-only selected bitmap destinations before filling, preserving the
+  backing bytes for CE `draw.cpp::WritableBitmapTest(EFillRect)`-style loaded
+  bitmap targets while leaving writable selected-DIB and framebuffer paths
+  intact.
+- Validation after the read-only selected-bitmap `FillRect` slice: `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_fill_rect_rejects_readonly_selected_bitmap`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 322 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `InvertRect` now
+  rejects read-only selected bitmap destinations before inversion, preserving
+  backing bytes for CE `draw.cpp::WritableBitmapTest(EInvertRect)`-style loaded
+  bitmap targets while leaving writable selected-DIB behavior intact.
+- `src/emulator/unicorn.rs`: `rotate_to_ready_parked_threads` now treats a
+  requested receiver thread with pending sent-message work as ready for the
+  blocked-send handoff, fixing
+  `blocked_send_handoff_prefers_parked_receiver_over_visible_sender_work`
+  without changing unrelated parked-process filters.
+- Validation after the read-only selected-bitmap `InvertRect` slice and parked
+  receiver handoff test fix: `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_invert_rect_rejects_readonly_selected_bitmap`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, targeted lib tests for
+  `blocked_send_handoff_prefers_parked_receiver_over_visible_sender_work` and
+  `ready_parked`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 323 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `SetPixel` now
+  rejects read-only selected bitmap destinations before filling the target
+  pixel, returning `CLR_INVALID` and preserving the four-pixel backing block for
+  CE `draw.cpp::WritableBitmapTest(ESetPixel)`-style loaded bitmap targets.
+- Validation after the read-only selected-bitmap `SetPixel` slice: `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_set_pixel_rejects_readonly_selected_bitmap`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 324 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `LineTo` now rejects
+  read-only selected bitmap destinations after the CE-compatible `MoveToEx`
+  setup but before drawing or advancing the current point, preserving backing
+  bytes for CE `draw.cpp::WritableBitmapTest(ELineTo)`-style loaded bitmap
+  targets.
+- Focused validation after the read-only selected-bitmap `LineTo` slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_line_to_rejects_readonly_selected_bitmap` passed. Cargo still
+  emits the existing unused-code warnings plus Windows profile/incremental-cache
+  cleanup noise.
+- Broader validation after the read-only selected-bitmap `LineTo` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 325 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `Polyline` now
+  rejects read-only selected bitmap destinations after reading the caller's
+  point array but before drawing or advancing the current point, preserving
+  backing bytes for CE `draw.cpp::WritableBitmapTest(EPolyline)`-style loaded
+  bitmap targets.
+- Focused validation after the read-only selected-bitmap `Polyline` slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_polyline_rejects_readonly_selected_bitmap` passed. Cargo still
+  emits the existing unused-code warnings plus Windows profile/incremental-cache
+  cleanup noise.
+- Broader validation after the read-only selected-bitmap `Polyline` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 326 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `Polygon` now
+  rejects read-only selected bitmap destinations after reading the caller's
+  point array but before fill/stroke rendering, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(EPolygon)`-style loaded bitmap targets.
+- Focused validation after the read-only selected-bitmap `Polygon` slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_polygon_rejects_readonly_selected_bitmap` passed. Cargo still
+  emits the existing unused-code warnings plus Windows profile noise.
+- Broader validation after the read-only selected-bitmap `Polygon` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 327 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `Rectangle` now
+  rejects read-only selected bitmap destinations before brush fill or pen stroke
+  rendering, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(ERectangle)`-style loaded bitmap targets.
+- Focused validation after the read-only selected-bitmap `Rectangle` slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_rectangle_rejects_readonly_selected_bitmap` passed. Cargo still
+  emits the existing unused-code warnings plus Windows profile/incremental-cache
+  cleanup noise.
+- Broader validation after the read-only selected-bitmap `Rectangle` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 328 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `Ellipse` now
+  rejects read-only selected bitmap destinations before brush fill or pen
+  outline rendering, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(EEllipse)`-style loaded bitmap targets.
+- Focused validation after the read-only selected-bitmap `Ellipse` slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_ellipse_rejects_readonly_selected_bitmap` passed. Cargo still
+  emits the existing unused-code warnings plus Windows profile/incremental-cache
+  cleanup noise.
+- Broader validation after the read-only selected-bitmap `Ellipse` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 329 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `RoundRect` now
+  rejects read-only selected bitmap destinations before rounded fill or pen
+  outline rendering, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(ERoundRect)`-style loaded bitmap targets.
+- Focused validation after the read-only selected-bitmap `RoundRect` slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_round_rect_rejects_readonly_selected_bitmap` passed. Cargo still
+  emits the existing unused-code warnings plus Windows profile/incremental-cache
+  cleanup noise.
+- Broader validation after the read-only selected-bitmap `RoundRect` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 330 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `DrawFocusRect`
+  now rejects read-only selected bitmap destinations before XOR perimeter
+  rendering, and raw `DrawEdge` rejects read-only selected bitmap destinations
+  after CE parameter validation and before border/fill rendering or `BF_ADJUST`
+  rectangle mutation, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(EDrawFocusRect/EDrawEdge)`-style loaded bitmap
+  targets.
+- Focused validation after the read-only selected-bitmap `DrawFocusRect` and
+  `DrawEdge` slice: `cargo fmt`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_draw_focus_rect_rejects_readonly_selected_bitmap`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_draw_edge_rejects_readonly_selected_bitmap`
+  passed. Cargo still emits the existing unused-code warnings plus Windows
+  profile/incremental-cache cleanup noise.
+- Broader validation after the read-only selected-bitmap `DrawFocusRect` and
+  `DrawEdge` slice: `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and full `cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The raw GWE suite is
+  now at 332 passing tests, and the full suite keeps the eVC4 MIPSII fixture
+  ignored because that toolchain is not configured. Cargo runs still emit the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `BitBlt`,
+  `StretchBlt`, and `MaskBlt` now reject read-only selected bitmap destinations
+  after their CE HDC/extent/ROP or mask validation and before destination pixel
+  writes, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(EBitBlt/EStretchBlt/EMaskBlt)`-style loaded
+  bitmap targets.
+- Focused validation after the read-only selected-bitmap blit slice:
+  `cargo fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_bit_blt_rejects_readonly_selected_bitmap`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_stretch_blt_rejects_readonly_selected_bitmap`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_mask_blt_rejects_readonly_selected_bitmap`
+  passed. Cargo still emits the existing unused-code warnings plus Windows
+  profile/incremental-cache cleanup noise.
+- Broader validation after the read-only selected-bitmap blit slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo fmt --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 335 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `TransparentImage` now rejects read-only selected bitmap destinations after
+  CE HDC and positive-extent validation and before source snapshotting or
+  color-key rendering, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(ETransparentImage)`-style loaded bitmap
+  targets.
+- Focused validation after the read-only selected-bitmap `TransparentImage`
+  slice: `cargo fmt` and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_transparent_image_rejects_readonly_selected_bitmap` passed. This
+  also repaired the Unicorn modal handoff compile break by consuming the
+  optional framebuffer only once during parked-modal preparation. Cargo still
+  emits the existing unused-code warnings plus Windows profile/import noise.
+- Broader validation after the read-only selected-bitmap `TransparentImage`
+  slice and Unicorn modal-handoff compile repair: `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The raw GWE
+  suite is now at 336 passing tests, and the full suite keeps the eVC4 MIPSII
+  fixture ignored because that toolchain is not configured. Cargo runs still
+  emit the existing unused-code warnings plus Windows profile/import and
+  incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `GradientFill` now
+  rejects read-only selected bitmap destinations after CE HDC, pointer/count,
+  and mode validation and before reading caller vertex/mesh payloads or
+  rendering rectangle gradients, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(EGradientFill)`-style loaded bitmap targets.
+- Focused validation after the read-only selected-bitmap `GradientFill` slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_gradient_fill_rejects_readonly_selected_bitmap` passed. Cargo
+  still emits the existing unused-code warnings plus Windows profile/import and
+  incremental-cache cleanup noise.
+- Broader validation after the read-only selected-bitmap `GradientFill` slice:
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 337 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/import and incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `AlphaBlend` now
+  rejects read-only selected bitmap destinations after CE HDC, blend-function,
+  and nonzero-extent validation and before source bitmap validation or
+  blending, preserving backing bytes for CE
+  `draw.cpp::WritableBitmapTest(EAlphaBlend)`-style loaded bitmap targets.
+- Focused validation after the read-only selected-bitmap `AlphaBlend` slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_alpha_blend_rejects_readonly_selected_bitmap` passed. Cargo still
+  emits the existing unused-code warnings plus Windows profile/import and
+  incremental-cache cleanup noise.
+- Broader validation after the read-only selected-bitmap `AlphaBlend` slice:
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 338 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/import and incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw direct-DIB
+  `StretchDIBits` and `SetDIBitsToDevice` now reject read-only selected bitmap
+  destinations like CE `draw.cpp::WritableBitmapTest(EStretchDIBits/
+  ESetDIBitsToDevice)`, preserving selected-bitmap backing bytes before caller
+  DIB payload reads or rendering.
+- Focused validation after the read-only selected-bitmap direct-DIB slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_direct_dib_calls_reject_readonly_selected_bitmap`
+  passed. Cargo still emits the existing unused-code warnings plus Windows
+  profile/import noise.
+- Broader validation after the read-only selected-bitmap direct-DIB slice:
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 339 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/import and incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `DrawTextW` and
+  `ExtTextOutW` now reject read-only selected bitmap destinations like CE
+  `text.cpp` importing `draw.cpp::WritableBitmapTest(EDrawTextW/EExtTextOut)`,
+  preserving selected-bitmap backing bytes before glyph rendering or
+  `ETO_OPAQUE` rectangle filling.
+- Focused validation after the read-only selected-bitmap text draw slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe
+  coredll_raw_text_draw_calls_reject_readonly_selected_bitmap` passed. Cargo
+  still emits the existing unused-code warnings plus Windows profile/import
+  noise.
+- Broader validation after the read-only selected-bitmap text draw slice:
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE suite is now at 340 passing
+  tests, and the full suite keeps the eVC4 MIPSII fixture ignored because that
+  toolchain is not configured. Cargo runs still emit the existing unused-code
+  warnings plus Windows profile/import and incremental-cache cleanup noise.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `TrackPopupMenuEx` now clamps normal top-level popup placement to CE screen
+  metrics after alignment, matching the `menu.h` screen-sized menu placement
+  model. The alignment regression now verifies a near-bottom-right request
+  records `(710, 440)` on the default 800x480 screen and still hit-tests the
+  selected row.
+- Focused validation after the popup screen-clamp slice: `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_track_popup_menu_ex_applies_ce_alignment_flags`
+  passed. Cargo still emits the existing unused-code warnings plus Windows
+  profile/import noise.
+- Broader validation after the popup screen-clamp slice: `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed. The raw GWE suite remains at 340 passing tests,
+  the full suite keeps the eVC4 MIPSII fixture ignored because that toolchain
+  is not configured, and `git diff --check` output was limited to existing
+  LF-to-CRLF warnings.
+- `src/ce/coredll.rs`: popup child-submenu placement now uses one CE-style
+  cascade helper for both live modal stack state and framebuffer rendering,
+  matching the `menu.h` screen-sized candidate-placement model. Left-flipped
+  child panes and bottom-edge child panes are clamped back inside the active
+  screen/framebuffer before the submenu is pushed or rendered.
+- Focused validation after the popup child-submenu clamp slice:
+  `cargo test -j 1 popup_menu_cascading_child_position --features
+  unicorn,trace,win32-desktop` passed. Cargo still emits the existing
+  unused-code warnings plus Windows profile/import noise.
+- Broader validation after the popup child-submenu clamp slice:
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  full `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed. The full suite keeps the eVC4 MIPSII fixture
+  ignored because that toolchain is not configured, and `git diff --check`
+  output was limited to existing LF-to-CRLF warnings.

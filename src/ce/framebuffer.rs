@@ -69,6 +69,77 @@ impl FramebufferRect {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FramebufferBackingStore {
+    info: FramebufferInfo,
+    rect: FramebufferRect,
+    row_stride: usize,
+    pixels: Vec<u8>,
+}
+
+impl FramebufferBackingStore {
+    pub fn capture(framebuffer: &dyn Framebuffer, rect: FramebufferRect) -> Option<Self> {
+        let info = framebuffer.info();
+        let rect = rect.clipped_to(info.width, info.height)?;
+        let bytes_per_pixel = info.format.bytes_per_pixel();
+        let row_stride = rect.width as usize * bytes_per_pixel;
+        let height = rect.height as usize;
+        let mut pixels = Vec::with_capacity(row_stride * height);
+        let framebuffer_pixels = framebuffer.pixels();
+        for y in rect.y as usize..rect.y as usize + height {
+            let start = y
+                .checked_mul(info.stride)?
+                .checked_add(rect.x as usize * bytes_per_pixel)?;
+            let end = start.checked_add(row_stride)?;
+            pixels.extend_from_slice(framebuffer_pixels.get(start..end)?);
+        }
+        Some(Self {
+            info,
+            rect,
+            row_stride,
+            pixels,
+        })
+    }
+
+    pub fn restore(&self, framebuffer: &mut dyn Framebuffer) -> bool {
+        let info = framebuffer.info();
+        if info.format != self.info.format {
+            return false;
+        }
+        let Some(rect) = self.rect.clipped_to(info.width, info.height) else {
+            return false;
+        };
+        if rect != self.rect {
+            return false;
+        }
+        let bytes_per_pixel = info.format.bytes_per_pixel();
+        let row_stride = rect.width as usize * bytes_per_pixel;
+        if row_stride != self.row_stride {
+            return false;
+        }
+        let height = rect.height as usize;
+        if self.pixels.len() < row_stride * height {
+            return false;
+        }
+        let framebuffer_pixels = framebuffer.pixels_mut();
+        for row in 0..height {
+            let y = rect.y as usize + row;
+            let dst_start = y * info.stride + rect.x as usize * bytes_per_pixel;
+            let dst_end = dst_start + row_stride;
+            let src_start = row * self.row_stride;
+            let src_end = src_start + row_stride;
+            framebuffer_pixels[dst_start..dst_end]
+                .copy_from_slice(&self.pixels[src_start..src_end]);
+        }
+        framebuffer.mark_dirty(rect);
+        true
+    }
+
+    pub fn rect(&self) -> FramebufferRect {
+        self.rect
+    }
+}
+
 pub trait Framebuffer {
     fn info(&self) -> FramebufferInfo;
     fn pixels(&self) -> &[u8];

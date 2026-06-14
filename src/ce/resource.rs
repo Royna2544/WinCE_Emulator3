@@ -14,6 +14,8 @@ const SYSTEM_FONT: u32 = 13;
 const DEFAULT_PALETTE: u32 = 15;
 const DC_BRUSH: u32 = 18;
 const DC_PEN: u32 = 19;
+const BORDERX_PEN: u32 = 32;
+const BORDERY_PEN: u32 = 33;
 const DEFAULT_BITMAP_HANDLE: u32 = STOCK_OBJECT_BASE | 0x80;
 
 pub fn stock_object_handle(index: u32) -> Option<u32> {
@@ -25,6 +27,8 @@ pub fn stock_object_handle(index: u32) -> Option<u32> {
             | DEFAULT_PALETTE
             | DC_BRUSH
             | DC_PEN
+            | BORDERX_PEN
+            | BORDERY_PEN
     );
     valid.then_some(STOCK_OBJECT_BASE | index)
 }
@@ -68,7 +72,7 @@ fn is_stock_brush(handle: u32) -> bool {
 fn is_stock_pen(handle: u32) -> bool {
     matches!(
         stock_object_index(handle),
-        Some(WHITE_PEN..=NULL_PEN | DC_PEN)
+        Some(WHITE_PEN..=NULL_PEN | DC_PEN | BORDERX_PEN | BORDERY_PEN)
     )
 }
 
@@ -117,6 +121,10 @@ pub struct BitmapObject {
     pub color_table: Vec<[u8; 4]>,
     pub bits_ptr: u32,
     pub bits_owned: bool,
+    pub bits_writable: bool,
+    pub dib_section: bool,
+    pub section_handle: u32,
+    pub section_offset: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -615,7 +623,9 @@ impl ResourceSystem {
         bits_pixel: u16,
         bits_ptr: u32,
     ) -> u32 {
-        self.create_bitmap_with_ownership(width, height, planes, bits_pixel, bits_ptr, None, false)
+        self.create_bitmap_with_flags(
+            width, height, planes, bits_pixel, bits_ptr, None, false, true,
+        )
     }
 
     pub fn create_bitmap_with_masks(
@@ -627,8 +637,8 @@ impl ResourceSystem {
         bits_ptr: u32,
         rgb_masks: Option<[u32; 3]>,
     ) -> u32 {
-        self.create_bitmap_with_ownership(
-            width, height, planes, bits_pixel, bits_ptr, rgb_masks, false,
+        self.create_bitmap_with_flags(
+            width, height, planes, bits_pixel, bits_ptr, rgb_masks, false, true,
         )
     }
 
@@ -640,7 +650,9 @@ impl ResourceSystem {
         bits_pixel: u16,
         bits_ptr: u32,
     ) -> u32 {
-        self.create_bitmap_with_ownership(width, height, planes, bits_pixel, bits_ptr, None, true)
+        self.create_bitmap_with_flags(
+            width, height, planes, bits_pixel, bits_ptr, None, true, true,
+        )
     }
 
     pub fn create_owned_bitmap_with_masks(
@@ -652,12 +664,39 @@ impl ResourceSystem {
         bits_ptr: u32,
         rgb_masks: Option<[u32; 3]>,
     ) -> u32 {
-        self.create_bitmap_with_ownership(
-            width, height, planes, bits_pixel, bits_ptr, rgb_masks, true,
+        self.create_bitmap_with_flags(
+            width, height, planes, bits_pixel, bits_ptr, rgb_masks, true, true,
         )
     }
 
-    fn create_bitmap_with_ownership(
+    pub fn create_readonly_owned_bitmap(
+        &mut self,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bits_pixel: u16,
+        bits_ptr: u32,
+    ) -> u32 {
+        self.create_bitmap_with_flags(
+            width, height, planes, bits_pixel, bits_ptr, None, true, false,
+        )
+    }
+
+    pub fn create_readonly_owned_bitmap_with_masks(
+        &mut self,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bits_pixel: u16,
+        bits_ptr: u32,
+        rgb_masks: Option<[u32; 3]>,
+    ) -> u32 {
+        self.create_bitmap_with_flags(
+            width, height, planes, bits_pixel, bits_ptr, rgb_masks, true, false,
+        )
+    }
+
+    fn create_bitmap_with_flags(
         &mut self,
         width: i32,
         height: i32,
@@ -666,6 +705,7 @@ impl ResourceSystem {
         bits_ptr: u32,
         rgb_masks: Option<[u32; 3]>,
         bits_owned: bool,
+        bits_writable: bool,
     ) -> u32 {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
@@ -685,6 +725,10 @@ impl ResourceSystem {
                 color_table: Vec::new(),
                 bits_ptr,
                 bits_owned,
+                bits_writable,
+                dib_section: false,
+                section_handle: 0,
+                section_offset: 0,
             },
         );
         handle
@@ -2155,13 +2199,13 @@ impl ResourceSystem {
     }
 
     pub fn get_current_object(&self, hdc: u32, obj_type: u32) -> u32 {
-        self.dc_states
-            .get(&hdc)
+        self.dc_state(hdc)
             .map(|s| match obj_type {
-                1 => s.selected_pen,    // OBJ_PEN
-                2 => s.selected_brush,  // OBJ_BRUSH
-                6 => s.selected_font,   // OBJ_FONT
-                7 => s.selected_bitmap, // OBJ_BITMAP
+                1 => s.selected_pen,     // OBJ_PEN
+                2 => s.selected_brush,   // OBJ_BRUSH
+                5 => s.selected_palette, // OBJ_PAL
+                6 => s.selected_font,    // OBJ_FONT
+                7 => s.selected_bitmap,  // OBJ_BITMAP
                 _ => 0,
             })
             .unwrap_or(0)
@@ -2274,7 +2318,7 @@ impl ResourceSystem {
     }
 
     pub fn select_palette(&mut self, hdc: u32, palette: u32) -> Option<u32> {
-        if hdc == 0 || !self.palettes.contains_key(&palette) {
+        if hdc == 0 || (!self.palettes.contains_key(&palette) && !is_stock_palette(palette)) {
             return None;
         }
         let state = self.dc_states.entry(hdc).or_default();

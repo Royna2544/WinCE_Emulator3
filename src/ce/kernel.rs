@@ -9,6 +9,7 @@ use crate::{
             FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_ALWAYS, OPEN_EXISTING,
             TRUNCATE_EXISTING,
         },
+        framebuffer::{Framebuffer, FramebufferBackingStore, FramebufferInfo, FramebufferRect},
         gwe::{
             FileChangeNotificationMessage, Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message,
             MessagePointerPayload, NotifyIconMessage, PeekFlags, Point, Rect, SMF_NULL,
@@ -145,6 +146,11 @@ pub struct CeKernel {
     comm_event_mask_changed_waits: BTreeSet<u64>,
     font_families: Vec<CeFontFamily>,
     fsdmgr_caches: Vec<Option<FsdmgrCacheEntry>>,
+    display_gamma_value: u32,
+    display_rotation: u32,
+    display_perf_timings: Vec<DisplayPerfTiming>,
+    display_perf_unhandled: u32,
+    window_backing_stores: BTreeMap<u32, FramebufferBackingStore>,
 }
 
 /// Font family entry for CE system font enumeration (EnumFontFamiliesExW).
@@ -217,6 +223,20 @@ fn ce_system_font_families() -> Vec<CeFontFamily> {
             is_truetype: true,
         },
     ]
+}
+
+fn framebuffer_rect_from_gwe_rect(info: FramebufferInfo, rect: Rect) -> Option<FramebufferRect> {
+    let rect = rect.normalized();
+    let left = rect.left.max(0).min(info.width as i32) as u32;
+    let top = rect.top.max(0).min(info.height as i32) as u32;
+    let right = rect.right.max(0).min(info.width as i32) as u32;
+    let bottom = rect.bottom.max(0).min(info.height as i32) as u32;
+    (right > left && bottom > top).then_some(FramebufferRect::new(
+        left,
+        top,
+        right - left,
+        bottom - top,
+    ))
 }
 
 // CE 6.0 NLS enumeration data for the Korean device image (locale.txt in
@@ -551,6 +571,36 @@ pub struct ProcessTraceRecord {
     pub thread_id: Option<u32>,
     pub result: Option<u32>,
     pub error: Option<String>,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayPerfTiming {
+    pub rop_code: u32,
+    pub c_gpe: u32,
+    pub dw_gpe_time: u32,
+    pub c_emul: u32,
+    pub dw_emul_time: u32,
+    pub c_hardware: u32,
+    pub dw_hardware_time: u32,
+    pub dw_wait_time: u32,
+    pub blt_params: [u32; 8],
+}
+
+impl DisplayPerfTiming {
+    fn new(rop_code: u32) -> Self {
+        Self {
+            rop_code,
+            c_gpe: 0,
+            dw_gpe_time: 0,
+            c_emul: 0,
+            dw_emul_time: 0,
+            c_hardware: 0,
+            dw_hardware_time: 0,
+            dw_wait_time: 0,
+            blt_params: [0; 8],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -770,11 +820,95 @@ impl CeKernel {
             comm_event_mask_changed_waits: BTreeSet::new(),
             font_families: ce_system_font_families(),
             fsdmgr_caches: Vec::new(),
+            display_gamma_value: 2330,
+            display_rotation: 0,
+            display_perf_timings: Vec::new(),
+            display_perf_unhandled: 0,
+            window_backing_stores: BTreeMap::new(),
         }
     }
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
         self.runtime_loader_stats
+    }
+
+    pub fn display_gamma_value(&self) -> u32 {
+        self.display_gamma_value
+    }
+
+    pub fn set_display_gamma_value(&mut self, value: u32) {
+        self.display_gamma_value = value.clamp(1000, 3000);
+    }
+
+    pub fn display_rotation(&self) -> u32 {
+        self.display_rotation
+    }
+
+    pub fn set_display_rotation(&mut self, value: u32) {
+        self.display_rotation = value;
+    }
+
+    pub fn clear_display_perf_timings(&mut self) {
+        self.display_perf_timings.clear();
+        self.display_perf_unhandled = 0;
+    }
+
+    pub fn display_perf_unhandled(&self) -> u32 {
+        self.display_perf_unhandled
+    }
+
+    pub fn display_perf_timing_bytes(&self) -> Vec<u8> {
+        const DISPPERF_TIMING_ROWS: usize = 32;
+        let mut bytes = Vec::with_capacity(DISPPERF_TIMING_ROWS * 64);
+        for index in 0..DISPPERF_TIMING_ROWS {
+            if let Some(timing) = self.display_perf_timings.get(index) {
+                bytes.extend_from_slice(&timing.rop_code.to_le_bytes());
+                bytes.extend_from_slice(&timing.c_gpe.to_le_bytes());
+                bytes.extend_from_slice(&timing.dw_gpe_time.to_le_bytes());
+                bytes.extend_from_slice(&timing.c_emul.to_le_bytes());
+                bytes.extend_from_slice(&timing.dw_emul_time.to_le_bytes());
+                bytes.extend_from_slice(&timing.c_hardware.to_le_bytes());
+                bytes.extend_from_slice(&timing.dw_hardware_time.to_le_bytes());
+                bytes.extend_from_slice(&timing.dw_wait_time.to_le_bytes());
+                for param in timing.blt_params {
+                    bytes.extend_from_slice(&param.to_le_bytes());
+                }
+            } else {
+                bytes.extend_from_slice(&[0; 64]);
+            }
+        }
+        bytes
+    }
+
+    pub fn record_display_perf_gpe(&mut self, rop_code: u32, stretch: bool, transparent: bool) {
+        const DISPPERF_TIMING_ROWS: usize = 32;
+        const PARAM_STRETCH: usize = 6;
+        const PARAM_TRANSPARENT: usize = 7;
+        let Some(index) = self
+            .display_perf_timings
+            .iter()
+            .position(|timing| timing.rop_code == rop_code)
+            .or_else(|| {
+                (self.display_perf_timings.len() < DISPPERF_TIMING_ROWS).then(|| {
+                    self.display_perf_timings
+                        .push(DisplayPerfTiming::new(rop_code));
+                    self.display_perf_timings.len() - 1
+                })
+            })
+        else {
+            self.display_perf_unhandled = self.display_perf_unhandled.saturating_add(1);
+            return;
+        };
+        let timing = &mut self.display_perf_timings[index];
+        timing.c_gpe = timing.c_gpe.saturating_add(1);
+        timing.dw_gpe_time = timing.dw_gpe_time.saturating_add(1);
+        if stretch {
+            timing.blt_params[PARAM_STRETCH] = timing.blt_params[PARAM_STRETCH].saturating_add(1);
+        }
+        if transparent {
+            timing.blt_params[PARAM_TRANSPARENT] =
+                timing.blt_params[PARAM_TRANSPARENT].saturating_add(1);
+        }
     }
 
     pub fn should_stop_after_live_pump_timeout_slice(&mut self, slice_ms: u32) -> bool {
@@ -1280,6 +1414,7 @@ impl CeKernel {
             thread_id: Some(thread_id),
             result: Some(1),
             error: None,
+            detail: Some(format!("show_cmd={show_cmd:?}")),
         });
         launch
     }
@@ -1289,7 +1424,22 @@ impl CeKernel {
     }
 
     pub fn mark_process_launch_exited(&mut self, launch: &PendingProcessLaunch, exit_code: u32) {
+        self.mark_process_launch_exited_with_framebuffer(launch, exit_code, None);
+    }
+
+    pub fn mark_process_launch_exited_with_framebuffer(
+        &mut self,
+        launch: &PendingProcessLaunch,
+        exit_code: u32,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) {
+        let targets = self.process_window_targets(launch.process_id, launch.thread_id);
         self.destroy_process_windows(launch.process_id, launch.thread_id);
+        if let Some(framebuffer) = framebuffer {
+            let _ = self.restore_window_backing_stores(&targets, framebuffer);
+        } else {
+            self.discard_window_backing_stores(&targets);
+        }
         if self
             .handles
             .mark_process_exited(launch.process_handle, exit_code)
@@ -1313,16 +1463,12 @@ impl CeKernel {
             thread_id: Some(launch.thread_id),
             result: Some(exit_code),
             error: None,
+            detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
         });
     }
 
-    fn destroy_process_windows(&mut self, process_id: u32, thread_id: u32) {
-        self.gwe.terminate_sent_messages_from_process(process_id);
-        if thread_id != 0 {
-            self.gwe.terminate_sent_messages_from_sender(thread_id);
-        }
-        let hwnds = self
-            .gwe
+    pub fn process_window_targets(&self, process_id: u32, thread_id: u32) -> Vec<u32> {
+        self.gwe
             .windows_snapshot()
             .into_iter()
             .filter(|window| {
@@ -1331,7 +1477,15 @@ impl CeKernel {
                     && (window.process_id == process_id || window.thread_id == thread_id)
             })
             .map(|window| window.hwnd)
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    fn destroy_process_windows(&mut self, process_id: u32, thread_id: u32) {
+        self.gwe.terminate_sent_messages_from_process(process_id);
+        if thread_id != 0 {
+            self.gwe.terminate_sent_messages_from_sender(thread_id);
+        }
+        let hwnds = self.process_window_targets(process_id, thread_id);
         for hwnd in &hwnds {
             self.record_window_lifecycle_trace(
                 "destroy_window_begin",
@@ -1406,6 +1560,16 @@ impl CeKernel {
         }
         self.queue_send_reply_wake_candidates(send_id);
         true
+    }
+
+    pub fn terminate_sent_messages_to_receiver(&mut self, receiver_thread_id: u32) -> Vec<u64> {
+        let terminated = self
+            .gwe
+            .terminate_sent_messages_to_receiver(receiver_thread_id);
+        for send_id in &terminated {
+            self.queue_send_reply_wake_candidates(*send_id);
+        }
+        terminated
     }
 
     pub fn set_file_root(&mut self, root: impl Into<std::path::PathBuf>) {
@@ -3213,6 +3377,20 @@ impl CeKernel {
                 });
                 return Ok(true);
             }
+            KernelObject::FileMapping(mapping) if !mapping.views.is_empty() => {
+                self.handles
+                    .close_file_mapping_handle_with_live_views(handle)?;
+                self.record_event_trace(EventTraceRecord {
+                    op: "CloseHandle",
+                    handle: Some(handle),
+                    name,
+                    manual_reset: None,
+                    signaled: None,
+                    result: Some(true),
+                    detail: Some(format!("closed handle, preserved live views for {detail}")),
+                });
+                return Ok(true);
+            }
             _ => {}
         }
         self.handles.close(handle)?;
@@ -3788,6 +3966,7 @@ impl CeKernel {
                 thread_id: None,
                 result: Some(result),
                 error: Some(format!("exit=0x{:08x}", process.exit_code)),
+                detail: None,
             }),
             Some(KernelObject::Thread(thread)) => Some(ProcessTraceRecord {
                 op: "WaitForSingleObjectThread",
@@ -3800,6 +3979,7 @@ impl CeKernel {
                 thread_id: Some(thread.thread_id),
                 result: Some(result),
                 error: Some(format!("exit=0x{:08x}", thread.exit_code)),
+                detail: None,
             }),
             _ => None,
         };
@@ -3901,6 +4081,19 @@ impl CeKernel {
         self.pulsed_wait_handles.remove(&wait_id);
         self.comm_event_mask_changed_waits.remove(&wait_id);
         self.scheduler.remove_blocked_wait(wait_id)
+    }
+
+    pub fn remove_blocked_waiters_for_thread(&mut self, thread_id: u32) -> usize {
+        let wait_ids = self
+            .scheduler
+            .blocked_waits()
+            .filter(|wait| wait.thread_id == thread_id)
+            .map(|wait| wait.id)
+            .collect::<Vec<_>>();
+        for wait_id in &wait_ids {
+            let _ = self.remove_blocked_waiter(*wait_id);
+        }
+        wait_ids.len()
     }
 
     pub(crate) fn take_modal_dialog_result(
@@ -4198,6 +4391,56 @@ impl CeKernel {
             )),
         );
         hwnd
+    }
+
+    pub fn capture_window_backing_store(
+        &mut self,
+        hwnd: u32,
+        framebuffer: &dyn Framebuffer,
+    ) -> bool {
+        if self.window_backing_stores.contains_key(&hwnd) {
+            return true;
+        }
+        let Some(window) = self.gwe.window(hwnd) else {
+            return false;
+        };
+        if window.destroyed {
+            return false;
+        }
+        let Some(rect) = framebuffer_rect_from_gwe_rect(framebuffer.info(), window.rect) else {
+            return false;
+        };
+        let Some(backing_store) = FramebufferBackingStore::capture(framebuffer, rect) else {
+            return false;
+        };
+        self.window_backing_stores.insert(hwnd, backing_store);
+        true
+    }
+
+    pub fn restore_window_backing_stores(
+        &mut self,
+        hwnds: &[u32],
+        framebuffer: &mut dyn Framebuffer,
+    ) -> usize {
+        let mut restored = 0usize;
+        for hwnd in hwnds.iter().rev().copied() {
+            if let Some(backing_store) = self.window_backing_stores.remove(&hwnd) {
+                if backing_store.restore(framebuffer) {
+                    restored = restored.saturating_add(1);
+                }
+            }
+        }
+        restored
+    }
+
+    pub fn discard_window_backing_stores(&mut self, hwnds: &[u32]) {
+        for hwnd in hwnds {
+            self.window_backing_stores.remove(hwnd);
+        }
+    }
+
+    pub fn window_destroy_targets(&self, hwnd: u32) -> Vec<u32> {
+        self.gwe.window_and_descendants(hwnd).unwrap_or_default()
     }
 
     pub fn show_window(&mut self, hwnd: u32, visible: bool) -> bool {
@@ -4597,6 +4840,29 @@ impl CeKernel {
             .record_thread_dispatched(thread_id, self.timers.tick_count());
         self.record_message_op(
             "get_message",
+            thread_id,
+            &message,
+            Some(1),
+            Some(format_filter_detail(hwnd, min_msg, max_msg)),
+        );
+        Some(message)
+    }
+
+    pub fn take_ready_visible_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        let message = self
+            .gwe
+            .get_visible_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
+        self.clear_timer_message_pending(thread_id, &message);
+        self.gwe
+            .record_thread_dispatched(thread_id, self.timers.tick_count());
+        self.record_message_op(
+            "get_visible_message",
             thread_id,
             &message,
             Some(1),
@@ -6951,6 +7217,50 @@ mod tests {
         assert_eq!(kernel.gwe.get_active_window(), Some(parent));
         assert!(kernel.gwe.get_message(thread_id).is_none());
 
+        Ok(())
+    }
+
+    #[test]
+    fn destroyed_window_restores_captured_framebuffer_backing_store() -> Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        for (index, byte) in framebuffer.pixels_mut().iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let original = framebuffer.snapshot().pixels;
+        let hwnd = kernel.create_window_ex_w_with_rect(
+            1,
+            "DIALOG",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(1, 1, 4, 4),
+        );
+
+        assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        let info = framebuffer.info();
+        let bytes_per_pixel = info.format.bytes_per_pixel();
+        for y in 1usize..5 {
+            for x in 1usize..5 {
+                let offset = y * info.stride + x * bytes_per_pixel;
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel].fill(0xff);
+            }
+        }
+
+        let targets = kernel.window_destroy_targets(hwnd);
+        assert!(kernel.destroy_window(hwnd));
+        assert_eq!(
+            kernel.restore_window_backing_stores(&targets, &mut framebuffer),
+            1
+        );
+        assert_eq!(framebuffer.pixels(), original.as_slice());
         Ok(())
     }
 

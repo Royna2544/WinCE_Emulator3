@@ -1797,6 +1797,14 @@ impl Gwe {
             if let Some(window) = self.windows.get_mut(&target) {
                 window.being_destroyed = false;
                 window.destroyed = true;
+                window.visible = false;
+                window.enabled = false;
+                window.style &= !WS_VISIBLE;
+                window.update_pending = false;
+                window.erase_pending = false;
+                window.update_rects.clear();
+                window.pending_move = false;
+                window.pending_size = false;
             }
             self.window_regions.remove(&target);
             self.z_order.retain(|candidate| *candidate != target);
@@ -4320,6 +4328,35 @@ impl Gwe {
         sent_ids
     }
 
+    pub fn terminate_sent_messages_to_receiver(&mut self, receiver_thread_id: u32) -> Vec<u64> {
+        let sent_ids = self
+            .sent_messages
+            .iter()
+            .filter(|(_, sent)| {
+                sent.receiver_thread_id == receiver_thread_id && sent.flags & SMF_RESULT_READY == 0
+            })
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        if sent_ids.is_empty() {
+            return sent_ids;
+        }
+
+        for id in &sent_ids {
+            if let Some(sent) = self.sent_messages.get_mut(id) {
+                sent.flags |= SMF_RECEIVER_TERMINATED | SMF_RESULT_READY;
+                sent.result = Some(0);
+            }
+        }
+        for queue in self.sent_queues.values_mut() {
+            queue.retain(|id| !sent_ids.contains(id));
+        }
+        self.stats.send_transaction_receiver_terminated_count = self
+            .stats
+            .send_transaction_receiver_terminated_count
+            .saturating_add(sent_ids.len() as u64);
+        sent_ids
+    }
+
     pub fn expire_timed_out_sent_messages(&mut self, now_ms: u32) -> Vec<u64> {
         let expired: Vec<u64> = self
             .sent_messages
@@ -4643,6 +4680,28 @@ impl Gwe {
             .is_some_and(|message| self.message_targets_visible_window(&message))
     }
 
+    pub fn has_visible_queued_message_filtered(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
+        self.sent_queues.get(&thread_id).is_some_and(|queue| {
+            queue.iter().any(|id| {
+                self.sent_messages.get(id).is_some_and(|sent| {
+                    message_matches(&sent.message, hwnd, min_msg, max_msg)
+                        && self.message_targets_visible_window(&sent.message)
+                })
+            })
+        }) || self.queues.get(&thread_id).is_some_and(|queue| {
+            queue.iter().any(|message| {
+                message_matches(message, hwnd, min_msg, max_msg)
+                    && self.message_targets_visible_window(message)
+            })
+        })
+    }
+
     fn message_targets_visible_window(&self, message: &Message) -> bool {
         self.windows
             .get(&message.hwnd)
@@ -4673,6 +4732,32 @@ impl Gwe {
             return Some(message);
         }
         let message = self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)?;
+        self.last_message_source_by_thread
+            .insert(thread_id, message.source);
+        self.record_last_message_pos(thread_id, &message);
+        Some(message)
+    }
+
+    pub fn get_visible_message_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        if let Some(message) =
+            self.take_matching_visible_sent_message(thread_id, hwnd, min_msg, max_msg)
+        {
+            return Some(message);
+        }
+        if let Some(message) = self.take_matching_visible_message(thread_id, hwnd, min_msg, max_msg)
+        {
+            return Some(message);
+        }
+        let message = self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)?;
+        if !self.message_targets_visible_window(&message) {
+            return None;
+        }
         self.last_message_source_by_thread
             .insert(thread_id, message.source);
         self.record_last_message_pos(thread_id, &message);
@@ -4842,6 +4927,28 @@ impl Gwe {
         Some(message)
     }
 
+    fn take_matching_visible_message(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        let index = {
+            let queue = self.queues.get(&thread_id)?;
+            queue.iter().position(|message| {
+                message_matches(message, hwnd, min_msg, max_msg)
+                    && self.message_targets_visible_window(message)
+            })?
+        };
+        let queue = self.queues.get_mut(&thread_id)?;
+        let message = queue.remove(index)?;
+        self.last_message_source_by_thread
+            .insert(thread_id, message.source);
+        self.record_last_message_pos(thread_id, &message);
+        Some(message)
+    }
+
     fn take_matching_sent_message(
         &mut self,
         thread_id: u32,
@@ -4855,6 +4962,36 @@ impl Gwe {
                 .get(id)
                 .is_some_and(|sent| message_matches(&sent.message, hwnd, min_msg, max_msg))
         })?;
+        let id = queue.remove(index)?;
+        let message = self.sent_messages.get(&id)?.message.clone();
+        self.last_message_source_by_thread
+            .insert(thread_id, message.source);
+        self.record_last_message_pos(thread_id, &message);
+        self.active_sent_stack_by_thread
+            .entry(thread_id)
+            .or_default()
+            .push(id);
+        self.begin_send_message(thread_id);
+        Some(message)
+    }
+
+    fn take_matching_visible_sent_message(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        let index = {
+            let queue = self.sent_queues.get(&thread_id)?;
+            queue.iter().position(|id| {
+                self.sent_messages.get(id).is_some_and(|sent| {
+                    message_matches(&sent.message, hwnd, min_msg, max_msg)
+                        && self.message_targets_visible_window(&sent.message)
+                })
+            })?
+        };
+        let queue = self.sent_queues.get_mut(&thread_id)?;
         let id = queue.remove(index)?;
         let message = self.sent_messages.get(&id)?.message.clone();
         self.last_message_source_by_thread
@@ -6013,6 +6150,37 @@ mod tests {
     }
 
     #[test]
+    fn terminating_receiver_marks_queued_sync_send_ready() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 11;
+        let receiver_thread = 12;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 4, 0x21, 0x22, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("queued sync send");
+        assert!(gwe.has_pending_sent_message_for_thread(receiver_thread));
+
+        assert_eq!(
+            gwe.terminate_sent_messages_to_receiver(receiver_thread),
+            vec![send_id]
+        );
+        let sent = gwe.sent_message(send_id).expect("terminated send state");
+        assert_ne!(sent.flags & SMF_RECEIVER_TERMINATED, 0);
+        assert_ne!(sent.flags & SMF_RESULT_READY, 0);
+        assert_eq!(sent.result, Some(0));
+        assert!(!gwe.has_pending_sent_message_for_thread(receiver_thread));
+        assert_eq!(gwe.get_message(receiver_thread), None);
+        assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
+    }
+
+    #[test]
     fn sent_message_dispatch_honors_hwnd_and_message_filters() {
         let mut gwe = Gwe::default();
         let receiver_thread = 12;
@@ -6466,6 +6634,43 @@ mod tests {
             gwe.update_rect(background).unwrap().rect,
             Rect::from_origin_size(50, 60, 100, 80)
         );
+    }
+
+    #[test]
+    fn destroy_window_hides_retained_destroyed_subtree_state() {
+        let mut gwe = Gwe::default();
+        let parent = gwe.create_window_ex(1, "Dialog", "Button", None, 0, WS_VISIBLE, 0);
+        let child = gwe.create_window_ex(
+            1,
+            "STATIC",
+            "Quit Happyway",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD,
+            0,
+        );
+
+        assert!(gwe.invalidate_window(parent, None, true));
+        assert!(gwe.invalidate_window(child, None, true));
+        assert!(gwe.destroy_window(parent, 0));
+
+        for hwnd in [parent, child] {
+            let window = gwe
+                .windows
+                .get(&hwnd)
+                .expect("destroyed window is retained");
+            assert!(window.destroyed);
+            assert!(!window.visible);
+            assert!(!window.enabled);
+            assert_eq!(window.style & WS_VISIBLE, 0);
+            assert!(!window.update_pending);
+            assert!(!window.erase_pending);
+            assert!(window.update_rects.is_empty());
+            assert!(!window.pending_move);
+            assert!(!window.pending_size);
+            assert!(!gwe.is_window_visible(hwnd));
+            assert!(!gwe.z_order.contains(&hwnd));
+        }
     }
 
     #[test]

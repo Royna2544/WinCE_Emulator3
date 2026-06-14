@@ -100,6 +100,7 @@ pub struct FileMappingObject {
     pub file_id: Option<u32>,
     pub data: Vec<u8>,
     pub views: Vec<FileMappingView>,
+    pub closed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,10 +275,11 @@ impl HandleTable {
             Ok(KernelObject::Window(hwnd)) => format!("window(hwnd=0x{hwnd:08x})"),
             Ok(KernelObject::WaveOut(id)) => format!("waveout(id={id})"),
             Ok(KernelObject::FileMapping(mapping)) => format!(
-                "mapping(name={},size={},views={})",
+                "mapping(name={},size={},views={},closed={})",
                 mapping.name.as_deref().unwrap_or("<unnamed>"),
                 mapping.size,
-                mapping.views.len()
+                mapping.views.len(),
+                mapping.closed
             ),
             Ok(KernelObject::CriticalSection(cs)) => {
                 format!("critical_section(ptr=0x{:08x})", cs.guest_ptr)
@@ -429,8 +431,13 @@ impl HandleTable {
             size,
             protect,
             file_id,
-            data: vec![0; size as usize],
+            data: if file_id.is_some() {
+                Vec::new()
+            } else {
+                vec![0; size as usize]
+            },
             views: Vec::new(),
+            closed: false,
         }))
     }
 
@@ -444,14 +451,28 @@ impl HandleTable {
 
     pub fn file_mapping(&self, handle: u32) -> Result<&FileMappingObject> {
         match self.get(handle)? {
-            KernelObject::FileMapping(mapping) => Ok(mapping),
+            KernelObject::FileMapping(mapping) if !mapping.closed => Ok(mapping),
             _ => Err(Error::InvalidHandle(handle)),
         }
     }
 
     pub fn file_mapping_mut(&mut self, handle: u32) -> Result<&mut FileMappingObject> {
         match self.get_mut(handle)? {
-            KernelObject::FileMapping(mapping) => Ok(mapping),
+            KernelObject::FileMapping(mapping) if !mapping.closed => Ok(mapping),
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn close_file_mapping_handle_with_live_views(&mut self, handle: u32) -> Result<bool> {
+        match self.get_mut(handle)? {
+            KernelObject::FileMapping(mapping) if mapping.closed => {
+                Err(Error::InvalidHandle(handle))
+            }
+            KernelObject::FileMapping(mapping) if !mapping.views.is_empty() => {
+                mapping.closed = true;
+                Ok(true)
+            }
+            KernelObject::FileMapping(_) => Ok(false),
             _ => Err(Error::InvalidHandle(handle)),
         }
     }
@@ -493,14 +514,24 @@ impl HandleTable {
     }
 
     pub fn remove_file_mapping_view(&mut self, base: u32) -> Option<FileMappingView> {
-        self.objects.values_mut().find_map(|object| match object {
-            KernelObject::FileMapping(mapping) => mapping
-                .views
-                .iter()
-                .position(|view| view.base == base)
-                .map(|index| mapping.views.remove(index)),
-            _ => None,
-        })
+        let (handle, view) = self
+            .objects
+            .iter_mut()
+            .find_map(|(handle, object)| match object {
+                KernelObject::FileMapping(mapping) => mapping
+                    .views
+                    .iter()
+                    .position(|view| view.base == base)
+                    .map(|index| (*handle, mapping.views.remove(index))),
+                _ => None,
+            })?;
+        if matches!(
+            self.objects.get(&handle),
+            Some(KernelObject::FileMapping(mapping)) if mapping.closed && mapping.views.is_empty()
+        ) {
+            let _ = self.objects.remove(&handle);
+        }
+        Some(view)
     }
 
     pub fn file_mappings_mut(&mut self) -> impl Iterator<Item = &mut FileMappingObject> {

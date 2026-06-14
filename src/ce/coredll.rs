@@ -861,6 +861,7 @@ impl CoredllExportTable {
                     kernel,
                     memory,
                     framebuffer,
+                    &context,
                     context.thread_id,
                     &export,
                     args,
@@ -1490,6 +1491,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     framebuffer: Option<&mut dyn Framebuffer>,
+    context: &CoredllRawContext,
     thread_id: u32,
     export: &CoredllExport,
     args: &[u32],
@@ -5514,15 +5516,25 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
         ))),
         ORD_CREATE_WINDOW_EX_W => Some(CoredllValue::Handle(create_window_ex_w_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_DESTROY_WINDOW => Some(CoredllValue::Bool(destroy_window_raw(
             kernel,
             memory,
+            framebuffer,
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_SHOW_WINDOW => Some(CoredllValue::Bool(show_window_raw(kernel, thread_id, args))),
+        ORD_SHOW_WINDOW => Some(CoredllValue::Bool(show_window_raw(
+            kernel,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
         ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(kernel.update_window(raw_arg(args, 0)))),
         ORD_INVALIDATE_RECT => Some(CoredllValue::Bool(invalidate_rect_raw(
             kernel, memory, thread_id, args,
@@ -5635,6 +5647,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_GET_DEVICE_CAPS => Some(CoredllValue::U32(get_device_caps_raw(
             kernel,
+            thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
@@ -5744,11 +5757,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_GET_NEAREST_COLOR => {
-            // GetNearestColor(hdc, crColor) — CE uses direct 24-bit color; return unchanged.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(raw_arg(args, 1)))
-        }
+        ORD_GET_NEAREST_COLOR => Some(CoredllValue::U32(get_nearest_color_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_GET_NEAREST_PALETTE_INDEX => Some(CoredllValue::U32(get_nearest_palette_index_raw(
             kernel,
             thread_id,
@@ -5793,37 +5807,28 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_GET_STOCK_OBJECT => Some(CoredllValue::Handle(get_stock_object_raw(raw_arg(args, 0)))),
+        ORD_GET_STOCK_OBJECT => Some(CoredllValue::Handle(get_stock_object_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_SELECT_OBJECT => Some(CoredllValue::Handle(select_object_raw(
             kernel,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_GET_CURRENT_OBJECT => {
-            // GetCurrentObject(hdc, uObjectType) — return the currently selected GDI object.
-            let hdc = raw_arg(args, 0);
-            let obj_type = raw_arg(args, 1);
-            kernel.threads.set_last_error(thread_id, 0);
-            let handle = kernel.resources.get_current_object(hdc, obj_type);
-            Some(CoredllValue::Handle(handle))
-        }
-        ORD_GET_OBJECT_TYPE => {
-            // GetObjectType(handle) — return the GDI object type code.
-            let handle = raw_arg(args, 0);
-            let type_code: u32 = match kernel.resources.gdi_object_kind(handle) {
-                "pen" => 1,       // OBJ_PEN
-                "brush" => 2,     // OBJ_BRUSH
-                "memory_dc" => 3, // OBJ_DC
-                "font" => 6,      // OBJ_FONT
-                "bitmap" => 7,    // OBJ_BITMAP
-                "palette" => 9,   // OBJ_PALETTE
-                "region" => 8,    // OBJ_REGION
-                _ => 0,
-            };
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(type_code))
-        }
+        ORD_GET_CURRENT_OBJECT => Some(CoredllValue::Handle(get_current_object_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_OBJECT_TYPE => Some(CoredllValue::U32(get_object_type_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_GET_BK_COLOR => Some(CoredllValue::U32(get_bk_color_raw(
             kernel,
             thread_id,
@@ -6048,12 +6053,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             args,
         ))),
-        ORD_RECT_VISIBLE => {
-            // RectVisible(hdc, lprc) — check if rectangle intersects clip region.
-            // Always return TRUE (visible) since we don't enforce clip regions.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_RECT_VISIBLE => Some(CoredllValue::U32(rect_visible_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_PAT_BLT => Some(CoredllValue::Bool(pat_blt_raw(
             kernel,
             memory,
@@ -7518,6 +7520,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel,
             memory,
             framebuffer,
+            context,
             thread_id,
             args,
         ))),
@@ -7836,6 +7839,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_DELETE_OBJECT => Some(CoredllValue::Bool(delete_object_raw(
             kernel,
+            memory,
+            thread_id,
             raw_arg(args, 0),
         ))),
         ORD_DPA_CREATE | ORD_DPA_CREATE_EX => Some(CoredllValue::Handle(dpa_create_raw(
@@ -13248,14 +13253,20 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     mut framebuffer: Option<&mut dyn Framebuffer>,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
     let state = match framebuffer {
-        Some(ref mut framebuffer) => {
-            message_box_w_prepare(kernel, memory, Some(&mut **framebuffer), thread_id, args)
-        }
-        None => message_box_w_prepare(kernel, memory, None, thread_id, args),
+        Some(ref mut framebuffer) => message_box_w_prepare(
+            kernel,
+            memory,
+            Some(&mut **framebuffer),
+            Some(context),
+            thread_id,
+            args,
+        ),
+        None => message_box_w_prepare(kernel, memory, None, Some(context), thread_id, args),
     };
     let state = match state {
         Err(result) => return result,
@@ -13283,6 +13294,7 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     framebuffer: Option<&mut dyn Framebuffer>,
+    context: Option<&CoredllRawContext>,
     thread_id: u32,
     args: &[u32],
 ) -> std::result::Result<MessageBoxModalState, u32> {
@@ -13373,6 +13385,9 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
         selection,
         owner_hwnd,
         owner_was_enabled,
+        caller_pc: context.and_then(|context| context.caller_pc),
+        trap_pc: context.and_then(|context| context.trap_pc),
+        caller_module: context.and_then(|context| context.caller_module.clone()),
         text,
         caption,
         style,
@@ -13389,6 +13404,9 @@ pub(crate) struct MessageBoxModalState {
     selection: MessageBoxSelection,
     owner_hwnd: u32,
     owner_was_enabled: Option<bool>,
+    caller_pc: Option<u32>,
+    trap_pc: Option<u32>,
+    caller_module: Option<String>,
     text: String,
     caption: String,
     style: u32,
@@ -13427,6 +13445,9 @@ impl MessageBoxModalState {
         {
             return self.selection.buttons.contains(&result).then_some(result);
         }
+        if let Some(result) = kernel.gwe.dialog_result(self.window_state.dialog_hwnd) {
+            return self.selection.buttons.contains(&result).then_some(result);
+        }
         message_box_modal_input_result(kernel, thread_id, &self.window_state, &self.selection)
     }
 
@@ -13461,6 +13482,9 @@ impl MessageBoxModalState {
             owner_hwnd: self.owner_hwnd,
             dialog_hwnd: self.window_state.dialog_hwnd,
             text_hwnd: self.window_state.text_hwnd,
+            caller_pc: self.caller_pc,
+            trap_pc: self.trap_pc,
+            caller_module: self.caller_module,
             text: self.text,
             caption: self.caption,
             style: self.style,
@@ -19492,24 +19516,49 @@ fn flush_view_of_file_raw<M: CoredllGuestMemory>(
     base: u32,
     bytes_to_flush: u32,
 ) -> bool {
-    let Some((mapping, view)) = kernel
-        .handles
-        .file_mapping_view(base)
-        .map(|(mapping, view)| (mapping.clone(), view))
-    else {
+    let Some((file_id, view, bytes)) = commit_file_mapping_view_from_guest(
+        kernel,
+        memory,
+        thread_id,
+        base,
+        (bytes_to_flush != 0).then_some(bytes_to_flush),
+    ) else {
+        return false;
+    };
+    let Some(file_id) = file_id else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    };
+    match kernel.write_file_at(file_id, view.offset as usize, &bytes) {
+        Ok(result) if result.success && result.bytes_transferred == bytes.len() as u32 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    base: u32,
+    bytes_to_commit: Option<u32>,
+) -> Option<(Option<u32>, FileMappingView, Vec<u8>)> {
+    let Some((mapping, view)) = kernel.handles.file_mapping_view(base) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
+        return None;
     };
-    let count = if bytes_to_flush == 0 {
-        view.size
-    } else {
-        bytes_to_flush.min(view.size)
-    };
-    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, base, count) else {
-        return false;
-    };
+    let file_id = mapping.file_id;
+    let count = bytes_to_commit.unwrap_or(view.size).min(view.size);
+    let bytes = read_guest_bytes(kernel, memory, thread_id, base, count)?;
     let (views, data) = if let Some((mapping, view)) = kernel.handles.file_mapping_by_view_mut(base)
     {
         let start = view.offset as usize;
@@ -19523,22 +19572,7 @@ fn flush_view_of_file_raw<M: CoredllGuestMemory>(
         (Vec::new(), Vec::new())
     };
     sync_file_mapping_views_to_guest(memory, base, &views, &data);
-    let Some(file_id) = mapping.file_id else {
-        kernel.threads.set_last_error(thread_id, 0);
-        return true;
-    };
-    match kernel.write_file_at(file_id, view.offset as usize, &bytes) {
-        Ok(result) if result.success && result.bytes_transferred == count => {
-            kernel.threads.set_last_error(thread_id, 0);
-            true
-        }
-        _ => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-            false
-        }
-    }
+    Some((file_id, view, bytes))
 }
 
 fn sync_file_mapping_views_to_guest<M: CoredllGuestMemory>(
@@ -19567,33 +19601,12 @@ fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     base: u32,
 ) -> bool {
-    let Some((mapping, view)) = kernel
-        .handles
-        .file_mapping_view(base)
-        .map(|(mapping, view)| (mapping.clone(), view))
+    let Some((file_id, view, bytes)) =
+        commit_file_mapping_view_from_guest(kernel, memory, thread_id, base, None)
     else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
-    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, base, view.size) else {
-        return false;
-    };
-    let (views, data) = if let Some((mapping, view)) = kernel.handles.file_mapping_by_view_mut(base)
-    {
-        let start = view.offset as usize;
-        let end = start.saturating_add(bytes.len());
-        if end > mapping.data.len() {
-            mapping.data.resize(end, 0);
-        }
-        mapping.data[start..end].copy_from_slice(&bytes);
-        (mapping.views.clone(), mapping.data.clone())
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    sync_file_mapping_views_to_guest(memory, base, &views, &data);
-    if let Some(file_id) = mapping.file_id {
+    if let Some(file_id) = file_id {
         let _ = kernel.write_file_at(file_id, view.offset as usize, &bytes);
     }
     if kernel.handles.remove_file_mapping_view(base).is_some() {
@@ -20269,6 +20282,7 @@ fn find_window_w_raw<M: CoredllGuestMemory>(
 fn create_window_ex_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
@@ -20334,6 +20348,11 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
     );
     if hwnd != 0 && menu != 0 {
         let _ = kernel.gwe.set_menu(hwnd, menu);
+    }
+    if hwnd != 0 {
+        if let Some(framebuffer) = framebuffer.as_deref() {
+            let _ = kernel.capture_window_backing_store(hwnd, framebuffer);
+        }
     }
     // CE: post WM_PARENTNOTIFY(WM_CREATE) to parent unless WS_EX_NOPARENTNOTIFY.
     if hwnd != 0 {
@@ -24574,6 +24593,7 @@ fn popup_menu_initial_position(
         return (x, y);
     };
     let (x, y) = popup_menu_aligned_position(flags, x, y, width, height);
+    let (x, y) = popup_menu_clamp_to_screen(x, y, width, height, screen_w, screen_h);
     let Some(exclude_rect) = exclude_rect else {
         return (x, y);
     };
@@ -24611,6 +24631,38 @@ fn popup_menu_initial_position(
         }
     }
     first_clamped.unwrap_or((x, y))
+}
+
+fn popup_menu_cascading_child_position(
+    parent_x: i32,
+    parent_y: i32,
+    parent_width: i32,
+    item_index: usize,
+    child_width: i32,
+    child_height: i32,
+    screen_w: i32,
+    screen_h: i32,
+) -> (i32, i32) {
+    let right_x = parent_x + parent_width - POPUP_MENU_BORDER;
+    let child_x = if right_x + child_width > screen_w {
+        parent_x - child_width + POPUP_MENU_BORDER
+    } else {
+        right_x
+    };
+    let raw_child_y = parent_y + POPUP_MENU_BORDER + (item_index as i32) * POPUP_MENU_ITEM_HEIGHT;
+    let child_y = if raw_child_y + child_height > screen_h {
+        (screen_h - child_height).max(0)
+    } else {
+        raw_child_y
+    };
+    popup_menu_clamp_to_screen(
+        child_x,
+        child_y,
+        child_width,
+        child_height,
+        screen_w,
+        screen_h,
+    )
 }
 
 fn popup_menu_aligned_position(flags: u32, x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
@@ -25168,18 +25220,16 @@ fn popup_menu_modal_open_submenu(
             parent_width,
             POPUP_MENU_ITEM_HEIGHT + POPUP_MENU_VERTICAL_PADDING,
         ));
-    let right_x = parent_x + parent_width - POPUP_MENU_BORDER;
-    let child_x = if right_x + child_width > screen_w {
-        parent_x - child_width + POPUP_MENU_BORDER
-    } else {
-        right_x
-    };
-    let raw_child_y = parent_y + POPUP_MENU_BORDER + (index as i32) * POPUP_MENU_ITEM_HEIGHT;
-    let child_y = if raw_child_y + child_height > screen_h {
-        (screen_h - child_height).max(0)
-    } else {
-        raw_child_y
-    };
+    let (child_x, child_y) = popup_menu_cascading_child_position(
+        parent_x,
+        parent_y,
+        parent_width,
+        index,
+        child_width,
+        child_height,
+        screen_w,
+        screen_h,
+    );
     let child_current = popup_menu_initial_key_index(&kernel.resources, submenu);
     stack.push(PopupMenuModalMenuState {
         menu: submenu,
@@ -25637,18 +25687,9 @@ fn render_popup_menu_framebuffer_inner(
                     let child_w = menu_popup_width(child_menu);
                     let child_h = (child_menu.items.len() as i32).max(1) * POPUP_MENU_ITEM_HEIGHT
                         + POPUP_MENU_VERTICAL_PADDING;
-                    let right_x = x + width - POPUP_MENU_BORDER;
-                    let cx = if right_x + child_w > screen_w {
-                        x - child_w + POPUP_MENU_BORDER
-                    } else {
-                        right_x
-                    };
-                    let cy = if item_top + child_h > screen_h {
-                        (screen_h - child_h).max(0)
-                    } else {
-                        item_top
-                    };
-                    (cx, cy)
+                    popup_menu_cascading_child_position(
+                        x, y, width, index, child_w, child_h, screen_w, screen_h,
+                    )
                 } else {
                     (x + width - POPUP_MENU_BORDER, item_top)
                 };
@@ -28179,6 +28220,7 @@ fn image_list_draw_raw<M: CoredllGuestMemory>(
     );
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
+        record_image_list_draw_dispperf(kernel, draw);
         if !render_image_list_draw_bitmap(kernel, memory, draw) {
             render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
         }
@@ -28230,6 +28272,7 @@ fn image_list_draw_ex_raw<M: CoredllGuestMemory>(
     );
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
+        record_image_list_draw_dispperf(kernel, draw);
         if !render_image_list_draw_bitmap(kernel, memory, draw) {
             render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
         }
@@ -28317,6 +28360,7 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     );
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
+        record_image_list_draw_dispperf(kernel, draw);
         let visible_params = image_list_draw_indirect_visible_params(kernel, draw);
         if !write_image_list_draw_indirect_normalized_params(
             kernel,
@@ -29818,6 +29862,13 @@ fn record_image_list_draw(kernel: &mut CeKernel, thread_id: u32, draw: ImageList
     }
 }
 
+fn record_image_list_draw_dispperf(kernel: &mut CeKernel, draw: ImageListDraw) {
+    let draw_flags = draw.flags & 0x00ff;
+    if let Some(rop) = image_list_draw_rop(draw_flags, draw.rop) {
+        kernel.record_display_perf_gpe(rop, false, false);
+    }
+}
+
 fn shell_system_image_bitmap_handle(index: i32) -> u32 {
     0x000b_d000 | ((index as u32) & 0x0fff)
 }
@@ -29987,7 +30038,7 @@ fn create_bitmap_from_file_bytes<M: CoredllGuestMemory>(
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    kernel.resources.create_owned_bitmap(
+    kernel.resources.create_readonly_owned_bitmap(
         header.width,
         header.height,
         header.planes,
@@ -30105,7 +30156,7 @@ fn create_bitmap_from_dib_bytes_with_color_usage<M: CoredllGuestMemory>(
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    let bitmap = kernel.resources.create_owned_bitmap_with_masks(
+    let bitmap = kernel.resources.create_readonly_owned_bitmap_with_masks(
         header.width,
         header.height,
         header.planes,
@@ -30227,6 +30278,10 @@ fn bitmap_byte_count(width: i32, height: i32, bits_pixel: u16) -> Option<u32> {
     (bytes <= u64::from(u32::MAX)).then_some(bytes as u32)
 }
 
+fn is_supported_dib_bit_depth(bits_pixel: u16) -> bool {
+    matches!(bits_pixel, 1 | 2 | 4 | 8 | 16 | 24 | 32)
+}
+
 fn dib_bits_offset(
     bytes: &[u8],
     header_size: u32,
@@ -30280,6 +30335,7 @@ fn dib_rgb_masks_from_bytes(
 ) -> Option<Option<[u32; 3]>> {
     match compression {
         BI_RGB => Some(None),
+        BI_BITFIELDS if bits_pixel == 24 => Some(None),
         BI_BITFIELDS if matches!(bits_pixel, 16 | 32) => {
             let mask_offset = if header_size >= 52 {
                 40usize
@@ -30368,6 +30424,7 @@ fn dib_rgb_masks<M: CoredllGuestMemory>(
 ) -> Option<Option<[u32; 3]>> {
     match compression {
         BI_RGB => Some(None),
+        BI_BITFIELDS if bits_pixel == 24 => Some(None),
         BI_BITFIELDS if matches!(bits_pixel, 16 | 32) => {
             let mask_bytes = if header_size >= 52 {
                 read_guest_bytes(kernel, memory, thread_id, info_ptr.wrapping_add(40), 12)?
@@ -30499,6 +30556,8 @@ fn get_object_w_raw<M: CoredllGuestMemory>(
 ) -> u32 {
     // BITMAP: bmType(i32)+bmWidth(i32)+bmHeight(i32)+bmWidthBytes(i32)+bmPlanes(u16)+bmBitsPixel(u16)+bmBits(u32)
     const BITMAP_SIZE: u32 = 24;
+    // DIBSECTION: BITMAP + BITMAPINFOHEADER + RGB bitfields[3] + section handle + offset
+    const DIBSECTION_SIZE: u32 = 84;
     // LOGPEN: lopnStyle(u32)+lopnWidth.x(i32)+lopnWidth.y(i32)+lopnColor(u32)
     const LOGPEN_SIZE: u32 = 16;
     // LOGBRUSH: lbStyle(u32)+lbColor(u32)+lbHatch(i32)
@@ -30543,14 +30602,32 @@ fn get_object_w_raw<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_HANDLE);
                 return 0;
             };
-            let mut b = Vec::with_capacity(BITMAP_SIZE as usize);
-            b.extend_from_slice(&0i32.to_le_bytes()); // bmType
-            b.extend_from_slice(&bmp.width.to_le_bytes());
-            b.extend_from_slice(&bmp.height.to_le_bytes());
-            b.extend_from_slice(&bmp.width_bytes.to_le_bytes());
-            b.extend_from_slice(&bmp.planes.to_le_bytes());
-            b.extend_from_slice(&bmp.bits_pixel.to_le_bytes());
-            b.extend_from_slice(&bmp.bits_ptr.to_le_bytes());
+            let mut b = bitmap_object_bytes(&bmp);
+            if bmp.dib_section && byte_count >= DIBSECTION_SIZE as i32 {
+                b.extend_from_slice(&40u32.to_le_bytes()); // biSize
+                b.extend_from_slice(&bmp.width.to_le_bytes());
+                let dib_height = if bmp.top_down {
+                    -bmp.height
+                } else {
+                    bmp.height
+                };
+                b.extend_from_slice(&dib_height.to_le_bytes());
+                b.extend_from_slice(&bmp.planes.to_le_bytes());
+                b.extend_from_slice(&bmp.bits_pixel.to_le_bytes());
+                let compression = if bmp.rgb_masks.is_some() { 3u32 } else { 0u32 };
+                b.extend_from_slice(&compression.to_le_bytes());
+                let size_image = (bmp.width_bytes.max(0) as u32).saturating_mul(bmp.height as u32);
+                b.extend_from_slice(&size_image.to_le_bytes());
+                b.extend_from_slice(&0i32.to_le_bytes()); // biXPelsPerMeter
+                b.extend_from_slice(&0i32.to_le_bytes()); // biYPelsPerMeter
+                b.extend_from_slice(&(bmp.color_table.len() as u32).to_le_bytes());
+                b.extend_from_slice(&0u32.to_le_bytes()); // biClrImportant
+                for mask in bmp.rgb_masks.unwrap_or([0, 0, 0]) {
+                    b.extend_from_slice(&mask.to_le_bytes());
+                }
+                b.extend_from_slice(&bmp.section_handle.to_le_bytes()); // dshSection
+                b.extend_from_slice(&bmp.section_offset.to_le_bytes()); // dsOffset
+            }
             b
         }
         "pen" => {
@@ -30674,10 +30751,12 @@ fn get_object_w_raw<M: CoredllGuestMemory>(
             b
         }
         "palette" => {
-            let count = kernel
-                .resources
-                .palette(handle)
-                .map_or(0u16, |p| p.entries.len() as u16);
+            let Some(count) = palette_entry_count(kernel, handle) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return 0;
+            };
             count.to_le_bytes().to_vec()
         }
         _ => unreachable!(),
@@ -30686,15 +30765,35 @@ fn get_object_w_raw<M: CoredllGuestMemory>(
     let ok = write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes);
     if ok {
         kernel.threads.set_last_error(thread_id, 0);
-        required
+        bytes.len() as u32
     } else {
         0
     }
 }
 
-fn delete_object_raw(kernel: &mut CeKernel, handle: u32) -> bool {
+fn bitmap_object_bytes(bitmap: &crate::ce::resource::BitmapObject) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(24);
+    bytes.extend_from_slice(&0i32.to_le_bytes()); // bmType
+    bytes.extend_from_slice(&bitmap.width.to_le_bytes());
+    bytes.extend_from_slice(&bitmap.height.to_le_bytes());
+    bytes.extend_from_slice(&bitmap.width_bytes.to_le_bytes());
+    bytes.extend_from_slice(&bitmap.planes.to_le_bytes());
+    bytes.extend_from_slice(&bitmap.bits_pixel.to_le_bytes());
+    bytes.extend_from_slice(&bitmap.bits_ptr.to_le_bytes());
+    bytes
+}
+
+fn delete_object_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+) -> bool {
     if handle == 0 {
         return false;
+    }
+    if is_stock_delete_noop(handle) {
+        return true;
     }
     let bitmap = kernel.resources.bitmap(handle).cloned();
     let owned_pattern_bitmap = kernel
@@ -30708,6 +30807,19 @@ fn delete_object_raw(kernel: &mut CeKernel, handle: u32) -> bool {
         && bitmap.bits_owned
         && bitmap.bits_ptr != 0
     {
+        if bitmap.section_handle != 0 {
+            if let Some((file_id, view, bytes)) = commit_file_mapping_view_from_guest(
+                kernel,
+                memory,
+                thread_id,
+                bitmap.bits_ptr,
+                None,
+            ) && let Some(file_id) = file_id
+            {
+                let _ = kernel.write_file_at(file_id, view.offset as usize, &bytes);
+            }
+            let _ = kernel.handles.remove_file_mapping_view(bitmap.bits_ptr);
+        }
         let _ = kernel
             .memory
             .heap_free(PROCESS_HEAP_HANDLE, 0, bitmap.bits_ptr);
@@ -30716,6 +30828,13 @@ fn delete_object_raw(kernel: &mut CeKernel, handle: u32) -> bool {
         delete_owned_bitmap(kernel, pattern_bitmap);
     }
     removed
+}
+
+fn is_stock_delete_noop(handle: u32) -> bool {
+    const STOCK_DELETE_NOOP_INDEXES: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 13, 15, 18, 19, 32, 33];
+    STOCK_DELETE_NOOP_INDEXES
+        .iter()
+        .any(|index| stock_object_handle(*index) == Some(handle))
 }
 
 fn delete_owned_bitmap(kernel: &mut CeKernel, handle: u32) {
@@ -31938,7 +32057,12 @@ fn set_parent_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, parent: u32)
     previous
 }
 
-fn show_window_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn show_window_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
     const SW_HIDE: u32 = 0;
     const SW_SHOWNOACTIVATE: u32 = 4;
     const SW_SHOWMINNOACTIVE: u32 = 7;
@@ -31947,13 +32071,22 @@ fn show_window_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool 
     let cmd = raw_arg(args, 1);
     let visible = cmd != SW_HIDE;
     let activate = visible && !matches!(cmd, SW_SHOWNOACTIVATE | SW_SHOWMINNOACTIVE | SW_SHOWNA);
+    if visible && !kernel.gwe.is_window_visible(hwnd) {
+        if let Some(framebuffer) = framebuffer.as_deref() {
+            let _ = kernel.capture_window_backing_store(hwnd, framebuffer);
+        }
+    }
     let previous = kernel.show_window_with_activation(hwnd, visible, activate);
     kernel.record_window_lifecycle_trace(
         "show_window_cmd",
         thread_id,
         Some(hwnd),
         Some(u32::from(previous)),
-        Some(format!("cmd={cmd}/visible={visible}/activate={activate}")),
+        Some(format!(
+            "cmd={cmd}/visible={visible}/activate={activate}/module={}/process_show_cmd={}",
+            kernel.process_module_path(),
+            kernel.process_show_cmd()
+        )),
     );
     previous
 }
@@ -35435,13 +35568,23 @@ fn release_dc_raw(kernel: &CeKernel, hwnd: u32, hdc: u32) -> u32 {
     }
 }
 
-fn get_device_caps_raw(kernel: &CeKernel, hdc: u32, index: u32) -> u32 {
-    if hdc == 0 {
+fn get_device_caps_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, index: u32) -> u32 {
+    if hdc != 0 && !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if index == u32::MAX {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let cx = kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN) as u32;
     let cy = kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN) as u32;
-    match index {
+    let value = match index {
+        DRIVERVERSION => 0x0001_0000,
         TECHNOLOGY => 1, // DT_RASDISPLAY
         // Physical display size in mm; approximate for a typical car-nav screen at 96 DPI.
         HORZSIZE => cx * 254 / 960,
@@ -35450,6 +35593,7 @@ fn get_device_caps_raw(kernel: &CeKernel, hdc: u32, index: u32) -> u32 {
         VERTRES => cy,
         BITSPIXEL => 16,
         PLANES => 1,
+        NUMBRUSHES | NUMPENS | NUMMARKERS | NUMFONTS => u32::MAX,
         NUMCOLORS => u32::MAX, // -1 cast to u32: true-color / hi-color device
         // CE GWES raster display capability flags.
         // RC_BITBLT | RC_BITMAP64 | RC_GDI20_OUTPUT | RC_DI_BITMAP | RC_DIBTODEV | RC_STRETCHBLT | RC_STRETCHDIB
@@ -35460,12 +35604,19 @@ fn get_device_caps_raw(kernel: &CeKernel, hdc: u32, index: u32) -> u32 {
         POLYGONALCAPS => 0x00FF, // PC_POLYGON | PC_RECTANGLE | PC_WINDPOLYGON | PC_SCANLINE | PC_WIDE | PC_STYLED | PC_WIDESTYLED | PC_INTERIORS
         // TC_OP_CHARACTER | TC_OP_STROKE | TC_CR_ANY | TC_SF_X_YINDEP | TC_SA_DOUBLE | TC_SA_INTEGER | TC_SA_CONTIN | TC_UA_ABLE | TC_SO_ABLE | TC_RA_ABLE | TC_VA_ABLE
         TEXTCAPS => 0x0000_7FF7,
+        CLIPCAPS => 1, // CP_RECTANGLE
+        ASPECTX | ASPECTY => 36,
+        ASPECTXY => 51,
         LOGPIXELSX | LOGPIXELSY => 96,
+        // The local display is RGB565/non-paletted, but CE's DEFAULT_PALETTE remains readable.
+        SIZEPALETTE | NUMRESERVED => 0,
         COLORRES => 16, // 16-bit RGB565 color resolution
-        // SB_CONST_ALPHA | SB_PIXEL_ALPHA | SB_PREMULT_ALPHA | SB_GRAD_RECT | SB_GRAD_TRI
-        SHADEBLENDCAPS => 0x0000_0037,
+        // SB_CONST_ALPHA | SB_PIXEL_ALPHA | SB_PREMULT_ALPHA | SB_GRAD_RECT
+        SHADEBLENDCAPS => 0x0000_0017,
         _ => 0,
-    }
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    value
 }
 
 const EXTESC_NOTSUPPORTED: u32 = 0;
@@ -35480,6 +35631,11 @@ const DRVESC_SETVIDEOPROTECTION: u32 = 6401;
 const DRVESC_GETVIDEOPROTECTION: u32 = 6402;
 const DRVESC_SAVEVIDEOMEM: u32 = 6501;
 const DRVESC_RESTOREVIDEOMEM: u32 = 6502;
+const DMDO_0: u32 = 0;
+const DMDO_90: u32 = 1;
+const DMDO_180: u32 = 2;
+const DMDO_270: u32 = 4;
+const DISP_CHANGE_BADMODE_RAW: u32 = (-2i32) as u32;
 const DISPPERF_EXTESC_GETSIZE: u32 = 0xfefefff0;
 const DISPPERF_EXTESC_GETTIMING: u32 = 0xfefefff1;
 const DISPPERF_EXTESC_CLEARTIMING: u32 = 0xfefefff2;
@@ -35487,6 +35643,9 @@ const DISPPERF_EXTESC_GETUNHANDLED: u32 = 0xfefefff3;
 const DISPPERF_TIMING_SIZE: u32 = 64;
 const DISPPERF_NUM_ROP_TIMES: u32 = 32;
 const DISPPERF_TIMING_TABLE_SIZE: u32 = DISPPERF_TIMING_SIZE * DISPPERF_NUM_ROP_TIMES;
+const DISPPERF_ROP_LINE: u32 = 0xfefefff1;
+const DISPPERF_ROP_TRANSPARENT_BLT: u32 = 0x0000_cccc;
+const DISPPERF_ROP_ALPHA_BLEND: u32 = 0x0000_cccc;
 
 fn ext_escape_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -35527,6 +35686,14 @@ fn ext_escape_raw<M: CoredllGuestMemory>(
         }
     } else if is_dispperf_escape(escape) {
         dispperf_ext_escape_raw(kernel, memory, thread_id, escape, output_len, output_ptr)
+    } else if escape == DRVESC_GETGAMMAVALUE {
+        drvesc_get_gamma_value_raw(kernel, memory, thread_id, output_len, output_ptr)
+    } else if escape == DRVESC_SETGAMMAVALUE {
+        drvesc_set_gamma_value_raw(kernel, memory, thread_id, input_len, input_ptr)
+    } else if escape == DRVESC_GETSCREENROTATION {
+        drvesc_get_screen_rotation_raw(kernel, memory, thread_id, output_len, output_ptr)
+    } else if escape == DRVESC_SETSCREENROTATION {
+        drvesc_set_screen_rotation_raw(kernel, memory, thread_id, input_len, input_ptr)
     } else if is_privileged_display_escape(escape) {
         kernel
             .threads
@@ -35538,6 +35705,101 @@ fn ext_escape_raw<M: CoredllGuestMemory>(
             .threads
             .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
         EXTESC_NOTSUPPORTED
+    }
+}
+
+fn drvesc_get_gamma_value_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    output_len: u32,
+    output_ptr: u32,
+) -> u32 {
+    if output_len < 4 || output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_ACCESS);
+        return EXTESC_ERROR;
+    }
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        output_ptr,
+        kernel.display_gamma_value(),
+    ) {
+        return EXTESC_ERROR;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    EXTESC_SUPPORTED
+}
+
+fn drvesc_set_gamma_value_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    input_len: u32,
+    input_ptr: u32,
+) -> u32 {
+    if input_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_ACCESS);
+        return EXTESC_ERROR;
+    }
+    if read_guest_u32(kernel, memory, thread_id, input_ptr).is_none() {
+        return EXTESC_ERROR;
+    }
+    kernel.set_display_gamma_value(input_len);
+    kernel.threads.set_last_error(thread_id, 0);
+    EXTESC_SUPPORTED
+}
+
+fn drvesc_get_screen_rotation_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    output_len: u32,
+    output_ptr: u32,
+) -> u32 {
+    if output_len < 4 || output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_ACCESS);
+        return EXTESC_ERROR;
+    }
+    let supported = (DMDO_0 | DMDO_90 | DMDO_180 | DMDO_270) << 8;
+    let packed = supported | (kernel.display_rotation() & 0xff);
+    if !write_guest_u32(kernel, memory, thread_id, output_ptr, packed) {
+        return EXTESC_ERROR;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    DISP_CHANGE_SUCCESSFUL
+}
+
+fn drvesc_set_screen_rotation_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    input_len: u32,
+    input_ptr: u32,
+) -> u32 {
+    if input_len == DMDO_0 && input_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_ACCESS);
+        return EXTESC_ERROR;
+    }
+    if input_ptr != 0 && read_guest_u32(kernel, memory, thread_id, input_ptr).is_none() {
+        return EXTESC_ERROR;
+    }
+    if matches!(input_len, DMDO_0 | DMDO_90 | DMDO_180 | DMDO_270) {
+        kernel.set_display_rotation(input_len);
+        kernel.threads.set_last_error(thread_id, 0);
+        DISP_CHANGE_SUCCESSFUL
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+        DISP_CHANGE_BADMODE_RAW
     }
 }
 
@@ -35576,14 +35838,15 @@ fn dispperf_ext_escape_raw<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
                 return EXTESC_ERROR;
             }
-            let zeroed = vec![0u8; DISPPERF_TIMING_TABLE_SIZE as usize];
-            if !write_guest_bytes(kernel, memory, thread_id, output_ptr, &zeroed) {
+            let timing = kernel.display_perf_timing_bytes();
+            if !write_guest_bytes(kernel, memory, thread_id, output_ptr, &timing) {
                 return EXTESC_ERROR;
             }
             kernel.threads.set_last_error(thread_id, 0);
             EXTESC_SUPPORTED
         }
         DISPPERF_EXTESC_CLEARTIMING => {
+            kernel.clear_display_perf_timings();
             kernel.threads.set_last_error(thread_id, 0);
             EXTESC_SUPPORTED
         }
@@ -35594,7 +35857,13 @@ fn dispperf_ext_escape_raw<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
                 return EXTESC_ERROR;
             }
-            if !write_guest_u32(kernel, memory, thread_id, output_ptr, 0) {
+            if !write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                output_ptr,
+                kernel.display_perf_unhandled(),
+            ) {
                 return EXTESC_ERROR;
             }
             kernel.threads.set_last_error(thread_id, 0);
@@ -35705,32 +35974,25 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let _hdc = raw_arg(args, 0);
+    let hdc = raw_arg(args, 0);
     let info_ptr = raw_arg(args, 1);
     let color_usage = raw_arg(args, 2);
     let bits_out = raw_arg(args, 3);
     let section = raw_arg(args, 4);
     let offset = raw_arg(args, 5);
     if info_ptr == 0
-        || bits_out == 0
         || !matches!(color_usage, DIB_RGB_COLORS | DIB_PAL_COLORS)
-        || offset != 0
+        || (section == 0 && offset != 0)
     {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    if section != 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        return 0;
-    }
     let Some(header_size) = read_guest_u32(kernel, memory, thread_id, info_ptr) else {
         return 0;
     };
-    if !(40..=124).contains(&header_size) {
+    if header_size != 12 && !(40..=124).contains(&header_size) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -35746,12 +36008,55 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    let Some(compression) = read_le_u32(&header_bytes, 16) else {
+    let compression = if header_size >= 40 {
+        let Some(compression) = read_le_u32(&header_bytes, 16) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        compression
+    } else {
+        BI_RGB
+    };
+    let color_used = if header_size >= 40 {
+        read_le_u32(&header_bytes, 32).unwrap_or(0)
+    } else {
+        0
+    };
+    if !is_supported_dib_bit_depth(header.bits_pixel) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
-    };
+    }
+    if header.bits_pixel < 16
+        && color_used > 256
+        && !(compression == BI_RGB && color_usage == DIB_PAL_COLORS)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if color_usage == DIB_PAL_COLORS && !matches!(header.bits_pixel, 1 | 2 | 4 | 8) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if hdc != 0 && !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if color_usage == DIB_PAL_COLORS && !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     let rgb_masks = match dib_rgb_masks(
         kernel,
         memory,
@@ -35789,6 +36094,57 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
+    let section_bytes = if section != 0 {
+        let (mapping_size, mapping_file_id, mapping_data) = {
+            let Ok(mapping) = kernel.handles.file_mapping(section) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return 0;
+            };
+            (mapping.size, mapping.file_id, mapping.data.clone())
+        };
+        let Some(section_end) = offset.checked_add(byte_count) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        if section_end > mapping_size {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        let start = offset as usize;
+        let end = section_end as usize;
+        let mut bytes = if let Some(file_id) = mapping_file_id {
+            match kernel.read_file_at(file_id, start, byte_count as usize) {
+                Ok(mut bytes) => {
+                    bytes.resize(byte_count as usize, 0);
+                    bytes
+                }
+                Err(_) => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    return 0;
+                }
+            }
+        } else if start < mapping_data.len() {
+            mapping_data[start..end.min(mapping_data.len())].to_vec()
+        } else {
+            Vec::new()
+        };
+        bytes.resize(byte_count as usize, 0);
+        if start < mapping_data.len() {
+            let overlay_end = end.min(mapping_data.len());
+            bytes[..overlay_end - start].copy_from_slice(&mapping_data[start..overlay_end]);
+        }
+        Some(bytes)
+    } else {
+        None
+    };
     let Some(bits_ptr) =
         kernel
             .memory
@@ -35799,9 +36155,27 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
         return 0;
     };
-    if !write_guest_u32(kernel, memory, thread_id, bits_out, bits_ptr) {
+    if bits_out != 0 && !write_guest_u32(kernel, memory, thread_id, bits_out, bits_ptr) {
         let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
         return 0;
+    }
+    if let Some(bytes) = section_bytes.as_ref() {
+        try_seed_guest_bytes(memory, bits_ptr, bytes);
+        let process_id = kernel.current_process_id();
+        if let Ok(mapping) = kernel.handles.file_mapping_mut(section) {
+            let start = offset as usize;
+            let end = start.saturating_add(bytes.len());
+            if end > mapping.data.len() {
+                mapping.data.resize(end, 0);
+            }
+            mapping.data[start..end].copy_from_slice(bytes);
+            mapping.views.push(FileMappingView {
+                base: bits_ptr,
+                size: byte_count,
+                offset,
+                process_id,
+            });
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     let bitmap = kernel.resources.create_owned_bitmap_with_masks(
@@ -35816,6 +36190,11 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
         if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
             object.color_table = color_table;
         }
+    }
+    if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
+        object.dib_section = true;
+        object.section_handle = section;
+        object.section_offset = offset;
     }
     bitmap
 }
@@ -36097,17 +36476,13 @@ fn get_palette_entries_raw<M: CoredllGuestMemory>(
     count: u32,
     entries_ptr: u32,
 ) -> u32 {
-    let Some(entries) = kernel
-        .resources
-        .palette(palette)
-        .map(|palette| &palette.entries)
-    else {
+    let Some(entries) = palette_entries_for_read(kernel, palette) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    let Some(bytes) = palette_entry_bytes(entries, start, count) else {
+    let Some(bytes) = palette_entry_bytes(&entries, start, count) else {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     };
@@ -36145,7 +36520,13 @@ fn set_palette_entries_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     };
-    if start_index >= entries_len || count == 0 {
+    if count == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if start_index >= entries_len {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
@@ -36186,26 +36567,76 @@ fn get_system_palette_entries_raw<M: CoredllGuestMemory>(
     count: u32,
     entries_ptr: u32,
 ) -> u32 {
-    if hdc == 0 {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
-    let entries = system_palette_entries();
-    let Some(bytes) = palette_entry_bytes(&entries, start, count) else {
-        kernel.threads.set_last_error(thread_id, 0);
-        return 0;
-    };
-    if entries_ptr == 0 || bytes.is_empty() {
-        kernel.threads.set_last_error(thread_id, 0);
-        return (bytes.len() / PALETTE_ENTRY_SIZE) as u32;
+    // CE GDIAPI's palette tests only expect system palette entries on 8bpp
+    // primary surfaces with RC_PALETTE. The local display is RGB565.
+    let _ = (memory, start, count, entries_ptr);
+    kernel.threads.set_last_error(thread_id, 0);
+    0
+}
+
+fn get_nearest_color_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, colorref: u32) -> u32 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return CLR_INVALID;
     }
-    if !write_guest_bytes(kernel, memory, thread_id, entries_ptr, &bytes) {
+    // The local display is true-color/RGB565, so CE returns the input RGB color.
+    kernel.threads.set_last_error(thread_id, 0);
+    colorref & 0x00ff_ffff
+}
+
+fn get_current_object_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, obj_type: u32) -> u32 {
+    const OBJ_PEN: u32 = 1;
+    const OBJ_BRUSH: u32 = 2;
+    const OBJ_PAL: u32 = 5;
+    const OBJ_FONT: u32 = 6;
+    const OBJ_BITMAP: u32 = 7;
+
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if !matches!(
+        obj_type,
+        OBJ_PEN | OBJ_BRUSH | OBJ_PAL | OBJ_FONT | OBJ_BITMAP
+    ) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    (bytes.len() / PALETTE_ENTRY_SIZE) as u32
+    kernel.resources.get_current_object(hdc, obj_type)
+}
+
+fn get_object_type_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    let type_code = match kernel.resources.gdi_object_kind(handle) {
+        "pen" => 1,                             // OBJ_PEN
+        "brush" => 2,                           // OBJ_BRUSH
+        "memory_dc" => 10,                      // OBJ_MEMDC
+        "palette" => 5,                         // OBJ_PAL
+        "font" => 6,                            // OBJ_FONT
+        "bitmap" => 7,                          // OBJ_BITMAP
+        "region" => 8,                          // OBJ_REGION
+        _ if is_valid_hdc(kernel, handle) => 3, // OBJ_DC
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
+        }
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    type_code
 }
 
 fn get_nearest_palette_index_raw(
@@ -36214,11 +36645,7 @@ fn get_nearest_palette_index_raw(
     palette: u32,
     colorref: u32,
 ) -> u32 {
-    let Some(entries) = kernel
-        .resources
-        .palette(palette)
-        .map(|palette| &palette.entries)
-    else {
+    let Some(entries) = palette_entries_for_read(kernel, palette) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -36245,7 +36672,55 @@ fn get_nearest_palette_index_raw(
     index as u32
 }
 
+fn palette_entry_count(kernel: &CeKernel, palette: u32) -> Option<u16> {
+    if let Some(palette) = kernel.resources.palette(palette) {
+        return u16::try_from(palette.entries.len()).ok();
+    }
+    is_default_palette_handle(palette).then_some(DEFAULT_PALETTE_ENTRIES.len() as u16)
+}
+
+fn palette_entries_for_read(kernel: &CeKernel, palette: u32) -> Option<Vec<[u8; 4]>> {
+    kernel
+        .resources
+        .palette(palette)
+        .map(|palette| palette.entries.clone())
+        .or_else(|| is_default_palette_handle(palette).then(|| DEFAULT_PALETTE_ENTRIES.to_vec()))
+}
+
+fn is_default_palette_handle(handle: u32) -> bool {
+    stock_object_handle(15) == Some(handle)
+}
+
+const DEFAULT_PALETTE_ENTRIES: [[u8; 4]; 20] = [
+    [0x00, 0x00, 0x00, 0x00],
+    [0x80, 0x00, 0x00, 0x00],
+    [0x00, 0x80, 0x00, 0x00],
+    [0x80, 0x80, 0x00, 0x00],
+    [0x00, 0x00, 0x80, 0x00],
+    [0x80, 0x00, 0x80, 0x00],
+    [0x00, 0x80, 0x80, 0x00],
+    [0xc0, 0xc0, 0xc0, 0x00],
+    [0xc0, 0xdc, 0xc0, 0x00],
+    [0xa6, 0xca, 0xf0, 0x00],
+    [0xff, 0xfb, 0xf0, 0x00],
+    [0xa0, 0xa0, 0xa4, 0x00],
+    [0x80, 0x80, 0x80, 0x00],
+    [0xff, 0x00, 0x00, 0x00],
+    [0x00, 0xff, 0x00, 0x00],
+    [0xff, 0xff, 0x00, 0x00],
+    [0x00, 0x00, 0xff, 0x00],
+    [0xff, 0x00, 0xff, 0x00],
+    [0x00, 0xff, 0xff, 0x00],
+    [0xff, 0xff, 0xff, 0x00],
+];
+
 fn select_palette_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, palette: u32) -> u32 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     let Some(previous) = kernel.resources.select_palette(hdc, palette) else {
         kernel
             .threads
@@ -36257,6 +36732,12 @@ fn select_palette_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, palette: 
 }
 
 fn realize_palette_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     let Some(mapped) = kernel.resources.realize_palette(hdc) else {
         kernel
             .threads
@@ -36277,15 +36758,42 @@ fn palette_entry_bytes(entries: &[[u8; 4]], start: u32, count: u32) -> Option<Ve
     Some(entries[start..end].iter().flatten().copied().collect())
 }
 
-fn system_palette_entries() -> Vec<[u8; 4]> {
-    (0..=255).map(|value| [value, value, value, 0]).collect()
-}
-
-fn get_stock_object_raw(index: u32) -> u32 {
-    stock_object_handle(index).unwrap_or(0)
+fn get_stock_object_raw(kernel: &mut CeKernel, thread_id: u32, index: u32) -> u32 {
+    let Some(handle) = stock_object_handle(index) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
 }
 
 fn select_object_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, object: u32) -> u32 {
+    if !is_valid_hdc(kernel, hdc) || object == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    let object_kind = kernel.resources.gdi_object_kind(object);
+    if object_kind == "unknown" {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if object_kind == "region" {
+        let Some(status) = kernel.resources.region(object).map(region_status_object) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
+        };
+        kernel.resources.select_clip_region(hdc, Some(object));
+        kernel.threads.set_last_error(thread_id, 0);
+        return status;
+    }
     let Some(previous) = kernel.resources.select_object(hdc, object) else {
         kernel
             .threads
@@ -36599,28 +37107,36 @@ fn set_layout_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, layout: u32) 
 }
 
 fn set_rop2_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, rop2: i32) -> u32 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     if !(R2_BLACK..=R2_WHITE).contains(&rop2) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
-    }
+    };
     let Some(previous) = kernel.resources.set_dc_rop2(hdc, rop2) else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-        return 0;
+        kernel.threads.set_last_error(thread_id, 0);
+        return R2_COPYPEN as u32;
     };
     kernel.threads.set_last_error(thread_id, 0);
     previous as u32
 }
 
 fn get_rop2_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
-    let Some(state) = kernel.resources.dc_state(hdc) else {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
+    }
+    let Some(state) = kernel.resources.dc_state(hdc) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return R2_COPYPEN as u32;
     };
     kernel.threads.set_last_error(thread_id, 0);
     state.rop2 as u32
@@ -36631,6 +37147,8 @@ const BDR_RAISEDOUTER: u32 = 0x0001;
 const BDR_SUNKENOUTER: u32 = 0x0002;
 const BDR_RAISEDINNER: u32 = 0x0004;
 const BDR_SUNKENINNER: u32 = 0x0008;
+const DRAW_EDGE_VALID_EDGE_MASK: u32 =
+    BDR_RAISEDOUTER | BDR_SUNKENOUTER | BDR_RAISEDINNER | BDR_SUNKENINNER;
 const BF_LEFT: u32 = 0x0001;
 const BF_TOP: u32 = 0x0002;
 const BF_RIGHT: u32 = 0x0004;
@@ -36671,7 +37189,13 @@ fn draw_edge_raw<M: CoredllGuestMemory>(
     let rect_ptr = raw_arg(args, 1);
     let edge = raw_arg(args, 2);
     let flags = raw_arg(args, 3);
-    if hdc == 0 || rect_ptr == 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if rect_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -36680,6 +37204,23 @@ fn draw_edge_raw<M: CoredllGuestMemory>(
     let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
         return false;
     };
+    let target_bits = selected_bitmap_object(kernel, hdc)
+        .map(|bitmap| bitmap.bits_pixel)
+        .unwrap_or(16);
+    if target_bits > 1 && edge & !DRAW_EDGE_VALID_EDGE_MASK != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
     if flags & BF_DIAGONAL != 0 {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
@@ -36878,14 +37419,20 @@ fn draw_edge_raw<M: CoredllGuestMemory>(
 fn draw_focus_rect_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
-    _framebuffer: Option<&mut dyn Framebuffer>,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
     // DrawFocusRect(hdc, lprc): draws a dotted focus rectangle using XOR.
     let hdc = raw_arg(args, 0);
     let rect_ptr = raw_arg(args, 1);
-    if hdc == 0 || rect_ptr == 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if rect_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -36895,6 +37442,9 @@ fn draw_focus_rect_raw<M: CoredllGuestMemory>(
         return false;
     };
     if !kernel.resources.is_memory_dc(hdc) {
+        if let Some(framebuffer) = framebuffer {
+            draw_focus_rect_to_framebuffer(kernel, framebuffer, hdc, rect);
+        }
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
@@ -36902,6 +37452,12 @@ fn draw_focus_rect_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     };
+    if !dst_bmp.bits_writable {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
     if dst_bmp.bits_ptr == 0 {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
@@ -36943,6 +37499,89 @@ fn draw_focus_rect_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn draw_focus_rect_to_framebuffer(
+    kernel: &CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    rect: Rect,
+) {
+    let Some((origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, rect) else {
+        return;
+    };
+    let info = framebuffer.info();
+    let bpp = info.format.bytes_per_pixel();
+    let xor_dot = |framebuffer: &mut dyn Framebuffer, x: i32, y: i32, parity: i32| {
+        if parity % 2 != 0 || !clips.iter().any(|clip| point_in_rect(*clip, x, y)) {
+            return;
+        }
+        let screen_x = origin.x.saturating_add(x);
+        let screen_y = origin.y.saturating_add(y);
+        if !(0..info.width as i32).contains(&screen_x)
+            || !(0..info.height as i32).contains(&screen_y)
+        {
+            return;
+        }
+        let offset = screen_y as usize * info.stride + screen_x as usize * bpp;
+        for byte in &mut framebuffer.pixels_mut()[offset..offset + bpp] {
+            *byte ^= 0xff;
+        }
+    };
+
+    for x in rect.left..rect.right {
+        xor_dot(framebuffer, x, rect.top, x - rect.left);
+    }
+    for x in rect.left..rect.right {
+        xor_dot(framebuffer, x, rect.bottom - 1, x - rect.left);
+    }
+    for y in rect.top + 1..rect.bottom - 1 {
+        xor_dot(framebuffer, rect.left, y, y - rect.top);
+    }
+    for y in rect.top + 1..rect.bottom - 1 {
+        xor_dot(framebuffer, rect.right - 1, y, y - rect.top);
+    }
+
+    let dirty = rect.offset(origin.x, origin.y).normalized();
+    let left = dirty.left.max(0).min(info.width as i32);
+    let top = dirty.top.max(0).min(info.height as i32);
+    let right = dirty.right.max(0).min(info.width as i32);
+    let bottom = dirty.bottom.max(0).min(info.height as i32);
+    if right > left && bottom > top {
+        framebuffer.mark_dirty(FramebufferRect::new(
+            left as u32,
+            top as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        ));
+    }
+}
+
+fn rect_visible_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hdc = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0xffff_ffff;
+    }
+    if rect_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(_rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    1
 }
 
 fn def_window_proc_erasebkgnd_raw<M: CoredllGuestMemory>(
@@ -37451,7 +38090,13 @@ fn fill_rect_raw<M: CoredllGuestMemory>(
     rect_ptr: u32,
     brush: u32,
 ) -> u32 {
-    if hdc == 0 || rect_ptr == 0 || brush == 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if rect_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -37461,9 +38106,19 @@ fn fill_rect_raw<M: CoredllGuestMemory>(
         return 0;
     };
     let Some(paint) = brush_paint(kernel, brush) else {
-        kernel.threads.set_last_error(thread_id, 0);
-        return 1;
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
     };
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint.clone())
         && let BrushPaint::Solid(color) = paint
         && let Some(framebuffer) = framebuffer
@@ -37540,6 +38195,15 @@ fn fill_framebuffer_rect_for_hdc(
         let screen_rect = rect.offset(client_origin.x, client_origin.y);
         fill_framebuffer_screen_rect(framebuffer, screen_rect, colorref);
     }
+}
+
+fn apply_rop3_rgb(rop: u32, pattern: [u8; 3], source: [u8; 3], destination: [u8; 3]) -> [u8; 3] {
+    let rop3 = rop3_byte(rop);
+    [
+        apply_rop3_byte(rop3, pattern[0], source[0], destination[0]),
+        apply_rop3_byte(rop3, pattern[1], source[1], destination[1]),
+        apply_rop3_byte(rop3, pattern[2], source[2], destination[2]),
+    ]
 }
 
 fn capture_framebuffer_rect(
@@ -38061,6 +38725,13 @@ fn alpha_blend_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
+    if hdc_has_readonly_selected_bitmap(kernel, dst_hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let mut routed_through_blt = false;
     // Only handle memory-DC src; fall back to plain copy for screen src.
     if kernel.resources.is_memory_dc(src_hdc)
         && let Some(src_bmp_h) = kernel.resources.selected_bitmap(src_hdc)
@@ -38085,6 +38756,7 @@ fn alpha_blend_raw<M: CoredllGuestMemory>(
         let byte_count = src_bmp.width_bytes.saturating_mul(src_bmp.height) as u32;
         let src_bytes = read_guest_bytes(kernel, memory, thread_id, src_bmp.bits_ptr, byte_count);
         if let Some(src_bytes) = src_bytes {
+            routed_through_blt = true;
             if kernel.resources.is_memory_dc(dst_hdc)
                 && let Some(dst_bmp_h) = kernel.resources.selected_bitmap(dst_hdc)
                 && let Some(dst_bmp) = kernel.resources.bitmap(dst_bmp_h).cloned()
@@ -38169,6 +38841,13 @@ fn alpha_blend_raw<M: CoredllGuestMemory>(
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
+    }
+    if routed_through_blt {
+        kernel.record_display_perf_gpe(
+            DISPPERF_ROP_ALPHA_BLEND,
+            dst_width != src_width || dst_height != src_height,
+            false,
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
@@ -38533,6 +39212,12 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
+    if hdc_has_readonly_selected_bitmap(kernel, dst) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
     let copy_all = mask_handle == 0 || rop4 == SRCCOPY || rop4 == makerop4(SRCCOPY, SRCCOPY);
     if copy_all {
         let bitblt_rop = if rop4 == makerop4(SRCCOPY, SRCCOPY) {
@@ -38591,6 +39276,7 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
             rop4,
             brush.as_ref(),
         );
+        kernel.record_display_perf_gpe(rop4, false, false);
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
@@ -38667,6 +39353,7 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
             }
         }
     }
+    kernel.record_display_perf_gpe(rop4, false, false);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -38794,6 +39481,10 @@ fn blt_destination_rect(dst_x: i32, dst_y: i32, dst_width: i32, dst_height: i32)
     }
 }
 
+fn hdc_has_readonly_selected_bitmap(kernel: &CeKernel, hdc: u32) -> bool {
+    selected_bitmap_object(kernel, hdc).is_some_and(|bitmap| !bitmap.bits_writable)
+}
+
 fn makerop4(foreground: u32, background: u32) -> u32 {
     foreground | ((background << 8) & 0xff00_0000)
 }
@@ -38843,6 +39534,12 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if hdc_has_readonly_selected_bitmap(kernel, dst) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
     if is_supported_source_bitmap_rop(rop)
@@ -38921,6 +39618,7 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
             invert_framebuffer_rect_for_hdc(kernel, framebuffer, dst, dst_rect);
         }
     }
+    kernel.record_display_perf_gpe(rop, false, false);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -38959,6 +39657,12 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if hdc_has_readonly_selected_bitmap(kernel, dst) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
     if is_supported_source_bitmap_rop(rop)
@@ -39042,6 +39746,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
             invert_framebuffer_rect_for_hdc(kernel, framebuffer, dst, dst_rect);
         }
     }
+    kernel.record_display_perf_gpe(rop, true, false);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -39150,20 +39855,22 @@ fn read_dib_source<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return None;
     }
+    if !is_supported_dib_bit_depth(header.bits_pixel) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
     let compression = if header_size >= 40 {
         read_le_u32(&header_bytes, 16)?
     } else {
         BI_RGB
     };
-    let rgb_masks = dib_rgb_masks(
-        kernel,
-        memory,
-        thread_id,
-        info_ptr,
-        header_size,
-        compression,
-        header.bits_pixel,
-    )?;
+    let size_image = if header_size >= 40 {
+        read_le_u32(&header_bytes, 20).unwrap_or(0)
+    } else {
+        0
+    };
     let color_table = read_dib_color_table(
         memory,
         info_ptr,
@@ -39175,6 +39882,71 @@ fn read_dib_source<M: CoredllGuestMemory>(
     let height = header.height.checked_abs()?;
     let byte_count = bitmap_byte_count(header.width, header.height, header.bits_pixel)?;
     let width_bytes = (byte_count / height as u32) as i32;
+    if matches!(compression, BI_RLE8 | BI_RLE4) {
+        if header_size < 40
+            || size_image == 0
+            || (compression == BI_RLE8 && header.bits_pixel != 8)
+            || (compression == BI_RLE4 && header.bits_pixel != 4)
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return None;
+        }
+        let compressed = read_guest_bytes(kernel, memory, thread_id, bits_ptr, size_image)?;
+        let bytes = match compression {
+            BI_RLE8 => decode_rle8_dib_bytes(
+                &compressed,
+                header.width,
+                height,
+                header.height < 0,
+                width_bytes,
+            ),
+            BI_RLE4 => decode_rle4_dib_bytes(
+                &compressed,
+                header.width,
+                height,
+                header.height < 0,
+                width_bytes,
+            ),
+            _ => None,
+        };
+        let Some(bytes) = bytes else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return None;
+        };
+        return Some((
+            crate::ce::resource::BitmapObject {
+                handle: 0,
+                width: header.width,
+                height,
+                top_down: header.height < 0,
+                width_bytes,
+                planes: header.planes,
+                bits_pixel: header.bits_pixel,
+                rgb_masks: None,
+                color_table,
+                bits_ptr,
+                bits_owned: false,
+                bits_writable: false,
+                dib_section: false,
+                section_handle: 0,
+                section_offset: 0,
+            },
+            bytes,
+        ));
+    }
+    let rgb_masks = dib_rgb_masks(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+    )?;
     let bytes = read_guest_bytes(kernel, memory, thread_id, bits_ptr, byte_count)?;
     Some((
         crate::ce::resource::BitmapObject {
@@ -39189,9 +39961,230 @@ fn read_dib_source<M: CoredllGuestMemory>(
             color_table,
             bits_ptr,
             bits_owned: false,
+            bits_writable: false,
+            dib_section: false,
+            section_handle: 0,
+            section_offset: 0,
         },
         bytes,
     ))
+}
+
+fn decode_rle8_dib_bytes(
+    compressed: &[u8],
+    width: i32,
+    height: i32,
+    _top_down: bool,
+    width_bytes: i32,
+) -> Option<Vec<u8>> {
+    if width <= 0 || height <= 0 || width_bytes < width {
+        return None;
+    }
+    let byte_count = usize::try_from(width_bytes)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?;
+    let mut decoded = vec![0u8; byte_count];
+    let width = usize::try_from(width).ok()?;
+    let height = usize::try_from(height).ok()?;
+    let stride = usize::try_from(width_bytes).ok()?;
+    let mut cursor = 0usize;
+    let mut x = 0usize;
+    let mut y = 0usize;
+    while cursor.checked_add(2)? <= compressed.len() {
+        let count = compressed[cursor];
+        let value = compressed[cursor + 1];
+        cursor += 2;
+        if count != 0 {
+            for _ in 0..count {
+                rle8_put_index(&mut decoded, stride, width, height, x, y, value);
+                x = x.saturating_add(1);
+            }
+            continue;
+        }
+        match value {
+            0 => {
+                x = 0;
+                y = y.saturating_add(1);
+            }
+            1 => return Some(decoded),
+            2 => {
+                if cursor.checked_add(2)? > compressed.len() {
+                    return None;
+                }
+                x = x.saturating_add(compressed[cursor] as usize);
+                y = y.saturating_add(compressed[cursor + 1] as usize);
+                cursor += 2;
+            }
+            literal_count => {
+                let literal_count = literal_count as usize;
+                if cursor.checked_add(literal_count)? > compressed.len() {
+                    return None;
+                }
+                for index in 0..literal_count {
+                    rle8_put_index(
+                        &mut decoded,
+                        stride,
+                        width,
+                        height,
+                        x.saturating_add(index),
+                        y,
+                        compressed[cursor + index],
+                    );
+                }
+                x = x.saturating_add(literal_count);
+                cursor += literal_count;
+                if literal_count % 2 != 0 {
+                    cursor = cursor.checked_add(1)?;
+                    if cursor > compressed.len() {
+                        return None;
+                    }
+                }
+            }
+        }
+        if y >= height {
+            return Some(decoded);
+        }
+    }
+    None
+}
+
+fn decode_rle4_dib_bytes(
+    compressed: &[u8],
+    width: i32,
+    height: i32,
+    _top_down: bool,
+    width_bytes: i32,
+) -> Option<Vec<u8>> {
+    if width <= 0 || height <= 0 || width_bytes <= 0 {
+        return None;
+    }
+    let byte_count = usize::try_from(width_bytes)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?;
+    let mut decoded = vec![0u8; byte_count];
+    let width = usize::try_from(width).ok()?;
+    let height = usize::try_from(height).ok()?;
+    let stride = usize::try_from(width_bytes).ok()?;
+    let mut cursor = 0usize;
+    let mut x = 0usize;
+    let mut y = 0usize;
+    while cursor.checked_add(2)? <= compressed.len() {
+        let count = compressed[cursor];
+        let value = compressed[cursor + 1];
+        cursor += 2;
+        if count != 0 {
+            let indexes = [value >> 4, value & 0x0f];
+            for index in 0..count as usize {
+                rle4_put_index(
+                    &mut decoded,
+                    stride,
+                    width,
+                    height,
+                    x,
+                    y,
+                    indexes[index % 2],
+                );
+                x = x.saturating_add(1);
+            }
+            continue;
+        }
+        match value {
+            0 => {
+                x = 0;
+                y = y.saturating_add(1);
+            }
+            1 => return Some(decoded),
+            2 => {
+                if cursor.checked_add(2)? > compressed.len() {
+                    return None;
+                }
+                x = x.saturating_add(compressed[cursor] as usize);
+                y = y.saturating_add(compressed[cursor + 1] as usize);
+                cursor += 2;
+            }
+            literal_count => {
+                let literal_count = literal_count as usize;
+                let literal_bytes = literal_count.checked_add(1)?.checked_div(2)?;
+                if cursor.checked_add(literal_bytes)? > compressed.len() {
+                    return None;
+                }
+                for index in 0..literal_count {
+                    let byte = compressed[cursor + (index / 2)];
+                    let value = if index % 2 == 0 {
+                        byte >> 4
+                    } else {
+                        byte & 0x0f
+                    };
+                    rle4_put_index(
+                        &mut decoded,
+                        stride,
+                        width,
+                        height,
+                        x.saturating_add(index),
+                        y,
+                        value,
+                    );
+                }
+                x = x.saturating_add(literal_count);
+                cursor += literal_bytes;
+                if literal_bytes % 2 != 0 {
+                    cursor = cursor.checked_add(1)?;
+                    if cursor > compressed.len() {
+                        return None;
+                    }
+                }
+            }
+        }
+        if y >= height {
+            return Some(decoded);
+        }
+    }
+    None
+}
+
+fn rle8_put_index(
+    decoded: &mut [u8],
+    stride: usize,
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    value: u8,
+) {
+    if x >= width || y >= height {
+        return;
+    }
+    let Some(offset) = y.checked_mul(stride).and_then(|row| row.checked_add(x)) else {
+        return;
+    };
+    if let Some(pixel) = decoded.get_mut(offset) {
+        *pixel = value;
+    }
+}
+
+fn rle4_put_index(
+    decoded: &mut [u8],
+    stride: usize,
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+    value: u8,
+) {
+    if x >= width || y >= height {
+        return;
+    }
+    let Some(offset) = y.checked_mul(stride).and_then(|row| row.checked_add(x / 2)) else {
+        return;
+    };
+    if let Some(pixel) = decoded.get_mut(offset) {
+        let value = value & 0x0f;
+        if x % 2 == 0 {
+            *pixel = (*pixel & 0x0f) | (value << 4);
+        } else {
+            *pixel = (*pixel & 0xf0) | value;
+        }
+    }
 }
 
 fn draw_dib_source_to_memory_dc<M: CoredllGuestMemory>(
@@ -40053,6 +41046,12 @@ fn invert_rect_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     };
+    if !dst_bmp.bits_writable {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
     if dst_bmp.bits_ptr == 0 || dst_bmp.width <= 0 || dst_bmp.height <= 0 {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
@@ -40071,6 +41070,99 @@ fn invert_rect_raw<M: CoredllGuestMemory>(
     true
 }
 
+fn pat_blt_to_bitmap_for_hdc<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    hdc: u32,
+    rect: Rect,
+    rop: u32,
+) -> bool {
+    if !kernel.resources.is_memory_dc(hdc) {
+        return false;
+    }
+    let Some(bitmap) = selected_bitmap_object(kernel, hdc) else {
+        return true;
+    };
+    if bitmap.bits_ptr == 0 || bitmap.width <= 0 || bitmap.height <= 0 || bitmap.width_bytes <= 0 {
+        return true;
+    }
+    let needs_pattern = rop3_depends_on_input(rop3_byte(rop), 0b100);
+    let pattern_source = selected_brush_pixel_source(kernel, memory, hdc);
+    if needs_pattern && pattern_source.is_none() {
+        return true;
+    }
+    for clip in hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height) {
+        for py in clip.top..clip.bottom {
+            for px in clip.left..clip.right {
+                let pattern = pattern_source
+                    .as_ref()
+                    .and_then(|source| source.pixel_rgb(px, py))
+                    .unwrap_or([0, 0, 0]);
+                let dst =
+                    bitmap_pixel_rgb_from_memory(memory, &bitmap, px, py).unwrap_or([0, 0, 0]);
+                let result = apply_rop3_rgb(rop, pattern, [0, 0, 0], dst);
+                let _ = write_bitmap_pixel_rgb(memory, &bitmap, px, py, result);
+            }
+        }
+    }
+    true
+}
+
+fn pat_blt_to_framebuffer_for_hdc<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    rect: Rect,
+    rop: u32,
+) {
+    let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, rect) else {
+        return;
+    };
+    let needs_pattern = rop3_depends_on_input(rop3_byte(rop), 0b100);
+    let pattern_source = selected_brush_pixel_source(kernel, memory, hdc);
+    if needs_pattern && pattern_source.is_none() {
+        return;
+    }
+    let info = framebuffer.info();
+    let bytes_per_pixel = info.format.bytes_per_pixel();
+    for rect in clips {
+        let screen_rect = rect.offset(client_origin.x, client_origin.y);
+        let left = screen_rect.left.max(0).min(info.width as i32);
+        let top = screen_rect.top.max(0).min(info.height as i32);
+        let right = screen_rect.right.max(0).min(info.width as i32);
+        let bottom = screen_rect.bottom.max(0).min(info.height as i32);
+        if right <= left || bottom <= top {
+            continue;
+        }
+        for screen_y in top..bottom {
+            for screen_x in left..right {
+                let client_x = screen_x - client_origin.x;
+                let client_y = screen_y - client_origin.y;
+                let pattern = pattern_source
+                    .as_ref()
+                    .and_then(|source| source.pixel_rgb(client_x, client_y))
+                    .unwrap_or([0, 0, 0]);
+                let offset = screen_y as usize * info.stride + screen_x as usize * bytes_per_pixel;
+                let dst = framebuffer_pixel_rgb(
+                    info.format,
+                    &framebuffer.pixels()[offset..offset + bytes_per_pixel],
+                );
+                let result = apply_rop3_rgb(rop, pattern, [0, 0, 0], dst);
+                let pixel = pixel_bytes_for_rgb(info.format, result);
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
+                    .copy_from_slice(&pixel[..bytes_per_pixel]);
+            }
+        }
+        framebuffer.mark_dirty(FramebufferRect::new(
+            left as u32,
+            top as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        ));
+    }
+}
+
 fn pat_blt_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -40084,83 +41176,135 @@ fn pat_blt_raw<M: CoredllGuestMemory>(
     let width = raw_i32_arg(args, 3);
     let height = raw_i32_arg(args, 4);
     let rop = raw_arg(args, 5);
-    if dst == 0 || width <= 0 || height <= 0 {
+    if !is_valid_hdc(kernel, dst) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if rop & 0xff00_0000 != 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let paint = match rop {
-        PATCOPY => selected_brush_paint(kernel, dst),
-        BLACKNESS => Some(BrushPaint::Solid(rgb(0, 0, 0))),
-        WHITENESS => Some(BrushPaint::Solid(rgb(0xff, 0xff, 0xff))),
-        _ => None,
-    };
-    if let Some(paint) = paint {
-        let rect = Rect {
-            left: x,
-            top: y,
-            right: x.saturating_add(width),
-            bottom: y.saturating_add(height),
-        };
-        if !fill_bitmap_rect_for_hdc(kernel, memory, dst, rect, paint.clone())
-            && let BrushPaint::Solid(color) = paint
-            && let Some(framebuffer) = framebuffer
-        {
-            fill_framebuffer_rect_for_hdc(kernel, framebuffer, dst, rect, color);
-        }
-    } else if matches!(rop, PATINVERT | DSTINVERT)
-        && kernel.resources.is_memory_dc(dst)
-        && let Some(dst_bmp_h) = kernel.resources.selected_bitmap(dst)
-        && let Some(dst_bmp) = kernel.resources.bitmap(dst_bmp_h).cloned()
-        && dst_bmp.bits_ptr != 0
-        && dst_bmp.width > 0
-        && dst_bmp.height > 0
-        && dst_bmp.width_bytes > 0
+    if rop3_depends_on_input(rop3_byte(rop), 0b010) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if let Some(bitmap) = selected_bitmap_object(kernel, dst)
+        && !bitmap.bits_writable
     {
-        let pat_rgb = if rop == PATINVERT {
-            selected_brush_paint(kernel, dst)
-                .and_then(|p| {
-                    if let BrushPaint::Solid(c) = p {
-                        Some(colorref_rgb(c))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or([0, 0, 0])
-        } else {
-            [0, 0, 0] // unused for DSTINVERT
-        };
-        let rect = Rect {
-            left: x,
-            top: y,
-            right: x.saturating_add(width),
-            bottom: y.saturating_add(height),
-        };
-        for clip in hdc_clip_rects(kernel, dst, rect, dst_bmp.width, dst_bmp.height) {
-            for py in clip.top..clip.bottom {
-                for px in clip.left..clip.right {
-                    let Some(d) = bitmap_pixel_rgb_from_memory(memory, &dst_bmp, px, py) else {
-                        continue;
-                    };
-                    let result = if rop == PATINVERT {
-                        [pat_rgb[0] ^ d[0], pat_rgb[1] ^ d[1], pat_rgb[2] ^ d[2]]
-                    } else {
-                        [!d[0], !d[1], !d[2]]
-                    };
-                    let _ = write_bitmap_pixel_rgb(memory, &dst_bmp, px, py, result);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let rect = normalize_rect(Rect {
+        left: x,
+        top: y,
+        right: x.saturating_add(width),
+        bottom: y.saturating_add(height),
+    });
+    if !pat_blt_to_bitmap_for_hdc(kernel, memory, dst, rect, rop)
+        && let Some(framebuffer) = framebuffer
+    {
+        pat_blt_to_framebuffer_for_hdc(kernel, memory, framebuffer, dst, rect, rop);
+    }
+    kernel.record_display_perf_gpe(rop, false, false);
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn draw_framebuffer_to_framebuffer_transparent(
+    kernel: &CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    dst_hdc: u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_width: i32,
+    dst_height: i32,
+    src_hdc: u32,
+    src_x: i32,
+    src_y: i32,
+    src_width: i32,
+    src_height: i32,
+    transparent_rgb: [u8; 3],
+) -> bool {
+    if dst_width == 0 || dst_height == 0 || src_width == 0 || src_height == 0 {
+        return false;
+    }
+    let dst_rect = blt_destination_rect(dst_x, dst_y, dst_width, dst_height);
+    let Some((dst_origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, dst_hdc, dst_rect)
+    else {
+        return false;
+    };
+    let src_rect = blt_destination_rect(src_x, src_y, src_width, src_height);
+    let Some((src_origin, _)) = hdc_framebuffer_client_clip_rects(kernel, src_hdc, src_rect) else {
+        return false;
+    };
+
+    let info = framebuffer.info();
+    let bytes_per_pixel = info.format.bytes_per_pixel();
+    let snapshot = framebuffer.pixels().to_vec();
+    for dst_rect in clips {
+        let screen_rect = dst_rect.offset(dst_origin.x, dst_origin.y);
+        let left = screen_rect.left.max(0).min(info.width as i32);
+        let top = screen_rect.top.max(0).min(info.height as i32);
+        let right = screen_rect.right.max(0).min(info.width as i32);
+        let bottom = screen_rect.bottom.max(0).min(info.height as i32);
+        if right <= left || bottom <= top {
+            continue;
+        }
+        for screen_y in top..bottom {
+            let dst_client_y = screen_y - dst_origin.y;
+            let src_client_y = blt_source_coord(dst_client_y, dst_y, dst_height, src_y, src_height);
+            let src_screen_y = src_origin.y.saturating_add(src_client_y);
+            if !(0..info.height as i32).contains(&src_screen_y) {
+                continue;
+            }
+            for screen_x in left..right {
+                let dst_client_x = screen_x - dst_origin.x;
+                let src_client_x =
+                    blt_source_coord(dst_client_x, dst_x, dst_width, src_x, src_width);
+                let src_screen_x = src_origin.x.saturating_add(src_client_x);
+                if !(0..info.width as i32).contains(&src_screen_x) {
+                    continue;
                 }
+
+                let src_offset =
+                    src_screen_y as usize * info.stride + src_screen_x as usize * bytes_per_pixel;
+                let rgb = framebuffer_pixel_rgb(
+                    info.format,
+                    &snapshot[src_offset..src_offset + bytes_per_pixel],
+                );
+                if rgb == transparent_rgb {
+                    continue;
+                }
+
+                let pixel = pixel_bytes_for_rgb(info.format, rgb);
+                let dst_offset =
+                    screen_y as usize * info.stride + screen_x as usize * bytes_per_pixel;
+                framebuffer.pixels_mut()[dst_offset..dst_offset + bytes_per_pixel]
+                    .copy_from_slice(&pixel[..bytes_per_pixel]);
             }
         }
+        framebuffer.mark_dirty(FramebufferRect::new(
+            left as u32,
+            top as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        ));
     }
-    kernel.threads.set_last_error(thread_id, 0);
     true
 }
 
 fn transparent_image_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
-    framebuffer: Option<&mut dyn Framebuffer>,
+    mut framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
@@ -40175,16 +41319,23 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
     let src_width = raw_i32_arg(args, 8);
     let src_height = raw_i32_arg(args, 9);
     let transparent_color = raw_arg(args, 10);
-    if dst == 0
-        || src == 0
-        || dst_width <= 0
-        || dst_height <= 0
-        || src_width <= 0
-        || src_height <= 0
-    {
+    let mut routed_through_blt = false;
+    if !is_valid_hdc(kernel, dst) || !is_valid_hdc(kernel, src) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if dst_width <= 0 || dst_height <= 0 || src_width <= 0 || src_height <= 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if hdc_has_readonly_selected_bitmap(kernel, dst) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
     if kernel.resources.is_memory_dc(src)
@@ -40199,6 +41350,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
         if let Some(bitmap_bytes) =
             read_guest_bytes(kernel, memory, thread_id, src_bitmap.bits_ptr, byte_count)
         {
+            routed_through_blt = true;
             if kernel.resources.is_memory_dc(dst)
                 && let Some(dst_bitmap_handle) = kernel.resources.selected_bitmap(dst)
                 && let Some(dst_bitmap) = kernel.resources.bitmap(dst_bitmap_handle).cloned()
@@ -40233,7 +41385,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                         clip,
                     );
                 }
-            } else if let Some(framebuffer) = framebuffer {
+            } else if let Some(framebuffer) = framebuffer.as_deref_mut() {
                 draw_bitmap_bytes_to_framebuffer(
                     kernel,
                     framebuffer,
@@ -40256,6 +41408,26 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                 );
             }
         }
+    }
+    if !routed_through_blt && let Some(framebuffer) = framebuffer.as_deref_mut() {
+        routed_through_blt = draw_framebuffer_to_framebuffer_transparent(
+            kernel,
+            framebuffer,
+            dst,
+            dst_x,
+            dst_y,
+            dst_width,
+            dst_height,
+            src,
+            src_x,
+            src_y,
+            src_width,
+            src_height,
+            colorref_rgb(transparent_color),
+        );
+    }
+    if routed_through_blt {
+        kernel.record_display_perf_gpe(DISPPERF_ROP_TRANSPARENT_BLT, false, false);
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
@@ -40306,6 +41478,12 @@ fn stretch_dibits_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    if hdc_has_readonly_selected_bitmap(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     if read_guest_u32(kernel, memory, thread_id, info).is_none() {
         return 0;
     }
@@ -40354,6 +41532,12 @@ fn stretch_dibits_raw<M: CoredllGuestMemory>(
                 (rop != SRCCOPY).then_some(rop),
             );
         }
+        kernel.record_display_perf_gpe(
+            rop,
+            dst_width.unsigned_abs() != src_width.unsigned_abs()
+                || dst_height.unsigned_abs() != src_height.unsigned_abs(),
+            false,
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     src_height.unsigned_abs()
@@ -40378,12 +41562,6 @@ fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
     let bits = raw_arg(args, 9);
     let info = raw_arg(args, 10);
     let usage = raw_arg(args, 11);
-    if !is_valid_hdc(kernel, hdc) {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-        return 0;
-    }
     if dst_width == 0
         || dst_height == 0
         || lines == 0
@@ -40394,6 +41572,18 @@ fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if hdc_has_readonly_selected_bitmap(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
     if read_guest_u32(kernel, memory, thread_id, info).is_none() {
@@ -40448,6 +41638,7 @@ fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
             None,
         );
     }
+    kernel.record_display_perf_gpe(SRCCOPY, false, false);
     kernel.threads.set_last_error(thread_id, 0);
     lines
 }
@@ -40461,7 +41652,13 @@ fn get_dib_color_table_raw<M: CoredllGuestMemory>(
     entries: u32,
     colors_ptr: u32,
 ) -> u32 {
-    if hdc == 0 || colors_ptr == 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if colors_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -40483,8 +41680,14 @@ fn get_dib_color_table_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     };
-    if entries == 0 || start_index >= bitmap.color_table.len() {
+    if entries == 0 {
         kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    if start_index >= bitmap.color_table.len() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
     let copy_count = usize::try_from(entries)
@@ -40511,7 +41714,13 @@ fn set_dib_color_table_raw<M: CoredllGuestMemory>(
     entries: u32,
     colors_ptr: u32,
 ) -> u32 {
-    if hdc == 0 || colors_ptr == 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if colors_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -40527,13 +41736,14 @@ fn set_dib_color_table_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
-    let Some(byte_count) = entries.checked_mul(4) else {
+    let Some(bitmap_len) = kernel
+        .resources
+        .bitmap(bitmap_handle)
+        .map(|bitmap| bitmap.color_table.len())
+    else {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return 0;
-    };
-    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, colors_ptr, byte_count) else {
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
     let Ok(start_index) = usize::try_from(start) else {
@@ -40542,17 +41752,34 @@ fn set_dib_color_table_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    let copy_count = bytes.len() / 4;
+    if start_index >= bitmap_len {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    let copy_count = usize::try_from(entries)
+        .ok()
+        .unwrap_or(usize::MAX)
+        .min(bitmap_len - start_index);
+    let Some(byte_count) = u32::try_from(copy_count)
+        .ok()
+        .and_then(|count| count.checked_mul(4))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, colors_ptr, byte_count) else {
+        return 0;
+    };
     let Some(bitmap) = kernel.resources.bitmap_mut(bitmap_handle) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    let required_len = start_index.saturating_add(copy_count);
-    if bitmap.color_table.len() < required_len {
-        bitmap.color_table.resize(required_len, [0, 0, 0, 0]);
-    }
     for (index, entry) in bytes.chunks_exact(4).enumerate() {
         bitmap.color_table[start_index + index] = [entry[0], entry[1], entry[2], entry[3]];
     }
@@ -40568,39 +41795,83 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
     byte_count: u32,
     bits_ptr: u32,
 ) -> u32 {
-    if bitmap == 0 || bits_ptr == 0 {
+    if bitmap == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if bits_ptr == 0 || byte_count == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let Some(dest_ptr) = kernel
-        .resources
-        .bitmap(bitmap)
-        .map(|bitmap| bitmap.bits_ptr)
+    let Some((dest_ptr, storage_size, bits_writable)) =
+        kernel.resources.bitmap(bitmap).and_then(|bitmap| {
+            let width_bytes = u32::try_from(bitmap.width_bytes).ok()?;
+            let height = u32::try_from(bitmap.height).ok()?;
+            Some((
+                bitmap.bits_ptr,
+                width_bytes.checked_mul(height)?,
+                bitmap.bits_writable,
+            ))
+        })
     else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    if dest_ptr != 0 {
-        let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, bits_ptr, byte_count) else {
+    if !bits_writable {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if storage_size == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    let copy_count = byte_count.min(storage_size);
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, bits_ptr, copy_count) else {
+        return 0;
+    };
+    let (dest_ptr, already_written) = if dest_ptr == 0 {
+        let Some(allocated) =
+            kernel
+                .memory
+                .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, storage_size)
+        else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
             return 0;
         };
-        if !write_guest_bytes(kernel, memory, thread_id, dest_ptr, &bytes) {
+        if !write_guest_bytes(kernel, memory, thread_id, allocated, &bytes) {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, allocated);
             return 0;
         }
+        if let Some(bitmap) = kernel.resources.bitmap_mut(bitmap) {
+            bitmap.bits_ptr = allocated;
+            bitmap.bits_owned = true;
+        }
+        (allocated, true)
+    } else {
+        (dest_ptr, false)
+    };
+    if !already_written && !write_guest_bytes(kernel, memory, thread_id, dest_ptr, &bytes) {
+        return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    byte_count
+    copy_count
 }
 
 fn get_pixel_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
-    if hdc == 0 {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return CLR_INVALID;
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -40653,11 +41924,21 @@ fn polyline_raw<M: CoredllGuestMemory>(
     points_ptr: u32,
     point_count: i32,
 ) -> bool {
-    if hdc == 0 || points_ptr == 0 || point_count <= 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if points_ptr == 0 || point_count < 0 || point_count == 1 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
+    }
+    if point_count == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
     }
     let mut points = Vec::new();
     for index in 0..point_count as u32 {
@@ -40671,6 +41952,14 @@ fn polyline_raw<M: CoredllGuestMemory>(
         };
         points.push(point);
     }
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
     if let Some(pen) = selected_pen_model(kernel, hdc) {
         if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &points, pen)
             && let Some(framebuffer) = framebuffer
@@ -40681,6 +41970,7 @@ fn polyline_raw<M: CoredllGuestMemory>(
     if let Some(last) = points.last().copied() {
         let _ = kernel.resources.move_to(hdc, last);
     }
+    kernel.record_display_perf_gpe(DISPPERF_ROP_LINE, false, false);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -40739,10 +42029,20 @@ fn polygon_raw<M: CoredllGuestMemory>(
     points_ptr: u32,
     point_count: i32,
 ) -> bool {
-    if hdc == 0 || points_ptr == 0 || point_count <= 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if points_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if point_count <= 1 {
+        kernel.threads.set_last_error(thread_id, 0);
         return false;
     }
     let mut points = Vec::new();
@@ -40756,6 +42056,14 @@ fn polygon_raw<M: CoredllGuestMemory>(
             return false;
         };
         points.push(point);
+    }
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
     }
     if points.len() >= 2 {
         if kernel.resources.is_memory_dc(hdc) {
@@ -40832,10 +42140,10 @@ fn rectangle_raw<M: CoredllGuestMemory>(
     args: &[u32],
 ) -> bool {
     let hdc = raw_arg(args, 0);
-    if hdc == 0 {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
     let rect = Rect {
@@ -40844,6 +42152,14 @@ fn rectangle_raw<M: CoredllGuestMemory>(
         right: raw_i32_arg(args, 3),
         bottom: raw_i32_arg(args, 4),
     };
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
     if let Some(paint) = selected_brush_paint(kernel, hdc)
         && !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint.clone())
         && let BrushPaint::Solid(color) = paint
@@ -40903,7 +42219,13 @@ fn gradient_fill_raw<M: CoredllGuestMemory>(
     const GRADIENT_FILL_RECT_H: u32 = 0x00;
     const GRADIENT_FILL_RECT_V: u32 = 0x01;
 
-    if hdc == 0 || vertex_ptr == 0 || mesh_ptr == 0 || n_vertex == 0 || n_mesh == 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if vertex_ptr == 0 || mesh_ptr == 0 || n_vertex == 0 || n_mesh == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -40916,9 +42238,16 @@ fn gradient_fill_raw<M: CoredllGuestMemory>(
     const GRADIENT_RECT_SIZE: u32 = 8;
 
     if mode != GRADIENT_FILL_RECT_H && mode != GRADIENT_FILL_RECT_V {
-        // Triangles: no-op for now.
-        kernel.threads.set_last_error(thread_id, 0);
-        return true;
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if hdc_has_readonly_selected_bitmap(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
     }
 
     // Read all vertex data.
@@ -41217,10 +42546,10 @@ fn ellipse_raw<M: CoredllGuestMemory>(
     args: &[u32],
 ) -> bool {
     let hdc = raw_arg(args, 0);
-    if hdc == 0 {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
     let rect = Rect {
@@ -41233,6 +42562,14 @@ fn ellipse_raw<M: CoredllGuestMemory>(
     if rect.right <= rect.left || rect.bottom <= rect.top {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
+    }
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
     }
     let spans = ellipse_fill_spans(rect);
     if kernel.resources.is_memory_dc(hdc) {
@@ -41458,10 +42795,10 @@ fn round_rect_raw<M: CoredllGuestMemory>(
     args: &[u32],
 ) -> bool {
     let hdc = raw_arg(args, 0);
-    if hdc == 0 {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
     let rect = normalize_rect(Rect {
@@ -41476,6 +42813,14 @@ fn round_rect_raw<M: CoredllGuestMemory>(
     if rect.right <= rect.left || rect.bottom <= rect.top {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
+    }
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
     }
 
     // Degenerate cases: no rounding → Rectangle; full rounding → Ellipse.
@@ -42130,18 +43475,16 @@ fn move_to_ex_raw<M: CoredllGuestMemory>(
         y: raw_i32_arg(args, 2),
     };
     let out_ptr = raw_arg(args, 3);
-    if hdc == 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
-    let Some(previous) = kernel.resources.move_to(hdc, point) else {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
+    let previous = kernel
+        .resources
+        .move_to(hdc, point)
+        .unwrap_or(Point { x: 0, y: 0 });
     if out_ptr != 0 && !write_guest_point(kernel, memory, thread_id, out_ptr, previous) {
         return false;
     }
@@ -42161,18 +43504,24 @@ fn line_to_raw<M: CoredllGuestMemory>(
         x: raw_i32_arg(args, 1),
         y: raw_i32_arg(args, 2),
     };
-    if hdc == 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
-    let Some(start) = kernel.resources.current_pos(hdc) else {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
+    let start = kernel
+        .resources
+        .current_pos(hdc)
+        .unwrap_or(Point { x: 0, y: 0 });
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
     if let Some(pen) = selected_pen_model(kernel, hdc) {
         let points = [start, end];
         if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &points, pen)
@@ -42182,6 +43531,7 @@ fn line_to_raw<M: CoredllGuestMemory>(
         }
     }
     let _ = kernel.resources.move_to(hdc, end);
+    kernel.record_display_perf_gpe(DISPPERF_ROP_LINE, false, false);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -42196,10 +43546,10 @@ fn set_pixel_raw<M: CoredllGuestMemory>(
     y: i32,
     color: u32,
 ) -> u32 {
-    if hdc == 0 {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0xffff_ffff;
     }
     let rect = crate::ce::gwe::Rect {
@@ -42208,6 +43558,14 @@ fn set_pixel_raw<M: CoredllGuestMemory>(
         right: x + 1,
         bottom: y + 1,
     };
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0xffff_ffff;
+    }
     let paint = BrushPaint::Solid(color);
     if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint)
         && let Some(framebuffer) = framebuffer
@@ -42843,6 +44201,12 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
+    if hdc_has_readonly_selected_bitmap(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
 
     let metrics = selected_text_metrics(kernel, hdc);
     let cell_h = metrics.as_ref().map(|m| m.height).unwrap_or(16).max(1);
@@ -43402,6 +44766,12 @@ fn ext_text_out_w_raw<M: CoredllGuestMemory>(
     } else {
         None
     };
+    if hdc_has_readonly_selected_bitmap(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
     if options & ETO_OPAQUE != 0
         && let Some(rect) = rect
     {
@@ -44422,6 +45792,7 @@ fn dispatch_message_w_raw<M: CoredllGuestMemory>(
 fn destroy_window_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     hwnd: u32,
 ) -> bool {
@@ -44435,8 +45806,14 @@ fn destroy_window_raw<M: CoredllGuestMemory>(
         let wparam = (child_id << 16) | crate::ce::gwe::WM_DESTROY;
         kernel.post_message_w(parent_hwnd, crate::ce::gwe::WM_PARENTNOTIFY, wparam, hwnd);
     }
+    let targets = kernel.window_destroy_targets(hwnd);
     let destroyed = kernel.destroy_window(hwnd);
     if destroyed {
+        if let Some(framebuffer) = framebuffer {
+            let _ = kernel.restore_window_backing_stores(&targets, framebuffer);
+        } else {
+            kernel.discard_window_backing_stores(&targets);
+        }
         write_completed_send_message_timeout_results(kernel, memory, thread_id);
     }
     destroyed
@@ -46098,6 +47475,10 @@ const CEDECOMPRESS_FAILED: u32 = u32::MAX;
 const STRING_COMPRESS_SIZE_MASK: u16 = 0x3fff;
 const STRING_COMPRESS_PART1_RAW: u16 = 0x8000;
 const STRING_COMPRESS_PART2_RAW: u16 = 0x4000;
+const STRING_COMPRESS_ENGINE_MAGIC: [u8; 2] = [0xce, 0x53];
+const STRING_COMPRESS_RUN_TOKEN: u8 = 0x80;
+const STRING_COMPRESS_TOKEN_LEN_MASK: u8 = 0x7f;
+const STRING_COMPRESS_MAX_TOKEN_LEN: usize = 128;
 
 fn string_compress_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -46142,26 +47523,21 @@ fn string_compress_raw<M: CoredllGuestMemory>(
         return CECOMPRESS_FAILED;
     }
 
-    let even_raw = !even_stream.iter().all(|&byte| byte == 0);
-    let odd_raw = !odd_stream.iter().all(|&byte| byte == 0);
-    let mut header = if even_raw {
-        STRING_COMPRESS_PART1_RAW | even_stream.len() as u16
-    } else {
-        0
-    };
-    if odd_raw {
-        header |= STRING_COMPRESS_PART2_RAW;
+    let even_part = string_compress_stream_part(&even_stream);
+    let odd_part = string_compress_stream_part(&odd_stream);
+    if even_part.payload_len() > usize::from(STRING_COMPRESS_SIZE_MASK) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CECOMPRESS_FAILED;
     }
-
-    let raw_even_len = even_raw.then_some(even_stream.len()).unwrap_or(0);
-    let raw_odd_len = odd_raw.then_some(odd_stream.len()).unwrap_or(0);
     let packet_len = 2usize
-        .saturating_add(raw_even_len)
-        .saturating_add(raw_odd_len);
+        .saturating_add(even_part.payload_len())
+        .saturating_add(odd_part.payload_len());
     if packet_len >= input_len as usize {
         kernel.threads.set_last_error(thread_id, 0);
         return CECOMPRESS_FAILED;
     }
+    let mut header = even_part.header_bits(true);
+    header |= odd_part.header_bits(false);
     if output_ptr != 0 {
         if packet_len > output_len as usize {
             kernel.threads.set_last_error(thread_id, 0);
@@ -46171,18 +47547,155 @@ fn string_compress_raw<M: CoredllGuestMemory>(
             return CECOMPRESS_FAILED;
         }
         let mut cursor = output_ptr.wrapping_add(2);
-        if even_raw {
-            if !write_guest_bytes(kernel, memory, thread_id, cursor, &even_stream) {
+        if let Some(bytes) = even_part.payload() {
+            if !write_guest_bytes(kernel, memory, thread_id, cursor, bytes) {
                 return CECOMPRESS_FAILED;
             }
-            cursor = cursor.wrapping_add(even_stream.len() as u32);
+            cursor = cursor.wrapping_add(bytes.len() as u32);
         }
-        if odd_raw && !write_guest_bytes(kernel, memory, thread_id, cursor, &odd_stream) {
+        if let Some(bytes) = odd_part.payload()
+            && !write_guest_bytes(kernel, memory, thread_id, cursor, bytes)
+        {
             return CECOMPRESS_FAILED;
         }
     }
     kernel.threads.set_last_error(thread_id, 0);
     packet_len as u32
+}
+
+enum StringCompressPart {
+    Zero,
+    Raw(Vec<u8>),
+    Compressed(Vec<u8>),
+}
+
+impl StringCompressPart {
+    fn payload(&self) -> Option<&[u8]> {
+        match self {
+            Self::Zero => None,
+            Self::Raw(bytes) | Self::Compressed(bytes) => Some(bytes),
+        }
+    }
+
+    fn payload_len(&self) -> usize {
+        self.payload().map_or(0, <[u8]>::len)
+    }
+
+    fn header_bits(&self, first_part: bool) -> u16 {
+        match self {
+            Self::Zero => 0,
+            Self::Raw(bytes) => {
+                let raw_bit = if first_part {
+                    STRING_COMPRESS_PART1_RAW
+                } else {
+                    STRING_COMPRESS_PART2_RAW
+                };
+                raw_bit | if first_part { bytes.len() as u16 } else { 0 }
+            }
+            Self::Compressed(bytes) => {
+                if first_part {
+                    bytes.len() as u16
+                } else {
+                    0
+                }
+            }
+        }
+    }
+}
+
+fn string_compress_stream_part(bytes: &[u8]) -> StringCompressPart {
+    if bytes.is_empty() || bytes.iter().all(|&byte| byte == 0) {
+        return StringCompressPart::Zero;
+    }
+    if let Some(compressed) = string_engine_compress_stream(bytes)
+        && compressed.len() < bytes.len()
+    {
+        return StringCompressPart::Compressed(compressed);
+    }
+    StringCompressPart::Raw(bytes.to_vec())
+}
+
+fn string_engine_compress_stream(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut encoded = Vec::with_capacity(bytes.len());
+    encoded.extend_from_slice(&STRING_COMPRESS_ENGINE_MAGIC);
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        let value = bytes[cursor];
+        let mut run_len = 1usize;
+        while cursor + run_len < bytes.len()
+            && bytes[cursor + run_len] == value
+            && run_len < STRING_COMPRESS_MAX_TOKEN_LEN
+        {
+            run_len += 1;
+        }
+        if run_len >= 4 {
+            encoded.push(STRING_COMPRESS_RUN_TOKEN | (run_len as u8 - 1));
+            encoded.push(value);
+            cursor += run_len;
+            continue;
+        }
+
+        let literal_start = cursor;
+        let mut literal_len = 0usize;
+        while cursor < bytes.len() && literal_len < STRING_COMPRESS_MAX_TOKEN_LEN {
+            let literal_value = bytes[cursor];
+            let mut next_run_len = 1usize;
+            while cursor + next_run_len < bytes.len()
+                && bytes[cursor + next_run_len] == literal_value
+                && next_run_len < STRING_COMPRESS_MAX_TOKEN_LEN
+            {
+                next_run_len += 1;
+            }
+            if next_run_len >= 4 && literal_len != 0 {
+                break;
+            }
+            cursor += 1;
+            literal_len += 1;
+            if next_run_len >= 4 {
+                break;
+            }
+        }
+        if literal_len == 0 {
+            return None;
+        }
+        encoded.push(literal_len as u8 - 1);
+        encoded.extend_from_slice(&bytes[literal_start..literal_start + literal_len]);
+    }
+    Some(encoded)
+}
+
+fn string_engine_decompress_stream(
+    bytes: &[u8],
+    output_len: usize,
+) -> std::result::Result<Vec<u8>, u32> {
+    if !bytes.starts_with(&STRING_COMPRESS_ENGINE_MAGIC) {
+        return Err(ERROR_NOT_SUPPORTED);
+    }
+    let mut decoded = Vec::with_capacity(output_len);
+    let mut cursor = STRING_COMPRESS_ENGINE_MAGIC.len();
+    while cursor < bytes.len() {
+        let token = bytes[cursor];
+        cursor += 1;
+        let count = usize::from(token & STRING_COMPRESS_TOKEN_LEN_MASK) + 1;
+        if token & STRING_COMPRESS_RUN_TOKEN != 0 {
+            let Some(&value) = bytes.get(cursor) else {
+                return Err(ERROR_INVALID_PARAMETER);
+            };
+            cursor += 1;
+            decoded.resize(decoded.len().saturating_add(count), value);
+        } else {
+            let end = cursor.saturating_add(count);
+            if end > bytes.len() {
+                return Err(ERROR_INVALID_PARAMETER);
+            }
+            decoded.extend_from_slice(&bytes[cursor..end]);
+            cursor = end;
+        }
+        if decoded.len() > output_len {
+            return Err(ERROR_INVALID_PARAMETER);
+        }
+    }
+    Ok(decoded)
 }
 
 fn string_decompress_raw<M: CoredllGuestMemory>(
@@ -46215,6 +47728,7 @@ fn string_decompress_raw<M: CoredllGuestMemory>(
         return CEDECOMPRESS_FAILED;
     };
 
+    let newsize1;
     if part1_size == 0 {
         for offset in (0..output_len).step_by(2) {
             if !write_guest_u8(
@@ -46227,6 +47741,7 @@ fn string_decompress_raw<M: CoredllGuestMemory>(
                 return CEDECOMPRESS_FAILED;
             }
         }
+        newsize1 = 0;
     } else if header & STRING_COMPRESS_PART1_RAW != 0 {
         if part1_size.saturating_mul(2) > output_len as usize {
             kernel
@@ -46254,13 +47769,40 @@ fn string_decompress_raw<M: CoredllGuestMemory>(
                 return CEDECOMPRESS_FAILED;
             }
         }
+        newsize1 = part1_size;
     } else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        return CEDECOMPRESS_FAILED;
+        let Some(bytes) = read_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr.wrapping_add(2),
+            part1_size as u32,
+        ) else {
+            return CEDECOMPRESS_FAILED;
+        };
+        let decompressed =
+            match string_engine_decompress_stream(&bytes, (output_len as usize).div_ceil(2)) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    kernel.threads.set_last_error(thread_id, error);
+                    return CEDECOMPRESS_FAILED;
+                }
+            };
+        newsize1 = decompressed.len();
+        for (index, byte) in decompressed.iter().copied().enumerate() {
+            if !write_guest_u8(
+                kernel,
+                memory,
+                thread_id,
+                output_ptr.wrapping_add((index * 2) as u32),
+                byte,
+            ) {
+                return CEDECOMPRESS_FAILED;
+            }
+        }
     }
 
+    let newsize2;
     if part2_size == 0 {
         for offset in (1..output_len).step_by(2) {
             if !write_guest_u8(
@@ -46273,6 +47815,7 @@ fn string_decompress_raw<M: CoredllGuestMemory>(
                 return CEDECOMPRESS_FAILED;
             }
         }
+        newsize2 = 0;
     } else if header & STRING_COMPRESS_PART2_RAW != 0 {
         if part2_size.saturating_mul(2) > output_len as usize {
             kernel
@@ -46300,14 +47843,39 @@ fn string_decompress_raw<M: CoredllGuestMemory>(
                 return CEDECOMPRESS_FAILED;
             }
         }
+        newsize2 = part2_size;
     } else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        return CEDECOMPRESS_FAILED;
+        let Some(bytes) = read_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr.wrapping_add(2 + part1_size as u32),
+            part2_size as u32,
+        ) else {
+            return CEDECOMPRESS_FAILED;
+        };
+        let decompressed = match string_engine_decompress_stream(&bytes, output_len as usize / 2) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                kernel.threads.set_last_error(thread_id, error);
+                return CEDECOMPRESS_FAILED;
+            }
+        };
+        newsize2 = decompressed.len();
+        for (index, byte) in decompressed.iter().copied().enumerate() {
+            if !write_guest_u8(
+                kernel,
+                memory,
+                thread_id,
+                output_ptr.wrapping_add((index * 2 + 1) as u32),
+                byte,
+            ) {
+                return CEDECOMPRESS_FAILED;
+            }
+        }
     }
 
-    let out_size = part1_size.max(part2_size).saturating_mul(2);
+    let out_size = newsize1.max(newsize2).saturating_mul(2);
     kernel.threads.set_last_error(thread_id, 0);
     out_size as u32
 }
@@ -47268,6 +48836,7 @@ const EVENT_PULSE: u32 = 1;
 const EVENT_RESET: u32 = 2;
 const EVENT_SET: u32 = 3;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+const DRIVERVERSION: u32 = 0;
 const TECHNOLOGY: u32 = 2;
 const HORZSIZE: u32 = 4;
 const VERTSIZE: u32 = 6;
@@ -47275,31 +48844,39 @@ const HORZRES: u32 = 8;
 const VERTRES: u32 = 10;
 const BITSPIXEL: u32 = 12;
 const PLANES: u32 = 14;
+const NUMBRUSHES: u32 = 16;
+const NUMPENS: u32 = 18;
+const NUMMARKERS: u32 = 20;
+const NUMFONTS: u32 = 22;
 const NUMCOLORS: u32 = 24;
 const CURVECAPS: u32 = 28;
 const LINECAPS: u32 = 30;
 const POLYGONALCAPS: u32 = 32;
 const TEXTCAPS: u32 = 34;
+const CLIPCAPS: u32 = 36;
 const RASTERCAPS: u32 = 38;
+const ASPECTX: u32 = 40;
+const ASPECTY: u32 = 42;
+const ASPECTXY: u32 = 44;
 const LOGPIXELSX: u32 = 88;
 const LOGPIXELSY: u32 = 90;
+const SIZEPALETTE: u32 = 104;
+const NUMRESERVED: u32 = 106;
 const COLORRES: u32 = 108;
 const SHADEBLENDCAPS: u32 = 120;
 const IMAGE_BITMAP: u32 = 0;
 const IMAGE_ICON: u32 = 1;
 const IMAGE_CURSOR: u32 = 2;
 const BI_RGB: u32 = 0;
+const BI_RLE8: u32 = 1;
+const BI_RLE4: u32 = 2;
 const BI_BITFIELDS: u32 = 3;
 const CLR_INVALID: u32 = 0xffff_ffff;
 const DIB_RGB_COLORS: u32 = 0;
 const DIB_PAL_COLORS: u32 = 1;
-const BLACKNESS: u32 = 0x0000_0042;
-const WHITENESS: u32 = 0x00ff_0062;
 const SRCCOPY: u32 = 0x00cc_0020;
 const SRCAND: u32 = 0x0088_00c6;
 const DSTINVERT: u32 = 0x0055_0009;
-const PATCOPY: u32 = 0x00f0_0021;
-const PATINVERT: u32 = 0x005a_0049;
 const R2_BLACK: i32 = 1;
 const R2_NOTMERGEPEN: i32 = 2;
 const R2_MASKNOTPEN: i32 = 3;
@@ -48578,5 +50155,19 @@ mod tests {
         assert!(prepared.is_none());
         assert!(kernel.gwe.sent_message(1).is_none());
         assert!(kernel.gwe.get_message(receiver_thread).is_none());
+    }
+
+    #[test]
+    fn popup_menu_cascading_child_position_flips_and_clamps_to_screen() {
+        let (x, y) = popup_menu_cascading_child_position(120, 40, 90, 0, 220, 40, 260, 180);
+
+        assert_eq!((x, y), (0, 42));
+    }
+
+    #[test]
+    fn popup_menu_cascading_child_position_clamps_bottom_edge() {
+        let (x, y) = popup_menu_cascading_child_position(120, 160, 90, 1, 90, 80, 260, 180);
+
+        assert_eq!((x, y), (32, 100));
     }
 }

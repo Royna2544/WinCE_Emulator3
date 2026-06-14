@@ -26,6 +26,7 @@
 // - GET /api/v1/debug/messages.txt returns the latest GWE/message trace text.
 // - GET /api/v1/debug/message-boxes.txt returns live MessageBoxW records.
 // - GET /api/v1/debug/processes.txt returns recent process/thread ops.
+// - GET /api/v1/debug/processes-live.txt returns live process/thread ops.
 // - GET /api/v1/debug/sends.txt returns synchronous SendMessage state.
 // - GET /api/v1/debug/pending-wndproc.txt returns pending WNDPROC callouts.
 // - GET /api/v1/debug/wndproc.txt returns recent WNDPROC call/return traces.
@@ -262,6 +263,11 @@ impl RemoteServer {
         self.local_addr
     }
 
+    pub fn video_frame_interval(&self) -> Duration {
+        let fps = self.state.config.video_fps.max(1) as u64;
+        Duration::from_millis((1_000 / fps).max(1))
+    }
+
     #[cfg(test)]
     fn listener_guard_addr(&self) -> SocketAddr {
         self.state
@@ -458,6 +464,9 @@ impl RemoteServer {
                 self.latest_debug_text("message-boxes").into()
             }
             ("GET", "/api/v1/debug/processes.txt") => self.latest_debug_text("processes").into(),
+            ("GET", "/api/v1/debug/processes-live.txt") => {
+                self.latest_debug_text("processes-live").into()
+            }
             ("GET", "/api/v1/debug/sends.txt") => self.latest_debug_text("sends").into(),
             ("GET", "/api/v1/debug/pending-wndproc.txt") => {
                 self.latest_debug_text("pending-wndproc").into()
@@ -545,6 +554,7 @@ impl RemoteServer {
                     "debugMessages": "GET /api/v1/debug/messages.txt",
                     "debugMessageBoxes": "GET /api/v1/debug/message-boxes.txt",
                     "debugProcesses": "GET /api/v1/debug/processes.txt",
+                    "debugProcessesLive": "GET /api/v1/debug/processes-live.txt",
                     "debugSends": "GET /api/v1/debug/sends.txt",
                     "debugPendingWndProc": "GET /api/v1/debug/pending-wndproc.txt",
                     "debugWndProc": "GET /api/v1/debug/wndproc.txt",
