@@ -1260,7 +1260,8 @@ fn get_message_waiter_uses_filtered_scheduler_message_readiness() -> Result<()> 
 fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<()> {
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
-    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    let remote_target = kernel.remote_gps_target();
+    let com = kernel.create_file_w(&remote_target, GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
     assert!(kernel.is_serial_device_handle(com));
     assert!(!kernel.serial_read_ready(com));
 
@@ -1339,7 +1340,8 @@ fn remote_serial_injection_queues_scheduler_comm_event_candidates() -> Result<()
 
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
-    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    let remote_target = kernel.remote_gps_target();
+    let com = kernel.create_file_w(&remote_target, GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
     kernel.set_comm_mask(com, EV_RXCHAR)?;
     assert!(!kernel.serial_comm_event_ready(com));
 
@@ -1417,7 +1419,8 @@ fn set_comm_mask_wakes_pending_comm_event_with_zero_event() -> Result<()> {
 
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
-    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    let remote_target = kernel.remote_gps_target();
+    let com = kernel.create_file_w(&remote_target, GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
     let comm_wait = kernel.register_blocked_waiter(
         51,
         0x351,
@@ -1485,7 +1488,8 @@ fn serial_comm_timeouts_control_empty_read_parking() -> Result<()> {
 fn serial_comm_state_mask_and_purge_are_handle_state() -> Result<()> {
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
-    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    let remote_target = kernel.remote_gps_target();
+    let com = kernel.create_file_w(&remote_target, GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
 
     let mut dcb_bytes = [0u8; CommDcb::SIZE];
     dcb_bytes[0..4].copy_from_slice(&(CommDcb::SIZE as u32).to_le_bytes());
@@ -3004,14 +3008,20 @@ fn gwe_keyboard_layout_ime_and_activate_layout() {
 
     // keyboard_layout() and keyboard_layout_list() are consistent.
     let layout = kernel.gwe.keyboard_layout();
-    assert_eq!(kernel.gwe.keyboard_layout_list(), [layout]);
+    assert_eq!(kernel.gwe.keyboard_layout_list(), vec![layout]);
     assert!(!kernel.gwe.keyboard_layout_name().is_empty());
 
-    // activate_keyboard_layout(0) → None (invalid).
-    assert_eq!(kernel.gwe.activate_keyboard_layout(0), None);
+    // activate_keyboard_layout(0/HKL_PREV) cycles through loaded layouts.
+    assert_eq!(kernel.gwe.activate_keyboard_layout(0), Some(layout));
+    assert_eq!(kernel.gwe.keyboard_layout(), layout);
     // activate_keyboard_layout(non-zero) → Some(previous), stores new layout.
     let prev = kernel.gwe.activate_keyboard_layout(0x0409_0409).unwrap();
     assert_eq!(prev, layout);
+    assert_eq!(kernel.gwe.keyboard_layout(), 0x0409_0409);
+    assert_eq!(kernel.gwe.keyboard_layout_list(), vec![layout, 0x0409_0409]);
+    assert_eq!(kernel.gwe.activate_keyboard_layout(0), Some(0x0409_0409));
+    assert_eq!(kernel.gwe.keyboard_layout(), layout);
+    assert_eq!(kernel.gwe.activate_keyboard_layout(1), Some(layout));
     assert_eq!(kernel.gwe.keyboard_layout(), 0x0409_0409);
 
     // set_keyboard_layout_from_name with valid 8-hex-digit string.
@@ -3464,6 +3474,7 @@ fn device_namespace_enabled_names_and_session_rx_tx_roundtrip() {
                 kind: DeviceKind::Serial,
                 backend: DeviceBackend::Stub,
                 host: None,
+                remote_gps: false,
                 enabled: true,
                 note: None,
             },
@@ -3472,6 +3483,7 @@ fn device_namespace_enabled_names_and_session_rx_tx_roundtrip() {
                 kind: DeviceKind::Serial,
                 backend: DeviceBackend::Stub,
                 host: None,
+                remote_gps: false,
                 enabled: false, // disabled — should not appear in enabled_names
                 note: None,
             },
@@ -4852,10 +4864,15 @@ fn resource_system_font_brush_pen_palette_dc_and_gdi_object_kind() {
         0,
         -12,
         0,
+        0,
+        0,
         400,
         false,
         false,
         false,
+        0,
+        0,
+        0,
         0,
         0,
         "Arial".to_owned(),
@@ -4968,7 +4985,10 @@ fn resource_system_image_list_create_add_count_info_bk_color_and_destroy() {
     assert_eq!(res.image_list(ilh).unwrap().width, 32);
     assert_eq!(res.image_list(ilh).unwrap().height, 32);
     assert_eq!(res.image_list_count(ilh), Some(0));
-    assert_eq!(res.set_image_list_size(ilh, 0, 32), Some(false)); // invalid
+    assert_eq!(res.set_image_list_size(ilh, 0, 32), Some(true));
+    assert_eq!(res.image_list(ilh).unwrap().width, 0);
+    assert_eq!(res.image_list(ilh).unwrap().height, 32);
+    assert_eq!(res.set_image_list_size(ilh, 0, 32), Some(false)); // unchanged
     assert_eq!(res.set_image_list_size(0xDEAD, 16, 16), None); // invalid handle
 
     // destroy_image_list.
@@ -5479,10 +5499,15 @@ fn resource_system_dc_palette_bk_mode_color_text_align_rop2_is_memory_and_delete
         0,
         -12,
         0,
+        0,
+        0,
         400,
         false,
         false,
         false,
+        0,
+        0,
+        0,
         0,
         0,
         "Arial".to_owned(),
@@ -5494,12 +5519,15 @@ fn resource_system_dc_palette_bk_mode_color_text_align_rop2_is_memory_and_delete
     let brush = res.create_brush(0x00FF00);
     let hdc2 = res.create_compatible_dc();
     res.select_object(hdc2, brush);
-    // delete_gdi_object resets selected brush to stock WHITE_BRUSH in all DCs.
+    // Selected GDI objects remain live until the DC selects something else.
+    assert!(!res.delete_gdi_object(brush));
+    assert!(res.brush(brush).is_some());
+    let replacement_brush = res.create_brush(0x0000FF);
+    assert_eq!(res.select_object(hdc2, replacement_brush), Some(brush));
     assert!(res.delete_gdi_object(brush));
     assert!(res.brush(brush).is_none());
-    // dc_state for hdc2 should no longer reference the deleted brush.
     let s2 = res.dc_state(hdc2).unwrap();
-    assert_ne!(s2.selected_brush, brush);
+    assert_eq!(s2.selected_brush, replacement_brush);
 
     let pen = res.create_pen(0, 2, 0x0000FF);
     assert!(res.delete_gdi_object(pen));
@@ -5637,8 +5665,14 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
     let drag = res.image_list_drag().unwrap();
     assert_eq!(drag.hotspot_x, 3);
     assert_eq!(drag.hotspot_y, 4);
+    assert!(!drag.visible);
+    assert!(res.image_list_drag_move(7, 8));
+    let drag = res.image_list_drag().unwrap();
+    assert_eq!(drag.x, 0);
+    assert_eq!(drag.y, 0);
 
     assert!(res.image_list_drag_enter(0x2000, 10, 20));
+    assert!(res.image_list_drag().unwrap().visible);
     assert!(res.image_list_drag_move(15, 25));
     let drag = res.image_list_drag().unwrap();
     assert_eq!(drag.x, 15);
@@ -9774,6 +9808,7 @@ fn device_namespace_default_baud_mode_and_accepts_remote_serial_target_and_bitma
             kind: DeviceKind::Serial,
             backend: DeviceBackend::Stub,
             host: None,
+            remote_gps: false,
             enabled: true,
             note: None,
         }],
@@ -10123,6 +10158,17 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(res.set_image_list_overlay(ov_il, 0, 16), Some(false));
     // Valid: maps overlay 1 → image index 0.
     assert_eq!(res.set_image_list_overlay(ov_il, 0, 1), Some(true));
+    assert_eq!(
+        res.set_image_list_overlay_bounds(ov_il, 1, 3, 4, 5, 6, 0x20),
+        Some(true)
+    );
+    assert_eq!(res.set_image_list_overlay(ov_il, 0, 1), Some(true));
+    let overlay = res.image_list(ov_il).unwrap().overlays.get(&1).unwrap();
+    assert_eq!(overlay.x, 3);
+    assert_eq!(overlay.y, 4);
+    assert_eq!(overlay.width, 5);
+    assert_eq!(overlay.height, 6);
+    assert_eq!(overlay.flags, 0x20);
 
     // --- record_image_list_draw ---
     let draw = ImageListDraw {
@@ -10164,6 +10210,7 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
 
     let drag_il = res.create_image_list(16, 16, 0, 0, 2).unwrap();
     res.add_image_list_image(drag_il, bmp_a, 0).unwrap();
+    let point_before_begin = res.image_list_drag_position();
     // begin_image_list_drag with bad index → Some(false).
     assert_eq!(res.begin_image_list_drag(drag_il, 99, 8, 8), Some(false));
     // begin_image_list_drag valid.
@@ -10171,11 +10218,16 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     let drag = res.image_list_drag().unwrap();
     assert_eq!(drag.image_list, drag_il);
     assert_eq!(drag.hotspot_x, 4);
+    assert!(!drag.visible);
+    assert!(res.image_list_drag_move(7, 8));
+    assert_eq!(res.image_list_drag().unwrap().x, point_before_begin.0);
+    assert_eq!(res.image_list_drag_position(), point_before_begin);
     // drag_enter sets lock_hwnd and position.
     assert!(res.image_list_drag_enter(0x1234, 10, 20));
     let drag2 = res.image_list_drag().unwrap();
     assert_eq!(drag2.lock_hwnd, 0x1234);
     assert_eq!(drag2.x, 10);
+    assert!(drag2.visible);
     // drag_move updates position.
     assert!(res.image_list_drag_move(30, 40));
     assert_eq!(res.image_list_drag().unwrap().x, 30);
@@ -10191,6 +10243,7 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     // drag_leave with matching hwnd.
     assert!(res.image_list_drag_leave(0x1234));
     assert_eq!(res.image_list_drag().unwrap().lock_hwnd, 0);
+    assert!(!res.image_list_drag().unwrap().visible);
     // set_image_list_drag_cursor with valid index updates drag state.
     assert_eq!(res.set_image_list_drag_cursor(drag_il, 0, 6, 7), Some(true));
     assert_eq!(res.image_list_drag().unwrap().hotspot_x, 6);

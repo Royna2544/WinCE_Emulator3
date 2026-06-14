@@ -292,8 +292,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     a guarded block, swallows output-pointer faults, and still reports
     `ERROR_NO_MORE_ITEMS`; v3 now mirrors the observable bad nonzero output
     pointer order and last-error result. The same `NotifyReset` path decrements
-    one outstanding event count for no-buffer
-    `FindNextChangeNotification` calls, so v3 keeps an outstanding signal count
+    one outstanding event count when `INT_NotifyGetNextChange`/`NotifyGetNextChange`
+    pass null data for all-zero no-data reset arguments, so v3 now routes the
+    matching `CeGetFileNotificationInfo` shape through the same one-signal reset
+    path as `FindNextChangeNotification` and keeps an outstanding signal count
     separate from detailed records instead of clearing all queued records on a
     single reset. `NotifyCloseChangeHandle` duplicates the caller's event
     handle with `DUPLICATE_CLOSE_SOURCE` before checking the event data, so v3
@@ -315,7 +317,52 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the creating process on public file-change notification handles, honors a
     nonzero direct AFS `hProc` owner, and rejects foreign-process wait,
     `FindNextChangeNotification`, `CeGetFileNotificationInfo`,
-    `DuplicateHandle`, and `FindCloseChangeNotification` attempts.
+    `DuplicateHandle`, direct `CloseHandle`, and
+    `FindCloseChangeNotification` attempts without consuming the public
+    notification handle. Direct `AFS_FindFirstChangeNotificationW` coverage now
+    also verifies that a foreign raw ordinal caller cannot directly close or
+    duplicate a notification created for the nonzero `hProc` owner, leaving the
+    owned notification intact and the duplicate output slot untouched.
+    The CE `fsdmgr.def` notification exports map `FSINT_*`/`FSEXT_*` to
+    ordinals 68-75; v3 now recognizes those `fsdmgr.dll` imports by name and
+    ordinal, traps only that supported notification subset, and dispatches the
+    first-change/reset/info/close calls through the same raw notification paths
+    used by the coredll exports. Import-level coverage now verifies
+    `FSEXT_FindFirstChangeNotificationW` creates an owner-scoped notification
+    handle, rejects a foreign-process reset through the FSDMGR import, and lets
+    the owner close that handle through the paired FSDMGR close import.
+    `pathapi.cpp` routes `FSINT_FindFirstChangeNotificationW` through
+    `GetCurrentProcessId()` and pairs it with `INT_NotifyGetNextChange`/
+    `INT_NotifyCloseChangeHandle`, while `FSEXT_*` uses caller-process
+    duplication. v3 now models `FSINT_*` imports with an internal FSDMGR
+    notification owner, so public/`FSEXT` reset-info calls reject those handles
+    without touching caller output while the paired `FSINT_*` reset, info, and
+    close imports continue to operate on the internal handle.
+    CE `INT_NotifyCloseChangeHandle` differs from public
+    `NotifyCloseChangeHandle`: the public path duplicates and closes the caller
+    event handle before validating its event data, but the internal path checks
+    event data first and leaves a valid non-notification handle alive when it
+    reports `ERROR_INVALID_HANDLE`. v3 now mirrors that split for
+    `FSINT_FindCloseChangeNotification` versus `FSEXT_FindCloseChangeNotification`.
+    CE `NotifyReset` writes `lpBytesAvailable` before `lpBytesReturned` in the
+    pending-data path, even when no record fits and it will report
+    `ERROR_INSUFFICIENT_BUFFER`; v3 now follows that order and reports
+    `ERROR_INVALID_PARAMETER` if a non-null returned-count pointer faults after
+    the available byte count was written.
+    When records do fit, CE copies and deletes/drains each fitted
+    `NOTFILEINFO` before the later output-count writes, so a fault in
+    `lpBytesAvailable`/`lpBytesReturned` still consumes records already copied
+    to the caller buffer; v3 now drains after the successful record-buffer
+    write and before the optional count writes to mirror that side effect.
+    The same per-record CE loop means a caller-buffer fault on a later fitted
+    record leaves earlier copied records drained while the failed reset does
+    not re-signal the event; v3 now writes and drains fitted records one at a
+    time, suppressing requeue until the reset completes successfully.
+    In the no-pending data path, CE dereferences `lpBytesReturned` before
+    `lpBytesAvailable` inside one guarded block; a null or bad returned-count
+    pointer therefore leaves the available-count slot untouched while still
+    returning `ERROR_NO_MORE_ITEMS`. v3 now treats that returned-count write as
+    mandatory for no-pending data queries before attempting the available count.
     CE `NotifyCreateEvent` inserts events under the `NOTVOLENTRY` for the
     resolved volume, and `NotifyPathChangeEx`/`NotifyMoveFileEx` receive that
     same `hVolume` from FSDMGR before walking directory events. v3 now stores
@@ -331,8 +378,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `mounttable.cpp` also calls `NotifyPathChange` with `FILE_ACTION_ADDED` or
     `FILE_ACTION_REMOVED` for visible mount folders on the root notification
     handle; v3 mirrors that for root-directory waiters when guest roots are
-    mounted or unmounted. Deeper FSDMGR volume-handle ownership and remaining
-    owner/reset/close lifetime edges remain queued.
+    mounted or unmounted. CE `extfile.h` declares `AFS_Unmount(HANDLE hFileSys)`,
+    `mextfile.h` traps it as an `HT_AFSVOLUME` direct handle call, and
+    `mounttable.cpp` closes the volume handle as the path that calls
+    `AFS_PreUnmount`/`AFS_Unmount`. v3 now models raw AFS volume handles for
+    mounted roots, records the owning process, rejects foreign `AFS_Unmount`
+    and `AFS_FsIoControlW`, routes `AFS_Unmount` and direct `CloseHandle`
+    through the mounted-root removal notifier, and consumes the handle after
+    the first successful close.
+    Fuller FSDMGR mount-table registration and remaining internal/external
+    paired-handle lifetime edges remain queued.
     FSDMGR `fileapi.cpp` calls `NotifyHandleChange(FILE_NOTIFY_CHANGE_LAST_WRITE)`
     after successful writes, and `fsnotify.cpp` marks that handle changed so
     `NotifyCloseHandle` emits `FILE_ACTION_CHANGE_COMPLETED` on close with the
@@ -384,6 +439,76 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     enumeration suppression, exact hidden mount attributes, system/hidden
     `CeGetVolumeInfoW` attributes, and read-only/removable volume attributes
     through both `CeGetVolumeInfoW` and `CeFsIoControlW(FSCTL_GET_VOLUME_INFO)`.
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdmgr.def` exports
+    `FSDMGR_DiskIoControl @12`, `FSDMGR_ReadDisk @25`,
+    `FSDMGR_ReadDiskEx @26`, `FSDMGR_WriteDisk @35`, and
+    `FSDMGR_WriteDiskEx @36`; `fsdmgrapi.cpp` implements direct
+    `ReadDisk`/`WriteDisk` by building a one-entry `FSD_SCATTER_GATHER_INFO`,
+    implements `ReadDiskEx`/`WriteDiskEx` by transforming caller
+    `FSD_BUFFER_INFO` entries into an `SG_REQ`, and forwards both shapes to the
+    disk IOCTL path. `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsdmgr.h` defines the
+    eight-DWORD `FSD_SCATTER_GATHER_INFO` layout and two-DWORD
+    `FSD_SCATTER_GATHER_RESULTS` layout; `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h` defines
+    the legacy `DISK_IOCTL_GETINFO`/`READ`/`WRITE` values, the
+    `IOCTL_DISK_*` equivalents, the six-DWORD `DISK_INFO` layout, and
+    `SG_REQ`/`SG_BUF` scatter/gather buffers with start sector, sector count,
+    status, callback, guest buffer pointer, and byte length fields, and the
+    12-byte `DELETE_SECTOR_INFO { cbSize, startsector, numsectors }` payload
+    for `IOCTL_DISK_DELETE_SECTORS`. `storemgr.h` defines the 80-byte
+    `STORAGEDEVICEINFO` shape used by `IOCTL_DISK_DEVICE_INFO`, and `diskio.h`
+    defines the 16-byte `STORAGE_IDENTIFICATION` header used by
+    `IOCTL_DISK_GET_STORAGEID` plus the 68-byte `PowerTimings` structure used
+    by `IOCTL_DISK_GETPMTIMINGS`; `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\BLOCK\ATAPI\atapipm.cpp`
+    treats that power-timing buffer as an input/output payload whose leading
+    `dwSize` must cover the full structure. `diskio.h` also defines the
+    552-byte `DISK_COPY_EXTERNAL` header and trailing `SECTOR_LIST_ENTRY`
+    array used by `IOCTL_DISK_COPY_EXTERNAL_START`; DOSPART `part.cpp`
+    validates the fixed header, rewrites each sector-list start sector from
+    partition-relative to disk-relative form, and forwards the payload to the
+    block driver. DOSPART `part.cpp` wraps secure
+    wipe requests in a partition-sized `DELETE_SECTOR_INFO`, and MSFLASH
+    `falmain.cpp` validates that same payload for both secure wipe and
+    set-secure-wipe-flag. v3 now traps the direct ordinals, persists
+    direct/cache/Ex writes in sparse synthetic 512-byte sectors, reads unwritten
+    sectors as zero-filled data, writes synthetic `DISK_INFO`, disk name,
+    device info, and storage-id metadata, fills Ex result sector counts, handles
+    direct disk SG read/write, validates `GET_SECTOR_ADDR` caller buffers before
+    returning no-XIP `ERROR_NOT_SUPPORTED` without writing synthetic addresses,
+    validates `COPY_EXTERNAL_START` `DISK_COPY_EXTERNAL` headers and sector-list
+    entries before returning unsupported without touching caller buffers,
+    returns a CE `PowerTimings`-sized zero timing snapshot for
+    `GETPMTIMINGS`, validates the `DELETE_SECTOR_INFO` payload for
+    `SET_SECURE_WIPE_FLAG` without erasing, clears sparse sectors for
+    secure-wipe and delete-sector requests, clears the synthetic disk for
+    format-media requests, and treats initialized and flush-cache as
+    successful basic disk IOCTLs. `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`
+    defines `FSCTL_COPY_EXTERNAL_START`, `FSCTL_COPY_EXTERNAL_COMPLETE`, and
+    the 536-byte `FILE_COPY_EXTERNAL` header; UDF's
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\FSD\UDF\udffile.cpp` accepts that hook
+    shape but returns `ERROR_CALL_NOT_IMPLEMENTED` for external copy. v3 now
+    validates fixed file-copy-external buffers on the public, AFS, and StoreMgr
+    FSCTL paths before returning unsupported without touching caller buffers.
+    `fsioctl.h` also defines `FSCTL_SET_FILE_CACHE` and the one-DWORD
+    `FILE_CACHE_INFO` level selector;
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\FSD\CACHEFILT\privatefilehandle.cpp`
+    accepts only `FileCacheDisableStandard` on private file handles, returns
+    `ERROR_NOT_SUPPORTED` for other cache levels, and reports
+    `ERROR_INVALID_PARAMETER` for malformed input, while
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\FSD\CACHEFILT\cachedvolume.cpp`
+    rejects the same FSCTL on volume handles. `mapfile.c` uses the disable
+    request before mapped-file paging, so v3 now implements that disable-only
+    file-handle surface as a no-op cache-state marker and keeps broader cache
+    filter behavior queued.
+    `volumeapi.cpp` handles
+    `FSCTL_GET_VOLUME_INFO` before forwarding other controls to the mounted
+    FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for
+    refresh/flush no-ops and host-backed unsupported-FSCTL no-touch failure.
+    Remaining storage fidelity is physical block-driver backing, external
+    cache/filter DLL behavior, remaining specialized disk IOCTLs, real static
+    sector address mapping, real external-copy accelerator behavior, hardware
+    flash secure-wipe resume behavior, hardware power-state timing, and
+    mounted-FSD `FsIoControl` hook forwarding beyond the host-backed
+    unsupported stub.
 
 - Shell popup-menu APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
@@ -450,6 +575,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`, and
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\main.cpp`
+  plus CE input-method samples under
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\MULTIBOX`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\MBOXKOR`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\MBOXCHT`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\MSROMA`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\CHTIM`, plus the caret/candidate
+  placement callers in
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\NETSAMP\PEGTERM\TERMCTRL\termime.c`
+  and `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\uicand.c`
   - CE defines `TranslateMessage(CONST MSG *pMsg)`, `WM_CHAR`,
     `WM_SYSKEYDOWN`, `WM_SYSCHAR`, `VK_SHIFT`, and `VK_CAPITAL` in the same
     input API surface. v3 now routes raw `TranslateMessage` through GWE key
@@ -463,9 +597,134 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     open/conversion-status, `ImmIsIME`, `ImmGetIMEFileNameW`, and
     `ImmDisableIME`; the CE GDI tests call `ImmDisableIME(0)` before drawing
     work so IME UI does not interfere. v3 now keeps an explicit GWE keyboard
-    layout/KLID and minimal HIMC state for those raw probes, while still
-    reporting no pending composition data. Broader layout-specific keymaps,
-    dead keys, candidate/composition UI, and IME handoff remain queued.
+    layout/KLID and minimal HIMC state for those raw probes. The CE
+    input-method samples frequently pass `NULL` for the active HIMC when
+    querying or setting open/conversion status; v3 now resolves those
+    `ImmGetOpenStatus(NULL)`, `ImmSetOpenStatus(NULL, ...)`,
+    `ImmGetConversionStatus(NULL, ...)`, and
+    `ImmSetConversionStatus(NULL, ...)` calls through the current foreground
+    keyboard target's HIMC. The `MULTIBOX`, `MBOXKOR`, `MBOXCHT`, `CACJPN`,
+    and Korean `MSIMK` input-method code also probes active composition with
+    `ImmGetCompositionString(NULL, GCS_COMPSTR, NULL, 0)`; v3 now resolves
+    those NULL-HIMC composition length/copy paths, plus the paired
+    `ImmSetCompositionStringW(NULL, SCS_SETSTR, ...)` path, through the same
+    focused/foreground HIMC. `imm.h` defines `COMPOSITIONFORM` as
+    `dwStyle`, `POINT ptCurrentPos`, and `RECT rcArea`, and
+    `CANDIDATEFORM` as `dwIndex`, `dwStyle`, `POINT ptCurrentPos`, and
+    `RECT rcArea`; PEGTERM positions the composition form at the caret with
+    `CFS_POINT`, while TESTIME and IME UI callers set candidate windows with
+    indexed `CANDIDATEFORM` records. v3 now stores and round-trips those two
+    CE layouts through `ImmGet/SetCompositionWindow` and
+    `ImmGet/SetCandidateWindow`, including the active NULL-HIMC path where it
+    applies. `imm.h` defines `CANDIDATELIST` as `dwSize`, `dwStyle`,
+    `dwCount`, `dwSelection`, `dwPageStart`, `dwPageSize`, and a trailing
+    `dwOffset[]` string-offset array, plus `ImmGetCandidateListCountW` and
+    `ImmGetCandidateListW`. TESTIME stores one active `CANDIDATEINFO`/
+    `CANDIDATELIST`, clears it by zeroing count/selection/page/offset fields,
+    treats `dwCount > 0` as the candidate-present test, and fills string
+    offsets relative to the `CANDIDATELIST` base. v3 now stores candidate-list
+    payload state on HIMCs, reports the CE list count and byte size through
+    `ImmGetCandidateListCountW`, and marshals `CANDIDATELIST` payloads with
+    UTF-16 string offsets through `ImmGetCandidateListW`. TESTIME `dic.c`
+    `GetCandidate` maps single upper/lower ASCII reading strings to the same
+    letter plus the toggled-case alternative and then fills the same
+    `CANDIDATELIST` slot when conversion candidates are opened. v3 now mirrors
+    that built-in TESTIME table for synthetic IME HKLs when
+    `ImmSetCompositionStringW(..., SCS_SETSTR, ...)` receives a one-letter
+    composition string, and clears the generated list when the composition is
+    not in that table. TESTIME `regword.c` defines `FAKEWORD_NOUN` and
+    `FAKEWORD_VERB` as the first two user-style values, exposes `NOUN`/`VERB`
+    through `ImeGetRegisterWordStyle`, stores valid registered words through
+    `WritePrivateProfileString`, and `dic.c` appends those private-profile
+    entries after the built-in candidate table. v3 now exposes those style
+    descriptors, tracks `ImmRegisterWordW`/`ImmUnregisterWordW` state for IME
+    HKLs, and includes registered words in generated TESTIME candidate lists.
+    `dic.c::ConvKanji` rejects the combined built-in/private-profile candidate
+    list when `cnt > MAXCANDSTRNUM`, and `testime.h` defines that ceiling as
+    32. v3 now suppresses generated TESTIME candidate lists that exceed this
+    count.
+    TESTIME `stub.c::GetPrivateProfileString` also rejects non-null key names
+    and section names containing lowercase characters before reading dictionary
+    entries. v3 now applies that section-name visibility rule to registered-word
+    candidate lookup and Unicorn `ImmEnumRegisterWordW` callback enumeration,
+    and generated candidates now include registry-value private-profile entries
+    from `HKLM\SOFTWARE\Microsoft\testime\Windows\testime.DIC\<reading>` after
+    the built-in table. CE's bundled `testime.reg` sample authors its default
+    dictionary as candidate subkeys, so v3 reconciles that image data during
+    kernel boot by seeding stable registry values whose string data preserves the
+    sample candidate text for the active value-enumeration path.
+    TESTIME `imm.c` implements `ImeConversionList` as a zero-result stub for
+    `GCL_CONVERSION`, `GCL_REVERSECONVERSION`, and `GCL_REVERSE_LENGTH`; v3 now
+    returns that clean zero-byte result through `ImmGetConversionListW`.
+    TESTIME `ImeEscape` supports only `IME_ESC_QUERY_SUPPORT`, returns false
+    for null `lpData`, and returns true only when the requested escape stored
+    at `lpData` is `IME_ESC_QUERY_SUPPORT`; v3 now mirrors that public
+    `ImmEscapeW` self-query shape for IME HKLs.
+    TESTIME `regword.c` implements `ImeEnumRegisterWord` as a callback-driven
+    enumeration: it first probes the callback with the caller's original
+    filters, stops with zero if that probe returns nonzero, then walks matching
+    private-profile entries for non-null readings when the requested style is
+    zero or `FAKEWORD_NOUN`, returning the last callback result. v3 now carries
+    that sequence through the Unicorn `ImmEnumRegisterWordW` callout while raw
+    dispatch returns the neutral zero fallback when no guest callback can run.
+    `imm.h` and
+    TESTIME also define `GUIDELINE`,
+    `GGL_LEVEL`, `GGL_INDEX`, `GGL_STRING`,
+    `GGL_PRIVATE`, and `GL_LEVEL_NOGUIDELINE`; TESTIME's UI code checks
+    `ImmGetGuideLine(GGL_LEVEL)` before allocating/fetching guideline strings,
+    while its IME dictionary path fills `hGuideLine` and posts
+    `IMN_GUIDELINE`. v3 now returns no-guideline results with clean last-error
+    state, clears caller string/private buffers for empty guideline queries, and
+    reads HIMCC-backed `GUIDELINE` headers through `hGuideLine` for
+    `GGL_LEVEL`, `GGL_INDEX`, `GGL_STRING`, and `GGL_PRIVATE` payload
+    query/copy behavior. `imm.h`
+    also defines `INPUTCONTEXT`, `COMPOSITIONSTRING`, `CANDIDATEINFO`, and the
+    `ImmLockIMC`/`ImmUnlockIMC`, `ImmLockIMCC`/`ImmUnlockIMCC`,
+    `ImmGetIMCLockCount`, `ImmGetIMCCLockCount`, `ImmGetIMCCSize`,
+    `ImmCreateIMCC`, and `ImmReSizeIMCC` APIs used throughout TESTIME's
+    dictionary and UI code. v3 now serializes the current HIMC state into a
+    guest-readable CE `INPUTCONTEXT`, exposes lockable `hCompStr` and
+    `hCandInfo` HIMCC buffers with CE `COMPOSITIONSTRING` and `CANDIDATEINFO`
+    payloads, preserves HIMC/HIMCC lock counts, reads back handle fields on
+    `ImmUnlockIMC` so IME code can assign resized component handles, and now
+    deserializes resized `COMPOSITIONSTRING`/`CANDIDATEINFO` payloads back into
+    HIMC composition/candidate state. TESTIME `dic.c`'s `GenerateMessage`
+    appends three-DWORD `GENEMSG` records to `INPUTCONTEXT::hMsgBuf`,
+    increments `dwNumMsgBuf`, and calls `ImmGenerateMessage`; v3 now drains
+    those records to the HIMC owner HWND and clears `dwNumMsgBuf`. `imm.h` and
+    TESTIME `NotifyIME` also define the candidate notification action flow:
+    `NI_OPENCANDIDATE` becomes `WM_IME_NOTIFY(IMN_OPENCANDIDATE)`,
+    selection/page/list changes become `IMN_CHANGECANDIDATE`, and
+    `NI_CLOSECANDIDATE` becomes `IMN_CLOSECANDIDATE`, with the candidate-list
+    index carried as a bit mask. v3 now posts those candidate notification
+    messages for valid 0..31 indexes while keeping unsupported actions as no-op
+    successes, and mutates stored candidate-list selection, page-start, and
+    page-size state for TESTIME-shaped selection/page notifications when a list
+    is present. `imm.h` also defines
+    `ImmGetProperty` indexes and the `IMEVER_*`, `IME_PROP_*`, `IME_CMODE_*`,
+    `UI_CAP_*`, `SCS_CAP_*`, and `SELECT_CAP_*` capability constants, and
+    TESTIME's `ImeInquire` fills those fields with Unicode/caret/KBD-first
+    properties, language/fullshape/roman/charcode conversion caps,
+    `UI_CAP_2700`, zero set-composition-string/sentence caps,
+    `SELECT_CAP_CONVERSION`, and a DWORD of private data. v3 now returns those
+    capability values for IME HKLs and zero for non-IME HKLs. `imm.h` also
+    exposes `ImmGetStatusWindowPos`, `ImmSetStatusWindowPos`,
+    `IMC_GETSTATUSWINDOWPOS`, `IMC_SETSTATUSWINDOWPOS`,
+    `IMC_OPENSTATUSWINDOW`, `IMC_CLOSESTATUSWINDOW`, and the matching
+    `IMN_*STATUSWINDOW*` notification constants; TESTIME's UI control path
+    stores the status-window point and generates those notifications. v3 now
+    round-trips that point in HIMC state and posts the status-window
+    `WM_IME_NOTIFY` messages for the CE context-update actions. TESTIME's
+    resource version data also identifies the sample IME as `TESTIME.IME` with
+    the file description `TESTIME 4.0`, and v3 now returns those identity
+    strings from `ImmGetIMEFileNameW` and `ImmGetDescriptionW` for IME HKLs
+    while preserving empty-string results for non-IME HKLs. `winuser.h` defines
+    `HKL_PREV`, `HKL_NEXT`, `KLF_ACTIVATE`, and `KLF_SETFORPROCESS`; v3 now
+    keeps a loaded-HKL list, leaves `LoadKeyboardLayoutW(..., 0)` inactive,
+    honors `KLF_ACTIVATE`, and cycles with `ActivateKeyboardLayout(HKL_NEXT/
+    HKL_PREV)`. Broader layout-specific keymaps, dead keys, private-profile
+    dictionary candidate sources, candidate UI/SIP callbacks, and IME handoff
+    remain queued.
 
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
@@ -593,7 +852,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     masks such as `QS_TIMER`; the message wait result is
     `WAIT_OBJECT_0 + nCount` when input wakes the call. v3 now applies that
     shape to raw timer waits by advancing only to timers due within the
-    requested timeout and leaving later timers pending. The Unicorn import
+    requested timeout and leaving later timers pending, and raw coverage now
+    verifies the same return index when queued input wakes after multiple valid
+    but unsignaled handles. The Unicorn import
     bridge uses the same result shape for current-thread timer wakes and
     timeout waits that fit the active host run budget, while over-budget waits
     remain scheduler-owned.
@@ -762,10 +1023,18 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the image list. It calls `ImageList::Add` rather than
     `ImageList::AddMasked` when `crMask == CLR_NONE`, so raw
     `ImageList_LoadImage` now leaves unmasked entries with mask handle `0` and
-    no transparent color. `ImageList_AddMasked` and the `ImageList_LoadImage` mask-color argument now
-    preserve a transparent color for BMP-backed entries, so masked
-    framebuffer draws skip matching source pixels while still rendering
-    non-transparent pixels. `ImageList_Add` with a bitmap `hbmMask` now also
+    no transparent color. `ImageList::AddMasked` treats `CLR_DEFAULT` as the
+    source bitmap's upper-left pixel via `GetPixel_I(s_hdcSrc, 0, 0)`, and
+    `LoadImageW_I` routes non-`CLR_NONE` masks through that same helper, so raw
+    `ImageList_AddMasked(CLR_DEFAULT)` and `ImageList_LoadImage(CLR_DEFAULT)`
+    now resolve and store that sampled color before building the image-list
+    entry. `ImageList::AddMasked` also creates a mono mask bitmap, writes
+    mask-color pixels as white, punches those source pixels to black, then
+    stores the mask as the entry `hbmMask`; raw bitmap-backed
+    `ImageList_AddMasked` and masked `ImageList_LoadImage` now create the same
+    owned mono mask while preserving the transparent color metadata, and
+    bitmap-backed rendering consults that real mask even when a transparent
+    color is also recorded. `ImageList_Add` with a bitmap `hbmMask` now also
     reads that mask bitmap during framebuffer draws and skips non-black mask
     pixels, preserving the distinct mask-handle path from color-key masking.
     CE `ImageList::Add` first resolves the source bitmap with
@@ -907,7 +1176,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `ImageList::SetDragCursorImage` calls `MergeDragImages`, whose no-dither
     branch treats the missing drag-image setup as non-error, so v3 now returns
     success for no-active-drag cursor-image requests against valid image lists.
-    `ImageList::GetDragImage` writes `s_DragContext.ptDrag` and
+    `ImageList::BeginDrag` initializes `s_DragContext.bDragShow` to `false`
+    before installing the dither/drag image through `SetDragImage`, so v3 now
+    keeps newly begun drags hidden until `DragEnter` or `DragShowNolock(TRUE)`;
+    pre-enter `DragMove` calls still return success but leave the static drag
+    point unchanged. `ImageList::GetDragImage` writes `s_DragContext.ptDrag` and
     `ptDragHotspot` before returning `s_DragContext.pimlDrag`; since CE
     initializes those fields to zero/null, v3 now returns null and zeroed
     point outputs before any drag context exists instead of surfacing a
@@ -948,19 +1221,30 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     memory DIBs for shell pseudo-icons, and draws bitmap-backed icons through
     the same bitmap renderer as image lists. Bitmap-backed framebuffer and
     selected-memory-DIB draws now scale from the icon bitmap's native source dimensions into
-    caller-requested destination sizes, and bitmap-backed `DI_MASK` draws use
-    the icon mask bitmap as the source instead of the color bitmap, including
-    covered 1bpp mask-only framebuffer and selected-memory-DIB paths. CE
+    caller-requested destination sizes, bitmap-backed `DI_MASK` draws use
+    the icon mask bitmap as the source instead of the color bitmap, and
+    bitmap-backed `DI_NORMAL` draws honor extracted AND-mask transparency,
+    including covered 1bpp mask-only framebuffer and selected-memory-DIB paths. CE
     `imagelist.cpp` uses `DrawIconEx_I(..., DI_NORMAL)` for image storage and
     `DrawIconEx_I(..., DI_MASK)` for mask storage when replacing an image-list
     icon. `pcommctr.h` defines CE's implemented image-list creation flag mask
     as `ILC_VALID`, excluding private placeholders such as `ILC_LARGESMALL`
     and `ILC_UNIQUE`; raw `ImageList_Create` now rejects flags outside that
     mask while preserving accepted private/shared flags on the image-list
-    object. `imagelist.cpp` also converts a missing color-depth mask to
+    object. The synthetic shell system image-list fallback now renders its
+    deterministic pseudo body and valid overlay marker into selected memory DIBs
+    as well as framebuffers, while invalid overlay slots above CE's four
+    registered overlays stay ignored. `imagelist.cpp` also converts a missing color-depth mask to
     `ILC_COLORDDB` for CE backward compatibility, so raw and direct
     image-list creation now store `ILC_COLORDDB` when callers pass
-    `ILC_COLOR`/zero color bits. `commctrl.h` defines `ILCF_MOVE` and `ILCF_SWAP`, while
+    `ILC_COLOR`/zero color bits. CE `imagelist.cpp::SetIconSize` only treats
+    unchanged dimensions as failure before storing the new width/height and
+    clearing images through `Remove(-1)`, so raw `ImageList_SetIconSize` now
+    accepts changed zero/negative dimensions while preserving the no-op
+    failure case. CE `imagelist.cpp::SetOverlayImage` returns immediately when
+    the requested overlay slot already points at the same image, so v3 now
+    preserves the precomputed overlay bounds instead of recomputing the mask
+    rectangle on a same-slot/same-image call. `commctrl.h` defines `ILCF_MOVE` and `ILCF_SWAP`, while
     `pcommctr.h` defines `ILCF_VALID` as `ILCF_SWAP`; CE `imagelist.cpp`
     rejects `ImageList_Copy` when the source and destination image-list
     pointers differ, requires valid source and destination image rectangles,
@@ -979,15 +1263,24 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     secondary `RT_ICON` ordinal resources,
     tolerates present `RT_ICON` DIB payloads that have color pixels but omit
     trailing AND-mask bytes by creating a color-only icon, preserves color
-    tables for covered 4bpp and 8bpp indexed `RT_ICON` payloads, and decodes
-    4bpp high/low-nibble palette indexes when drawing extracted icons,
+    tables for covered 1bpp, 4bpp, and 8bpp indexed `RT_ICON` payloads,
+    preserves stride-padded 24bpp `BI_RGB` payloads and 16bpp
+    `BI_BITFIELDS`/RGB555 masks when creating the extracted color bitmap,
+    preserves 24bpp trailing AND masks as 1bpp mask bitmaps, and decodes 1bpp
+    high-bit palette indexes, 4bpp high/low-nibble palette indexes, 24bpp BGR
+    pixels, 24bpp AND-mask transparency, and RGB555 bitfield colors when drawing
+    extracted icons,
     and keeps the index-zero shell fallback for non-PE paths that writes the
     same synthetic `HICON` values that
-    `SHGetFileInfo` would select, including CE shortcut overlays. CE
+    `SHGetFileInfo` would select, including CE shortcut overlays, while
+    leaving additional requested output slots and nonzero-index miss outputs
+    untouched. CE
     `resource.cpp` `KernExtractIcons` loads the module as datafile, resolves
     `RT_GROUP_ICON` with `MAKEINTRESOURCE(nIconIndex)`, lets a callback choose
     large/small group-directory indices, then extracts the referenced
-    `RT_ICON` resources. Raw `KernExtractIcons` now follows that integer
+    `RT_ICON` resources. The PE-extracted icon path now also verifies
+    `DestroyIcon` releases the owned color and mask bitmap heap storage created
+    from those icon resources. Raw `KernExtractIcons` now follows that integer
     group-resource lookup and copies selected `RT_ICON` payload bytes into
     guest heap outputs, rejects zero-based group enumeration when no matching
     integer `RT_GROUP_ICON` resource ID exists, and reports
@@ -995,7 +1288,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     is supplied; the non-Unicorn raw path uses the default `{0, 1}`
     group-entry selection because it cannot execute the CE callback.
     Missing paths fail with `ERROR_FILE_NOT_FOUND`; broader PE format variants
-    and non-PE fallback edges remain queued.
+    and broader non-PE fallback edges remain queued.
   - `shellapi.h` defines `SHELLEXECUTEINFO`, `SEE_MASK_NOCLOSEPROCESS`,
     `nShow`, `hInstApp`, and `hProcess`. v3's raw `ShellExecuteEx` now
     preserves `nShow`, returns the queued process handle when
@@ -1686,7 +1979,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     this target SDK, while MFC's CE `mtex.cpp` wait-all path loops around
     normal wait-any calls itself. v3 therefore treats desktop bit `0x0001` as
     unsupported/ignored message-wait metadata rather than converting raw
-    `MsgWaitForMultipleObjectsEx` into kernel wait-all failure.
+    `MsgWaitForMultipleObjectsEx` into kernel wait-all failure, and preserves
+    CE's message-wake result index after the supplied handle count when the
+    handle probe finds no signaled object.
   - `cmsgque.h` defines `smfSenderNoWait`,
     `smfSenderNoWaitIfDifferentThread`, and `smfNotifyMessage` for no-wait
     notification sends. Rust raw `SendNotifyMessageW` now preserves that CE
@@ -1741,8 +2036,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     cross-thread hung check, so `SMTO_ABORTIFHUNG` does not abort a same-thread
     dispatch even when that thread's last-dispatch timestamp would satisfy the
     CE hung threshold. Cross-thread `SMTO_ABORTIFHUNG` now also covers the CE
-    threshold boundary by queueing just below the 5-second hung cutoff and
-    aborting without queueing once the receiver is considered hung. The Unicorn
+    threshold boundary by queueing just below the 5-second hung cutoff,
+    aborting without queueing once the receiver is considered hung, and
+    preserving that hung-abort behavior when callers combine `SMTO_BLOCK` with
+    `SMTO_ABORTIFHUNG`. The Unicorn
     guest path then parks the sender context on that same transaction when a
     guest WNDPROC callout is possible; zero-timeout cross-thread calls are
     refused by Unicorn block preparation so the raw immediate-expiry path owns
@@ -1923,9 +2220,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     layered around that generic byte-surface model. They deliberately do not
     define CE/MFC message, class, HWND, HDC, or GDI semantics.
 
-- GDI DIB/color-table surface:
+- GDI DIB/color-table and DIB brush surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
-  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\da.cpp`
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\da.cpp`,
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\brush.cpp`
   - CE exposes `CreateDIBSection`, `GetDIBColorTable`, `SetDIBColorTable`,
     `RGBQUAD`, `BITMAPINFOHEADER`, `BITMAPINFO`, `DIB_RGB_COLORS`, and indexed
     DIB color-table conventions through the public GDI header.
@@ -1937,12 +2235,32 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     newly created DCs.
   - Rust now stores RGBQUAD color-table entries on bitmap objects selected into
     memory DCs, routes raw `SetDIBColorTable`/`GetDIBColorTable` through guest
-    memory, and uses the selected bitmap table when 8 bpp blits write RGB565
+    memory, and uses the selected bitmap table when indexed blits write RGB565
     framebuffer pixels. Rust direct-DIB sources now also parse BITMAPINFO-
-    supplied RGBQUAD/RGBTRIPLE tables for 1/4/8 bpp `DIB_RGB_COLORS`, so
+    supplied RGBQUAD/RGBTRIPLE tables for 1/2/4/8 bpp `DIB_RGB_COLORS`, so
     indexed `StretchDIBits`/`SetDIBitsToDevice` sources use their embedded
-    palette. Remaining indexed-DIB work is broader palette/device-color
-    behavior as trace evidence reaches it.
+    palette. CE `draw.cpp::SimpleStretchDIBitsTest` and
+    `SimpleSetDIBitsToDeviceTest` exercise top-down and bottom-up caller DIBs
+    against writable DIB destinations and iterate both `DIB_RGB_COLORS` and
+    `DIB_PAL_COLORS`; raw `StretchDIBits` now renders parsed caller DIB sources
+    into selected memory DIBs through the shared bitmap ROP3 renderer, accepts
+    CE GDIPRINT-style indexed 2 bpp `DIB_RGB_COLORS` sources and
+    `DIB_PAL_COLORS` palette-index tables for direct indexed DIB sources,
+    rejects bad HDCs and ROP4-shaped values before reporting success, and raw
+    `SetDIBitsToDevice` now renders into selected memory DIBs while converting
+    bottom-up source scanline arguments into the renderer's normalized top-left
+    coordinate space. Remaining indexed-DIB work is broader
+    palette/device-color behavior as trace evidence reaches it.
+  - CE `brush.cpp::CreateDIBPatternBrushPtNULL` expects
+    `CreateDIBPatternBrushPt(NULL, DIB_PAL_COLORS)`,
+    `CreateDIBPatternBrushPt(NULL, DIB_RGB_COLORS)`, and unsupported color-use
+    values to fail with `ERROR_INVALID_PARAMETER`. `CreateDIBPatternBrushPtTest`
+    builds packed top-down and bottom-up DIBs by copying `BITMAPINFO` plus bits,
+    creates a brush from that packed DIB, selects it, and verifies `PatBlt`
+    reproduces the DIB pattern. Raw `CreateDIBPatternBrushPt` now reads the
+    packed guest DIB, creates private owned bitmap backing, tiles it through the
+    existing pattern-brush renderer, and deletes that private backing when the
+    brush is deleted.
   - CE `draw.cpp::passNull2Draw(EBitBlt)` and
     `draw.cpp::passNull2Draw(EStretchBlt)` expect null/bad destination and
     source DCs to fail with `ERROR_INVALID_HANDLE`. The same cases reject
@@ -1958,7 +2276,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     selected brush for CE pattern ROP3 operations `MERGECOPY`, `PATCOPY`,
     `PATINVERT`, and `PATPAINT` across selected-DIB and framebuffer targets,
     and evaluates the ROP3 byte generically for the literal values in
-    `gnvRop3Array`; broader ROP4 combinations remain future work.
+    `gnvRop3Array`. CE `draw.cpp::NegativeSize(EStretchBlt)` and
+    `StretchBltFlipMirrorTest` exercise signed destination and source extents;
+    raw `StretchBlt` now uses the same ordered destination-rectangle and
+    signed source-coordinate helper as `BitBlt`/`MaskBlt` selected-DIB draws.
+    Broader ROP4 combinations remain future work.
   - CE `draw.cpp::passNull2Draw(EMaskBlt)` expects `MaskBlt` to fail null/bad
     destination DCs with `ERROR_INVALID_HANDLE`, fail null/bad source DCs with
     `ERROR_INVALID_HANDLE`, reject bad mask handles with `ERROR_INVALID_HANDLE`,
@@ -1967,9 +2289,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     whose origin/size cannot cover the requested blit rectangle, while
     `MaskBltTest` uses `MAKEROP4(DSTCOPY, SRCCOPY)` with a 1 bpp mask, and
     `TestAllRops(EMaskBlt)` iterates foreground/background ROP3 bytes with a
-    two-pixel mask. Raw `MaskBlt` now implements those validation paths plus
-    selected-DIB and framebuffer masked copies for that CE source-backed ROP4
-    shape and generic ROP4 foreground/background byte evaluation.
+    two-pixel mask. CE `draw.cpp::NegativeSize(EMaskBlt)` also calls
+    `MaskBlt` with a null mask, `SRCCOPY`, and signed destination extents.
+    CE `swblt.cpp` normalizes improperly ordered destination rectangles from
+    signed blt extents, flips the destination iterator, and keeps source/mask
+    iteration aligned through `xPositive`/`yPositive`. Raw `MaskBlt` now
+    implements those validation paths plus selected-DIB and framebuffer masked
+    copies for that CE source-backed ROP4 shape, generic ROP4
+    foreground/background byte evaluation, selected-DIB/framebuffer negative
+    destination extent mirroring for masked draws, and the null-mask
+    source-copy shortcut through the same signed destination helper as direct
+    `BitBlt`.
   - CE `core\dll\apis.c::SystemParametersInfoW` routes
     `SPI_GETOEMINFO` and related device-info actions through
     `KernelIoControl(IOCTL_HAL_GET_DEVICE_INFO, ...)` before GWE handles the
@@ -2005,8 +2335,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     source RGB, applies top-down and bottom-up 32 bpp per-pixel alpha between
     selected-memory DIBs, and applies source-constant plus top-down and
     bottom-up 32 bpp per-pixel alpha into framebuffer-backed window DCs, and
-    clips negative framebuffer destination origins while preserving CE stretch
-    source mapping to the visible pixel. Selected-DIB and framebuffer alpha
+    clips negative selected-DIB and framebuffer destination origins while
+    preserving CE stretch source mapping to the visible pixel. Selected-DIB and framebuffer alpha
     stretch paths now use the same CE GPE Bresenham source-pixel
     repetition/advance pattern for uneven stretches.
   - CE GDIAPI device-attribute tests expect `GetBkMode(NULL/bad hdc)` to
@@ -2044,8 +2374,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\text.cpp`
   - Defines CE `LOGFONTW`, `TEXTMETRICW`, `ExtTextOutW`,
     `GetTextExtentExPointW`, `GetTextMetricsW`, `SetTextAlign`,
-    `GetTextAlign`, and `GetTextColor`; `GetTextExtentPointW` is a macro over
-    `GetTextExtentExPointW`.
+    `GetTextAlign`, `GetTextColor`, `GetCharABCWidths`, and
+    `GetCharABCWidthsI`; `GetTextExtentPointW` is a macro over
+    `GetTextExtentExPointW`, while `GetCharABCWidthsI` uses
+    `(hdc, giFirst, cgi, pgi, lpabc)` instead of the non-`I` first/last range
+    shape.
   - Rust now copies selected `LOGFONTW` fields into font objects and returns
     deterministic selected-font metrics, extent/fitting arrays, face names,
     text color, and text alignment at the raw COREDLL boundary. CE GDIAPI
@@ -2062,6 +2395,69 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `da.cpp::PassNull2da` expects `SetBkMode` and `GetBkMode` to return `0`
     with `ERROR_INVALID_HANDLE` for null and bad HDCs, so the raw background
     mode APIs now validate the HDC before reading or mutating DC state.
+    `text.cpp::GetTextExtentPointWidthTest` expects `SetTextCharacterExtra`
+    to participate in text extent and drawing advance calculations: positive
+    extras widen every character, while negative extras preserve the first
+    character width and only shrink later advances when the previous character
+    plus the extra remains positive. Raw `GetTextExtentExPointW`, `DrawTextW`,
+    and `ExtTextOutW` now share that CE advance model, and `ExtTextOutW`
+    caller `lpDx` advances also include the selected character extra like the
+    CE comparison path. The CE GDIAPI text/font tests repeatedly skip
+    `SetTextCharacterExtra` when `fontArray[aFont].dwType` is not
+    `TRUETYPE_FONTTYPE`, and the private font list identifies the `"Arial"`
+    `arial.fnt` entry as `RASTER_FONTTYPE`; raw selected Arial raster fonts now
+    reject the setter with the CE failure sentinel and preserve the previous DC
+    spacing value.
+    `font.cpp::TestCreateFontIndirectZero` creates a known font, selects a
+    zeroed `LOGFONT`, re-reads the selected font with `GetCurrentObject` and
+    `GetObject`, and expects every `LOGFONT` field including the face-name head
+    to remain zero; raw `CreateFontIndirectW`/`GetObjectW` now has a regression
+    for that zero-font round trip.
+    CE font/text tests inspect and reuse `LOGFONT` fields including
+    `lfEscapement`, `lfOrientation`, precision bytes, quality, pitch/family,
+    and face name after `CreateFontIndirect`/`GetObject`; raw font objects now
+    preserve those nonzero `LOGFONTW` fields instead of serializing only the
+    height/width/weight/style subset.
+    `font.cpp::passOddSize` compares realized `TEXTMETRIC.tmHeight` for known
+    Tahoma/Courier New/Symbol/Times New Roman/Wingdings fonts at requested
+    heights `0` and `-24`; raw `GetTextMetricsW` now uses those CE rows for
+    plain known-font selections instead of the generic absolute-height fallback.
+    CE text tests restore the previous selected font before deleting custom
+    fonts, and the weight manual test deletes only the previous font after a
+    newer font has been selected into the DC. Raw `DeleteObject` now preserves
+    that selected-object lifetime shape by failing while a GDI object is still
+    selected into any live DC, so selected custom-font metrics remain active
+    until the DC explicitly selects another font.
+    Raw `GetCharABCWidthsI` now follows the CE SDK glyph-index/count ABI, probes
+    non-null WORD glyph-index arrays, and writes `cgi` ABC structs through the
+    fifth argument instead of treating the call as a non-`I` first/last range.
+    `font.cpp` defines `ABCWIDTHS_NOESCAPEMENT`, and `abcEscapementTest`
+    expects `GetCharABCWidths` on a selected nonzero-escapement TrueType font
+    to fail with `ERROR_INVALID_PARAMETER`; raw `GetCharABCWidths` now carries
+    selected font escapement into the metrics model and rejects that CE case.
+    The same fixture's `fontdata.h` Tahoma-only `NT_ABCWidths` table now feeds
+    raw 16px selected Tahoma `GetCharABCWidths` ranges and `GetCharABCWidthsI`
+    glyph-index lookups for `!` through `z`.
+    `fontdata.h` records CE-supported plain 20px `NTFontMetrics` rows as
+    height/ascent/descent/internal-leading/external-leading/average
+    width/maximum width/weight/overhang/first-char/last-char/default-char/
+    break-char/style/pitch-family/charset values for Tahoma, Courier New,
+    Symbol, Times New Roman, Wingdings, and Verdana. The raw stock/fallback
+    `Tahoma` metrics path now uses the CE Tahoma `tmPitchAndFamily` and
+    `tmCharSet` bytes, and the raw plain 20px selected-font path now returns
+    those CE row values for the `TEXTMETRICW` fields that fixture compares.
+    The same fixture's `GetTextExtentPointTest` selects plain 16px known fonts
+    and compares single-character widths for `!` through `z` against
+    `NTExtentResults`; raw `GetTextExtentExPointW`, `GetCharWidth32`, and the
+    shared text-run measurement path now use those CE width rows for Tahoma,
+    Courier New, Times New Roman, Wingdings, Verdana, and the Arial raster face
+    when the selected font matches that fixture shape.
+    `text.cpp::BlastStr`, manual font tests, and comparison paths draw text
+    through selected DC clip regions as well as explicit `ETO_CLIPPED`
+    rectangles. Raw `ExtTextOutW` now uses the shared DC clipping helpers for
+    both selected-DIB and framebuffer text rendering, so glyph pixels and
+    `OPAQUE` text-cell background fills are intersected with the selected clip
+    region before drawing.
     `text.cpp` manual and color-fill text paths call `SetBkMode(OPAQUE)` or
     `SetBkMode(TRANSPARENT)` before `ExtTextOut`, so raw `ExtTextOutW` now
     applies the selected DC background mode when rendering text cells: opaque
@@ -2245,10 +2641,20 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsdmgr.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwindbas.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\extfile.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mextfile.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdmgr.def`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdmgrapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdcache.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdcache.hpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullcache.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\filesystem.hpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\apis.c`,
   `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\shfileop.cpp`,
   `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\recbin.cpp`, and
@@ -2284,10 +2690,72 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `volumeapi.cpp` validates the info-level input and fixed output size
     before returning volume metadata, and COREDLL `apis.c` uses
     `CeFsIoControlW(... FSCTL_GET_VOLUME_INFO ...)` for RAMFS-aware file
-    copying. Rust now reports matching mounted-root/object-store
-    `CE_VOLUME_INFO` through `CeFsIoControlW`, direct `AFS_FsIoControlW`, and
-    `CeGetVolumeInfoW`; full mount-table volume handles and broader FSCTL
-    forwarding remain queued fidelity gaps.
+    copying. `fsdmgr.def` exports the FSDMGR cache surface
+    `FSDMGR_CacheIoControl @3`, `FSDMGR_CachedRead @4`,
+    `FSDMGR_CachedWrite @5`, `FSDMGR_CreateCache @6`,
+    `FSDMGR_DeleteCache @9`, `FSDMGR_FlushCache @14`,
+    `FSDMGR_InvalidateCache @24`, `FSDMGR_ResizeCache @30`, and
+    `FSDMGR_SyncCache @32`, plus `FSDMGR_CreateFileHandle @7`,
+    `FSDMGR_CreateSearchHandle @8`, `FSDMGR_DeregisterVolume @10`,
+    `FSDMGR_GetVolumeHandle @21`, `FSDMGR_GetVolumeName @22`,
+    `FSDMGR_RegisterVolume @27`, `FSDMGR_GetMountFlags @37`, and
+    `STOREMGR_FsIoControlW @44`; `fsdmgr.h` declares their public HVOL/PDSK
+    and cache signatures. `fsdcache.cpp` loads a configured cache DLL when one
+    exists and otherwise falls back to the CE null-cache function table.
+    `nullcache.cpp` stores cache records by cache id, returns
+    `ERROR_INVALID_PARAMETER` for invalid cache ids on delete/read/write/flush
+    and cache IOCTL calls, treats resize/sync/invalidate as unconditional
+    success, forwards cached read/write to `FSDMGR_ReadDisk`/`WriteDisk`, and
+    turns failed `IOCTL_DISK_DELETE_SECTORS`/flush forwarding into future
+    disabled-success behavior. `diskio.h` defines
+    `IOCTL_DISK_DELETE_SECTORS` as `0x00071c4c`.
+    `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
+    `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
+    leading slash from the requested mount name, rejects an already-mounted
+    volume with `ERROR_ALREADY_EXISTS`, registers the AFS folder name with
+    suffix attempts 2 through 9, associates the FSD's caller-supplied volume
+    context with the filesystem, and returns the mounted volume handle.
+    `FSDMGR_GetVolumeHandle` maps that same `PDSK`/`LogicalDisk_t` pointer back
+    to the associated `MountedVolume_t` handle, while
+    `FSDMGR_DeregisterVolume` is a no-op in this CE 6 source.
+    `FSDMGR_CreateFileHandle` and `FSDMGR_CreateSearchHandle` ignore the HVOL
+    and originating process handle in this CE 6 source and simply return the
+    caller-supplied FSD file/search context pointer reinterpreted as a handle.
+    `fsdmgrapi.cpp`
+    resolves `HVOL` handles through `LockAPIHandle`, returns
+    `ERROR_INVALID_PARAMETER` for bad volume handles, returns
+    `ERROR_PATH_NOT_FOUND` when a volume no longer has a mount-table index for
+    `GetVolumeName`, and returns the copied mount-name character count excluding
+    the NUL. `mounttable.cpp::GetMountName` requires a buffer strictly larger
+    than the mount name so the NUL fits, otherwise returning
+    `ERROR_INSUFFICIENT_BUFFER`. `pwindbas.h` defines the AFS mount flags used
+    by `GetMountFlags`, including hidden `0x0001`, system `0x0020`, and
+    permanent `0x0040`. `filesystem.hpp` forwards non-volume-info controls
+    through the mounted FSD's `FsIoControl` hook and uses
+    `FSStub_Bool`/`ERROR_NOT_SUPPORTED` when an FSD lacks that export. Rust now
+    reports matching mounted-root/object-store `CE_VOLUME_INFO` through
+    `CeFsIoControlW`, direct `AFS_FsIoControlW`, `CeGetVolumeInfoW`, and the
+    FSDMGR `STOREMGR_FsIoControlW` import; raw AFS volume handles now cover
+    owner-checked `AFS_Unmount`/`CloseHandle` mounted-root removal and mounted
+    `FSCTL_GET_VOLUME_INFO` metadata. FSDMGR import traps now also expose
+    existing mounted HVOL names, AFS hidden/system/permanent mount flags, and a
+    lightweight FSD `PDSK` to HVOL association for registered host-backed mount
+    names, the CE context-pointer return behavior for FSD file/search handle
+    creation, `STOREMGR_FsIoControlW` refresh/flush no-op plus unsupported
+    host-backed no-touch failure behavior, `FSCTL_COPY_EXTERNAL_START`/
+    `COMPLETE` fixed `FILE_COPY_EXTERNAL` validation with unsupported
+    no-touch failure behavior, `GET_SECTOR_ADDR` validation with
+    no-XIP unsupported failure, `GETPMTIMINGS` zero timing snapshots,
+    secure-wipe sparse-sector clearing, set-secure-wipe-flag validation/no-op
+    behavior, copy-external-start `DISK_COPY_EXTERNAL` validation/unsupported
+    no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
+    validation/no-op behavior, and the CE null-cache fallback ID/status behavior
+    for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
+    forwarding, external cache DLL/filter behavior, real static sector address
+    mapping, real external-copy accelerator behavior, hardware flash
+    secure-wipe resume behavior, hardware power-state timing, and mounted-FSD
+    `FsIoControl` hook forwarding beyond the host-backed unsupported stub
+    remain queued fidelity gaps.
 
 - CE file write syscall and error surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
@@ -2440,7 +2908,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `cbTitle` and assumes `pszTitle` has the fixed taskbar-label capacity
     (`CCHMAXTBLABEL == MAX_PATH`), so raw `SHNotificationGetDataI` now writes a
     bounded fixed-title copy even when the marshalled `cbTitle` argument is
-    zero. `SHNotificationAddII` validates title/HTML content by pointer
+    zero. CE `TaskbarBubble` creation and `CTaskBar::UpdateBubble` both call
+    `StringCbCopy` into the same fixed `m_wszItem` buffer and clear the first
+    character on failure, so Rust now clears stored notification titles whose
+    UTF-16 length cannot fit the `MAX_PATH` taskbar label including the NUL.
+    `SHNotificationAddII` validates title/HTML content by pointer
     presence (`pszHTML == NULL` and both title/HTML null), not by string
     length, so raw `SHNotificationAddI` now accepts a non-null empty HTML string
     for `SHNP_INFORM` while still rejecting a null HTML pointer.
@@ -2473,13 +2945,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `DEFINE_OLEGUID(..., 0x000214C0L, 0, 0)`, so Rust stores the CE memory-order
     GUID bytes and uses them when a notification with only a CLSID queues a
     link/dismiss/command callback. If the local COM registry has that CLSID, the
-    queue now records the acquired `IShellNotificationCallback*` token instead
-    of a null callback pointer. A Unicorn regression now maps a guest COM
-    interface pointer/vtable and verifies the callback dispatcher enters the
-    selected `IShellNotificationCallback` method with the CE-style MIPS
-    `this`/argument registers, return stub, stack adjustment, and pending return
-    bookkeeping. Integrated Explorer/taskbar validation with a real guest COM
-    object lifecycle and visual bubble/taskbar rendering remain queued
+    queue records the acquired `IShellNotificationCallback*` token; if
+    `CoCreateInstance` fails for an unregistered CLSID, v3 now skips the COM
+    callback record and falls back to the sink-window notification path like
+    `GetCallbackInterface` returning `FALSE`. A Unicorn regression now maps a
+    guest COM interface pointer/vtable and verifies the callback dispatcher
+    enters the selected `IShellNotificationCallback` method with the CE-style
+    MIPS `this`/argument registers, return stub, stack adjustment, and pending
+    return bookkeeping. Integrated Explorer/taskbar validation with a real guest
+    COM object lifecycle and visual bubble/taskbar rendering remain queued
     separately.
     CE `UpdateTimedNotificationIcons` walks iconic bubble notifications in the
     taskbar list, sets `HHTBF_DESTROYICON` on expired items, then calls
@@ -2499,3 +2973,83 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `exceptfds` on both raw imports and parked Unicorn scheduler replay,
     `getsockopt(SO_ERROR)` still reports zero for pure OOB readiness, and
     `recv(..., MSG_OOB)` clears the OOB-ready bit after reading.
+
+- CE GPE AlphaBlend source/destination-negation authority:
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\winddi.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\GPE\swblt.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\EMULROTATE\fastblt.cpp`
+  - `winddi.h` defines the CE GPE blend flags `BLT_ALPHASRCNEG` (`32`) and
+    `BLT_ALPHADESTNEG` (`64`). `swblt.cpp` accepts those `BlendFlags` in the
+    alpha path. When `BLT_ALPHASRCNEG` is set, `swblt.cpp` subtracts both the
+    source per-pixel alpha and source constant alpha from the channel max before
+    the blend calculation; when `BLT_ALPHADESTNEG` is set, it subtracts the
+    destination alpha before blending the output alpha lane. Rust now accepts
+    those two CE flags instead of rejecting every nonzero `BlendFlags` byte,
+    applies the source-alpha/source-constant inversion for selected-DIB and
+    framebuffer destinations, applies destination-alpha negation for 32bpp
+    selected-DIB and alpha-capable framebuffer destinations, and keeps unknown
+    blend flags rejected as invalid parameters.
+
+- CE IMM composition-font authority:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\imm.c`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\ui.c`
+  - `imm.h` declares `ImmGetCompositionFontW(HIMC, LPLOGFONTW)` and
+    `ImmSetCompositionFontW(HIMC, LPLOGFONTW)`, carries
+    `INPUTCONTEXT::lfFont.W`, defines `IMC_GETCOMPOSITIONFONT` (`0x0009`),
+    `IMC_SETCOMPOSITIONFONT` (`0x000A`), and maps
+    `IMN_SETCOMPOSITIONFONT` to `0x000A`. TESTIME initializes the input
+    context font by setting `lpIMC->lfFont.W.lfCharSet` and `INIT_LOGFONT`,
+    and its UI handles `IMN_SETCOMPOSITIONFONT` by copying `lpIMC->lfFont.W`
+    before recreating the composition font. Rust now stores the CE 92-byte
+    `LOGFONTW` payload in each IMM context, round-trips it through
+    `ImmSetCompositionFontW`/`ImmGetCompositionFontW`, resolves NULL-HIMC font
+    calls through the active keyboard target like the adjacent IMM status and
+    form APIs, and posts the CE composition-font notification for
+    `NI_CONTEXTUPDATED`.
+
+- CE SIP panel and shell preference authority:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwinuser.h`,
+  `C:\WINCE600\PRIVATE\SHELL\SHELLPSL\HAVEAYGSHELL\shellpsl.cpp`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`
+  - `shellapi.h` defines `SIP_UP`, `SIP_DOWN`, `SIP_FORCEDOWN`,
+    `SIP_UNCHANGED`, and `SIP_INPUTDIALOG`; the shell PSL adds private
+    `SIP_INPUTDIALOGINIT` and `SIP_DOWN_NOVALIDATE`, rejects null HWNDs and
+    out-of-range states with `ERROR_INVALID_PARAMETER`, maps up/down states to
+    SIP visibility changes, and remembers input-dialog HWNDs so child HWNDs are
+    rejected. `imm.h` defines `SIP_QUERY_LOCATION`, `SIP_SET_LOCATION`, and
+    `SIP_INPUT_ATTRIBUTES` for `ImmSIPanelState`, while `pwinuser.h` and
+    `gweapiset1.hpp` expose `RegisterSIPanel(HWND)`. Rust now stores the SIP
+  panel HWND, visibility flags, SIP rectangle, and input attributes in GWE,
+  implements those three `ImmSIPanelState` commands, validates
+  `RegisterSIPanel`, and covers the shell preference state transitions with a
+  raw coredll regression.
+
+- CE default IME window authority:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\ui.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
+  - `imm.h` declares `ImmGetDefaultIMEWnd(HWND)`, `window.hpp` exposes GWE's
+    default-IME-window forwarding helper, and `cmsgque.h` stores
+    `m_hwndDefaultIme` with `GetDefIMEWindow`/`SetDefIMEWindow` plus helpers
+    that send IME notifications and layout activation to the thread default IME
+    window. Rust does not synthesize hidden CE IME windows yet, but
+    `ImmGetDefaultIMEWnd` and `DefaultImeWndGet` now share a proxy that returns
+    the current focused window when valid and otherwise falls back to a valid
+    caller HWND.
+  - `imm.h` also declares `ImmIsUIMessageW(HWND, UINT, WPARAM, LPARAM)` and
+    defines the `WM_IME_*` message constants consumed by IME UI windows; TESTIME
+    `ui.c` handles `WM_IME_SETCONTEXT`, `WM_IME_NOTIFY`, `WM_IME_CONTROL`,
+    `WM_IME_COMPOSITIONFULL`, `WM_IME_SELECT`, and the composition start/end/body
+    messages in its IME UI window procedures. Rust now recognizes that CE IME UI
+    message family, forwards it synchronously to the supplied IME HWND or the
+    focused default-IME proxy, and leaves non-IME messages unconsumed.
+  - `imm.h` declares `ImmGetHotKey(DWORD, LPUINT, LPUINT, LPHKL)`, and CHTIM
+    startup calls it for `IME_SW_HOTKEY` before synthesizing modifier/vkey
+    events through `SwitchIME`. Rust does not register emulator IME-switch
+    hotkeys yet, but `ImmGetHotKey` now returns CE-shaped `FALSE` with optional
+    modifier, vkey, and HKL output pointers cleared so callers do not observe
+    stale guest memory as a configured hotkey.

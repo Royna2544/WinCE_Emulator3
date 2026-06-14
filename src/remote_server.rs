@@ -24,6 +24,7 @@
 // - GET /api/v1/debug/summary.txt returns the latest emulator debug summary.
 // - GET /api/v1/debug/windows.txt returns the latest GWE window snapshot text.
 // - GET /api/v1/debug/messages.txt returns the latest GWE/message trace text.
+// - GET /api/v1/debug/message-boxes.txt returns live MessageBoxW records.
 // - GET /api/v1/debug/processes.txt returns recent process/thread ops.
 // - GET /api/v1/debug/sends.txt returns synchronous SendMessage state.
 // - GET /api/v1/debug/pending-wndproc.txt returns pending WNDPROC callouts.
@@ -34,10 +35,16 @@
 // - GET /api/v1/debug/calls.txt returns recent guest call targets.
 // - GET /api/v1/debug/code.txt returns recent guest code samples.
 // - GET /api/v1/debug/blocks.txt returns recent guest basic blocks.
+// - GET /api/v1/debug/blobs.txt returns mapped guest blob ranges.
+// - GET /api/v1/debug/trampolines.txt returns MIPS trampoline stub origins.
 // - GET /api/v1/debug/files.txt returns recent file I/O summary.
 // - GET /api/v1/debug/files-full.txt returns recent file I/O records.
 // - GET /api/v1/debug/events.txt returns recent event operations.
 // - GET /api/v1/debug/devices.txt returns recent device IOCTL operations.
+// - GET /api/v1/debug/render.txt returns display/controller render traces.
+// - GET /api/v1/debug/controller.txt returns iNavi controller traces.
+// - GET /api/v1/debug/resource.txt returns iNavi resource traces.
+// - GET /api/v1/debug/active.txt returns live active process/thread state.
 // - GET /api/v1/debug/parked.txt returns parked-process snapshots.
 // - GET /api/v1/debug/remote-input.txt returns the latest remote input drain line.
 // - GET /api/v1/video.mjpg[?fps=1..60][&quality=1..100] streams multipart
@@ -421,6 +428,9 @@ impl RemoteServer {
             ("GET", "/api/v1/debug/summary.txt") => self.latest_debug_text("summary").into(),
             ("GET", "/api/v1/debug/windows.txt") => self.latest_debug_text("windows").into(),
             ("GET", "/api/v1/debug/messages.txt") => self.latest_debug_text("messages").into(),
+            ("GET", "/api/v1/debug/message-boxes.txt") => {
+                self.latest_debug_text("message-boxes").into()
+            }
             ("GET", "/api/v1/debug/processes.txt") => self.latest_debug_text("processes").into(),
             ("GET", "/api/v1/debug/sends.txt") => self.latest_debug_text("sends").into(),
             ("GET", "/api/v1/debug/pending-wndproc.txt") => {
@@ -433,10 +443,18 @@ impl RemoteServer {
             ("GET", "/api/v1/debug/calls.txt") => self.latest_debug_text("calls").into(),
             ("GET", "/api/v1/debug/code.txt") => self.latest_debug_text("code").into(),
             ("GET", "/api/v1/debug/blocks.txt") => self.latest_debug_text("blocks").into(),
+            ("GET", "/api/v1/debug/blobs.txt") => self.latest_debug_text("blobs").into(),
+            ("GET", "/api/v1/debug/trampolines.txt") => {
+                self.latest_debug_text("trampolines").into()
+            }
             ("GET", "/api/v1/debug/files.txt") => self.latest_debug_text("files").into(),
             ("GET", "/api/v1/debug/files-full.txt") => self.latest_debug_text("files-full").into(),
             ("GET", "/api/v1/debug/events.txt") => self.latest_debug_text("events").into(),
             ("GET", "/api/v1/debug/devices.txt") => self.latest_debug_text("devices").into(),
+            ("GET", "/api/v1/debug/render.txt") => self.latest_debug_text("render").into(),
+            ("GET", "/api/v1/debug/controller.txt") => self.latest_debug_text("controller").into(),
+            ("GET", "/api/v1/debug/resource.txt") => self.latest_debug_text("resource").into(),
+            ("GET", "/api/v1/debug/active.txt") => self.latest_debug_text("active").into(),
             ("GET", "/api/v1/debug/parked.txt") => self.latest_debug_text("parked").into(),
             ("GET", "/api/v1/debug/remote-input.txt") => {
                 self.latest_debug_text("remote-input").into()
@@ -499,6 +517,7 @@ impl RemoteServer {
                     "debugSummary": "GET /api/v1/debug/summary.txt",
                     "debugWindows": "GET /api/v1/debug/windows.txt",
                     "debugMessages": "GET /api/v1/debug/messages.txt",
+                    "debugMessageBoxes": "GET /api/v1/debug/message-boxes.txt",
                     "debugProcesses": "GET /api/v1/debug/processes.txt",
                     "debugSends": "GET /api/v1/debug/sends.txt",
                     "debugPendingWndProc": "GET /api/v1/debug/pending-wndproc.txt",
@@ -509,10 +528,16 @@ impl RemoteServer {
                     "debugCalls": "GET /api/v1/debug/calls.txt",
                     "debugCode": "GET /api/v1/debug/code.txt",
                     "debugBlocks": "GET /api/v1/debug/blocks.txt",
+                    "debugBlobs": "GET /api/v1/debug/blobs.txt",
+                    "debugTrampolines": "GET /api/v1/debug/trampolines.txt",
                     "debugFiles": "GET /api/v1/debug/files.txt",
                     "debugFilesFull": "GET /api/v1/debug/files-full.txt",
                     "debugEvents": "GET /api/v1/debug/events.txt",
                     "debugDevices": "GET /api/v1/debug/devices.txt",
+                    "debugRender": "GET /api/v1/debug/render.txt",
+                    "debugController": "GET /api/v1/debug/controller.txt",
+                    "debugResource": "GET /api/v1/debug/resource.txt",
+                    "debugActive": "GET /api/v1/debug/active.txt",
                     "debugParked": "GET /api/v1/debug/parked.txt",
                     "debugRemoteInput": "GET /api/v1/debug/remote-input.txt",
                     "video": "GET /api/v1/video.mjpg",

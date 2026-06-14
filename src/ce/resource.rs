@@ -349,11 +349,16 @@ pub struct FontObject {
     pub logfont_ptr: u32,
     pub height: i32,
     pub width: i32,
+    pub escapement: i32,
+    pub orientation: i32,
     pub weight: i32,
     pub italic: bool,
     pub underline: bool,
     pub strikeout: bool,
     pub charset: u8,
+    pub out_precision: u8,
+    pub clip_precision: u8,
+    pub quality: u8,
     pub pitch_and_family: u8,
     pub face_name: String,
 }
@@ -363,6 +368,7 @@ pub struct BrushObject {
     pub handle: u32,
     pub color: u32,
     pub pattern_bitmap: Option<u32>,
+    pub owns_pattern_bitmap: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1306,9 +1312,6 @@ impl ResourceSystem {
     }
 
     pub fn set_image_list_size(&mut self, handle: u32, width: i32, height: i32) -> Option<bool> {
-        if width <= 0 || height <= 0 {
-            return Some(false);
-        }
         let list = self.image_lists.get_mut(&handle)?;
         if list.width == width && list.height == height {
             return Some(false);
@@ -1474,6 +1477,40 @@ impl ResourceSystem {
             list.images.push(ImageListImage {
                 bitmap,
                 mask: transparent_color,
+                icon: 0,
+                transparent_color: (transparent_color != 0xffff_ffff).then_some(transparent_color),
+                source_x: strip.saturating_mul(list.width),
+                source_y: 0,
+            });
+        }
+        i32::try_from(index).ok()
+    }
+
+    pub fn add_masked_image_list_image_with_mask(
+        &mut self,
+        handle: u32,
+        bitmap: u32,
+        mask: u32,
+        transparent_color: u32,
+    ) -> Option<i32> {
+        if bitmap == 0 {
+            return None;
+        }
+        let bitmap_width = self
+            .bitmaps
+            .get(&bitmap)
+            .map(|bitmap| bitmap.width.abs())
+            .unwrap_or(0);
+        let list = self.image_lists.get_mut(&handle)?;
+        let index = list.images.len();
+        let count = image_list_bitmap_strip_count(bitmap_width, list.width);
+        if count == 0 {
+            return None;
+        }
+        for strip in 0..count {
+            list.images.push(ImageListImage {
+                bitmap,
+                mask,
                 icon: 0,
                 transparent_color: (transparent_color != 0xffff_ffff).then_some(transparent_color),
                 source_x: strip.saturating_mul(list.width),
@@ -1726,6 +1763,13 @@ impl ResourceSystem {
         if image_index as usize >= list.images.len() {
             return Some(false);
         }
+        if list
+            .overlays
+            .get(&(overlay as u32))
+            .is_some_and(|record| record.image_index == image_index)
+        {
+            return Some(true);
+        }
         list.overlays.insert(
             overlay as u32,
             ImageListOverlay {
@@ -1800,7 +1844,7 @@ impl ResourceSystem {
             lock_hwnd: self.image_list_drag_lock_hwnd,
             x: self.image_list_drag_x,
             y: self.image_list_drag_y,
-            visible: true,
+            visible: false,
         });
         Some(true)
     }
@@ -1838,6 +1882,7 @@ impl ResourceSystem {
             drag.lock_hwnd = hwnd;
             drag.x = x;
             drag.y = y;
+            drag.visible = true;
         }
         true
     }
@@ -1861,6 +1906,7 @@ impl ResourceSystem {
         self.image_list_drag_lock_hwnd = 0;
         if let Some(drag) = self.image_list_drag.as_mut() {
             drag.lock_hwnd = 0;
+            drag.visible = false;
         }
         true
     }
@@ -1905,11 +1951,16 @@ impl ResourceSystem {
         logfont_ptr: u32,
         height: i32,
         width: i32,
+        escapement: i32,
+        orientation: i32,
         weight: i32,
         italic: bool,
         underline: bool,
         strikeout: bool,
         charset: u8,
+        out_precision: u8,
+        clip_precision: u8,
+        quality: u8,
         pitch_and_family: u8,
         face_name: String,
     ) -> u32 {
@@ -1922,11 +1973,16 @@ impl ResourceSystem {
                 logfont_ptr,
                 height,
                 width,
+                escapement,
+                orientation,
                 weight,
                 italic,
                 underline,
                 strikeout,
                 charset,
+                out_precision,
+                clip_precision,
+                quality,
                 pitch_and_family,
                 face_name,
             },
@@ -1947,6 +2003,7 @@ impl ResourceSystem {
                 handle,
                 color,
                 pattern_bitmap: None,
+                owns_pattern_bitmap: false,
             },
         );
         handle
@@ -1968,6 +2025,25 @@ impl ResourceSystem {
                 handle,
                 color: 0,
                 pattern_bitmap: Some(bitmap),
+                owns_pattern_bitmap: false,
+            },
+        );
+        Some(handle)
+    }
+
+    pub fn create_owned_pattern_brush(&mut self, bitmap: u32) -> Option<u32> {
+        if !self.bitmaps.contains_key(&bitmap) {
+            return None;
+        }
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.brushes.insert(
+            handle,
+            BrushObject {
+                handle,
+                color: 0,
+                pattern_bitmap: Some(bitmap),
+                owns_pattern_bitmap: true,
             },
         );
         Some(handle)
@@ -2327,6 +2403,9 @@ impl ResourceSystem {
     }
 
     pub fn delete_gdi_object(&mut self, handle: u32) -> bool {
+        if self.is_gdi_object_selected(handle) {
+            return false;
+        }
         let mut removed = self.fonts.remove(&handle).is_some();
         removed |= self.brushes.remove(&handle).is_some();
         removed |= self.pens.remove(&handle).is_some();
@@ -2334,27 +2413,18 @@ impl ResourceSystem {
         removed |= self.delete_region(handle);
         removed |= self.image_lists.remove(&handle).is_some();
         removed |= self.palettes.remove(&handle).is_some();
-        for state in self.dc_states.values_mut() {
-            if state.selected_object == handle {
-                state.selected_object = 0;
-            }
-            if state.selected_bitmap == handle {
-                state.selected_bitmap = DEFAULT_BITMAP_HANDLE;
-            }
-            if state.selected_font == handle {
-                state.selected_font = stock_object_handle(SYSTEM_FONT).unwrap_or(0);
-            }
-            if state.selected_brush == handle {
-                state.selected_brush = stock_object_handle(WHITE_BRUSH).unwrap_or(0);
-            }
-            if state.selected_pen == handle {
-                state.selected_pen = stock_object_handle(BLACK_PEN).unwrap_or(0);
-            }
-            if state.selected_palette == handle {
-                state.selected_palette = stock_object_handle(DEFAULT_PALETTE).unwrap_or(0);
-            }
-        }
         removed
+    }
+
+    fn is_gdi_object_selected(&self, handle: u32) -> bool {
+        self.dc_states.values().any(|state| {
+            state.selected_object == handle
+                || state.selected_bitmap == handle
+                || state.selected_font == handle
+                || state.selected_brush == handle
+                || state.selected_pen == handle
+                || state.selected_palette == handle
+        })
     }
 }
 

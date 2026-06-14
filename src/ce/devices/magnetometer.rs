@@ -50,10 +50,13 @@ impl Magnetometer {
         ioctl_code: u32,
         input: &[u8],
         output_capacity: u32,
+        output_buffer_present: bool,
     ) -> DeviceIoControlResult {
         match ioctl_code {
             IOCTL_MFS_WRITE_REGISTERS => self.write_registers(input),
-            IOCTL_MFS_READ_REGISTERS => self.read_registers(input, output_capacity),
+            IOCTL_MFS_READ_REGISTERS => {
+                self.read_registers(input, output_capacity, output_buffer_present)
+            }
             IOCTL_MFS_CONTROL_08 | IOCTL_MFS_CONTROL_0C | IOCTL_MFS_CONTROL_10 => {
                 success(Vec::new())
             }
@@ -71,7 +74,12 @@ impl Magnetometer {
         success(Vec::new())
     }
 
-    fn read_registers(&self, input: &[u8], output_capacity: u32) -> DeviceIoControlResult {
+    fn read_registers(
+        &self,
+        input: &[u8],
+        output_capacity: u32,
+        output_buffer_present: bool,
+    ) -> DeviceIoControlResult {
         if input.len() != 4 || !valid_selector(input[1]) {
             return failure();
         }
@@ -79,10 +87,10 @@ impl Magnetometer {
         if requested == 0 {
             return failure();
         }
-        if output_capacity == 0 {
-            return success(Vec::new());
+        if !output_buffer_present {
+            return failure();
         }
-        if requested > output_capacity as usize {
+        if output_capacity != 0 && requested > output_capacity as usize {
             return failure();
         }
         let bank = self.bank(input[0]);

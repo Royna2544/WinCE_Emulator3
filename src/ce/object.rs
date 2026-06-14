@@ -21,6 +21,7 @@ pub enum KernelObject {
     Semaphore(SemaphoreObject),
     File(FileObject),
     FindFile(FindFileObject),
+    Volume(VolumeObject),
     FileChangeNotification(FileChangeNotificationObject),
     Device(DeviceSession),
     Window(u32),
@@ -63,6 +64,14 @@ pub struct FileObject {
 pub struct FindFileObject {
     pub guest_pattern: String,
     pub find_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct VolumeObject {
+    pub owner_process_id: u32,
+    pub guest_root: String,
+    pub disk_ptr: Option<u32>,
+    pub fsd_volume_context: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +218,12 @@ impl HandleTable {
             .map(|(handle, object)| (*handle, object))
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (u32, &KernelObject)> {
+        self.objects
+            .iter()
+            .map(|(handle, object)| (*handle, object))
+    }
+
     pub fn describe_handle(&self, handle: u32) -> String {
         match self.get(handle) {
             Ok(KernelObject::Event(event)) => format!(
@@ -238,6 +253,15 @@ impl HandleTable {
             Ok(KernelObject::FindFile(find)) => {
                 format!("find(id={},pattern={})", find.find_id, find.guest_pattern)
             }
+            Ok(KernelObject::Volume(volume)) => format!(
+                "volume(owner={},root={},disk={})",
+                volume.owner_process_id,
+                volume.guest_root,
+                volume
+                    .disk_ptr
+                    .map(|disk| format!("0x{disk:08x}"))
+                    .unwrap_or_else(|| "none".to_owned())
+            ),
             Ok(KernelObject::FileChangeNotification(notification)) => format!(
                 "file_change(owner={},path={},recursive={},filter=0x{:08x},signaled={})",
                 notification.owner_process_id,
@@ -726,6 +750,7 @@ impl HandleTable {
             }
             KernelObject::File(_)
             | KernelObject::FindFile(_)
+            | KernelObject::Volume(_)
             | KernelObject::Device(_)
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
@@ -774,6 +799,7 @@ impl HandleTable {
             KernelObject::Process(process) => process.signaled,
             KernelObject::File(_)
             | KernelObject::FindFile(_)
+            | KernelObject::Volume(_)
             | KernelObject::Device(_)
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)

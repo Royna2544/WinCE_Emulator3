@@ -8,17 +8,18 @@
     {
       "guest": "COM1:",
       "type": "serial",
-      "backend": "stub",
+      "backend": "win32_com",
+      "host": "COM21",
       "enabled": true,
-      "note": "Fixture/default CE serial port stub"
+      "note": "Drivers\\BuiltIn\\VSP, VSP.dll, real GPS NMEA output confirmed, 9600 8N1; host COM21 is the GPS Sensor"
     },
     {
       "guest": "COM7:",
       "type": "serial",
-      "backend": "win32_com",
-      "host": "COM21",
+      "backend": "stub",
+      "remote_gps": true,
       "enabled": true,
-      "note": "TEMP diagnostic: current dump selects COM7; host COM21 is GPS Sensor. Real device is Drivers\\BuiltIn\\VSP, VSP.dll, COM1 GPS NMEA output confirmed, 9600 8N1"
+      "note": "Drivers\\BuiltIn\\Serial7 compatibility stub"
     },
     {
       "guest": "COM3:",

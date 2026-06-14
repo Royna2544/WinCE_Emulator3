@@ -166,6 +166,10 @@ pub const QS_PAINT: u32 = 0x0020;
 pub const QS_SENDMESSAGE: u32 = 0x0040;
 
 pub const HWND_BROADCAST: u32 = 0x0000_ffff;
+pub const SIPF_OFF: u32 = 0x0000_0000;
+pub const SIPF_ON: u32 = 0x0000_0001;
+pub const SIPF_DOCKED: u32 = 0x0000_0002;
+pub const SIPF_LOCKED: u32 = 0x0000_0004;
 pub const HTNOWHERE: u32 = 0;
 pub const HTCLIENT: u32 = 1;
 pub const HTCAPTION: u32 = 2;
@@ -774,7 +778,97 @@ pub struct ImeContextState {
     pub conversion_status: u32,
     pub sentence_status: u32,
     pub composition_string: Vec<u16>,
+    pub composition_font: [u8; LOGFONTW_SIZE],
+    pub composition_form: ImeCompositionForm,
+    pub candidate_forms: [ImeCandidateForm; 4],
+    pub candidate_lists: [Option<ImeCandidateListState>; 4],
+    pub status_window_pos: Point,
     pub hangul: crate::ce::hangul::HangulComposeState,
+    pub input_context_ptr: u32,
+    pub lock_count: u32,
+    pub h_comp_str: u32,
+    pub h_cand_info: u32,
+    pub h_guide_line: u32,
+    pub h_private: u32,
+    pub h_msg_buf: u32,
+}
+
+pub const LOGFONTW_SIZE: usize = 92;
+pub const IME_CAND_READ: u32 = 0x0001;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImeComponentKind {
+    Generic,
+    CompositionString,
+    CandidateInfo,
+    GuideLine,
+    Private,
+    MessageBuffer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImeComponentState {
+    pub kind: ImeComponentKind,
+    pub size: u32,
+    pub lock_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImeCompositionForm {
+    pub style: u32,
+    pub current_pos: Point,
+    pub area: Rect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImeCandidateForm {
+    pub index: u32,
+    pub style: u32,
+    pub current_pos: Point,
+    pub area: Rect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImeCandidateListState {
+    pub style: u32,
+    pub selection: u32,
+    pub page_start: u32,
+    pub page_size: u32,
+    pub candidates: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImeRegisteredWord {
+    pub reading: String,
+    pub style: u32,
+    pub word: String,
+}
+
+fn testime_private_profile_accepts_reading(reading: &str) -> bool {
+    !reading.chars().any(char::is_lowercase)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SipPanelState {
+    pub hwnd: Option<u32>,
+    pub fdw_flags: u32,
+    pub visible_desktop: Rect,
+    pub sip_rect: Rect,
+    pub input_attributes: u32,
+    input_dialogs: BTreeSet<u32>,
+}
+
+impl Default for SipPanelState {
+    fn default() -> Self {
+        Self {
+            hwnd: None,
+            fdw_flags: SIPF_DOCKED,
+            visible_desktop: Rect::from_origin_size(0, 0, 800, 480),
+            sip_rect: Rect::from_origin_size(0, 240, 800, 480),
+            input_attributes: 0,
+            input_dialogs: BTreeSet::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -813,10 +907,14 @@ pub struct Gwe {
     async_key_down: [bool; 256],
     keyboard_layout: u32,
     keyboard_layout_name: String,
+    keyboard_layouts: Vec<u32>,
     ime_disabled_threads: BTreeSet<u32>,
     next_ime_context: u32,
     ime_contexts: BTreeMap<u32, ImeContextState>,
     ime_context_by_window: BTreeMap<u32, u32>,
+    ime_components: BTreeMap<u32, ImeComponentState>,
+    ime_registered_words: Vec<ImeRegisteredWord>,
+    sip_panel: SipPanelState,
     message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
     replied_send_depth_by_thread: BTreeMap<u32, BTreeSet<u32>>,
     clipboard: ClipboardState,
@@ -922,10 +1020,14 @@ impl Default for Gwe {
             async_key_down: [false; 256],
             keyboard_layout: DEFAULT_KEYBOARD_LAYOUT_HKL,
             keyboard_layout_name: DEFAULT_KEYBOARD_LAYOUT_NAME.to_owned(),
+            keyboard_layouts: vec![DEFAULT_KEYBOARD_LAYOUT_HKL],
             ime_disabled_threads: BTreeSet::new(),
             next_ime_context: 0x000d_0001,
             ime_contexts: BTreeMap::new(),
             ime_context_by_window: BTreeMap::new(),
+            ime_components: BTreeMap::new(),
+            ime_registered_words: Vec::new(),
+            sip_panel: SipPanelState::default(),
             message_pointer_payloads: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             clipboard: ClipboardState::default(),
@@ -2113,6 +2215,96 @@ impl Gwe {
         false
     }
 
+    pub fn register_sip_panel(&mut self, hwnd: u32) -> bool {
+        if hwnd == 0 || !self.is_window(hwnd) {
+            return false;
+        }
+        self.sip_panel.hwnd = Some(hwnd);
+        true
+    }
+
+    pub fn sip_panel_hwnd(&self) -> Option<u32> {
+        self.sip_panel.hwnd.filter(|hwnd| self.is_window(*hwnd))
+    }
+
+    pub fn sip_panel_flags(&self) -> u32 {
+        self.sip_panel.fdw_flags
+    }
+
+    pub fn set_sip_panel_visible(&mut self, visible: bool) -> bool {
+        if visible {
+            self.sip_panel.fdw_flags &= !SIPF_OFF;
+            self.sip_panel.fdw_flags |= SIPF_ON;
+        } else {
+            self.sip_panel.fdw_flags &= !SIPF_ON;
+            self.sip_panel.fdw_flags |= SIPF_OFF;
+        }
+        true
+    }
+
+    pub fn sh_sip_preference(&mut self, hwnd: u32, state: u32) -> bool {
+        const SIP_UP: u32 = 0;
+        const SIP_DOWN: u32 = 1;
+        const SIP_FORCEDOWN: u32 = 2;
+        const SIP_UNCHANGED: u32 = 3;
+        const SIP_INPUTDIALOG: u32 = 4;
+        const SIP_INPUTDIALOGINIT: u32 = 5;
+        const SIP_DOWN_NOVALIDATE: u32 = 6;
+
+        let live_input_dialogs: BTreeSet<u32> = self
+            .sip_panel
+            .input_dialogs
+            .iter()
+            .copied()
+            .filter(|dialog| self.is_window(*dialog))
+            .collect();
+        self.sip_panel.input_dialogs = live_input_dialogs;
+        if self
+            .sip_panel
+            .input_dialogs
+            .iter()
+            .any(|dialog| self.is_child(*dialog, hwnd))
+        {
+            return false;
+        }
+
+        match state {
+            SIP_UP => self.set_sip_panel_visible(true),
+            SIP_DOWN | SIP_DOWN_NOVALIDATE | SIP_FORCEDOWN => self.set_sip_panel_visible(false),
+            SIP_UNCHANGED => true,
+            SIP_INPUTDIALOG => self.sip_panel.input_dialogs.insert(hwnd) || true,
+            SIP_INPUTDIALOGINIT => {
+                self.sip_panel.input_dialogs.insert(hwnd);
+                self.set_sip_panel_visible(true)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn sip_panel_rect(&self) -> Rect {
+        self.sip_panel.sip_rect
+    }
+
+    pub fn set_sip_panel_rect(&mut self, rect: Rect) {
+        self.sip_panel.sip_rect = rect.normalized();
+        if self.sip_panel.fdw_flags & SIPF_ON != 0 {
+            self.sip_panel.visible_desktop = Rect {
+                left: 0,
+                top: 0,
+                right: 800,
+                bottom: self.sip_panel.sip_rect.top.max(0),
+            };
+        }
+    }
+
+    pub fn sip_input_attributes(&self) -> u32 {
+        self.sip_panel.input_attributes
+    }
+
+    pub fn set_sip_input_attributes(&mut self, attributes: u32) {
+        self.sip_panel.input_attributes = attributes;
+    }
+
     pub fn top_level_ancestor(&self, hwnd: u32) -> Option<u32> {
         let mut current = hwnd;
         loop {
@@ -2151,6 +2343,14 @@ impl Gwe {
         self.windows
             .values()
             .find(|window| !window.destroyed && window.parent == Some(parent) && window.id == id)
+            .or_else(|| {
+                self.windows.values().find(|window| {
+                    !window.destroyed
+                        && window.id == id
+                        && window.parent != Some(parent)
+                        && self.is_child(parent, window.hwnd)
+                })
+            })
             .map(|window| window.hwnd)
     }
 
@@ -2180,6 +2380,17 @@ impl Gwe {
     }
 
     pub fn end_dialog(&mut self, hwnd: u32, result: u32) -> bool {
+        if self.dialog_results.contains_key(&hwnd) {
+            return true;
+        }
+        if self
+            .windows
+            .get(&hwnd)
+            .is_some_and(|window| window.destroyed)
+        {
+            self.dialog_results.insert(hwnd, result);
+            return true;
+        }
         if !self.is_window(hwnd) {
             return false;
         }
@@ -2405,23 +2616,63 @@ impl Gwe {
         let normalized = normalize_keyboard_layout_name(name)?;
         let hkl = u32::from_str_radix(&normalized, 16).ok()?;
         let previous = self.keyboard_layout;
+        self.note_keyboard_layout(hkl);
         self.keyboard_layout = hkl;
         self.keyboard_layout_name = normalized;
         Some(previous)
     }
 
-    pub fn activate_keyboard_layout(&mut self, hkl: u32) -> Option<u32> {
-        if hkl == 0 {
-            return None;
+    pub fn load_keyboard_layout_from_name(&mut self, name: &str, activate: bool) -> Option<u32> {
+        let normalized = normalize_keyboard_layout_name(name)?;
+        let hkl = u32::from_str_radix(&normalized, 16).ok()?;
+        self.note_keyboard_layout(hkl);
+        if activate {
+            self.keyboard_layout = hkl;
+            self.keyboard_layout_name = normalized;
         }
+        Some(hkl)
+    }
+
+    pub fn activate_keyboard_layout(&mut self, hkl: u32) -> Option<u32> {
+        let hkl = match hkl {
+            0 => self.next_keyboard_layout(-1)?,
+            1 => self.next_keyboard_layout(1)?,
+            u32::MAX => self.next_keyboard_layout(-1)?,
+            _ => hkl,
+        };
         let previous = self.keyboard_layout;
+        self.note_keyboard_layout(hkl);
         self.keyboard_layout = hkl;
         self.keyboard_layout_name = format!("{hkl:08X}");
         Some(previous)
     }
 
-    pub fn keyboard_layout_list(&self) -> [u32; 1] {
-        [self.keyboard_layout]
+    pub fn keyboard_layout_list(&self) -> Vec<u32> {
+        self.keyboard_layouts.clone()
+    }
+
+    fn note_keyboard_layout(&mut self, hkl: u32) {
+        if hkl != 0 && !self.keyboard_layouts.contains(&hkl) {
+            self.keyboard_layouts.push(hkl);
+        }
+    }
+
+    fn next_keyboard_layout(&self, direction: i32) -> Option<u32> {
+        if self.keyboard_layouts.is_empty() {
+            return None;
+        }
+        let current = self
+            .keyboard_layouts
+            .iter()
+            .position(|hkl| *hkl == self.keyboard_layout)
+            .unwrap_or(0);
+        let len = self.keyboard_layouts.len();
+        let next = if direction < 0 {
+            current.checked_sub(1).unwrap_or(len - 1)
+        } else {
+            (current + 1) % len
+        };
+        self.keyboard_layouts.get(next).copied()
     }
 
     pub fn set_dead_key(&mut self, ch: u32) {
@@ -2475,8 +2726,19 @@ impl Gwe {
     }
 
     pub fn destroy_ime_context(&mut self, himc: u32) -> bool {
-        if self.ime_contexts.remove(&himc).is_none() {
+        let Some(context) = self.ime_contexts.remove(&himc) else {
             return false;
+        };
+        for component in [
+            context.h_comp_str,
+            context.h_cand_info,
+            context.h_guide_line,
+            context.h_private,
+            context.h_msg_buf,
+        ] {
+            if component != 0 {
+                self.ime_components.remove(&component);
+            }
         }
         self.ime_context_by_window.retain(|_, value| *value != himc);
         true
@@ -2504,6 +2766,85 @@ impl Gwe {
 
     pub fn ime_context(&self, himc: u32) -> Option<&ImeContextState> {
         self.ime_contexts.get(&himc)
+    }
+
+    pub fn ime_contexts_iter(&self) -> impl Iterator<Item = (u32, &ImeContextState)> + '_ {
+        self.ime_contexts
+            .iter()
+            .map(|(himc, context)| (*himc, context))
+    }
+
+    pub fn ime_context_mut(&mut self, himc: u32) -> Option<&mut ImeContextState> {
+        self.ime_contexts.get_mut(&himc)
+    }
+
+    pub fn ime_component(&self, himcc: u32) -> Option<&ImeComponentState> {
+        self.ime_components.get(&himcc)
+    }
+
+    pub fn ime_component_mut(&mut self, himcc: u32) -> Option<&mut ImeComponentState> {
+        self.ime_components.get_mut(&himcc)
+    }
+
+    pub fn register_ime_component(&mut self, himcc: u32, kind: ImeComponentKind, size: u32) {
+        if himcc == 0 {
+            return;
+        }
+        self.ime_components
+            .entry(himcc)
+            .and_modify(|component| {
+                component.kind = kind;
+                component.size = size;
+            })
+            .or_insert(ImeComponentState {
+                kind,
+                size,
+                lock_count: 0,
+            });
+    }
+
+    pub fn unregister_ime_component(&mut self, himcc: u32) {
+        self.ime_components.remove(&himcc);
+    }
+
+    pub fn register_ime_word(&mut self, reading: String, style: u32, word: String) {
+        if let Some(existing) = self
+            .ime_registered_words
+            .iter_mut()
+            .find(|entry| entry.reading == reading && entry.word == word)
+        {
+            existing.style = style;
+            return;
+        }
+        self.ime_registered_words.push(ImeRegisteredWord {
+            reading,
+            style,
+            word,
+        });
+    }
+
+    pub fn unregister_ime_word(&mut self, reading: &str, word: &str) {
+        self.ime_registered_words
+            .retain(|entry| entry.reading != reading || entry.word != word);
+    }
+
+    pub fn ime_registered_words_for_reading(&self, reading: &str) -> Vec<String> {
+        if !testime_private_profile_accepts_reading(reading) {
+            return Vec::new();
+        }
+        self.ime_registered_words
+            .iter()
+            .filter(|entry| entry.reading == reading)
+            .map(|entry| entry.word.clone())
+            .collect()
+    }
+
+    pub fn ime_registered_words(&self) -> impl Iterator<Item = &ImeRegisteredWord> {
+        self.ime_registered_words.iter()
+    }
+
+    pub fn testime_registered_word_reading_is_visible(&self, reading: &str) -> bool {
+        testime_private_profile_accepts_reading(reading)
     }
 
     /// Returns true when the window has an explicitly associated HIMC that is in
@@ -2585,6 +2926,33 @@ impl Gwe {
         context.hwnd
     }
 
+    pub fn set_ime_candidate_list(
+        &mut self,
+        himc: u32,
+        index: usize,
+        mut list: ImeCandidateListState,
+    ) -> bool {
+        let Some(context) = self.ime_contexts.get_mut(&himc) else {
+            return false;
+        };
+        let Some(slot) = context.candidate_lists.get_mut(index) else {
+            return false;
+        };
+        let count = list.candidates.len() as u32;
+        if count == 0 {
+            *slot = None;
+            return true;
+        }
+        list.selection = list.selection.min(count - 1);
+        list.page_start = list.page_start.min(count - 1);
+        list.page_size = list.page_size.min(count - list.page_start);
+        if list.page_size == 0 {
+            list.page_size = 1;
+        }
+        *slot = Some(list);
+        true
+    }
+
     /// Sets the open status for the given HIMC.  Returns `true` on success
     /// (HIMC known) or `false` if the HIMC is unknown.  After a successful
     /// call the caller should post `WM_IME_NOTIFY(IMN_SETOPENSTATUS)` to the
@@ -2650,7 +3018,19 @@ impl Gwe {
                 conversion_status: 0,
                 sentence_status: 0,
                 composition_string: Vec::new(),
+                composition_font: [0; LOGFONTW_SIZE],
+                composition_form: ImeCompositionForm::default(),
+                candidate_forms: [ImeCandidateForm::default(); 4],
+                candidate_lists: std::array::from_fn(|_| None),
+                status_window_pos: Point::default(),
                 hangul: Default::default(),
+                input_context_ptr: 0,
+                lock_count: 0,
+                h_comp_str: 0,
+                h_cand_info: 0,
+                h_guide_line: 0,
+                h_private: 0,
+                h_msg_buf: 0,
             },
         );
         himc
@@ -3762,6 +4142,37 @@ impl Gwe {
         Some(id)
     }
 
+    pub fn complete_restored_sent_message(
+        &mut self,
+        thread_id: u32,
+        id: u64,
+        result: u32,
+    ) -> Option<u64> {
+        let sent = self.sent_messages.get(&id)?;
+        if sent.receiver_thread_id != thread_id {
+            return None;
+        }
+        if self.active_sent_message_id(thread_id) == Some(id) {
+            return self.complete_active_sent_message(thread_id, result);
+        }
+
+        if let Some(sent) = self.sent_messages.get_mut(&id) {
+            if sent.flags & SMF_RESULT_READY == 0 {
+                sent.flags |= SMF_RESULT_READY;
+                sent.result = Some(result);
+                self.stats.send_transaction_completed_count = self
+                    .stats
+                    .send_transaction_completed_count
+                    .saturating_add(1);
+            }
+        }
+        for queue in self.sent_queues.values_mut() {
+            queue.retain(|queued_id| *queued_id != id);
+        }
+        self.end_send_message(thread_id);
+        Some(id)
+    }
+
     pub fn activate_sent_message_for_receiver(&mut self, thread_id: u32, id: u64) -> bool {
         let Some(sent) = self.sent_messages.get(&id) else {
             return false;
@@ -4206,6 +4617,36 @@ impl Gwe {
             || self
                 .synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
                 .is_some()
+    }
+
+    pub fn has_visible_window_message_filtered(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
+        self.sent_queues.get(&thread_id).is_some_and(|queue| {
+            queue.iter().any(|id| {
+                self.sent_messages.get(id).is_some_and(|sent| {
+                    message_matches(&sent.message, hwnd, min_msg, max_msg)
+                        && self.message_targets_visible_window(&sent.message)
+                })
+            })
+        }) || self.queues.get(&thread_id).is_some_and(|queue| {
+            queue.iter().any(|message| {
+                message_matches(message, hwnd, min_msg, max_msg)
+                    && self.message_targets_visible_window(message)
+            })
+        }) || self
+            .synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
+            .is_some_and(|message| self.message_targets_visible_window(&message))
+    }
+
+    fn message_targets_visible_window(&self, message: &Message) -> bool {
+        self.windows
+            .get(&message.hwnd)
+            .is_some_and(|window| window.visible && !window.destroyed)
     }
 
     pub fn post_quit_message(&mut self, thread_id: u32, exit_code: u32, time_ms: u32) {
@@ -5432,6 +5873,26 @@ mod tests {
     }
 
     #[test]
+    fn visible_message_filter_ignores_thread_and_hidden_window_messages() {
+        let mut gwe = Gwe::default();
+        let thread_id = 7;
+        let hidden = gwe.create_window(thread_id, "hidden", "");
+
+        gwe.post_message(thread_id, Message::new(0, WM_USER + 1, 0, 0, 10));
+        assert!(!gwe.has_visible_window_message_filtered(thread_id, None, 0, 0));
+
+        let _ = gwe.get_message(thread_id);
+        gwe.post_message(thread_id, Message::new(hidden, WM_USER + 2, 0, 0, 11));
+        assert!(!gwe.has_visible_window_message_filtered(thread_id, None, 0, 0));
+
+        let _ = gwe.get_message(thread_id);
+        let visible = gwe.create_window_ex(thread_id, "visible", "", None, 0, WS_VISIBLE, 0);
+        assert!(gwe.validate_window(visible));
+        gwe.post_message(thread_id, Message::new(visible, WM_USER + 3, 0, 0, 12));
+        assert!(gwe.has_visible_window_message_filtered(thread_id, None, 0, 0));
+    }
+
+    #[test]
     fn mouse_button_messages_update_lbutton_key_state() {
         let mut gwe = Gwe::default();
         let thread_id = 7;
@@ -5479,6 +5940,45 @@ mod tests {
         assert_eq!(
             gwe.take_completed_sent_message_result(send_id),
             Some(0x1234)
+        );
+        assert!(gwe.sent_message(send_id).is_none());
+    }
+
+    #[test]
+    fn restored_sent_message_completion_recovers_missing_active_stack() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 11;
+        let receiver_thread = 12;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 99, 1, 2, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("queued sync send");
+        assert!(
+            gwe.activate_sent_message_for_receiver(receiver_thread, send_id),
+            "receiver should activate queued send"
+        );
+        assert!(gwe.in_send_message(receiver_thread));
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(send_id));
+
+        gwe.active_sent_stack_by_thread.remove(&receiver_thread);
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), None);
+        assert!(gwe.in_send_message(receiver_thread));
+
+        assert_eq!(
+            gwe.complete_restored_sent_message(receiver_thread, send_id, 0x7788),
+            Some(send_id)
+        );
+        assert!(!gwe.in_send_message(receiver_thread));
+        assert_eq!(
+            gwe.take_completed_sent_message_result(send_id),
+            Some(0x7788)
         );
         assert!(gwe.sent_message(send_id).is_none());
     }
@@ -6265,6 +6765,19 @@ mod tests {
     }
 
     #[test]
+    fn get_dlg_item_finds_nested_child_after_direct_children() {
+        let mut gwe = Gwe::default();
+        let dialog = gwe.create_window(1, "Dialog", "");
+        let panel = gwe.create_window_ex(1, "Panel", "", Some(dialog), 10, WS_CHILD, 0);
+        let nested = gwe.create_window_ex(1, "Button", "", Some(panel), 42, WS_CHILD, 0);
+
+        assert_eq!(gwe.get_dlg_item(dialog, 42), Some(nested));
+
+        let direct = gwe.create_window_ex(1, "Button", "", Some(dialog), 42, WS_CHILD, 0);
+        assert_eq!(gwe.get_dlg_item(dialog, 42), Some(direct));
+    }
+
+    #[test]
     fn send_message_nccreate_returns_true() {
         let mut gwe = Gwe::default();
         let hwnd = gwe.create_window(1, "STATIC", "");
@@ -6277,6 +6790,28 @@ mod tests {
         let hwnd = gwe.create_window(1, "STATIC", "");
         // CE DefWindowProcW returns 0 (MNC_IGNORE) for unrecognized menu keys.
         assert_eq!(gwe.send_message(hwnd, WM_MENUCHAR, 0, 0), Some(0));
+    }
+
+    #[test]
+    fn end_dialog_is_idempotent_after_recorded_modal_result() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(1, "Dialog", "Button");
+
+        assert!(gwe.end_dialog(hwnd, 1));
+        assert!(gwe.destroy_window(hwnd, 0));
+
+        assert!(gwe.end_dialog(hwnd, 1));
+        assert_eq!(gwe.dialog_result(hwnd), Some(1));
+    }
+
+    #[test]
+    fn end_dialog_records_result_for_known_destroyed_dialog() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(1, "Dialog", "Button");
+
+        assert!(gwe.destroy_window(hwnd, 0));
+        assert!(gwe.end_dialog(hwnd, 1));
+        assert_eq!(gwe.dialog_result(hwnd), Some(1));
     }
 
     #[test]

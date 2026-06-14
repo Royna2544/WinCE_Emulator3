@@ -32,6 +32,7 @@ pub struct ImportTrap {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportModuleKind {
     Coredll,
+    Fsdmgr,
     Mfc,
     Winsock,
     Ole,
@@ -234,6 +235,16 @@ impl ImportTrapTable {
             ImportModuleKind::Winsock | ImportModuleKind::Ole => ImportTrapReturn::v0(
                 dispatch_external_stub_to_u32(kernel, trap, memory, context.thread_id, args),
             ),
+            ImportModuleKind::Fsdmgr => {
+                ImportTrapReturn::v0(crate::ce::coredll::dispatch_fsdmgr_import_raw(
+                    kernel,
+                    memory,
+                    context.thread_id,
+                    trap.ordinal,
+                    trap.name.as_deref(),
+                    args,
+                )?)
+            }
             ImportModuleKind::Mfc => return None,
         })
     }
@@ -363,13 +374,23 @@ pub fn patch_supported_imports_with_external(
                 if module_kind == ImportModuleKind::Mfc {
                     continue;
                 }
+                if module_kind == ImportModuleKind::Fsdmgr
+                    && !is_supported_fsdmgr_import(&thunk.import)
+                {
+                    continue;
+                }
             }
 
             let (ordinal, name) = match &thunk.import {
-                ImportBy::Ordinal(ordinal) => (
-                    Some(normalize_coredll_import_ordinal(u32::from(*ordinal))),
-                    None,
-                ),
+                ImportBy::Ordinal(ordinal) => {
+                    let ordinal = u32::from(*ordinal);
+                    let ordinal = if module_kind == ImportModuleKind::Coredll {
+                        normalize_coredll_import_ordinal(ordinal)
+                    } else {
+                        ordinal
+                    };
+                    (Some(ordinal), None)
+                }
                 ImportBy::Name { name, .. } => {
                     let ordinal = (module_kind == ImportModuleKind::Coredll)
                         .then(|| exports.resolve_name(name).map(|export| export.ordinal))
@@ -581,6 +602,7 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
         ),
         ImportModuleKind::Ole => ole_stub_return(kernel, memory, thread_id, name, args),
         ImportModuleKind::Coredll => 0,
+        ImportModuleKind::Fsdmgr => 0,
         ImportModuleKind::Mfc => {
             unreachable!("MFC imports must resolve to SDK DLL exports, not emulator stubs")
         }
@@ -733,6 +755,8 @@ fn classify_import_module(module_name: &str) -> Option<ImportModuleKind> {
     let normalized = normalize_module(module_name);
     if normalized == "coredll" {
         Some(ImportModuleKind::Coredll)
+    } else if normalized == "fsdmgr" {
+        Some(ImportModuleKind::Fsdmgr)
     } else if normalized.starts_with("mfc") {
         Some(ImportModuleKind::Mfc)
     } else if normalized == "winsock" || normalized == "ws2" || normalized == "ws2_32" {
@@ -741,6 +765,39 @@ fn classify_import_module(module_name: &str) -> Option<ImportModuleKind> {
         Some(ImportModuleKind::Ole)
     } else {
         None
+    }
+}
+
+fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
+    match import {
+        ImportBy::Ordinal(ordinal) => {
+            matches!(
+                u32::from(*ordinal),
+                3 | 4
+                    | 5
+                    | 6
+                    | 7
+                    | 8
+                    | 9
+                    | 10
+                    | 12
+                    | 14
+                    | 21
+                    | 22
+                    | 24
+                    | 25
+                    | 26
+                    | 27
+                    | 30
+                    | 32
+                    | 35
+                    | 36
+                    | 37
+                    | 44
+                    | 68..=75
+            )
+        }
+        ImportBy::Name { name, .. } => crate::ce::coredll::is_fsdmgr_import(name),
     }
 }
 
@@ -776,17 +833,18 @@ fn write_mapped_u32(mapped: &mut [u8], rva: u32, value: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, fs};
 
     use crate::pe::ImportThunk;
     use crate::{
         ce::{coredll::CoredllGuestMemory, kernel::CeKernel},
-        config::RuntimeConfig,
+        config::{MountConfig, RuntimeConfig},
     };
 
     #[derive(Default)]
     struct TestMemory {
         bytes: BTreeMap<u32, u8>,
+        halfwords: BTreeMap<u32, u16>,
         words: BTreeMap<u32, u32>,
     }
 
@@ -797,12 +855,52 @@ mod tests {
             }
         }
 
+        fn map_wide_z(&mut self, addr: u32, value: &str) {
+            for (index, unit) in value.encode_utf16().chain(std::iter::once(0)).enumerate() {
+                self.halfwords.insert(addr + (index as u32 * 2), unit);
+            }
+        }
+
+        fn map_wide_buffer(&mut self, addr: u32, chars: usize) {
+            for index in 0..chars {
+                self.halfwords.insert(addr + (index as u32 * 2), 0);
+            }
+        }
+
         fn map_word(&mut self, addr: u32, value: u32) {
             self.words.insert(addr, value);
         }
 
         fn word(&self, addr: u32) -> u32 {
             self.words.get(&addr).copied().unwrap_or(0)
+        }
+
+        fn read_le_u32_from_bytes(&self, addr: u32) -> u32 {
+            let mut bytes = [0u8; 4];
+            for (offset, byte) in bytes.iter_mut().enumerate() {
+                *byte = self
+                    .bytes
+                    .get(&(addr + offset as u32))
+                    .copied()
+                    .unwrap_or(0);
+            }
+            u32::from_le_bytes(bytes)
+        }
+
+        fn read_wide_z(&self, addr: u32, max_chars: usize) -> String {
+            let mut units = Vec::new();
+            for index in 0..max_chars {
+                let unit = self
+                    .halfwords
+                    .get(&(addr + (index as u32 * 2)))
+                    .copied()
+                    .unwrap_or(0);
+                if unit == 0 {
+                    break;
+                }
+                units.push(unit);
+            }
+            String::from_utf16_lossy(&units)
         }
     }
 
@@ -839,12 +937,20 @@ mod tests {
             }
         }
 
-        fn read_u16(&self, _addr: u32) -> Result<u16> {
-            Err(Error::Backend("unexpected read_u16".to_owned()))
+        fn read_u16(&self, addr: u32) -> Result<u16> {
+            self.halfwords
+                .get(&addr)
+                .copied()
+                .ok_or_else(|| Error::Backend(format!("unexpected read_u16 0x{addr:08x}")))
         }
 
-        fn write_u16(&mut self, _addr: u32, _value: u16) -> Result<()> {
-            Err(Error::Backend("unexpected write_u16".to_owned()))
+        fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+            if let Some(halfword) = self.halfwords.get_mut(&addr) {
+                *halfword = value;
+                Ok(())
+            } else {
+                Err(Error::Backend(format!("unexpected write_u16 0x{addr:08x}")))
+            }
         }
     }
 
@@ -895,6 +1001,2067 @@ mod tests {
         assert_eq!(
             table.trap_at(IMPORT_TRAP_BASE).unwrap().ordinal,
             Some(crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT)
+        );
+    }
+
+    #[test]
+    fn patches_supported_fsdmgr_imports_only() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_GetVolumeName".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(37),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_RegisterVolume".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Ordinal(21),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2010,
+                    iat_rva: 0x3010,
+                    import: ImportBy::Ordinal(10),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2014,
+                    iat_rva: 0x3014,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_FindNextChangeNotification".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2018,
+                    iat_rva: 0x3018,
+                    import: ImportBy::Ordinal(74),
+                },
+                ImportThunk {
+                    thunk_rva: 0x201c,
+                    iat_rva: 0x301c,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "STOREMGR_FsIoControlW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2020,
+                    iat_rva: 0x3020,
+                    import: ImportBy::Ordinal(44),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2024,
+                    iat_rva: 0x3024,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_CreateFileHandle".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2028,
+                    iat_rva: 0x3028,
+                    import: ImportBy::Ordinal(8),
+                },
+                ImportThunk {
+                    thunk_rva: 0x202c,
+                    iat_rva: 0x302c,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_CreateCache".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2030,
+                    iat_rva: 0x3030,
+                    import: ImportBy::Ordinal(24),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2034,
+                    iat_rva: 0x3034,
+                    import: ImportBy::Ordinal(12),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2038,
+                    iat_rva: 0x3038,
+                    import: ImportBy::Ordinal(25),
+                },
+                ImportThunk {
+                    thunk_rva: 0x203c,
+                    iat_rva: 0x303c,
+                    import: ImportBy::Ordinal(35),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2040,
+                    iat_rva: 0x3040,
+                    import: ImportBy::Ordinal(26),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2044,
+                    iat_rva: 0x3044,
+                    import: ImportBy::Ordinal(36),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2048,
+                    iat_rva: 0x3048,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_UnsupportedStorageApi".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+
+        assert_eq!(table.len(), 18);
+        for index in 0..18 {
+            let iat = 0x3000 + index * 4;
+            assert_eq!(
+                u32::from_le_bytes(mapped[iat..iat + 4].try_into().unwrap()),
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * index as u32
+            );
+        }
+        assert_eq!(
+            u32::from_le_bytes(mapped[0x3048..0x304c].try_into().unwrap()),
+            0
+        );
+        assert_eq!(
+            table.trap_at(IMPORT_TRAP_BASE).unwrap().module_kind,
+            ImportModuleKind::Fsdmgr
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE)
+                .unwrap()
+                .ordinal,
+            Some(37)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("FSDMGR_RegisterVolume")
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3)
+                .unwrap()
+                .ordinal,
+            Some(21)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 4)
+                .unwrap()
+                .ordinal,
+            Some(10)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 6)
+                .unwrap()
+                .ordinal,
+            Some(74)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 7)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("STOREMGR_FsIoControlW")
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 8)
+                .unwrap()
+                .ordinal,
+            Some(44)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 9)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("FSDMGR_CreateFileHandle")
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 10)
+                .unwrap()
+                .ordinal,
+            Some(8)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 11)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("FSDMGR_CreateCache")
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 12)
+                .unwrap()
+                .ordinal,
+            Some(24)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 13)
+                .unwrap()
+                .ordinal,
+            Some(12)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 14)
+                .unwrap()
+                .ordinal,
+            Some(25)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 15)
+                .unwrap()
+                .ordinal,
+            Some(35)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 16)
+                .unwrap()
+                .ordinal,
+            Some(26)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 17)
+                .unwrap()
+                .ordinal,
+            Some(36)
+        );
+    }
+
+    #[test]
+    fn fsdmgr_notification_import_dispatches_to_raw_reset_path() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![ImportThunk {
+                thunk_rva: 0x2000,
+                iat_rva: 0x3000,
+                import: ImportBy::Name {
+                    hint: 0,
+                    name: "FSINT_FindNextChangeNotification".to_owned(),
+                },
+            }],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [0x1234_5678],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_INVALID_HANDLE
+        );
+    }
+
+    #[test]
+    fn fsdmgr_create_file_and_search_handle_return_fsd_context_pointer() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_CreateFileHandle".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(8),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [0x1111_2222, 0x3333_4444, 0x5555_6666],
+            ),
+            Some(0x5555_6666)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [0x1111_2222, 0x3333_4444, 0],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+    }
+
+    #[test]
+    fn fsdmgr_storemgr_fs_io_control_import_dispatches_to_mounted_volume_info() {
+        const FSCTL_COPY_EXTERNAL_START: u32 = 0x0009_004c;
+        const FSCTL_COPY_EXTERNAL_COMPLETE: u32 = 0x0009_0050;
+        const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
+        const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
+        const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
+        const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
+        const UNKNOWN_FSCTL: u32 = 0x0009_0099;
+        const CE_VOLUME_INFO_SIZE: u32 = 144;
+        const CE_VOLUME_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0004;
+        const ERROR_INVALID_PARAMETER: u32 = 87;
+        const ERROR_NOT_SUPPORTED: u32 = 50;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![ImportThunk {
+                thunk_rva: 0x2000,
+                iat_rva: 0x3000,
+                import: ImportBy::Name {
+                    hint: 0,
+                    name: "STOREMGR_FsIoControlW".to_owned(),
+                },
+            }],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let root = std::env::temp_dir().join(format!(
+            "wince_storemgr_fsctl_import_{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&root);
+        kernel.mount_guest_root("\\SDMMC Disk", root.clone());
+
+        let mut memory = TestMemory::default();
+        let path = 0x1000_0000;
+        let info_level = 0x1000_0100;
+        let volume_info = 0x1000_0200;
+        let bytes_returned = 0x1000_0400;
+        let copy_external = 0x1000_0500;
+        let copy_external_out = 0x1000_0800;
+        memory.map_wide_z(path, "\\SDMMC Disk");
+        memory.map_word(info_level, 0);
+        memory.map_bytes(volume_info, &vec![0x5a; CE_VOLUME_INFO_SIZE as usize]);
+        memory.map_word(bytes_returned, 0xfeed_cafe);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [
+                    77,
+                    path,
+                    FSCTL_GET_VOLUME_INFO,
+                    info_level,
+                    4,
+                    volume_info,
+                    CE_VOLUME_INFO_SIZE,
+                    bytes_returned,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(bytes_returned), CE_VOLUME_INFO_SIZE);
+        assert_eq!(
+            memory.read_le_u32_from_bytes(volume_info + 4) & CE_VOLUME_ATTRIBUTE_REMOVABLE,
+            CE_VOLUME_ATTRIBUTE_REMOVABLE
+        );
+
+        for ioctl in [FSCTL_REFRESH_VOLUME, FSCTL_FLUSH_BUFFERS] {
+            memory.map_word(bytes_returned, 0xfeed_cafe);
+            assert_eq!(
+                table.dispatch_trap(
+                    &mut kernel,
+                    &mut memory,
+                    11,
+                    IMPORT_TRAP_BASE,
+                    [77, path, ioctl, 0, 0, 0, 0, bytes_returned, 0],
+                ),
+                Some(1)
+            );
+            assert_eq!(kernel.threads.get_last_error(11), 0);
+            assert_eq!(memory.word(bytes_returned), 0);
+        }
+
+        memory.map_bytes(copy_external, &vec![0x33; FILE_COPY_EXTERNAL_SIZE as usize]);
+        memory.map_word(copy_external, FILE_COPY_EXTERNAL_SIZE);
+        memory.map_bytes(copy_external_out, &[0xa5, 0xa5, 0xa5, 0xa5]);
+        for ioctl in [FSCTL_COPY_EXTERNAL_START, FSCTL_COPY_EXTERNAL_COMPLETE] {
+            memory.map_word(bytes_returned, 0xfeed_cafe);
+            assert_eq!(
+                table.dispatch_trap(
+                    &mut kernel,
+                    &mut memory,
+                    11,
+                    IMPORT_TRAP_BASE,
+                    [
+                        77,
+                        path,
+                        ioctl,
+                        copy_external,
+                        FILE_COPY_EXTERNAL_SIZE,
+                        copy_external_out,
+                        4,
+                        bytes_returned,
+                        0,
+                    ],
+                ),
+                Some(0)
+            );
+            assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+            assert_eq!(memory.bytes.get(&(copy_external + 32)).copied(), Some(0x33));
+            assert_eq!(memory.bytes.get(&copy_external_out).copied(), Some(0xa5));
+            assert_eq!(memory.word(bytes_returned), 0xfeed_cafe);
+        }
+
+        memory.map_word(copy_external, FILE_COPY_EXTERNAL_SIZE - 4);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [
+                    77,
+                    path,
+                    FSCTL_COPY_EXTERNAL_START,
+                    copy_external,
+                    FILE_COPY_EXTERNAL_SIZE,
+                    copy_external_out,
+                    4,
+                    bytes_returned,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        memory.map_word(bytes_returned, 0xfeed_cafe);
+        memory.map_bytes(volume_info, &vec![0xa5; CE_VOLUME_INFO_SIZE as usize]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [
+                    77,
+                    path,
+                    UNKNOWN_FSCTL,
+                    0,
+                    0,
+                    volume_info,
+                    CE_VOLUME_INFO_SIZE,
+                    bytes_returned,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(memory.word(bytes_returned), 0xfeed_cafe);
+        assert_eq!(memory.bytes.get(&volume_info).copied(), Some(0xa5));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fsdmgr_mount_table_imports_query_volume_name_and_flags() {
+        const AFS_FLAG_HIDDEN: u32 = 0x0001;
+        const AFS_FLAG_SYSTEM: u32 = 0x0020;
+        const AFS_FLAG_PERMANENT: u32 = 0x0040;
+        const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_GetVolumeName".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(37),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let root =
+            std::env::temp_dir().join(format!("wince_fsdmgr_mount_query_{}", std::process::id()));
+        let _ = fs::create_dir_all(&root);
+        kernel.files.mount(MountConfig {
+            name: Some("Resident Flash Store".to_owned()),
+            guest_root: r"\ResidentFlash".to_owned(),
+            host_root: Some(root.clone()),
+            total_mbytes: 128,
+            free_mbytes: 64,
+            writable: true,
+            removable: false,
+            system: true,
+            hidden: true,
+        });
+        let volume = kernel
+            .create_volume_handle_for_guest_root(r"\ResidentFlash")
+            .unwrap();
+
+        let mut memory = TestMemory::default();
+        let name_ptr = 0x1000_0000;
+        let flags_ptr = 0x1000_0100;
+        memory.map_wide_buffer(name_ptr, 32);
+        memory.map_word(flags_ptr, 0xfeed_cafe);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [volume, name_ptr, 32],
+            ),
+            Some("ResidentFlash".encode_utf16().count() as u32)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.read_wide_z(name_ptr, 32), "ResidentFlash");
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [volume, flags_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            memory.word(flags_ptr),
+            AFS_FLAG_HIDDEN | AFS_FLAG_SYSTEM | AFS_FLAG_PERMANENT
+        );
+
+        let short_name_ptr = 0x1000_0200;
+        memory.map_wide_z(short_name_ptr, "unchanged");
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [
+                    volume,
+                    short_name_ptr,
+                    "ResidentFlash".encode_utf16().count() as u32,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INSUFFICIENT_BUFFER);
+        assert_eq!(memory.read_wide_z(short_name_ptr, 16), "unchanged");
+
+        let invalid_flags_ptr = 0x1000_0300;
+        memory.map_word(invalid_flags_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [0x1234_5678, invalid_flags_ptr],
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_INVALID_PARAMETER
+        );
+        assert_eq!(memory.word(invalid_flags_ptr), 0xfeed_cafe);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fsdmgr_register_volume_maps_disk_pointer_to_volume_handle() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_RegisterVolume".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(21),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_GetVolumeName".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Ordinal(10),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let disk_ptr = 0x1000_2000;
+        let mount_name_ptr = 0x1000_3000;
+        let name_out = 0x1000_4000;
+        memory.map_wide_z(mount_name_ptr, r"\Fsd Card");
+        memory.map_wide_buffer(name_out, 32);
+
+        let volume = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, mount_name_ptr, 0x0bad_f00d],
+            )
+            .unwrap();
+        assert_ne!(volume, 0);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr],
+            ),
+            Some(volume)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [volume, name_out, 32],
+            ),
+            Some("Fsd Card".encode_utf16().count() as u32)
+        );
+        assert_eq!(memory.read_wide_z(name_out, 32), "Fsd Card");
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, mount_name_ptr, 0x0bad_f00d],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_ALREADY_EXISTS
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+                [volume],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr],
+            ),
+            Some(volume)
+        );
+    }
+
+    #[test]
+    fn fsdmgr_null_cache_imports_track_ids_and_nullcache_results() {
+        const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
+        const UNSUPPORTED_IOCTL: u32 = 0xfeed_cafe;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_CreateCache".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(9),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Ordinal(30),
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Ordinal(14),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2010,
+                    iat_rva: 0x3010,
+                    import: ImportBy::Ordinal(32),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2014,
+                    iat_rva: 0x3014,
+                    import: ImportBy::Ordinal(24),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2018,
+                    iat_rva: 0x3018,
+                    import: ImportBy::Ordinal(4),
+                },
+                ImportThunk {
+                    thunk_rva: 0x201c,
+                    iat_rva: 0x301c,
+                    import: ImportBy::Ordinal(5),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2020,
+                    iat_rva: 0x3020,
+                    import: ImportBy::Ordinal(3),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let disk_ptr = 0x1000_2000;
+        let write_sector_ptr = 0x1000_4000;
+        let read_sector_ptr = 0x1000_5000;
+
+        let create = IMPORT_TRAP_BASE;
+        let delete = IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE;
+        let resize = IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2;
+        let flush = IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3;
+        let sync = IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 4;
+        let invalidate = IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 5;
+        let cached_read = IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 6;
+        let cached_write = IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 7;
+        let cache_ioctl = IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 8;
+
+        let cache_id = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                create,
+                [disk_ptr, 0, 0, 0, 512, 0],
+            )
+            .unwrap();
+        assert_eq!(cache_id, 0);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                create,
+                [disk_ptr + 4, 0, 0, 0, 512, 0],
+            ),
+            Some(1)
+        );
+
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 11, delete, [cache_id]),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 11, delete, [0xdead_beef]),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_INVALID_PARAMETER
+        );
+
+        let cache_id = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                create,
+                [disk_ptr, 0, 0, 0, 512, 0],
+            )
+            .unwrap();
+        assert_eq!(cache_id, 0);
+
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 11, resize, [0xdead_beef, 64, 0]),
+            Some(0)
+        );
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 11, sync, [0xdead_beef, 0]),
+            Some(0)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                invalidate,
+                [0xdead_beef, 0, 0]
+            ),
+            Some(0)
+        );
+
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 11, flush, [cache_id, 0]),
+            Some(0)
+        );
+        let mut sector_bytes = vec![0; 512];
+        sector_bytes[..13].copy_from_slice(b"sector-write!");
+        memory.map_bytes(write_sector_ptr, &sector_bytes);
+        memory.map_bytes(read_sector_ptr, &vec![0xa5; 512]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                cached_write,
+                [cache_id, 7, 1, write_sector_ptr, 0],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                cached_read,
+                [cache_id, 7, 1, read_sector_ptr, 0]
+            ),
+            Some(0)
+        );
+        let mut read_back = vec![0; 512];
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert_eq!(&read_back[..13], b"sector-write!");
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                cached_write,
+                [0xdead_beef, 0, 1, 0, 0],
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                cache_ioctl,
+                [0xdead_beef, IOCTL_DISK_DELETE_SECTORS, 0, 0, 0, 0, 0],
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                cache_ioctl,
+                [cache_id, IOCTL_DISK_DELETE_SECTORS, 0, 0, 0, 0, 0],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                cache_ioctl,
+                [cache_id, UNSUPPORTED_IOCTL, 0, 0, 0, 0, 0],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_NOT_SUPPORTED
+        );
+    }
+
+    #[test]
+    fn fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info() {
+        const DISK_IOCTL_GETINFO: u32 = 1;
+        const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
+        const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
+        const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
+        const IOCTL_DISK_GETNAME: u32 = 0x0007_1c20;
+        const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
+        const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
+        const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
+        const IOCTL_DISK_COPY_EXTERNAL_START: u32 = 0x0007_1c58;
+        const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
+        const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
+        const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
+        const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
+        const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+        const ERROR_INVALID_PARAMETER: u32 = 87;
+        const ERROR_NOT_SUPPORTED: u32 = 50;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Ordinal(35),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(25),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Ordinal(12),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let disk_ptr = 0x1000_6000;
+        let write_sector_ptr = 0x1000_7000;
+        let read_sector_ptr = 0x1000_8000;
+        let disk_info_ptr = 0x1000_9000;
+        let bytes_returned_ptr = 0x1000_a000;
+        let delete_info_ptr = 0x1000_b000;
+        let disk_name_ptr = 0x1000_c000;
+        let device_info_ptr = 0x1000_d000;
+        let storage_id_ptr = 0x1000_e000;
+        let sector_list_ptr = 0x1000_f000;
+        let sector_addr_ptr = 0x1001_0000;
+        let power_timings_ptr = 0x1001_1000;
+        let copy_external_ptr = 0x1001_2000;
+        let copy_external_out_ptr = 0x1001_3000;
+
+        let mut sector_bytes = vec![0; 512];
+        sector_bytes[..17].copy_from_slice(b"direct-disk-write");
+        memory.map_bytes(write_sector_ptr, &sector_bytes);
+        memory.map_bytes(read_sector_ptr, &vec![0x5a; 512]);
+        for offset in (0..24).step_by(4) {
+            memory.map_word(disk_info_ptr + offset, 0xfeed_cafe);
+        }
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, 11, 1, write_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 11, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        let mut read_back = vec![0; 512];
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert_eq!(&read_back[..17], b"direct-disk-write");
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    DISK_IOCTL_GETINFO,
+                    disk_info_ptr,
+                    24,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(disk_info_ptr + 4), 512);
+        assert_eq!(memory.word(bytes_returned_ptr), 24);
+
+        memory.map_wide_buffer(disk_name_ptr, 32);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_GETNAME,
+                    0,
+                    0,
+                    disk_name_ptr,
+                    64,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.read_wide_z(disk_name_ptr, 32), "Storage Card");
+        assert_eq!(memory.word(bytes_returned_ptr), 26);
+
+        memory.map_word(device_info_ptr, 0);
+        memory.map_wide_buffer(device_info_ptr + 4, 32);
+        for offset in [68, 72, 76] {
+            memory.map_word(device_info_ptr + offset, 0);
+        }
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_DEVICE_INFO,
+                    device_info_ptr,
+                    80,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(device_info_ptr), 80);
+        assert_eq!(memory.read_wide_z(device_info_ptr + 4, 32), "SyntheticDisk");
+        assert_eq!(memory.word(device_info_ptr + 68), 1);
+        assert_eq!(memory.word(device_info_ptr + 72), 1 << 29);
+        assert_eq!(memory.word(device_info_ptr + 76), 1);
+        assert_eq!(memory.word(bytes_returned_ptr), 80);
+
+        for offset in (0..16).step_by(4) {
+            memory.map_word(storage_id_ptr + offset, 0xfeed_cafe);
+        }
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_GET_STORAGEID,
+                    0,
+                    0,
+                    storage_id_ptr,
+                    16,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(storage_id_ptr), 16);
+        assert_eq!(memory.word(storage_id_ptr + 4), 3);
+        assert_eq!(memory.word(storage_id_ptr + 8), 0);
+        assert_eq!(memory.word(storage_id_ptr + 12), 0);
+        assert_eq!(memory.word(bytes_returned_ptr), 16);
+
+        memory.map_word(sector_list_ptr, 11);
+        memory.map_word(sector_list_ptr + 4, 12);
+        memory.map_word(sector_addr_ptr, 0xfeed_cafe);
+        memory.map_word(sector_addr_ptr + 4, 0xfeed_cafe);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_GET_SECTOR_ADDR,
+                    sector_list_ptr,
+                    8,
+                    sector_addr_ptr,
+                    8,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(memory.word(sector_addr_ptr), 0xfeed_cafe);
+        assert_eq!(memory.word(sector_addr_ptr + 4), 0xfeed_cafe);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        memory.map_word(copy_external_ptr, DISK_COPY_EXTERNAL_SIZE);
+        memory.map_word(copy_external_ptr + 548, 16);
+        memory.map_word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE, 31);
+        memory.map_word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE + 4, 2);
+        memory.map_word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE + 8, 41);
+        memory.map_word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE + 12, 3);
+        memory.map_word(copy_external_out_ptr, 0xfeed_cafe);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_COPY_EXTERNAL_START,
+                    copy_external_ptr,
+                    DISK_COPY_EXTERNAL_SIZE + 16,
+                    copy_external_out_ptr,
+                    4,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(memory.word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE), 31);
+        assert_eq!(
+            memory.word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE + 8),
+            41
+        );
+        assert_eq!(memory.word(copy_external_out_ptr), 0xfeed_cafe);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        memory.map_word(copy_external_ptr + 548, 12);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_COPY_EXTERNAL_START,
+                    copy_external_ptr,
+                    DISK_COPY_EXTERNAL_SIZE + 12,
+                    copy_external_out_ptr,
+                    4,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        for offset in (0..DISK_POWER_TIMINGS_SIZE).step_by(4) {
+            memory.map_word(power_timings_ptr + offset, 0xfeed_cafe);
+        }
+        memory.map_word(power_timings_ptr, DISK_POWER_TIMINGS_SIZE);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_GETPMTIMINGS,
+                    power_timings_ptr,
+                    DISK_POWER_TIMINGS_SIZE,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(power_timings_ptr), DISK_POWER_TIMINGS_SIZE);
+        for offset in (4..DISK_POWER_TIMINGS_SIZE).step_by(4) {
+            assert_eq!(memory.word(power_timings_ptr + offset), 0);
+        }
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        memory.map_word(power_timings_ptr, DISK_POWER_TIMINGS_SIZE - 4);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_GETPMTIMINGS,
+                    power_timings_ptr,
+                    DISK_POWER_TIMINGS_SIZE,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        sector_bytes[..16].copy_from_slice(b"secure-wipe-kept");
+        memory.map_bytes(write_sector_ptr, &sector_bytes);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, 13, 1, write_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.map_word(delete_info_ptr, 12);
+        memory.map_word(delete_info_ptr + 4, 13);
+        memory.map_word(delete_info_ptr + 8, 1);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_SET_SECURE_WIPE_FLAG,
+                    delete_info_ptr,
+                    12,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 13, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert_eq!(&read_back[..16], b"secure-wipe-kept");
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_SECURE_WIPE,
+                    delete_info_ptr,
+                    12,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 13, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert!(read_back.iter().all(|byte| *byte == 0));
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_GET_SECTOR_ADDR,
+                    sector_list_ptr,
+                    8,
+                    sector_addr_ptr,
+                    4,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_INITIALIZED,
+                    0,
+                    0,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        memory.map_word(delete_info_ptr, 12);
+        memory.map_word(delete_info_ptr + 4, 11);
+        memory.map_word(delete_info_ptr + 8, 1);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_DELETE_SECTORS,
+                    delete_info_ptr,
+                    12,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 11, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert!(read_back.iter().all(|byte| *byte == 0));
+
+        sector_bytes[..16].copy_from_slice(b"format-will-zero");
+        memory.map_bytes(write_sector_ptr, &sector_bytes);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, 12, 1, write_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    DISK_IOCTL_FORMAT_MEDIA,
+                    0,
+                    0,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 12, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert!(read_back.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn fsdmgr_disk_ex_imports_scatter_gather_sparse_sectors() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Ordinal(36),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_ReadDiskEx".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let disk_ptr = 0x1000_6000;
+        let write_info = 0x1000_b000;
+        let write_buffers = 0x1000_b100;
+        let write_results = 0x1000_b200;
+        let write_a = 0x1000_c000;
+        let write_b = 0x1000_d000;
+        let read_info = 0x1000_e000;
+        let read_buffers = 0x1000_e100;
+        let read_results = 0x1000_e200;
+        let read_a = 0x1000_f000;
+        let read_b = 0x1001_0000;
+
+        let mut sector_bytes = vec![0; 1024];
+        let marker = b"ex-scatter-writeback";
+        sector_bytes[..marker.len()].copy_from_slice(marker);
+        for (index, byte) in sector_bytes.iter_mut().enumerate().skip(marker.len()) {
+            *byte = (index as u8).wrapping_mul(37).wrapping_add(11);
+        }
+        memory.map_bytes(write_a, &sector_bytes[..300]);
+        memory.map_bytes(write_b, &sector_bytes[300..]);
+        memory.map_bytes(read_a, &vec![0xa5; 512]);
+        memory.map_bytes(read_b, &vec![0x5a; 512]);
+        for ptr in [write_results, read_results] {
+            memory.map_word(ptr, 0xfeed_cafe);
+            memory.map_word(ptr + 4, 0xfeed_cafe);
+        }
+
+        for (info, buffers) in [(write_info, write_buffers), (read_info, read_buffers)] {
+            memory.map_word(info, 0);
+            memory.map_word(info + 4, disk_ptr);
+            memory.map_word(info + 8, 21);
+            memory.map_word(info + 12, 2);
+            memory.map_word(info + 16, 0);
+            memory.map_word(info + 20, 2);
+            memory.map_word(info + 24, buffers);
+            memory.map_word(info + 28, 0);
+        }
+        memory.map_word(write_buffers, write_a);
+        memory.map_word(write_buffers + 4, 300);
+        memory.map_word(write_buffers + 8, write_b);
+        memory.map_word(write_buffers + 12, 724);
+        memory.map_word(read_buffers, read_a);
+        memory.map_word(read_buffers + 4, 512);
+        memory.map_word(read_buffers + 8, read_b);
+        memory.map_word(read_buffers + 12, 512);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [write_info, write_results],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(write_results), 0);
+        assert_eq!(memory.word(write_results + 4), 2);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [read_info, read_results],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(read_results), 0);
+        assert_eq!(memory.word(read_results + 4), 2);
+
+        let mut read_back = vec![0; 1024];
+        memory.read_bytes(read_a, &mut read_back[..512]).unwrap();
+        memory.read_bytes(read_b, &mut read_back[512..]).unwrap();
+        assert_eq!(read_back, sector_bytes);
+    }
+
+    #[test]
+    fn fsdmgr_notification_import_first_change_preserves_owner() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_FindFirstChangeNotificationW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_FindNextChangeNotification".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Ordinal(73),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let path = 0x1000_0000;
+        memory.map_wide_z(path, "\\");
+
+        kernel.set_current_process_id(77);
+        let handle = table
+            .dispatch_trap(&mut kernel, &mut memory, 11, IMPORT_TRAP_BASE, [path, 1, 1])
+            .expect("FSDMGR first-change import should dispatch");
+        assert_ne!(handle, u32::MAX);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        kernel.set_current_process_id(88);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [handle],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_ACCESS_DENIED
+        );
+
+        kernel.set_current_process_id(77);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [handle],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+    }
+
+    #[test]
+    fn fsdmgr_internal_notification_imports_use_internal_owner() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSINT_FindFirstChangeNotificationW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_FindNextChangeNotification".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSINT_FindNextChangeNotification".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_GetFileNotificationInfoW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2010,
+                    iat_rva: 0x3010,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSINT_GetFileNotificationInfoW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2014,
+                    iat_rva: 0x3014,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSINT_FindCloseChangeNotification".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let path = 0x1000_0000;
+        let returned_ptr = 0x1000_0100;
+        let available_ptr = 0x1000_0104;
+        memory.map_wide_z(path, "\\");
+        memory.map_word(returned_ptr, 0xfeed_cafe);
+        memory.map_word(available_ptr, 0xabcd_1234);
+
+        kernel.set_current_process_id(77);
+        let handle = table
+            .dispatch_trap(&mut kernel, &mut memory, 11, IMPORT_TRAP_BASE, [path, 1, 1])
+            .expect("FSINT first-change import should dispatch");
+        assert_ne!(handle, u32::MAX);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [handle],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_ACCESS_DENIED
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [handle],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+                [handle, 0, 0, 0, returned_ptr, available_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_ACCESS_DENIED
+        );
+        assert_eq!(memory.word(returned_ptr), 0xfeed_cafe);
+        assert_eq!(memory.word(available_ptr), 0xabcd_1234);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 4,
+                [handle, 0, 0, 0, returned_ptr, available_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::registry::ERROR_NO_MORE_ITEMS
+        );
+        assert_eq!(memory.word(returned_ptr), 0);
+        assert_eq!(memory.word(available_ptr), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 5,
+                [handle],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+    }
+
+    #[test]
+    fn fsdmgr_internal_close_rejects_wrong_handle_without_consuming_it() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSINT_FindCloseChangeNotification".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_FindCloseChangeNotification".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let internal_wrong = kernel.create_event_w(None, true, false);
+        let external_wrong = kernel.create_event_w(None, true, false);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [internal_wrong],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_INVALID_HANDLE
+        );
+        assert!(
+            kernel.close_handle(internal_wrong).is_ok(),
+            "FSINT close must not consume a non-notification handle"
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [external_wrong],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_INVALID_HANDLE
+        );
+        assert!(
+            matches!(
+                kernel.close_handle(external_wrong),
+                Err(Error::InvalidHandle(_))
+            ),
+            "FSEXT close should consume a valid but wrong caller handle"
         );
     }
 

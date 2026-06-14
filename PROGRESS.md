@@ -7,14 +7,136 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - Runtime loader work has reached dynamic Unicorn DLL mapping with dependency loading, dependency-ref release on unload, current-image cleanup on failed maps, transactional current-image resource/trap/trampoline commit ordering, import patching, forwarders, malformed-forwarder rejection, failed-load and failed-attach rollback for load-attempt refs, trampoline tracking, datafile/no-resolve flags, datafile export suppression, CE-style process/thread lifecycle calls, process-detach refcount draining, and CE `DisableThreadLibraryCalls` filtering.
 - Shell icon work now includes `ExtractIconExW`, real PE resource icon extraction, PE group-icon count reporting for `nIconIndex == -1`, raw `KernExtractIcons` integer group-resource extraction, shell fallback icons, `CreateIconIndirect`, `DrawIconEx`, image lists, CE-valid image-list creation/copy flag validation, CE-style image-list bitmap copy/lifetime handling, bitmap-backed image-list drawing, `xBitmap` offsets, `rgbBk` fill handling, CE color-image vs mask-only `rgbFg == CLR_NONE` blend behavior, and exact CE `IMAGELISTDRAWPARAMS` size plus normalized-field write-back validation.
 - `Shell_NotifyIcon` now tracks add/modify/delete state, rejects duplicate `(hwnd,uID)` adds, honors member `NIF_*` flags on add, requires the fixed CE `NOTIFYICONDATAW` footprint and readable 64-WCHAR `szTip` buffer, keeps the existing icon on `NIM_MODIFY | NIF_ICON` with null `hIcon` per the CE taskbar path, posts callback messages, records destroy-icon cleanup, tracks registered taskbar HWND state, posts CE `WM_HANDLESHELLNOTIFYICON` taskbar messages with copied `NOTIFYICONDATAW` payloads, releases those copied payloads after dispatch, and treats stale registered taskbar windows as a non-posting shell-state update success.
-- `SHNotificationUpdateI` now covers CE update-mask behavior for null icon preservation, non-null icon replacement cleanup, stale incoming `hwndSink` values while keeping the original registered sink, and inform/iconic priority-list movement; iconic notification expiration, explicit remove, and sink cleanup now record copied icon destruction like the CE taskbar cleanup paths, notification remove and sink cleanup now purge pending callback records for removed notifications, and `SHNotificationGetDataI` accepts the CE fixed-title-buffer path when `cbTitle == 0`.
-- File-change notifications now canonicalize public watch paths, preserve caller notification filter bits while CE-style known-bit matching decides whether changes signal, honor root and non-root `WatchSubtree` boundaries, map same-parent vs cross-parent move notifications through CE `NotifyMoveFileEx` action semantics, coalesce exact duplicates, transient create/delete pairs, and modified/delete sequences, track CE-style outstanding notification signals across `FindNextChangeNotification`, and gate detailed notification records by the CE `FILE_NOTIFY_CHANGE_CEGETINFO` flag while signal-only watches still wake normally. `CeGetFileNotificationInfo` record sizing now follows CE `NotifyReset`, including the copied trailing NUL WCHAR and DWORD padding while preserving non-NUL `FileNameLength`, and its no-pending path now preserves CE's guarded output-pointer write order while returning `ERROR_NO_MORE_ITEMS`. Mounted file operations now enforce CE volume boundaries and read-only root access checks for mutating calls, with access-denied read-only mutations leaving watchers unsignaled. Mounted change notifications now retain the resolved owning mount root, so non-root watches are scoped to their CE-style volume while recursive root watches still report mounted-volume-prefixed child paths. Raw `DuplicateHandle` now creates independent local handles for notification/file/find objects and supports the CE `DUPLICATE_CLOSE_SOURCE` ownership-transfer shape used by notification close paths. Public file-change notification handles now track their creating process and reject foreign-process wait/reset/info/duplicate/close attempts, and direct `AFS_FindFirstChangeNotificationW` now honors its nonzero `hProc` owner.
+- `SHNotificationUpdateI` now covers CE update-mask behavior for null icon preservation, non-null icon replacement cleanup, stale incoming `hwndSink` values while keeping the original registered sink, inform/iconic priority-list movement, and overlong taskbar-title clearing through the CE `CCHMAXTBLABEL` storage rule; iconic notification expiration, explicit remove, and sink cleanup now record copied icon destruction like the CE taskbar cleanup paths, notification remove and sink cleanup now purge pending callback records for removed notifications, and `SHNotificationGetDataI` accepts the CE fixed-title-buffer path when `cbTitle == 0`.
+- File-change notifications now canonicalize public watch paths, preserve caller notification filter bits while CE-style known-bit matching decides whether changes signal, honor root and non-root `WatchSubtree` boundaries, map same-parent vs cross-parent move notifications through CE `NotifyMoveFileEx` action semantics, coalesce exact duplicates, transient create/delete pairs, and modified/delete sequences, track CE-style outstanding notification signals across `FindNextChangeNotification`, and gate detailed notification records by the CE `FILE_NOTIFY_CHANGE_CEGETINFO` flag while signal-only watches still wake normally. `CeGetFileNotificationInfo` record sizing now follows CE `NotifyReset`, including the copied trailing NUL WCHAR and DWORD padding while preserving non-NUL `FileNameLength`, and its no-pending path now preserves CE's guarded output-pointer write order while returning `ERROR_NO_MORE_ITEMS`. Mounted file operations now enforce CE volume boundaries and read-only root access checks for mutating calls, with access-denied read-only mutations leaving watchers unsignaled. Mounted change notifications now retain the resolved owning mount root, so non-root watches are scoped to their CE-style volume while recursive root watchers still report mounted-volume-prefixed child paths. Raw `DuplicateHandle` now creates independent local handles for notification/file/find objects and supports the CE `DUPLICATE_CLOSE_SOURCE` ownership-transfer shape used by notification close paths. Public file-change notification handles now track their creating process and reject foreign-process wait/reset/info/duplicate/close attempts, direct `AFS_FindFirstChangeNotificationW` now honors its nonzero `hProc` owner, and raw AFS volume handles now enforce owner-checked unmount/close plus `FSCTL_GET_VOLUME_INFO` metadata while signaling mounted-root removal.
 - GWE message work includes cross-thread send setup, timeout marking, CE-public `SMTO_NORMAL` timeout-send completion, destroyed-window completion, and zero-result writes for destroyed `SendMessageTimeout` targets.
 - Winsock has CE-facing dispatch for core socket operations with isolated NAT addressing, `select` fd-set validation, readiness checks, and scheduler wake candidate integration.
 - Core CE subsystems remain broad and test-backed: handles, waits, events, TLS, critical sections, registry, files, memory, GDI resources, DIBs, windows, menus, clipboard, and scheduler selection.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/devices.rs` and `serial_devices.json`: remote GPS serial routing is
+  now config-selectable with an optional `remote_gps` device flag. The live
+  `drive29` iNavi run starts with `gps_target=COM7:`, and when the guest opens
+  `COM7:` the queued NMEA bytes drain from 2784 to 0 and the handle is marked
+  `remote-gps-target`; `MFS1:` and `SMB1:` also open and receive dump-derived
+  IOCTL traffic. This replaces the previous static preference for the first
+  Win32-backed serial device, which incorrectly targeted `COM1:` for this live
+  path even though the guest was using `COM7:`.
+- Validation for the remote GPS target update: `cargo fmt`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo build --release --features unicorn,trace,win32-desktop`, and
+  `cargo test remote_gps_target --features unicorn,trace,win32-desktop` passed
+  with existing warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: synthetic IME HKLs now
+  report TESTIME resource-backed identity strings through raw
+  `ImmGetIMEFileNameW` (`TESTIME.IME`) and `ImmGetDescriptionW`
+  (`TESTIME 4.0`), while non-IME HKLs still return empty strings.
+- `CARGO_INCREMENTAL=0 cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  and `CARGO_INCREMENTAL=0 cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed after the IMM identity-string update.
+- `cargo fmt --check` and
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features unicorn,trace,win32-desktop`
+  passed after the IMM identity-string update; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`: CE
+  IMM status-window position now lives in HIMC state and round-trips through
+  raw `ImmGet/SetStatusWindowPos`, including active `HIMC == NULL` resolution.
+  `ImmNotifyIME(NI_CONTEXTUPDATED, ..., IMC_SETSTATUSWINDOWPOS)`,
+  `IMC_OPENSTATUSWINDOW`, and `IMC_CLOSESTATUSWINDOW` now post the matching
+  `WM_IME_NOTIFY` status-window messages from `imm.h`/TESTIME.
+- `CARGO_INCREMENTAL=0 cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  and `CARGO_INCREMENTAL=0 cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed after the IMM status-window update.
+- `cargo fmt --check` and
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features unicorn,trace,win32-desktop`
+  passed after the IMM status-window update; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `ImmGetProperty`
+  now returns CE `imm.h` and TESTIME `ImeInquire`-backed capability values for
+  synthetic IME HKLs, including `IMEVER_0400`, Unicode/caret/KBD-first
+  properties, conversion caps, `UI_CAP_2700`, `SELECT_CAP_CONVERSION`, zero
+  set-composition-string/sentence caps, and `sizeof(DWORD)` private-data size;
+  non-IME HKLs still return zero.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  and `CARGO_INCREMENTAL=0 cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed after the `ImmGetProperty` update.
+- `cargo fmt --check` and
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features unicorn,trace,win32-desktop`
+  passed after the `ImmGetProperty` update; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`: CE
+  IMM placement forms now round-trip through stored HIMC state. Raw
+  `ImmGet/SetCompositionWindow` marshal the CE `COMPOSITIONFORM` layout, raw
+  `ImmGet/SetCandidateWindow` marshal the CE `CANDIDATEFORM` layout with
+  candidate-index validation, and the active `HIMC == NULL` path resolves
+  through the current foreground/focused keyboard target where CE samples use
+  the active context.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `ImmNotifyIME` now
+  maps CE candidate notification actions to posted `WM_IME_NOTIFY` messages.
+  `NI_OPENCANDIDATE`, `NI_SELECTCANDIDATESTR`, and `NI_CLOSECANDIDATE` are
+  covered with CE candidate-list bit-mask `lParam` values, `HIMC == NULL`
+  resolves through the active keyboard target, and out-of-range candidate-list
+  indexes fail with `ERROR_INVALID_PARAMETER`.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed after the IMM notification update.
+- `cargo fmt --check`, `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features unicorn,trace,win32-desktop`,
+  and `git diff --check` passed after the IMM composition/candidate window
+  update; the eVC4 MIPSII fixture remains ignored because the toolchain is not
+  configured, and `git diff --check` output was limited to existing LF-to-CRLF
+  normalization warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: CE input-method sample
+  parity now resolves `ImmGetOpenStatus(NULL)`, `ImmSetOpenStatus(NULL, ...)`,
+  `ImmGetConversionStatus(NULL, ...)`, and `ImmSetConversionStatus(NULL, ...)`
+  through the current foreground/focused keyboard target's HIMC, while nonzero
+  invalid HIMC values still fail as invalid handles.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: the same active-HIMC
+  resolver now covers CE sample composition probes, including
+  `ImmGetCompositionStringW(NULL, GCS_COMPSTR, NULL, 0)`, buffer copies through
+  `HIMC == NULL`, and `ImmSetCompositionStringW(NULL, SCS_SETSTR, ...)`.
+- `cargo test coredll_raw_translate_message_hangul_ime_composes_syllables -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  and `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed for the NULL-HIMC composition-string update.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  NULL-HIMC composition-string update; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful -j 1 --features unicorn,trace,win32-desktop`
+  passed for the NULL-HIMC open/conversion status update.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  NULL-HIMC status update; the eVC4 MIPSII fixture remains ignored because the
+  toolchain is not configured.
+- `tests/coredll_raw_gwe.rs`: added `MsgWaitForMultipleObjectsEx` coverage for
+  two valid unsignaled handles plus queued thread input, proving CE-style
+  message wake results return at `WAIT_OBJECT_0 + nCount` and leave the
+  message retrievable.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_msgwait_returns_message_index_after_all_unsignaled_handles`
+  passed for the mixed MsgWait handle/input coverage update.
+- `tests/coredll_raw_gwe.rs`: added `SendMessageTimeout` coverage for the
+  cross-thread `SMTO_BLOCK | SMTO_ABORTIFHUNG` case after the receiver crosses
+  the CE hung threshold, proving it aborts without queueing or writing
+  `lpdwResult`.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_send_message_timeout_block_abortifhung_aborts_when_thread_is_hung`
+  passed for the combined abort-if-hung coverage update.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed after adding the combined abort-if-hung coverage update.
+- `cargo check --features unicorn,trace,win32-desktop` and `cargo test -j 1 --features unicorn,trace,win32-desktop`
+  passed after reconciling the current full-feature validation state; the eVC4
+  MIPSII fixture remains ignored because the toolchain is not configured.
+- `git diff --check` passed with only existing LF-to-CRLF working-copy
+  warnings.
+- `tests/coredll_raw_gwe.rs`: added raw `AlphaBlend` selected-memory-DIB
+  clipping coverage for a negative destination origin, proving the visible
+  destination pixel maps to the clipped source pixel instead of restarting at
+  source zero.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_alpha_blend_clips_negative_destination_between_selected_dibs`
+  passed for the alpha selected-DIB clipping coverage update.
 - `tests/coredll_raw_gwe.rs`: added raw `AlphaBlend` framebuffer clipping
   coverage for a negative destination origin, proving the visible pixel maps to
   the correct clipped source pixel and only the clipped framebuffer rectangle is
@@ -117,9 +239,10 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `GetCallbackInterface` acquisition path when a notification carries only a
   CLSID. The shell stores the CE
   `IID_IShellNotificationCallback` GUID from `shellsdkguids.h`, asks the local
-  COM registry for that interface by GUID value, and records the acquired local
-  interface token as `callback_ptr` while preserving the previous null fallback
-  for unregistered classes.
+  COM registry for that interface by GUID value, records the acquired local
+  interface token as `callback_ptr`, and now skips COM callback records for
+  unregistered classes so those events fall back to the sink-window path like
+  CE `CHtmlBubble::GetCallbackInterface`.
 - `tests/basic_subsystems.rs`: direct COM coverage now includes value-only
   CLSID/IID object creation metadata, and shell notification coverage asserts a
   registered notification CLSID queues the acquired
@@ -202,6 +325,35 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   and restores the callback record to the front of the queue for a later retry,
   matching CE's "try COM, then keep sink notification independent" shape without
   silently dropping bubble callbacks.
+- `src/ce/kernel.rs` and `tests/coredll_raw_kernel.rs`: shell notification COM
+  callbacks now require either a stored non-null interface pointer or a
+  successful local `CoCreateInstance(... IID_IShellNotificationCallback ...)`
+  acquisition. Unregistered notification CLSIDs no longer queue zero-pointer
+  COM callback records; link/dismiss/command events still notify a live sink
+  window when present, matching CE taskbar `CHtmlBubble::GetCallbackInterface`.
+- `cargo test shnotification_i_ --test coredll_raw_kernel --features unicorn,trace,win32-desktop -j 1 -- --nocapture`
+  passed after the unregistered callback-CLSID fallback regression.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the unregistered callback-CLSID sink-window
+  fallback slice; `git diff --check` output was limited to existing CRLF
+  normalization warnings and the eVC4 MIPSII fixture test remains ignored
+  because the toolchain is not configured.
+- `src/ce/shell.rs` and `tests/coredll_raw_kernel.rs`: shell notification
+  title storage now mirrors CE `StringCbCopy` into `CCHMAXTBLABEL`/`MAX_PATH`:
+  add/update titles with 260 or more UTF-16 code units clear the stored
+  taskbar label instead of retaining an overlong string.
+- `cargo fmt --check`,
+  `cargo test shnotification_i_clears_overlong_taskbar_titles_like_ce --test coredll_raw_kernel --features unicorn,trace,win32-desktop -j 1 -- --nocapture`,
+  and `cargo test --test coredll_raw_kernel --features unicorn,trace,win32-desktop -j 1`
+  passed after the CE taskbar title-overflow regression.
+- `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` also passed after the taskbar title-overflow slice;
+  `git diff --check` output was limited to existing CRLF normalization
+  warnings and the eVC4 MIPSII fixture test remains ignored because the
+  toolchain is not configured.
 - `cargo fmt --check`,
   `cargo test -j 1 --features unicorn,trace,win32-desktop shell_notification_com_dispatch_restores_unmapped_callback_pointer`,
   `cargo check --features unicorn,trace,win32-desktop`, and
@@ -538,7 +690,7 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `src/emulator/imports.rs`: import-table tests now verify malformed forwarded-export strings fail closed, including whitespace-padded module/symbol halves and missing ordinal digits.
 - `tests/coredll_raw_memory_file.rs`: `FindCloseChangeNotification` coverage now verifies a wrong-type file handle fails with `ERROR_INVALID_HANDLE` and is no longer closeable afterward, preserving the CE caller-handle ownership side effect.
 - `tests/coredll_raw_memory_file.rs`: `DuplicateHandle` coverage now verifies `DUPLICATE_CLOSE_SOURCE` invalidates the source change-notification handle while preserving an independent duplicate that still receives and drains detailed file-change records.
-- `tests/coredll_raw_memory_file.rs`: process-owned notification coverage now verifies a different current process cannot wait on, reset, query, duplicate, or close a file-change notification handle created by another process, and that the owner can still close it afterward.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_memory_file.rs`: process-owned notification coverage now verifies a different current process cannot wait on, reset, query, duplicate, directly `CloseHandle`, or find-close a file-change notification handle created by another process, and that the failed direct close leaves the handle available for the owner to close afterward.
 - `tests/coredll_raw_memory_file.rs`: direct `AFS_FindFirstChangeNotificationW` coverage now verifies a nonzero `hProc` creates a notification handle owned by that target process rather than by the raw ordinal caller.
 - `tests/coredll_raw_memory_file.rs`: `CeGetFileNotificationInfo` coverage now verifies a two-character filename record requires CE's 20-byte NUL-padded record size instead of the old 16-byte non-NUL-only size, and confirms the copied NUL/padding bytes while preserving `FileNameLength`.
 - `tests/coredll_raw_memory_file.rs`: `CeGetFileNotificationInfo` coverage now verifies the no-pending CE output-pointer fault order: a bad `lpBytesReturned` leaves `lpBytesAvailable` untouched, while a bad `lpBytesAvailable` still leaves `lpBytesReturned` zeroed and returns `ERROR_NO_MORE_ITEMS`.
@@ -548,6 +700,8 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `tests/coredll_raw_kernel.rs`: `SHNotificationAddI` title/HTML coverage now verifies the CE pointer-presence rule for `SHNP_INFORM`: title-only with null HTML fails, while non-null empty HTML succeeds and receives the default inform duration.
 - `tests/coredll_raw_kernel.rs`: `SHNotificationUpdateI` coverage now asserts `SHNUM_PRIORITY` moves a notification from the inform list to the iconic list and `SHNotificationRemoveI` clears the priority-list entry.
 - `src/ce/coredll.rs`: raw `ImageList_Add`, `ImageList_AddMasked`, and `ImageList_Replace` now snapshot real source and mask bitmap pixels into owned bitmap storage like CE `imagelist.cpp` image/mask DCs, while preserving metadata-only pseudo handles.
+- `src/ce/resource.rs` and `tests/coredll_raw_kernel.rs`: `ImageList_SetIconSize` now follows CE `imagelist.cpp` by accepting changed zero/negative dimensions, storing them, and clearing images/overlays while still failing unchanged no-op size requests.
+- `src/ce/resource.rs`, `src/ce/coredll.rs`, `tests/basic_subsystems.rs`, and `tests/coredll_raw_kernel.rs`: `ImageList_SetOverlayImage` now follows CE `imagelist.cpp` by treating the same overlay slot/image pair as a successful no-op that preserves the previously computed overlay bounds.
 - `tests/coredll_raw_kernel.rs`: image-list lifetime coverage now verifies deleting the caller-owned source bitmap after `ImageList_Add` does not invalidate later bitmap-backed image-list draws.
 - `tests/coredll_raw_kernel.rs`: `ImageList_Duplicate` coverage now verifies bitmap-backed image and mask entries receive distinct duplicated handles and backing memory, matching CE `CopyDIBBitmap`/`CopyBitmap` ownership instead of aliasing the source list.
 - `tests/coredll_raw_gwe.rs`: destroyed-target `SendMessageTimeout` result write coverage is present.
@@ -1068,6 +1222,19 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 ## Next Checkpoint
 
 The next useful checkpoint is targeted validation after expanding shell icon/image-list edge coverage or completing the next `SendMessageTimeout` semantics slice.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_msgwait_returns_message_index_after_all_unsignaled_handles`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff --check` passed after adding CE `MsgWaitForMultipleObjectsEx` message-wake return-index coverage after multiple unsignaled handles; `git diff --check` output was limited to existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_notification_import`, `cargo check --features unicorn,trace,win32-desktop`, and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding `fsdmgr.dll` notification import trapping for CE `FSINT_*`/`FSEXT_*` names and ordinals 68-75; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_change_notification_handles_are_process_owned`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff --check` passed after making raw `CloseHandle` reject foreign-owned public file-change notification handles with `ERROR_ACCESS_DENIED` without consuming the handle; `git diff --check` output was limited to existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test basic_subsystems resource_system_image_list_create_add_count_info_bk_color_and_destroy`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff --check` passed after aligning `ImageList_SetIconSize` changed zero/negative dimensions with CE `imagelist.cpp`; `git diff --check` output was limited to existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test basic_subsystems resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_drag`, `cargo check --features unicorn,trace,win32-desktop`, and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after aligning same-slot `ImageList_SetOverlayImage` bounds preservation with CE `imagelist.cpp`; the Cargo runs required unsandboxed execution after sandboxed CMake/Ninja probing for `unicorn-engine-sys` failed with `operation not permitted`, and the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test basic_subsystems resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_drag`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff --check` passed after aligning hidden-after-`ImageList_BeginDrag` visibility and pre-`DragEnter` `DragMove` point preservation with CE `imagelist.cpp`; the first sandboxed Cargo probe hit the known `unicorn-engine-sys` CMake/Ninja `operation not permitted` restriction, so the feature Cargo runs were rerun unsandboxed, `git diff --check` output was limited to existing CRLF normalization warnings, and the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- Raw `ImageList_AddMasked(CLR_DEFAULT)` now follows CE `imagelist.cpp::AddMasked` by sampling the source bitmap's upper-left pixel before storing the transparent color; the raw image-list regression confirms a magenta/green bitmap masks the magenta pixel and still draws the green pixel.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff --check` passed after aligning raw `ImageList_AddMasked(CLR_DEFAULT)` with CE upper-left color sampling; `git diff --check` output was limited to existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- Raw `ImageList_LoadImage(CLR_DEFAULT)` now follows CE `LoadImageW_I` by routing the mask through the same `ImageList::AddMasked` upper-left color sampling as direct `ImageList_AddMasked`; the raw image-list regression confirms the loaded magenta/green bitmap masks the sampled magenta pixel and still draws the green pixel.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff --check` passed after aligning raw `ImageList_LoadImage(CLR_DEFAULT)` with CE upper-left color sampling; `git diff --check` output was limited to existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- Raw bitmap-backed `ImageList_AddMasked` and masked `ImageList_LoadImage` now create CE-style owned mono mask bitmaps, mark mask-color pixels white, punch those source pixels to black, and keep bitmap rendering mask-driven even when transparent color metadata is also present; the raw regression now verifies real 1bpp mask handles and post-`SetBkColor` transparent drawing.
+- `cargo fmt --check` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after aligning bitmap-backed `ImageList_AddMasked` mono-mask creation/rendering with CE `imagelist.cpp`.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff --check` passed after the CE mono-mask AddMasked slice; `git diff --check` output was limited to existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
 - Raw `AlphaBlend` now matches CE `AlphaBlendGoodRectTest`/`AlphaBlendBadRectTest`
   rectangle handling for selected-DIB sources: zero source or destination
   dimensions succeed without painting, while negative dimensions and
@@ -1160,3 +1327,1294 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   the source of truth. The next checkpoint is a fresh driven startup run to
   prove the parked sender resumes past the prior `0x008cc9b0` stop and to find
   the next live blocker. No sensor IOCTLs are observed yet.
+- Fresh remote-driven runs now dismiss the real Happyway modal, remove the live
+  modal waiter, and keep taps routed to the visible iNavi window. The scheduler
+  no longer rotates on stale blocked-wait snapshots owned by another process,
+  and live-pump rotation ignores dead/stale modal `GetMessage` snapshots. After
+  a post-dialog tap, iNavi advances into resource/map loading (`SetFilePointer`
+  on Coredll ordinal 173 at `iNavi.exe+0x642f8`, handle `0x440`) and opens
+  `mapdata`, `iNaviData`, font, and resource files. The app still stays on the
+  animated splash during this run, and device traffic remains limited to
+  `UID1:` NAND UUID IOCTLs; GPS/IMU/light/I2C/SMB traffic has not been reached.
+- `drive50` validation after the visible-work scheduler handoff patch:
+  Happyway `OK` dismisses through the real dialog button, live waits clear,
+  active state returns to iNavi (`pid=1`) after dismissal and after main-surface
+  taps, and remote touches are recorded against iNavi's visible `0x00020008`
+  window. The splash continues to animate and resource reads continue, but the
+  UI still does not transition to the map. Sensor REST injection succeeds, yet
+  the guest still only opens/issues IOCTLs to `UID1:`.
+- `tests/coredll_raw_memory_file.rs`: direct `AFS_FindFirstChangeNotificationW`
+  hProc owner coverage now verifies a foreign raw ordinal caller cannot
+  directly `CloseHandle` or `DuplicateHandle` the target-process-owned
+  notification, reports `ERROR_ACCESS_DENIED`, preserves the live owner handle,
+  and leaves the duplicate output pointer unchanged.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  extending direct AFS `hProc` notification-owner coverage; the eVC4 MIPSII
+  fixture test remains ignored because the toolchain is not configured.
+- `src/emulator/imports.rs`: FSDMGR notification import coverage now exercises
+  `FSEXT_FindFirstChangeNotificationW` creation, validates the created handle
+  remains owner-scoped when reset through the FSDMGR import from a foreign
+  process, and closes it through the paired FSDMGR close import as the owner.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::fsdmgr_notification_import_first_change_preserves_owner`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  adding the FSDMGR first-change import owner regression; the eVC4 MIPSII
+  fixture test remains ignored because the toolchain is not configured.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `src/emulator/imports.rs`:
+  FSDMGR `FSINT_FindCloseChangeNotification` now follows CE
+  `INT_NotifyCloseChangeHandle` by rejecting valid non-notification handles
+  without consuming them, while the public/`FSEXT` path keeps the existing
+  consume-then-error behavior for valid-but-wrong caller handles.
+- `cargo fmt`, `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::fsdmgr_internal_close_rejects_wrong_handle_without_consuming_it`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  splitting internal and external FSDMGR notification close behavior; the eVC4
+  MIPSII fixture test remains ignored because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_memory_file.rs`: pending
+  `CeGetFileNotificationInfo` no-fit buffers now follow CE `NotifyReset` by
+  writing `lpBytesAvailable` before `lpBytesReturned` and returning
+  `ERROR_INVALID_PARAMETER` when a bad non-null returned-count pointer faults
+  after the available byte count is stored.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_file_notification_info_partially_drains_pending_records`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after aligning pending
+  `CeGetFileNotificationInfo` no-fit output-count write order with CE
+  `NotifyReset`; `git diff --check` output was limited to existing CRLF
+  normalization warnings and the eVC4 MIPSII fixture test remains ignored
+  because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_memory_file.rs`: fitted
+  `CeGetFileNotificationInfo` records now follow CE `NotifyReset` by draining
+  records after a successful caller-buffer copy but before
+  `lpBytesAvailable`/`lpBytesReturned` writes, so a bad returned-count pointer
+  reports `ERROR_INVALID_PARAMETER` while the copied record is consumed.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_file_notification_info_count_fault_drains_copied_records`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after matching CE `NotifyReset` fitted-record
+  count-pointer fault drain behavior; `git diff --check` output was limited to
+  existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains
+  ignored because the toolchain is not configured.
+- `src/ce/coredll.rs`, `src/ce/kernel.rs`, and
+  `tests/coredll_raw_memory_file.rs`: fitted `CeGetFileNotificationInfo`
+  records now copy and drain one record at a time like CE `NotifyReset`, so a
+  later caller-buffer fault consumes the already copied prefix, leaves the
+  failed reset un-signaled, and lets a later direct info query retrieve the
+  remaining records.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_file_notification_info_partial_buffer_fault_drains_copied_prefix`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after matching CE `NotifyReset` partial
+  caller-buffer fault copied-prefix drain behavior; `git diff --check` output
+  was limited to existing CRLF normalization warnings and the eVC4 MIPSII
+  fixture test remains ignored because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_memory_file.rs`: no-pending
+  `CeGetFileNotificationInfo` now follows CE `NotifyReset` by treating
+  `lpBytesReturned` as the first mandatory guarded write, so a null returned
+  pointer leaves `lpBytesAvailable` untouched while the call still reports
+  `ERROR_NO_MORE_ITEMS`.
+- `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_file_notification_info_partially_drains_pending_records`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after matching CE `NotifyReset` no-pending
+  null-returned pointer ordering; `git diff --check` output was limited to
+  existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains
+  ignored because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_memory_file.rs`: all-zero
+  `CeGetFileNotificationInfo` calls now follow CE
+  `INT_NotifyGetNextChange`/`NotifyReset` by passing null reset data, returning
+  success, and consuming exactly one outstanding notification signal without
+  forcing a detail-buffer fetch.
+- `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_file_notification_info_all_zero_args_resets_one_pending_signal`
+  passed after matching the CE all-zero no-data reset branch for
+  `CeGetFileNotificationInfo`.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after matching the CE all-zero no-data reset branch
+  for `CeGetFileNotificationInfo`; `git diff --check` output was limited to
+  existing CRLF normalization warnings and the eVC4 MIPSII fixture test remains
+  ignored because the toolchain is not configured.
+- Remote iNavi drive update: the Happyway popup is a real guest
+  `happyway_win.exe` `MessageBoxW` (`Quit Happyway`, title `Button`), not a
+  synthetic iNavi UI element. The real OK button is at roughly `47,67-101,89`;
+  tapping `(74,78)` dismisses it.
+- `src/emulator/unicorn.rs`: parked modal `MessageBoxW` resume paths now pass
+  the live framebuffer into modal teardown, so the existing backing-store
+  restore removes the dialog pixels after remote-button dismissal.
+- `src/emulator/unicorn.rs`: persisted parked process state now filters out
+  entries whose process id matches the active kernel process, preventing the
+  active process from being queued as its own parked sibling.
+- `src/ce/kernel.rs`, `src/ce/object.rs`, and `src/main.rs`: added generic
+  device debug text to `/api/v1/debug/devices.txt`, including configured
+  device names, remote GPS/IMU queue state, and open device handles.
+- Dump-derived IOCTL verification: SMB380, YAS526B, light sensor, and the four
+  GIO I2C DLLs match the implemented command families; the suspected command
+  offset error was not supported by the DLL disassembly.
+- `drive64` is the current clean running process (`wince_emulation_v3.exe` PID
+  31812 at launch verification). It uses `registry.reg`, `mounts.toml`, the
+  iNavi image from `D:\INAVI_Emulator\INAVI\INavi\iNavi.exe`, and the DLL dump
+  from `D:\INAVI_Emulator\DUMPPLZ\Windows`.
+- Sensor REST injection succeeds and queues GPS NMEA/IMU state, but the guest
+  still has not opened `COM*`, `SMB1:`, `MFS1:`, or `LSD1:` during the observed
+  splash/resource-loading phase. Device traffic remains limited to `UID1:`
+  NAND UUID IOCTLs.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `AlphaBlend` now
+  accepts the CE GPE `BLT_ALPHASRCNEG`/`BLT_ALPHADESTNEG` blend-flag bits from
+  `winddi.h`; the source-negation path mirrors `swblt.cpp` by inverting both
+  source constant alpha and per-pixel source alpha before blending selected-DIB
+  and framebuffer destinations.
+- `cargo fmt --check` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe alpha_blend_honors_ce_source`
+  passed after adding CE `BLT_ALPHASRCNEG` AlphaBlend coverage.
+- `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  the CE `BLT_ALPHASRCNEG` AlphaBlend slice; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `GetTextExtentExPointW`, `DrawTextW`, and `ExtTextOutW` now apply CE
+  `SetTextCharacterExtra` advance math from `text.cpp`, including positive
+  widening, first-character-preserving negative spacing, and selected character
+  extra added to `ExtTextOutW` caller `lpDx` advances.
+- `cargo fmt --check` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_get_text_extent_ex_point_applies_text_character_extra`
+  passed after adding CE text-character-extra extent coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the CE text-character-extra slice; the eVC4
+  MIPSII fixture remains ignored because the toolchain is not configured, and
+  `git diff --check` output was limited to existing CRLF normalization
+  warnings.
+- `src/ce/resource.rs`, `src/ce/coredll.rs`,
+  `tests/coredll_raw_gwe.rs`, and `tests/basic_subsystems.rs`: raw
+  `DeleteObject` now fails without destroying a GDI object that remains
+  selected into any live DC, preserving selected custom-font metrics until the
+  caller selects a different font before deletion like the CE GDI text tests.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_text_metrics_use_selected_logfont`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test basic_subsystems resource_system_dc_palette_bk_mode_color_text_align_rop2_is_memory_and_delete_gdi`
+  passed after adding selected GDI object deletion coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop --test basic_subsystems`
+  passed after the selected GDI object deletion slice.
+- `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the selected GDI object deletion slice; the
+  eVC4 MIPSII fixture remains ignored because the toolchain is not configured,
+  and `git diff --check` output was limited to existing CRLF normalization
+  warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `GetCharABCWidthsI` now follows the CE `wingdi.h` signature by accepting
+  `giFirst`, `cgi`, optional WORD glyph indices, and the fifth-argument ABC
+  output buffer, instead of sharing the non-`I` `GetCharABCWidths` first/last
+  range parser.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_get_char_abc_widths_i_uses_glyph_count_signature`
+  passed after splitting the CE `GetCharABCWidthsI` ABI path.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after splitting the CE `GetCharABCWidthsI` ABI path;
+  `git diff --check` output was limited to existing CRLF normalization warnings
+  and the eVC4 MIPSII fixture test remains ignored because the toolchain is not
+  configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `ExtTextOutW` now
+  intersects glyph output and `OPAQUE` text-cell background fills with the
+  selected DC clip region, in addition to any `ETO_CLIPPED` rectangle, for
+  selected-DIB and framebuffer rendering paths.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_ext_text_out_honors_dc_clip_region_on_selected_dib`
+  passed after adding CE text DC clip-region coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed after the CE text DC clip-region slice.
+- `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the CE text DC clip-region slice; the eVC4
+  MIPSII fixture remains ignored because the toolchain is not configured, and
+  `git diff --check` output was limited to existing CRLF normalization
+  warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `AlphaBlend` now
+  threads CE GPE destination alpha through the selected-DIB and framebuffer
+  blend paths, applies `BLT_ALPHADESTNEG` before output-alpha blending for
+  32bpp selected-DIB and alpha-capable framebuffer destinations, and preserves
+  the resulting alpha byte instead of forcing opaque 32bpp output.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_alpha_blend_honors_ce_destination_alpha_negation_between_32bpp_dibs`
+  passed after adding CE `BLT_ALPHADESTNEG` destination-alpha coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE `BLT_ALPHADESTNEG` destination-alpha slice; the eVC4 MIPSII fixture
+  remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the CE `BLT_ALPHADESTNEG` destination-alpha
+  slice; output was limited to existing CRLF normalization warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `MaskBlt` now
+  normalizes negative destination extents like CE GPE `swblt.cpp` for masked
+  selected-DIB and framebuffer draws, mirrors output through the ordered
+  destination rectangle, and keeps source/mask sampling aligned with the
+  original positive source/mask direction.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_mask_blt_mirrors_negative_destination_width_between_selected_dibs`
+  passed after adding CE `MaskBlt` negative destination extent coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE `MaskBlt` negative destination extent slice; the eVC4 MIPSII fixture
+  remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the CE `MaskBlt` negative destination extent
+  slice; output was limited to existing CRLF normalization warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: the shared selected-DIB
+  and framebuffer bitmap draw helper now normalizes signed destination
+  rectangles and maps destination pixels back to source pixels with CE
+  bottom/right-plus-one mirroring semantics. Raw `BitBlt` now accepts negative
+  source-copy destination extents, and raw `MaskBlt`'s null-mask `SRCCOPY`
+  shortcut uses that path instead of failing through the old invalid-size
+  `BitBlt` guard.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe negative_destination_width_between_selected_dibs`
+  passed after adding CE `draw.cpp::NegativeSize` source-copy coverage for
+  direct `BitBlt`, masked `MaskBlt`, and null-mask `MaskBlt`.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE signed-destination source-copy blit slice; the eVC4 MIPSII fixture
+  remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the CE signed-destination source-copy blit
+  slice; output was limited to existing CRLF normalization warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `StretchBlt` now
+  uses the CE signed destination rectangle helper for selected-DIB and
+  framebuffer clipping, so CE `draw.cpp::NegativeSize(EStretchBlt)` and
+  `StretchBltFlipMirrorTest`-style signed destination/source extents reach the
+  shared mirrored source-coordinate mapping instead of clipping away negative
+  destination rectangles.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_stretchblt_mirrors_negative_extents_between_selected_dibs`
+  passed after adding CE `StretchBlt` signed-extent selected-DIB coverage.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE `StretchBlt` signed-extent slice; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `git diff --check` passed after the CE `StretchBlt` signed-extent slice;
+  output was limited to existing CRLF normalization warnings.
+- `src/emulator/unicorn.rs`: live-pump handoff now gives visible/priority
+  parked processes first chance before generic runnable-process rotation, so a
+  hidden runnable child cannot beat a visible iNavi UI process when both are
+  eligible after a run slice.
+- `cargo fmt`, `cargo test live_pump_handoff_prefers_visible_parked_process_before_generic_runnable --features unicorn,trace,win32-desktop`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo build --release --features unicorn,trace,win32-desktop` passed after
+  the live-pump handoff change; warnings were existing unused/dead-code warnings.
+- Added `WINCE_EMU_FAST_START_LIVE` as an explicit override that allows
+  `WINCE_EMU_FAST_START=1` to remain active for live-pump runs. In the current
+  iNavi run, non-fast-start bounded CPU execution exits through the CE current
+  process pseudo-handle (`0x42`) with exit code `3` from `mfcce400.dll+0xd674`,
+  while fast-start mode keeps the process executing past that point.
+- Launch diagnostics on `drive78` through `drive93` found a separate remote
+  driving blocker: detached/hosted live launches can print
+  `remote server: http://192.168.0.39:8765` and keep `wince_emulation_v3.exe`
+  alive for several seconds, but no TCP listener appears on port `8765`
+  (`Get-NetTCPConnection` and HTTP both show no listener/refused). Stable UI
+  driving is blocked until the remote accept thread/lifetime issue is fixed.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw direct-DIB
+  rendering now parses caller `BITMAPINFO` once and can render
+  `StretchDIBits`/`SetDIBitsToDevice` into selected memory DIB destinations
+  through the shared bitmap draw path, including CE-style `StretchDIBits`
+  bad-HDC and ROP4-shaped ROP rejection before success. `SetDIBitsToDevice`
+  now converts bottom-up DIB source scanline arguments into the renderer's
+  normalized top-left coordinate space, matching CE
+  `draw.cpp::SimpleSetDIBitsToDeviceTest`.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe dibits`
+  passed after adding the selected-memory-DIB direct-DIB coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 276 raw GWE tests after the direct-DIB selected-memory-DIB slice.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  direct-DIB selected-memory-DIB slice; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `git diff --check` passed after the direct-DIB selected-memory-DIB slice;
+  output was limited to existing CRLF normalization warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw direct-DIB source
+  parsing now receives the caller's color-usage value, so
+  `StretchDIBits`/`SetDIBitsToDevice` accept `DIB_PAL_COLORS` for direct
+  indexed DIB sources and resolve WORD palette-index tables through the shared
+  indexed bitmap renderer for selected-memory-DIB destinations.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe direct_dib`,
+  and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 277 raw GWE tests after the direct-DIB `DIB_PAL_COLORS` slice.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  direct-DIB `DIB_PAL_COLORS` slice; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: indexed bitmap helpers
+  now decode, read, and write 2 bpp packed pixels, so CE GDIPRINT-style direct
+  `StretchDIBits`/`SetDIBitsToDevice` caller DIBs with 2 bpp
+  `DIB_RGB_COLORS` color tables render through the shared selected-DIB path.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_direct_2bpp_dib_uses_bitmapinfo_color_table`
+  passed after the direct-DIB 2 bpp indexed source slice.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 278 raw GWE tests after the direct-DIB 2 bpp indexed source
+  slice.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  direct-DIB 2 bpp indexed source slice; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `src/ce/coredll.rs`, `src/ce/resource.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw `CreateDIBPatternBrushPt` now validates CE null/unsupported color-use
+  inputs, copies packed guest DIB data into private owned bitmap backing, uses
+  that backing for pattern-brush tiling, and releases the private bitmap when
+  the brush is deleted.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_create_dib_pattern_brush_pt_uses_packed_dib`,
+  and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 279 raw GWE tests after the packed-DIB pattern-brush slice.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  packed-DIB pattern-brush slice; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, and
+  `SOURCE_REFERENCES.md`: the raw stock/fallback `Tahoma` `TEXTMETRICW` path
+  now uses the CE GDIAPI `fontdata.h` Tahoma `tmPitchAndFamily == 39` and
+  `tmCharSet == 0` bytes, with regression coverage before a custom font is
+  selected into the DC.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_text_metrics_use_selected_logfont`
+  passed after adding the CE default Tahoma `TEXTMETRICW` metadata slice.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 280 raw GWE tests after the CE default Tahoma `TEXTMETRICW`
+  metadata slice.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE default Tahoma `TEXTMETRICW` metadata slice; the eVC4 MIPSII fixture
+  remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the CE default Tahoma `TEXTMETRICW` metadata
+  slice; output was limited to existing LF-to-CRLF normalization warnings.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, and
+  `SOURCE_REFERENCES.md`: plain 20px selected `Tahoma` fonts now use the CE
+  GDIAPI `fontdata.h` `NTFontMetrics` row for the comparable `TEXTMETRICW`
+  fields, while arbitrary custom fonts keep the existing deterministic metrics
+  model.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_text_metrics_use`
+  passed after adding the CE plain 20px Tahoma metrics profile.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 281 raw GWE tests after the CE plain 20px Tahoma metrics profile.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the CE
+  plain 20px Tahoma metrics profile; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `git diff --check` passed after the CE plain 20px Tahoma metrics profile;
+  output was limited to existing LF-to-CRLF normalization warnings.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, and
+  `SOURCE_REFERENCES.md`: the CE 20px known-font metrics profile now covers
+  the full `fontdata.h` `NTFontMetrics` row set for Tahoma, Courier New,
+  Symbol, Times New Roman, Wingdings, and Verdana instead of only Tahoma.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_text_metrics_use_ce_known_font_profiles`
+  passed after extending the CE 20px known-font metrics profile.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 282 raw GWE tests after extending the CE 20px known-font metrics
+  profile.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  extending the CE 20px known-font metrics profile; the eVC4 MIPSII fixture
+  remains ignored because the toolchain is not configured.
+- `git diff --check` passed after extending the CE 20px known-font metrics
+  profile; output was limited to existing LF-to-CRLF normalization warnings.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, and
+  `SOURCE_REFERENCES.md`: plain 16px known-font text extents now use the CE
+  GDIAPI `fontdata.h` `NTExtentResults` rows for Tahoma, Courier New,
+  Times New Roman, Wingdings, and Verdana in `GetTextExtentExPointW`,
+  `GetCharWidth32`, and shared text-run measurement.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_text_extents_use_ce_known_font_widths`
+  passed after adding the CE 16px known-font extent-width profile.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after adding the CE 16px known-font extent-width
+  profile; the full raw GWE suite passed with 283 tests, `git diff --check`
+  output was limited to existing LF-to-CRLF normalization warnings, and the
+  eVC4 MIPSII fixture remains ignored because the toolchain is not configured.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: the CE 16px known-font
+  extent-width profile now includes the `fontdata.h` Arial raster row selected
+  through the `"Arial"` face name, matching `text.cpp::GetTextExtentPointTest`.
+- `src/emulator/unicorn.rs`, `tests/basic_subsystems.rs`, and
+  `tests/coredll_raw_kernel.rs`: serial-read/comm-event tests now use the
+  configured remote GPS target where they exercise runtime routing, while the
+  raw comm-state/mask/purge test owns a one-device stub `COM7:` fixture so it
+  stays stable when local `serial_devices.json` prefers a Win32-backed serial
+  port.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  Arial raster extent row and serial test stabilization; the eVC4 MIPSII
+  fixture remains ignored because the toolchain is not configured.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `GetCharABCWidths` and
+  `GetCharABCWidthsI` now use the CE GDIAPI `fontdata.h` Tahoma-only
+  `NT_ABCWidths` table for plain selected 16px Tahoma glyphs from `!` through
+  `z`, while generic fonts keep the existing average-width fallback.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_get_char_abc_widths -- --nocapture`
+  passed after adding the CE Tahoma ABC table path.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 284 raw GWE tests after adding the CE Tahoma ABC table path.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE Tahoma ABC table path; the eVC4 MIPSII fixture remains ignored because
+  the toolchain is not configured.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `SetTextCharacterExtra`
+  now rejects selected CE Arial raster fonts with the GDI error sentinel and
+  preserves the previous DC spacing value, matching the CE GDIAPI text/font
+  tests that skip character-extra handling for non-TrueType raster fonts.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe text_character_extra -- --nocapture`
+  passed after adding the CE Arial raster `SetTextCharacterExtra` rejection.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 285 raw GWE tests after adding the CE Arial raster
+  `SetTextCharacterExtra` rejection.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE Arial raster `SetTextCharacterExtra` rejection; the eVC4 MIPSII fixture
+  remains ignored because the toolchain is not configured.
+- `cargo fmt --check` and
+  `cargo check --features unicorn,trace,win32-desktop` passed after the CE
+  Arial raster `SetTextCharacterExtra` rejection.
+- `git diff --check` passed after the CE Arial raster
+  `SetTextCharacterExtra` rejection; Git still reports LF-to-CRLF conversion
+  warnings for the dirty worktree files.
+- `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw `CreateFontIndirectW` now has a CE
+  `font.cpp::TestCreateFontIndirectZero` regression proving a selected zeroed
+  `LOGFONTW` round-trips through `GetCurrentObject(OBJ_FONT)` and `GetObjectW`
+  without being normalized to fallback font fields.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe create_font_indirect_zero_logfont -- --nocapture`
+  passed after adding the zeroed `LOGFONTW` regression.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 286 raw GWE tests after adding the zeroed `LOGFONTW` regression.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  zeroed `LOGFONTW` regression; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `git diff --check` passed after the zeroed `LOGFONTW` regression; Git still
+  reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `GetTextMetricsW` now uses
+  the CE `font.cpp::passOddSize` known-font realized `tmHeight` rows for
+  `CreateFontIndirectW` selections with `lfHeight` 0 and -24 across Tahoma,
+  Courier New, Symbol, Times New Roman, and Wingdings.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe createfont_pass_odd_heights -- --nocapture`
+  passed after adding the CE `passOddSize` known-font height rows.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 287 raw GWE tests after adding the CE `passOddSize` known-font
+  height rows.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE `passOddSize` known-font height rows; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `src/ce/resource.rs`, `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw font
+  objects now preserve nonzero `LOGFONTW` escapement, orientation, precision,
+  quality, pitch/family, style, charset, and face-name fields across
+  `CreateFontIndirectW` and `GetObjectW`.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe create_font_indirect_preserves_logfont_fields -- --nocapture`
+  passed after adding the nonzero `LOGFONTW` round-trip regression.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 288 raw GWE tests after adding the nonzero `LOGFONTW`
+  round-trip regression.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  nonzero `LOGFONTW` round-trip regression and test-constructor call-site
+  updates; the eVC4 MIPSII fixture remains ignored because the toolchain is
+  not configured.
+- `git diff --check` passed after the CE `passOddSize` and nonzero
+  `LOGFONTW` work; Git still reports LF-to-CRLF conversion warnings for the
+  dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `GetCharABCWidths` now
+  follows CE `font.cpp::abcEscapementTest` by rejecting selected fonts with
+  nonzero escapement and setting `ERROR_INVALID_PARAMETER`.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe rejects_nonzero_escapement -- --nocapture`
+  passed after adding the CE nonzero-escapement ABC-width regression.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed with 289 raw GWE tests after adding the CE nonzero-escapement
+  ABC-width regression.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  CE nonzero-escapement ABC-width regression; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `git diff --check` passed after the CE nonzero-escapement ABC-width
+  regression; Git still reports LF-to-CRLF conversion warnings for the dirty
+  worktree files.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw IMM
+  contexts now preserve CE-sized `LOGFONTW` composition-font state across
+  `ImmSetCompositionFontW`/`ImmGetCompositionFontW`, resolve NULL-HIMC calls
+  through the active keyboard target, and post `IMN_SETCOMPOSITIONFONT` for
+  `ImmNotifyIME(NI_CONTEXTUPDATED, ..., IMC_SETCOMPOSITIONFONT)`.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE IMM composition-font state regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the CE
+  IMM composition-font work; the eVC4 MIPSII fixture remains ignored because
+  the toolchain is not configured.
+- `git diff --check` passed after the CE IMM composition-font work; Git still
+  reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw IMM
+  contexts now carry stored CE candidate-list state, report candidate-list
+  count/required bytes through `ImmGetCandidateListCountW`, marshal UTF-16
+  `CANDIDATELIST` payloads through `ImmGetCandidateListW`, and mutate
+  selection/page-start/page-size for TESTIME-shaped `ImmNotifyIME` candidate
+  selection/page actions when a stored list exists.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE IMM candidate-list payload/state regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the CE
+  IMM candidate-list payload/state work; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `git diff --check` passed after the CE IMM candidate-list payload/state
+  work; Git still reports LF-to-CRLF conversion warnings for the dirty
+  worktree files.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: SIP panel
+  state now follows the CE `shellapi.h`/`imm.h`/shell PSL surface for
+  `RegisterSIPanel`, `SHSipPreferenceI`, and
+  `ImmSIPanelState(SIP_QUERY_LOCATION/SIP_SET_LOCATION/SIP_INPUT_ATTRIBUTES)`,
+  including null/out-of-range preference validation, up/down visibility flags,
+  remembered input-dialog child rejection, SIP rectangle round-trips, and
+  input-attribute storage.
+- `cargo fmt` and
+  `cargo test coredll_raw_sip_panel_state_and_shell_preference_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE SIP panel state regression.
+- `src/emulator/unicorn.rs`: parked-process switching now reconciles a bare
+  default parked CPU thread id with the `ParkedProcess` wrapper thread id before
+  deciding whether to requeue the outgoing process. This keeps sender/current
+  parked entries from being pruned as duplicate thread-id owners when rotating
+  to a synthetic parked receiver.
+- `cargo test rotate_to_parked_process_skips_send_blocked_process_until_ready --lib --features unicorn,trace,win32-desktop -j 1`
+  passed after the parked-process thread-id reconciliation.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the CE SIP panel state and parked-process
+  scheduler fixes; the eVC4 MIPSII fixture remains ignored because the
+  toolchain is not configured, and Git still reports LF-to-CRLF conversion
+  warnings for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `ImmGetDefaultIMEWnd` and the
+  internal `DefaultImeWndGet` ordinal now share a CE default-IME-window proxy
+  backed by the focused window, with valid caller HWND fallback until hidden IME
+  control windows are emulated.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE default IME window regression.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the CE default IME window proxy work; the
+  eVC4 MIPSII fixture remains ignored because the toolchain is not configured,
+  and Git still reports LF-to-CRLF conversion warnings for the dirty worktree
+  files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `ImmIsUIMessageW` now recognizes
+  the CE `WM_IME_*` UI message family from `imm.h`, forwards recognized messages
+  to the supplied IME HWND or focused default-IME proxy, returns false for
+  non-IME messages, and reports invalid-window failure when no target exists.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE `ImmIsUIMessageW` forwarding regression.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the CE `ImmIsUIMessageW` forwarding work; the
+  eVC4 MIPSII fixture remains ignored because the toolchain is not configured,
+  and Git still reports LF-to-CRLF conversion warnings for the dirty worktree
+  files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `ImmGetHotKey` now returns a
+  BOOL false no-hotkey result while clearing optional modifier, virtual-key, and
+  HKL outputs, matching the CE `imm.h` signature used by CHTIM startup without
+  pretending an emulator IME-switch hotkey is registered.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE `ImmGetHotKey` no-hotkey regression.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the CE `ImmGetHotKey` no-hotkey work; the
+  eVC4 MIPSII fixture remains ignored because the toolchain is not configured,
+  and Git still reports LF-to-CRLF conversion warnings for the dirty worktree
+  files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `ImmGetGuideLineW` now follows
+  the CE no-guideline query shape from `imm.h` and TESTIME, returning zero for
+  `GGL_LEVEL`/`GGL_INDEX`, clearing caller string/private buffers for empty
+  `GGL_STRING`/`GGL_PRIVATE` results, and reporting invalid index/handle errors
+  without claiming HIMCC-backed guideline payload support yet.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE `ImmGetGuideLineW` no-guideline regression.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the CE `ImmGetGuideLineW` no-guideline work;
+  the eVC4 MIPSII fixture remains ignored because the toolchain is not
+  configured, and Git still reports LF-to-CRLF conversion warnings for the dirty
+  worktree files.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`:
+  `ImmLockIMC`/`ImmUnlockIMC` now expose a CE-shaped guest `INPUTCONTEXT`, and
+  `ImmLockIMCC`/`ImmUnlockIMCC` expose lockable `COMPOSITIONSTRING` and
+  `CANDIDATEINFO` buffers for the HIMC state already tracked by GWE, including
+  `ImmGetIMCLockCount`, `ImmGetIMCCLockCount`, `ImmGetIMCCSize`,
+  `ImmCreateIMCC`, and `ImmReSizeIMCC` behavior needed by TESTIME-style IME
+  code.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE HIMC/HIMCC lock-buffer regression.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the CE HIMC/HIMCC lock-buffer work; the eVC4
+  MIPSII fixture remains ignored because the toolchain is not configured, and
+  Git still reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `ImmUnlockIMC` now retags
+  assigned `INPUTCONTEXT` component handles by their CE field role, and
+  `ImmGetGuideLineW` reads HIMCC-backed `GUIDELINE` headers through
+  `hGuideLine`, returning `GGL_LEVEL`/`GGL_INDEX` and querying/copying
+  `GGL_STRING`/`GGL_PRIVATE` payloads with CE byte-count return semantics.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE HIMCC-backed guideline payload regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the CE
+  HIMCC-backed guideline payload work; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `git diff --check` passed after the CE HIMCC-backed guideline payload work;
+  Git still reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `ImmUnlockIMC` now parses
+  resized CE `COMPOSITIONSTRING` and `CANDIDATEINFO` HIMCC buffers assigned
+  through `INPUTCONTEXT::hCompStr`/`hCandInfo`, updating the stored composition
+  string and candidate lists so later `ImmGetCompositionStringW`,
+  `ImmGetCandidateListCountW`, `ImmGetCandidateListW`, and `ImmNotifyIME`
+  selection/page mutations operate on the guest-written state.
+- `cargo fmt` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE resized composition/candidate IMCC mutation
+  regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the CE
+  resized composition/candidate IMCC mutation work; the eVC4 MIPSII fixture
+  remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the CE resized composition/candidate IMCC
+  mutation work; Git still reports LF-to-CRLF conversion warnings for the dirty
+  worktree files.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, `tests/basic_subsystems.rs`,
+  `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: keyboard layout state now tracks the loaded HKL list
+  instead of only the active HKL, `LoadKeyboardLayoutW` honors CE
+  `KLF_ACTIVATE`, and `ActivateKeyboardLayout` supports `HKL_NEXT`/`HKL_PREV`
+  cycling while continuing to post `WM_INPUTLANGCHANGE` to the focused window.
+- `cargo fmt`,
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`, and
+  `cargo test gwe_keyboard_layout_ime_and_activate_layout --test basic_subsystems --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the CE keyboard-layout transition regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the CE
+  keyboard-layout transition work; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `git diff --check` passed after the CE keyboard-layout transition work; Git
+  still reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: synthetic IME HKLs now mirror
+  TESTIME `dic.c`'s built-in single-letter candidate table when
+  `ImmSetCompositionStringW(..., SCS_SETSTR, ...)` receives an ASCII letter,
+  generating a slot-0 `IME_CAND_READ` list with the same/toggled-case pair and
+  clearing that generated list when the composition is not in the table.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the TESTIME dictionary-backed candidate regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  TESTIME dictionary-backed candidate work; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME dictionary-backed candidate work;
+  Git still reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `ImmGenerateMessage` now
+  mirrors TESTIME `GenerateMessage`/`hMsgBuf` delivery by reading
+  `INPUTCONTEXT::dwNumMsgBuf` three-DWORD message records, posting them to the
+  HIMC owner window, clearing the count, and preserving the message-buffer
+  HIMCC handle for later locks.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the TESTIME `ImmGenerateMessage` message-buffer
+  regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  TESTIME `ImmGenerateMessage` work; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME `ImmGenerateMessage` work; Git
+  still reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: TESTIME
+  registered-word support now exposes `NOUN`/`VERB` style descriptors for IME
+  HKLs, accepts `ImmRegisterWordW`/`ImmUnregisterWordW` for those fake styles,
+  stores the registered reading/string pairs, and appends them to generated
+  `ImmSetCompositionStringW(..., SCS_SETSTR, ...)` candidate lists before
+  clearing them again after unregistering.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the TESTIME registered-word/private-profile candidate
+  regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  TESTIME registered-word/private-profile candidate work; the eVC4 MIPSII
+  fixture remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME registered-word/private-profile
+  candidate work; Git still reports LF-to-CRLF conversion warnings for the
+  dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `ImmGetConversionListW`
+  now mirrors TESTIME `ImeConversionList` by returning a clean zero-byte result
+  for conversion, reverse-conversion, and reverse-length requests instead of
+  reporting the ordinal as unsupported.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the TESTIME `ImmGetConversionListW` zero-result
+  regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  TESTIME `ImmGetConversionListW` work; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME `ImmGetConversionListW` work; Git
+  still reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `ImmEscapeW` now mirrors
+  TESTIME `ImeEscape` for `IME_ESC_QUERY_SUPPORT`, returning false for non-IME
+  HKLs, null `lpData`, or unsupported requested escapes, and true only for
+  IME HKL self-query support requests.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the TESTIME `ImmEscapeW(IME_ESC_QUERY_SUPPORT)`
+  regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  TESTIME `ImmEscapeW(IME_ESC_QUERY_SUPPORT)` work; the eVC4 MIPSII fixture
+  remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME
+  `ImmEscapeW(IME_ESC_QUERY_SUPPORT)` work; Git still reports LF-to-CRLF
+  conversion warnings for the dirty worktree files.
+- `src/ce/gwe.rs`, `src/ce/coredll.rs`, `src/emulator/unicorn.rs`,
+  `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: `ImmEnumRegisterWordW` now mirrors TESTIME
+  `ImeEnumRegisterWord` for Unicorn guest callbacks by issuing the initial
+  filter probe callback, then enumerating registered private-profile words for
+  non-null readings when the requested style is zero or `FAKEWORD_NOUN`; raw
+  dispatch now returns the clean zero fallback instead of unsupported when no
+  guest callback can be invoked.
+- `cargo check --features unicorn,trace,win32-desktop -j 1` and
+  `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after the TESTIME `ImmEnumRegisterWordW` callback-enumeration work.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  TESTIME `ImmEnumRegisterWordW` callback-enumeration work; the eVC4 MIPSII
+  fixture remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME `ImmEnumRegisterWordW`
+  callback-enumeration work; Git still reports LF-to-CRLF conversion warnings
+  for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: TESTIME candidate generation now
+  mirrors `dic.c::ConvKanji` by rejecting combined built-in/registered-word
+  candidate lists above the CE `MAXCANDSTRNUM` ceiling of 32 instead of
+  returning an oversized `CANDIDATELIST`.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the TESTIME oversized-candidate rejection regression.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  TESTIME oversized-candidate rejection work; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME oversized-candidate rejection
+  work; Git still reports LF-to-CRLF conversion warnings for the dirty worktree
+  files.
+- `src/ce/gwe.rs`, `src/emulator/unicorn.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: TESTIME
+  registered-word candidate lookup and Unicorn `ImmEnumRegisterWordW`
+  enumeration now mirror `stub.c::GetPrivateProfileString` by hiding
+  private-profile entries for readings with lowercase characters while keeping
+  uppercase readings visible.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the TESTIME private-profile uppercase-section visibility
+  regression.
+- `tests/coredll_raw_gwe.rs`: the nonzero cross-thread
+  `SendMessageTimeout` regression now verifies the actual queued send ID for
+  the target window instead of assuming the incidental transaction ID is always
+  `1`, removing an order-sensitive full-suite failure.
+- `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  `cargo test coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  the TESTIME private-profile visibility and SendMessageTimeout test-hardening
+  work; the eVC4 MIPSII fixture remains ignored because the toolchain is not
+  configured.
+- `git diff --check` passed after the TESTIME private-profile visibility and
+  SendMessageTimeout test-hardening work; Git still reports LF-to-CRLF
+  conversion warnings for the dirty worktree files.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: TESTIME candidate generation now
+  mirrors the active `stub.c::GetPrivateProfileString` dictionary read by
+  appending registry-value private-profile entries under
+  `HKLM\SOFTWARE\Microsoft\testime\Windows\testime.DIC\<reading>` after the
+  built-in candidate table, while still applying the lowercase-section guard.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding the TESTIME registry-backed private-profile candidate
+  regression.
+- `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  the TESTIME registry-backed private-profile candidate work; the eVC4 MIPSII
+  fixture remains ignored because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME registry-backed private-profile
+  candidate work; Git still reports LF-to-CRLF conversion warnings for the
+  dirty worktree files.
+- `src/ce/kernel.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: kernel boot now reconciles the
+  bundled TESTIME `testime.reg` sample dictionary with the active
+  `stub.c::GetPrivateProfileString` registry-value enumeration path by seeding
+  stable registry values whose string data preserves the sample candidates,
+  including the numeric rolling candidate entries.
+- `cargo test coredll_raw_keyboard_layout_and_imm_context_are_stateful --test coredll_raw_gwe --features unicorn,trace,win32-desktop -j 1`
+  passed after adding default TESTIME sample-dictionary candidate coverage.
+- `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  the TESTIME sample-dictionary seed work; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `git diff --check` passed after the TESTIME sample-dictionary seed work; Git
+  still reports LF-to-CRLF conversion warnings for the dirty worktree files.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR
+  notification imports now distinguish CE `FSINT_*` internal notification
+  handles from caller-owned `FSEXT_*` handles. `FSINT_FindFirstChangeNotificationW`
+  creates an internal FSDMGR-owned handle, public/`FSEXT` reset-info rejects it
+  without touching caller output pointers, and paired `FSINT` reset/info/close
+  continues to operate on it, matching the `pathapi.cpp` and `fsnotify.cpp`
+  internal-vs-external split.
+- `cargo test emulator::imports::tests::fsdmgr --lib --features unicorn,trace,win32-desktop -j 1`
+  and
+  `cargo test --test coredll_raw_memory_file --features unicorn,trace,win32-desktop -j 1`
+  passed after the FSDMGR internal notification-owner work.
+- `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  the FSDMGR internal notification-owner work; the eVC4 MIPSII fixture remains
+  ignored because the toolchain is not configured.
+- `git diff --check` passed after the FSDMGR internal notification-owner work;
+  Git still reports LF-to-CRLF conversion warnings for the dirty worktree
+  files.
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw `ExtractIconExW` coverage now includes a 16bpp
+  `BI_BITFIELDS`/RGB555 `RT_ICON` fixture, verifying that extracted PE icon
+  color bitmaps preserve the DIB masks and render red correctly into the RGB565
+  framebuffer.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info_uses_registry_associations_and_attributes -- --nocapture`
+  passed after adding the `BI_BITFIELDS` PE icon coverage.
+- `cargo check --features unicorn,trace,win32-desktop -j 1` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` also passed after
+  the `BI_BITFIELDS` PE icon coverage; the eVC4 MIPSII fixture remains ignored
+  because the toolchain is not configured.
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: the same PE `BI_BITFIELDS` extraction path now asserts
+  that `DestroyIcon` releases PE-extracted owned color/mask bitmap handles and
+  their heap storage.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info_uses_registry_associations_and_attributes -- --nocapture`
+  passed after adding the PE-extracted `DestroyIcon` cleanup assertion.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`
+  passed after adding the PE-extracted `DestroyIcon` cleanup assertion.
+- `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and `git diff --check`
+  passed after the PE-extracted `DestroyIcon` cleanup assertion; `git diff --check`
+  output remains limited to existing LF-to-CRLF warnings, and the eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured.
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw `ExtractIconExW` non-PE fallback coverage now
+  proves the CE shell-icon fallback only fills the index-zero synthetic icon,
+  leaves additional requested output-array slots untouched, and leaves
+  large/small output pointers untouched for nonzero-index misses.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info_uses_registry_associations_and_attributes -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  non-PE `ExtractIconExW` fallback preservation regression; the eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured.
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw `ExtractIconExW` PE coverage now includes a
+  stride-padded 24bpp `BI_RGB` `RT_ICON` fixture, verifying extracted bitmap
+  metadata, trailing AND-mask creation, and RGB565 framebuffer rendering of both
+  padded BGR source pixels.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info_uses_registry_associations_and_attributes -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  24bpp PE icon coverage; the eVC4 MIPSII fixture remains ignored because that
+  toolchain is not configured.
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw `ExtractIconExW` PE coverage now includes a 1bpp
+  indexed `RT_ICON` fixture, verifying palette preservation, high-bit pixel
+  decoding, and RGB565 framebuffer rendering for both palette indexes.
+- `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info_uses_registry_associations_and_attributes -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  1bpp PE icon coverage; the eVC4 MIPSII fixture remains ignored because that
+  toolchain is not configured.
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw `ExtractIconExW` PE coverage now includes a
+  masked stride-padded 24bpp `BI_RGB` `RT_ICON` fixture, verifying the trailing
+  AND-mask byte becomes a 1bpp mask bitmap and `DrawIconEx(DI_NORMAL)` leaves
+  the masked framebuffer destination pixel untouched while painting the
+  unmasked color pixel.
+- `src/emulator/unicorn.rs` and `src/main.rs`: immutable publish/snapshot paths
+  now call the read-only parked-process duplicate pruning helper instead of the
+  mutating trace-recording helper, restoring full-feature compilation while
+  keeping the mutating helper available for callers that can pass `&mut
+  CeKernel`.
+- `cargo fmt`, `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info_uses_registry_associations_and_attributes -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  masked 24bpp PE icon coverage and read-only prune call-site fix; the eVC4
+  MIPSII fixture remains ignored because that toolchain is not configured.
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw shell system image-list pseudo-icon coverage now
+  verifies selected-memory-DIB rendering, including untouched outside pixels,
+  a painted pseudo body, and a visibly distinct valid overlay marker. This
+  complements the existing framebuffer and invalid-overlay-slot coverage for
+  synthetic shell/system image-list icons.
+- `cargo fmt`, `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info_system_image_list_supports_icon_queries_and_draw -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  system image-list pseudo-icon selected-DIB coverage; the eVC4 MIPSII fixture
+  remains ignored because that toolchain is not configured.
+- `src/ce/object.rs`, `src/ce/kernel.rs`, `src/ce/coredll.rs`,
+  `tests/coredll_raw_memory_file.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`,
+  and `SOURCE_REFERENCES.md`: raw AFS volume handles now model the CE
+  `HT_AFSVOLUME` shape enough for mounted roots. `AFS_Unmount(hAFS)` rejects
+  foreign-process volume handles, successful unmount consumes the handle,
+  direct `CloseHandle(hAFS)` also unmounts once, and both paths signal root and
+  subpath file-change watchers through the mounted-root removal notifier.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_afs_unmount_volume_handle_signals_and_enforces_owner -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_close_handle_on_volume_handle_unmounts_volume_once -- --nocapture`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`
+  passed after the AFS volume-handle unmount/close work.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`,
+  `tests/coredll_raw_memory_file.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`,
+  and `SOURCE_REFERENCES.md`: raw `AFS_FsIoControlW` now resolves nonzero AFS
+  volume handles through the owner-checked mounted root. `FSCTL_GET_VOLUME_INFO`
+  reports the mounted volume's `CE_VOLUME_INFO` instead of falling back to the
+  object store, while foreign-process volume-handle FSCTL attempts fail without
+  touching caller output buffers.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers -- --nocapture`
+  passed after the volume-handle `AFS_FsIoControlW(FSCTL_GET_VOLUME_INFO)`
+  update.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR imports now recognize
+  CE `STOREMGR_FsIoControlW @44` by ordinal/name and dispatch its
+  `hProcess, path, Fsctl, ...` signature through the same mounted-volume
+  FSCTL path used by `CeFsIoControlW`. The raw import regression now reaches
+  mounted `FSCTL_GET_VOLUME_INFO` metadata through an actual `fsdmgr.dll`
+  import trap, while the local non-volume-info fallback documents CE's
+  `FsIoControl` forwarding/`FSStub_Bool` unsupported behavior.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::patches_supported_fsdmgr_imports_only -- --nocapture`,
+  and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::fsdmgr_storemgr_fs_io_control_import_dispatches_to_mounted_volume_info -- --nocapture`
+  passed after the FSDMGR `STOREMGR_FsIoControlW` import work.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the FSDMGR `STOREMGR_FsIoControlW` import
+  work; `git diff --check` reported only the existing LF-to-CRLF warnings.
+- `src/ce/file.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR
+  imports now recognize CE `FSDMGR_GetVolumeName @22` and
+  `FSDMGR_GetMountFlags @37` by ordinal/name. Existing mounted HVOL handles now
+  expose their mounted folder name through `GetVolumeName` with CE
+  NUL-inclusive buffer sizing and expose CE AFS hidden/system/permanent mount
+  flags through `GetMountFlags`; the remaining gap is still full
+  `FSDMGR_RegisterVolume`/disk-handle mapping and broader non-volume-info
+  FSCTL forwarding.
+- `src/emulator/unicorn.rs`: fixed the old-MIPS encoded-exit regression test so
+  its non-process-handle case uses the current-thread pseudo-handle instead of
+  `0x42`, which is this repo's current-process pseudo-handle.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::patches_supported_fsdmgr_imports_only -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::fsdmgr_mount_table_imports_query_volume_name_and_flags -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::unicorn::unicorn_tests::old_mips_api_thunk_with_non_process_handle_is_not_process_exit -- --nocapture`,
+  `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed after the FSDMGR mount-table query import and
+  old-MIPS test-harness correction; the eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured, and `git diff --check` reported
+  only the existing LF-to-CRLF warnings.
+- `src/ce/object.rs`, `src/ce/kernel.rs`, `src/ce/file.rs`,
+  `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR imports now recognize
+  CE `FSDMGR_DeregisterVolume @10`, `FSDMGR_GetVolumeHandle @21`, and
+  `FSDMGR_RegisterVolume @27`. The host-backed model registers/resolves a CE
+  mount folder name, creates an HVOL carrying the FSD `PDSK` token and optional
+  FSD volume context, maps that same disk token back through
+  `FSDMGR_GetVolumeHandle`, and keeps `FSDMGR_DeregisterVolume` as the CE 6
+  no-op. Remaining storage gaps are real block-driver/cache/filter support
+  functions and broader non-volume-info FSCTL forwarding.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::fsdmgr_register_volume_maps_disk_pointer_to_volume_handle -- --nocapture`,
+  and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::patches_supported_fsdmgr_imports_only -- --nocapture`
+  passed after the FSDMGR register/get-volume-handle support-function work.
+- `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  FSDMGR register/get-volume-handle support-function work; the eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR imports now also
+  recognize CE `FSDMGR_CreateFileHandle @7` and
+  `FSDMGR_CreateSearchHandle @8`. The raw traps follow
+  `fsdmgrapi.cpp` by returning the FSD-supplied file/search context pointer as
+  the handle while ignoring the HVOL and originating process handle. Remaining
+  storage gaps are still real block-driver/cache/filter support functions and
+  broader non-volume-info FSCTL forwarding.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::fsdmgr_create_file_and_search_handle_return_fsd_context_pointer -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::patches_supported_fsdmgr_imports_only -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::unicorn::unicorn_tests::wall_clock_restart_pc_restarts_mips_trampoline_before_delay_slot -- --nocapture`,
+  `cargo fmt --check`,
+  `cargo check --features unicorn,trace,win32-desktop -j 1`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  FSDMGR create-file/search-handle import work; the eVC4 MIPSII fixture remains
+  ignored because that toolchain is not configured.
+- `git diff --check` passed after the FSDMGR create-file/search-handle import
+  work, reporting only the existing LF-to-CRLF working-copy warnings.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR
+  imports now recognize the CE null-cache surface:
+  `FSDMGR_CacheIoControl @3`, `FSDMGR_CachedRead @4`,
+  `FSDMGR_CachedWrite @5`, `FSDMGR_CreateCache @6`,
+  `FSDMGR_DeleteCache @9`, `FSDMGR_FlushCache @14`,
+  `FSDMGR_InvalidateCache @24`, `FSDMGR_ResizeCache @30`, and
+  `FSDMGR_SyncCache @32`. The host-backed model now tracks CE null-cache IDs,
+  reuses deleted slots, returns `ERROR_INVALID_PARAMETER` for invalid
+  delete/read/write/flush/cache-IOCTL ids, treats resize/sync/invalidate as CE
+  null-cache no-ops, reports cached read/write as `ERROR_NOT_SUPPORTED` until
+  real block-driver forwarding exists, and handles
+  `IOCTL_DISK_DELETE_SECTORS` as null-cache success after unsupported device
+  forwarding.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::fsdmgr_null_cache_imports_track_ids_and_nullcache_results -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop emulator::imports::tests::patches_supported_fsdmgr_imports_only -- --nocapture`,
+  `cargo fmt --check`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  FSDMGR null-cache import work; the eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR
+  imports now also recognize CE `FSDMGR_DiskIoControl @12`,
+  `FSDMGR_ReadDisk @25`, and `FSDMGR_WriteDisk @35`. The host-backed model
+  persists direct and cache-sector writes in sparse synthetic 512-byte sectors,
+  returns zero-filled bytes for unwritten sectors, writes a CE-shaped
+  six-DWORD `DISK_INFO`, handles SG read/write requests through the direct
+  disk IOCTL path, and treats delete-sector/flush-cache as successful basic
+  disk IOCTLs. Cache write buffer sizing now uses the created cache block size
+  instead of assuming 512 bytes at the guest boundary.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_null_cache_imports_track_ids_and_nullcache_results -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop patches_supported_fsdmgr_imports_only -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`,
+  `cargo fmt --check`, and `git diff --check` passed after the direct FSDMGR
+  disk read/write and disk-IOCTL work; the eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured, and `git diff --check` reported
+  only the existing LF-to-CRLF warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR imports now recognize
+  CE `FSDMGR_ReadDiskEx @26` and `FSDMGR_WriteDiskEx @36` by ordinal/name.
+  The raw traps parse guest `FSD_SCATTER_GATHER_INFO`, scatter/gather the
+  requested sector payload across caller `FSD_BUFFER_INFO` arrays, persist the
+  transfer in the same sparse synthetic disk sectors as direct/cache I/O, and
+  write `FSD_SCATTER_GATHER_RESULTS` flags plus transferred-sector counts.
+  Remaining storage gaps are physical block-driver backing, external cache
+  DLL/filter behavior, richer disk IOCTLs, and broader non-volume-info FSCTL
+  forwarding.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_disk_ex_imports_scatter_gather_sparse_sectors -- --nocapture`,
+  and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop patches_supported_fsdmgr_imports_only -- --nocapture`
+  passed after the FSDMGR `ReadDiskEx`/`WriteDiskEx` import work.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`:
+  `FSDMGR_DiskIoControl @12` now treats CE
+  `IOCTL_DISK_DELETE_SECTORS` as a real sparse-disk mutation. The raw shim
+  validates the 12-byte `DELETE_SECTOR_INFO` payload, reads
+  `startsector`/`numsectors`, clears matching synthetic sectors, and later
+  reads return zero-filled data for the deleted range. Remaining storage gaps
+  are physical block-driver backing, external cache DLL/filter behavior,
+  remaining disk IOCTLs, and broader non-volume-info FSCTL forwarding.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`,
+  `cargo fmt --check`, and `git diff --check` passed after the
+  `IOCTL_DISK_DELETE_SECTORS` sparse-sector clearing work; the eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and
+  `git diff --check` reported only the existing LF-to-CRLF warnings.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`:
+  `FSDMGR_DiskIoControl @12` now covers more CE `diskio.h` metadata/status
+  paths against the synthetic disk backing. The raw trap returns a CE-shaped
+  disk name, `STORAGEDEVICEINFO`, and invalid-manufacturer/serial
+  `STORAGE_IDENTIFICATION`, accepts `DISK_IOCTL_SETINFO`/`IOCTL_DISK_SETINFO`
+  buffers as validated no-ops, treats `DISK_IOCTL_INITIALIZED`/
+  `IOCTL_DISK_INITIALIZED` as success, and clears all synthetic sectors for
+  `DISK_IOCTL_FORMAT_MEDIA`/`IOCTL_DISK_FORMAT_MEDIA`. Remaining storage gaps
+  are physical block-driver backing, external cache DLL/filter behavior,
+  remaining specialized disk IOCTLs, and broader non-volume-info FSCTL
+  forwarding.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info -- --nocapture`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  the FSDMGR disk metadata/status IOCTL work; the eVC4 MIPSII fixture remains
+  ignored because that toolchain is not configured.
+- `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: the FSDMGR `STOREMGR_FsIoControlW @44` import
+  regression now covers the non-volume-info edges that our host-backed FSD can
+  model today. `FSCTL_REFRESH_VOLUME` and `FSCTL_FLUSH_BUFFERS` are successful
+  no-ops with zero returned bytes, while an unknown FSCTL follows the CE
+  `FSStub_Bool` unsupported shape by returning false, setting
+  `ERROR_NOT_SUPPORTED`, and leaving caller buffers/counts untouched. Remaining
+  FSCTL fidelity is real mounted-FSD `FsIoControl` hook forwarding beyond the
+  host-backed unsupported stub.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_storemgr_fs_io_control_import_dispatches_to_mounted_volume_info -- --nocapture`
+  passed after the FSDMGR `STOREMGR_FsIoControlW` refresh/flush/unsupported
+  FSCTL import coverage work.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  FSDMGR `STOREMGR_FsIoControlW` refresh/flush/unsupported FSCTL import
+  coverage work; the eVC4 MIPSII fixture remains ignored because that
+  toolchain is not configured.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `FSDMGR_DiskIoControl @12`
+  now has an explicit CE `IOCTL_DISK_GET_SECTOR_ADDR` path. The raw shim
+  validates the CE/DOSPART buffer contract (`in`/`out` pointers present,
+  matching nonzero DWORD-array byte counts, readable sector list) and then
+  reports `ERROR_NOT_SUPPORTED` without touching the address list because the
+  host-backed synthetic disk has no static XIP sector-address mapping.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info -- --nocapture`
+  passed after the FSDMGR `GET_SECTOR_ADDR` validation/no-XIP unsupported
+  import work.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  FSDMGR `GET_SECTOR_ADDR` validation/no-XIP unsupported import work; the eVC4
+  MIPSII fixture remains ignored because that toolchain is not configured.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `FSDMGR_DiskIoControl @12`
+  now handles CE `IOCTL_DISK_GETPMTIMINGS` for the synthetic disk. The raw
+  shim follows the ATAPI power path's in/out `PowerTimings` contract by
+  requiring a writable 68-byte buffer whose `dwSize` covers the full structure,
+  then returns a correctly sized all-zero timing snapshot rather than inventing
+  hardware power-transition counters.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info -- --nocapture`
+  passed after the FSDMGR `GETPMTIMINGS` synthetic timing work.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  FSDMGR `GETPMTIMINGS` synthetic timing work; the eVC4 MIPSII fixture remains
+  ignored because that toolchain is not configured.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `FSDMGR_DiskIoControl @12`
+  now models CE secure-wipe disk IOCTLs against the sparse synthetic disk.
+  `IOCTL_DISK_SET_SECURE_WIPE_FLAG` validates the 12-byte
+  `DELETE_SECTOR_INFO` payload and succeeds without erasing data, while
+  `IOCTL_DISK_SECURE_WIPE` validates the same payload and clears the requested
+  sparse-sector range. This follows DOSPART's partition-to-delete-info wrapping
+  and MSFLASH's payload validation while leaving hardware flash resume behavior
+  as an open fidelity gap.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info -- --nocapture`
+  passed after the FSDMGR secure-wipe disk IOCTL work.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  FSDMGR secure-wipe disk IOCTL work; the eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `FSDMGR_DiskIoControl @12`
+  now explicitly handles CE `IOCTL_DISK_COPY_EXTERNAL_START` enough for the
+  host-backed synthetic disk model. The raw shim validates the CE
+  `DISK_COPY_EXTERNAL` fixed header and trailing `SECTOR_LIST_ENTRY` array,
+  then reports `ERROR_NOT_SUPPORTED` without mutating caller input or output
+  buffers because there is no external copy accelerator behind the sparse disk.
+  Real accelerator/filter behavior remains queued with the physical block-driver
+  backing gaps.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`,
+  `cargo fmt --check`, and `git diff --check` passed after the FSDMGR
+  copy-external-start validation work. `git diff --check` reported only the
+  existing LF-to-CRLF warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `tests/coredll_raw_memory_file.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `CeFsIoControlW`,
+  `AFS_FsIoControlW`, and `STOREMGR_FsIoControlW @44` now explicitly handle
+  CE `FSCTL_COPY_EXTERNAL_START` and `FSCTL_COPY_EXTERNAL_COMPLETE` for the
+  host-backed FSD model. The raw helper validates the fixed 536-byte
+  `FILE_COPY_EXTERNAL` payload, requires `cbSize` to cover the structure, and
+  then returns `ERROR_NOT_SUPPORTED` without mutating caller buffers, matching
+  the reviewed CE shape while leaving real external-copy acceleration as an
+  open physical/FSD hook gap.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop coredll_raw_fs_io_control_refresh_and_flush_are_no_ops -- --nocapture`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop fsdmgr_storemgr_fs_io_control_import_dispatches_to_mounted_volume_info -- --nocapture`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after
+  the filesystem copy-external FSCTL validation work.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`,
+  `tests/coredll_raw_memory_file.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: file-handle
+  `DeviceIoControl(FSCTL_SET_FILE_CACHE)` now follows the reviewed CE
+  cache-filter shape. `FileCacheDisableStandard` succeeds as a zero-byte
+  no-op for host-backed file handles, enable/discard levels return
+  `ERROR_NOT_SUPPORTED`, malformed input returns `ERROR_INVALID_PARAMETER`,
+  closed handles return `ERROR_INVALID_HANDLE`, and volume-level
+  `CeFsIoControlW(FSCTL_SET_FILE_CACHE)` remains unsupported. Broader external
+  cache DLL/filter behavior stays queued with the remaining storage fidelity
+  gaps.

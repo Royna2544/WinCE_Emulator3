@@ -36,6 +36,7 @@ use wince_emulation_v3::{
     emulator::{
         cpu::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
+        imports::ImportModuleKind,
         memory::MemoryPerms,
     },
     pe::PeImage,
@@ -50,7 +51,8 @@ const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 5_000;
 // messages and ticks the framebuffer while the guest executes, and a fully
 // blocked guest exits the run on its own, so short forced exits only paid the
 // fresh-Unicorn restart cost (blob copy + retranslation) every second.
-const REMOTE_LIVE_RUN_SLICE_MS: u64 = 120_000;
+const REMOTE_LIVE_RUN_SLICE_MS: u64 = HOST_REMOTE_BUSY_RUN_SLICE_MS;
+const REMOTE_LIVE_RUN_SLICE_ENV: &str = "WINCE_EMU_REMOTE_LIVE_RUN_SLICE_MS";
 const COMPANION_START_DELAY_MS: u64 = 1_000;
 const COMPANION_INSTRUCTION_LIMIT: usize = 250_000_000;
 #[cfg(windows)]
@@ -327,7 +329,12 @@ fn run_cpu_loop(
     let mut reported_blocked_message_wait = false;
     let run_started = Instant::now();
     loop {
+        cpu.prune_active_process_from_parked(kernel);
         if cpu.complete_escaped_saved_get_message_sent_callout(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.complete_escaped_direct_send_message_callout(kernel) {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -356,10 +363,16 @@ fn run_cpu_loop(
             Some(desktop.framebuffer_mut()),
         ) {
             reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.prepare_active_sent_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         let blocked_remote_target = blocked_remote_input_target(cpu, kernel);
@@ -375,18 +388,34 @@ fn run_cpu_loop(
                 &remote_drained.target_thread_ids,
                 Some(desktop.framebuffer_mut()),
             ) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
             if cpu.rotate_to_ready_parked_wait_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
             ) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if cpu.rotate_to_receiver_parked_process_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            ) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if !cpu.active_process_has_visible_receiver_work(kernel)
+                && cpu.rotate_to_runnable_parked_threads(kernel, &remote_drained.target_thread_ids)
+            {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
             if !current_cpu_targeted
                 && cpu.has_runnable_parked_process(kernel)
                 && cpu.rotate_to_next_parked_process(kernel)
             {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
             continue;
@@ -397,25 +426,69 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
         }
         if (remote_drained.handled != 0 || desktop_queued != 0)
+            && !kernel_has_unreturned_parked_process(kernel)
+            && !cpu.active_process_has_visible_receiver_work(kernel)
+            && cpu.rotate_to_receiver_parked_process_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            )
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if args.remote_server.is_some()
+            && remote_drained.handled == 0
+            && desktop_queued == 0
+            && !active_has_pending_parked_create_process(cpu, kernel)
+            && should_rotate_idle_remote_receiver_parked_process(
+                cpu.active_process_has_receiver_work(kernel),
+                cpu.active_process_has_visible_receiver_work(kernel),
+            )
+            && cpu.rotate_to_receiver_parked_process_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            )
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if !kernel_has_unreturned_parked_process(kernel)
+            && cpu.rotate_to_ready_parked_wait_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            )
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if args.remote_server.is_some()
+            && remote_drained.handled == 0
+            && desktop_queued == 0
+            && active_has_pending_parked_create_process(cpu, kernel)
             && cpu.has_runnable_parked_process(kernel)
             && cpu.rotate_to_next_parked_process(kernel)
         {
             reported_blocked_message_wait = false;
-            continue;
-        }
-        if cpu.rotate_to_ready_parked_wait_with_framebuffer(kernel, Some(desktop.framebuffer_mut()))
-        {
-            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
             continue;
         }
+        if cpu.prepare_active_sent_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if args.remote_server.is_some()
             && remote_drained.handled == 0
             && desktop_queued == 0
             && !cpu.has_saved_context()
+            && !cpu.active_process_has_visible_receiver_work(kernel)
             && cpu
                 .last_debug_snapshot()
                 .is_some_and(|snapshot| snapshot_has_orphaned_cross_process_send(snapshot, kernel))
@@ -423,25 +496,14 @@ fn run_cpu_loop(
             && cpu.rotate_to_next_parked_process(kernel)
         {
             reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if args.remote_server.is_some()
             && remote_drained.handled == 0
             && desktop_queued == 0
             && !cpu.has_saved_context()
-            && cpu
-                .last_debug_snapshot()
-                .is_some_and(|snapshot| snapshot_has_only_stale_blocked_waits(snapshot, kernel))
-            && cpu.has_runnable_parked_process(kernel)
-            && cpu.rotate_to_next_parked_process(kernel)
-        {
-            reported_blocked_message_wait = false;
-            continue;
-        }
-        if args.remote_server.is_some()
-            && remote_drained.handled == 0
-            && desktop_queued == 0
-            && !cpu.has_saved_context()
+            && !cpu.active_process_has_visible_receiver_work(kernel)
             && cpu.last_debug_snapshot().is_some_and(|snapshot| {
                 snapshot_has_only_stale_owned_blocked_waits(snapshot, cpu, kernel)
             })
@@ -449,6 +511,22 @@ fn run_cpu_loop(
             && cpu.rotate_to_next_parked_process(kernel)
         {
             reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if args.remote_server.is_some()
+            && remote_drained.handled == 0
+            && desktop_queued == 0
+            && !cpu.has_saved_context()
+            && !cpu.active_process_has_visible_receiver_work(kernel)
+            && cpu.last_debug_snapshot().is_some_and(|snapshot| {
+                snapshot_has_only_stale_owned_blocked_waits(snapshot, cpu, kernel)
+            })
+            && cpu.has_runnable_parked_process(kernel)
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if remote_drained.handled == 0
@@ -459,19 +537,17 @@ fn run_cpu_loop(
             std::thread::sleep(Duration::from_millis(16));
             continue;
         }
-        let instruction_limit = if args.cpu_instruction_limit == 0
-            && std::env::var_os("WINCE_EMU_FAST_START").is_some()
-        {
-            FAST_START_RUN_SLICE_INSTRUCTIONS
-        } else {
-            args.cpu_instruction_limit
-        };
         let (wall_clock_limit_ms, live_pump_slice) = effective_wall_clock_limit_ms(
             args.cpu_wall_clock_limit_ms,
             run_started.elapsed(),
             args.desktop,
             args.remote_server.is_some(),
             host_idle_message_poll_slice(cpu, args.desktop),
+        );
+        let instruction_limit = effective_instruction_limit(
+            args.cpu_instruction_limit,
+            live_pump_slice,
+            std::env::var_os("WINCE_EMU_FAST_START").is_some(),
         );
         if let Err(err) = desktop.run_cpu_until(
             cpu,
@@ -500,6 +576,7 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
         }
         desktop.present()?;
+        publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
         let blocked_remote_target = blocked_remote_input_target(cpu, kernel);
         let remote_drained =
             service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
@@ -513,25 +590,65 @@ fn run_cpu_loop(
                 &remote_drained.target_thread_ids,
                 Some(desktop.framebuffer_mut()),
             ) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
             if cpu.rotate_to_ready_parked_wait_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
             ) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if cpu.rotate_to_receiver_parked_process_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            ) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if !cpu.active_process_has_visible_receiver_work(kernel)
+                && cpu.rotate_to_runnable_parked_threads(kernel, &remote_drained.target_thread_ids)
+            {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
             if !current_cpu_targeted
                 && cpu.has_runnable_parked_process(kernel)
                 && cpu.rotate_to_next_parked_process(kernel)
             {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
             continue;
         }
-        if cpu.rotate_to_ready_parked_wait_with_framebuffer(kernel, Some(desktop.framebuffer_mut()))
+        if !kernel_has_unreturned_parked_process(kernel)
+            && cpu.rotate_to_ready_parked_wait_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            )
         {
             reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if args.remote_server.is_some()
+            && active_has_pending_parked_create_process(cpu, kernel)
+            && cpu.has_runnable_parked_process(kernel)
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if !cpu.active_process_has_visible_receiver_work(kernel)
+            && cpu.rotate_to_receiver_parked_process_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            )
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         let total_wall_clock_expired =
@@ -560,17 +677,29 @@ fn run_cpu_loop(
         };
         if process_handoff_switched {
             reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
+        }
+        if active_process_exited {
+            if let Some(snapshot) = cpu.last_debug_snapshot() {
+                print_unicorn_stop(snapshot);
+            }
+            break;
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
             continue;
         }
+        if cpu.prepare_active_sent_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         let snapshot_state = cpu.last_debug_snapshot().map(|snapshot| {
             (
                 snapshot_can_rotate_on_wall_stop(snapshot),
-                snapshot_has_blocked_get_message(snapshot),
-                snapshot_has_non_message_blocked_wait(snapshot),
+                snapshot_has_live_blocked_message_waiter(snapshot, kernel),
+                snapshot_has_live_non_message_blocked_wait(snapshot, kernel),
             )
         });
         if let Some((host_wall_clock_stop, message_waiter, non_message_waiter)) = snapshot_state {
@@ -587,28 +716,45 @@ fn run_cpu_loop(
             );
             if should_rotate_process && cpu.rotate_to_next_parked_process(kernel) {
                 reported_blocked_message_wait = false;
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
             if live_pump_slice && message_waiter {
-                if non_message_waiter {
-                    reported_blocked_message_wait = false;
+                if !should_run_active_visible_work_for_live_message_waiter(
+                    live_pump_slice,
+                    message_waiter,
+                    cpu.active_process_has_visible_receiver_work(kernel),
+                ) {
+                    if non_message_waiter {
+                        reported_blocked_message_wait = false;
+                        std::thread::sleep(Duration::from_millis(16));
+                        continue;
+                    }
+                    if !reported_blocked_message_wait {
+                        if let Some(snapshot) = cpu.last_debug_snapshot() {
+                            print_unicorn_stop(snapshot);
+                        }
+                        if let Some(path) = args.framebuffer_dump.as_ref() {
+                            desktop.framebuffer().write_ppm(path)?;
+                            println!("  framebuffer dump: {}", path.display());
+                        }
+                        reported_blocked_message_wait = true;
+                    }
                     std::thread::sleep(Duration::from_millis(16));
                     continue;
                 }
-                if !reported_blocked_message_wait {
-                    if let Some(snapshot) = cpu.last_debug_snapshot() {
-                        print_unicorn_stop(snapshot);
-                    }
-                    if let Some(path) = args.framebuffer_dump.as_ref() {
-                        desktop.framebuffer().write_ppm(path)?;
-                        println!("  framebuffer dump: {}", path.display());
-                    }
-                    reported_blocked_message_wait = true;
-                }
-                std::thread::sleep(Duration::from_millis(16));
-                continue;
             }
             if live_pump_slice && host_wall_clock_stop {
+                if !cpu.active_process_has_visible_receiver_work(kernel)
+                    && cpu.rotate_to_receiver_parked_process_with_framebuffer(
+                        kernel,
+                        Some(desktop.framebuffer_mut()),
+                    )
+                {
+                    reported_blocked_message_wait = false;
+                    publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                    continue;
+                }
                 reported_blocked_message_wait = false;
                 continue;
             }
@@ -660,16 +806,32 @@ fn should_rotate_parked_process(
     message_waiter: bool,
     host_wall_clock_stop: bool,
     live_pump_slice: bool,
-    idle_message_poll_slice: bool,
+    _idle_message_poll_slice: bool,
 ) -> bool {
-    has_parked_child_processes
-        && ((message_waiter
-            && (has_runnable_parked_process
-                || has_ready_parked_send_unblock
-                || has_ready_parked_wait_unblock))
-            || (live_pump_slice
-                && host_wall_clock_stop
-                && (!idle_message_poll_slice || has_ready_parked_wait_unblock || message_waiter)))
+    if !has_parked_child_processes {
+        return false;
+    }
+    let ready_message_waiter = message_waiter
+        && ((!live_pump_slice && has_runnable_parked_process)
+            || has_ready_parked_send_unblock
+            || has_ready_parked_wait_unblock);
+    let ready_live_wall_stop = live_pump_slice
+        && host_wall_clock_stop
+        && (has_runnable_parked_process
+            || has_ready_parked_send_unblock
+            || has_ready_parked_wait_unblock
+            || message_waiter);
+    let ready_live_message_waiter =
+        live_pump_slice && message_waiter && has_runnable_parked_process;
+    ready_message_waiter || ready_live_wall_stop || ready_live_message_waiter
+}
+
+fn should_run_active_visible_work_for_live_message_waiter(
+    live_pump_slice: bool,
+    message_waiter: bool,
+    active_visible_receiver_work: bool,
+) -> bool {
+    live_pump_slice && message_waiter && active_visible_receiver_work
 }
 
 fn host_idle_message_poll_slice(cpu: &UnicornMips, desktop: DesktopMode) -> bool {
@@ -728,15 +890,84 @@ fn snapshot_has_orphaned_cross_process_send(
         .is_some_and(|yielded| kernel.gwe.sent_message(yielded.send_id).is_none())
 }
 
-fn snapshot_has_only_stale_blocked_waits(
+fn active_stopped_in_create_process_w(cpu: &UnicornMips) -> bool {
+    cpu.saved_context_at_import(
+        ImportModuleKind::Coredll,
+        wince_emulation_v3::ce::coredll_ordinals::ORD_CREATE_PROCESS_W,
+    ) || cpu
+        .preferred_trace_snapshot()
+        .is_some_and(snapshot_is_create_process_w_stop)
+        || cpu
+            .last_debug_snapshot()
+            .is_some_and(snapshot_is_create_process_w_stop)
+}
+
+fn active_has_pending_parked_create_process(cpu: &UnicornMips, kernel: &CeKernel) -> bool {
+    should_rotate_for_pending_parked_create_process(
+        cpu.has_runnable_parked_process(kernel),
+        cpu.active_process_has_visible_receiver_work(kernel),
+        active_stopped_in_create_process_w(cpu),
+        kernel_has_unreturned_parked_process(kernel),
+    )
+}
+
+fn should_rotate_for_pending_parked_create_process(
+    has_runnable_parked_process: bool,
+    active_has_visible_receiver_work: bool,
+    active_stopped_in_create_process_w: bool,
+    kernel_has_unreturned_parked_process: bool,
+) -> bool {
+    has_runnable_parked_process
+        && !active_has_visible_receiver_work
+        && (active_stopped_in_create_process_w || kernel_has_unreturned_parked_process)
+}
+
+fn snapshot_is_create_process_w_stop(snapshot: &UnicornDebugSnapshot) -> bool {
+    snapshot.trap_module_kind == Some(ImportModuleKind::Coredll)
+        && snapshot.trap_ordinal
+            == Some(wince_emulation_v3::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
+}
+
+fn kernel_has_unreturned_parked_process(kernel: &CeKernel) -> bool {
+    let mut parked_process_ids = Vec::new();
+    for record in kernel.recent_process_ops() {
+        let Some(process_id) = record.process_id else {
+            continue;
+        };
+        match record.op {
+            "CreateProcessChildParked" => {
+                if !parked_process_ids.contains(&process_id) {
+                    parked_process_ids.push(process_id);
+                }
+            }
+            "CreateProcessChildReturned" | "CreateProcessChildError" | "CreateProcessExited" => {
+                parked_process_ids.retain(|id| *id != process_id);
+            }
+            _ => {}
+        }
+    }
+    !parked_process_ids.is_empty()
+}
+
+fn snapshot_has_live_blocked_message_waiter(
     snapshot: &UnicornDebugSnapshot,
     kernel: &CeKernel,
 ) -> bool {
-    !snapshot.active_blocked_waits.is_empty()
+    snapshot_has_blocked_get_message(snapshot)
         && snapshot
             .active_blocked_waits
             .iter()
-            .all(|wait| kernel.blocked_waiter(wait.id).is_none())
+            .any(|wait| wait.kind == "get_message" && kernel.blocked_waiter(wait.id).is_some())
+}
+
+fn snapshot_has_live_non_message_blocked_wait(
+    snapshot: &UnicornDebugSnapshot,
+    kernel: &CeKernel,
+) -> bool {
+    snapshot
+        .active_blocked_waits
+        .iter()
+        .any(|wait| wait.kind != "get_message" && kernel.blocked_waiter(wait.id).is_some())
 }
 
 fn snapshot_has_only_stale_owned_blocked_waits(
@@ -759,6 +990,35 @@ fn snapshot_has_only_stale_owned_blocked_waits(
 
 fn snapshot_is_idle_message_wait_only(snapshot: &UnicornDebugSnapshot) -> bool {
     snapshot_has_blocked_get_message(snapshot) && !snapshot_has_non_message_blocked_wait(snapshot)
+}
+
+fn remote_live_run_slice_ms() -> u64 {
+    std::env::var(REMOTE_LIVE_RUN_SLICE_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0)
+        .unwrap_or(REMOTE_LIVE_RUN_SLICE_MS)
+}
+
+fn should_rotate_idle_remote_receiver_parked_process(
+    active_has_receiver_work: bool,
+    active_has_visible_receiver_work: bool,
+) -> bool {
+    !active_has_receiver_work && !active_has_visible_receiver_work
+}
+
+fn effective_instruction_limit(
+    explicit_instruction_limit: usize,
+    live_pump_slice: bool,
+    fast_start_enabled: bool,
+) -> usize {
+    if live_pump_slice {
+        return 0;
+    }
+    if explicit_instruction_limit == 0 && fast_start_enabled {
+        return FAST_START_RUN_SLICE_INSTRUCTIONS;
+    }
+    explicit_instruction_limit
 }
 
 fn effective_wall_clock_limit_ms(
@@ -798,11 +1058,12 @@ fn effective_wall_clock_limit_ms(
         );
     }
     if remote_server_enabled {
+        let live_slice = remote_live_run_slice_ms();
         if explicit_limit_ms == 0 {
-            return (REMOTE_LIVE_RUN_SLICE_MS, true);
+            return (live_slice, true);
         }
         return (
-            remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed).min(REMOTE_LIVE_RUN_SLICE_MS),
+            remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed).min(live_slice),
             true,
         );
     }
@@ -989,25 +1250,7 @@ fn blocked_remote_input_target(
 }
 
 fn saved_message_remote_input_target(kernel: &CeKernel) -> Option<BlockedRemoteInputTarget> {
-    let get_message = kernel.scheduler.blocked_waits().find_map(|wait| {
-        matches!(wait.kind, SchedulerBlockedWaitKind::GetMessage { .. })
-            .then(|| {
-                let SchedulerBlockedWaitKind::GetMessage { hwnd, .. } = wait.kind else {
-                    unreachable!();
-                };
-                remote_input_wait_target_is_visible(kernel, wait.thread_id, hwnd).then_some(
-                    BlockedRemoteInputTarget {
-                        thread_id: wait.thread_id,
-                        hwnd,
-                    },
-                )
-            })
-            .flatten()
-    });
-    if get_message.is_some() {
-        return get_message;
-    }
-    kernel.scheduler.blocked_waits().find_map(|wait| {
+    let modal_message_box = kernel.scheduler.blocked_waits().find_map(|wait| {
         if wait.kind != SchedulerBlockedWaitKind::ModalMessageBox {
             return None;
         }
@@ -1026,7 +1269,29 @@ fn saved_message_remote_input_target(kernel: &CeKernel) -> Option<BlockedRemoteI
             thread_id: wait.thread_id,
             hwnd: dialog,
         })
-    })
+    });
+    if modal_message_box.is_some() {
+        return modal_message_box;
+    }
+    let get_message = kernel.scheduler.blocked_waits().find_map(|wait| {
+        matches!(wait.kind, SchedulerBlockedWaitKind::GetMessage { .. })
+            .then(|| {
+                let SchedulerBlockedWaitKind::GetMessage { hwnd, .. } = wait.kind else {
+                    unreachable!();
+                };
+                remote_input_wait_target_is_visible(kernel, wait.thread_id, hwnd).then_some(
+                    BlockedRemoteInputTarget {
+                        thread_id: wait.thread_id,
+                        hwnd,
+                    },
+                )
+            })
+            .flatten()
+    });
+    if get_message.is_some() {
+        return get_message;
+    }
+    None
 }
 
 fn remote_input_wait_target_is_visible(
@@ -1055,12 +1320,26 @@ fn remote_input_wait_target_is_visible(
 }
 
 fn service_remote_endpoint(
-    cpu: &UnicornMips,
+    cpu: &mut UnicornMips,
     kernel: &mut CeKernel,
-    desktop: &DesktopRuntime,
+    desktop: &mut DesktopRuntime,
     blocked_get_message: Option<&BlockedRemoteInputTarget>,
 ) -> RemoteEndpointDrain {
-    let drained = if let Some(blocked) = blocked_get_message {
+    cpu.prune_active_process_from_parked(kernel);
+    let mut remote_target = blocked_get_message.cloned();
+    if remote_target.is_none()
+        && !cpu.active_process_has_visible_receiver_work(kernel)
+        && cpu.rotate_to_receiver_parked_process_with_framebuffer(
+            kernel,
+            Some(desktop.framebuffer_mut()),
+        )
+    {
+        remote_target = Some(BlockedRemoteInputTarget {
+            thread_id: cpu.current_thread_id(),
+            hwnd: None,
+        });
+    }
+    let drained = if let Some(blocked) = remote_target.as_ref() {
         kernel.drain_remote_server_control_messages_to_thread_window_with_targets(
             blocked.thread_id,
             blocked.hwnd,
@@ -1068,12 +1347,13 @@ fn service_remote_endpoint(
     } else {
         kernel.drain_remote_server_control_messages_with_targets()
     };
+    let snapshot = cpu.last_debug_snapshot().cloned();
     publish_remote_endpoint(
         kernel.remote_server.as_ref(),
         Some(cpu),
         kernel,
         desktop.framebuffer(),
-        cpu.last_debug_snapshot(),
+        snapshot.as_ref(),
     );
     RemoteEndpointDrain {
         handled: drained.handled,
@@ -1083,32 +1363,43 @@ fn service_remote_endpoint(
 
 fn publish_remote_endpoint(
     server: Option<&RemoteServer>,
-    cpu: Option<&UnicornMips>,
+    cpu: Option<&mut UnicornMips>,
     kernel: &CeKernel,
     framebuffer: &VirtualFramebuffer,
     snapshot: Option<&UnicornDebugSnapshot>,
 ) {
     if let Some(server) = server {
+        let cpu = cpu.map(|cpu| {
+            cpu.prune_active_process_from_parked(kernel);
+            &*cpu
+        });
         server.publish_status(&kernel.remote_status());
         server.publish_recent_logs(kernel.remote.recent_log_lines(4096));
         server.publish_framebuffer(framebuffer);
         server.publish_debug_text("windows", live_kernel_windows_text(kernel));
         server.publish_debug_text("messages", live_kernel_messages_text(kernel));
+        server.publish_debug_text("message-boxes", live_kernel_message_boxes_text(kernel));
         server.publish_debug_text("devices", live_kernel_devices_text(kernel));
+        if let Some(cpu) = cpu {
+            server.publish_debug_text("active", live_active_process_text(cpu, kernel));
+            server.publish_debug_text("pending-wndproc", cpu.pending_wndproc_debug_text());
+            server.publish_debug_text("parked", cpu.parked_process_debug_text(kernel));
+            server.publish_debug_text("blobs", live_mapped_blob_ranges_text(cpu));
+            server.publish_debug_text("trampolines", cpu.trampoline_debug_text());
+        }
+        server.publish_debug_text(
+            "summary",
+            format!(
+                "  last_stop_snapshot: {}\n{}",
+                snapshot
+                    .map(|snapshot| snapshot.summary())
+                    .unwrap_or_else(|| "none".to_owned()),
+                live_kernel_waits_text(kernel)
+            ),
+        );
+        server.publish_debug_text("sends", kernel.gwe.sent_message_debug_text());
         if let Some(snapshot) = snapshot {
-            server.publish_debug_text(
-                "summary",
-                format!(
-                    "  last_stop_snapshot: {}\n{}",
-                    snapshot.summary(),
-                    live_kernel_waits_text(kernel)
-                ),
-            );
             server.publish_debug_text("processes", monitor_trace_text(snapshot, "processes"));
-            server.publish_debug_text("sends", kernel.gwe.sent_message_debug_text());
-            if let Some(cpu) = cpu {
-                server.publish_debug_text("pending-wndproc", cpu.pending_wndproc_debug_text());
-            }
             server.publish_debug_text("wndproc", monitor_trace_text(snapshot, "wndproc"));
             server.publish_debug_text("imports", monitor_trace_text(snapshot, "imports"));
             server.publish_debug_text("milestones", monitor_trace_text(snapshot, "milestones"));
@@ -1119,11 +1410,98 @@ fn publish_remote_endpoint(
             server.publish_debug_text("files", monitor_trace_text(snapshot, "files"));
             server.publish_debug_text("files-full", monitor_trace_text(snapshot, "files-full"));
             server.publish_debug_text("events", monitor_trace_text(snapshot, "events"));
-            if let Some(cpu) = cpu {
-                server.publish_debug_text("parked", cpu.parked_process_debug_text(kernel));
-            }
+            server.publish_debug_text("render", monitor_trace_text(snapshot, "render"));
+            server.publish_debug_text("controller", monitor_trace_text(snapshot, "controller"));
+            server.publish_debug_text("resource", monitor_trace_text(snapshot, "resource"));
         }
     }
+}
+
+fn publish_remote_debug_after_scheduler_change(
+    cpu: &mut UnicornMips,
+    kernel: &CeKernel,
+    desktop: &DesktopRuntime,
+) {
+    let snapshot = cpu.last_debug_snapshot().cloned();
+    publish_remote_endpoint(
+        kernel.remote_server.as_ref(),
+        Some(cpu),
+        kernel,
+        desktop.framebuffer(),
+        snapshot.as_ref(),
+    );
+}
+
+fn live_active_process_text(cpu: &UnicornMips, kernel: &CeKernel) -> String {
+    use std::fmt::Write as _;
+
+    let state = kernel.current_process_state();
+    let active_threads = cpu.active_thread_ids();
+    let active_thread_text = active_threads
+        .iter()
+        .map(|thread_id| thread_id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let last_stop = cpu
+        .last_debug_snapshot()
+        .map(|snapshot| snapshot.summary())
+        .unwrap_or_else(|| "none".to_owned());
+    let mut out = format!(
+        "  active: pid={} tid={} active_threads=[{}] saved_context={} visible_receiver_work={} receiver_work={} parked_processes={}\n  saved_context_detail: {}\n  active_last_stop_snapshot: {}\n",
+        state.process_id,
+        cpu.current_thread_id(),
+        active_thread_text,
+        cpu.has_saved_context(),
+        cpu.active_process_has_visible_receiver_work(kernel),
+        cpu.active_process_has_receiver_work(kernel),
+        cpu.parked_child_process_count(),
+        cpu.saved_context_debug_text(),
+        last_stop
+    );
+    out.push_str("  active thread work:\n");
+    for thread_id in active_threads {
+        let dirty_visible_windows = kernel
+            .gwe
+            .windows_snapshot()
+            .into_iter()
+            .filter(|window| {
+                window.thread_id == thread_id
+                    && window.visible
+                    && !window.destroyed
+                    && window.rect.width() > 0
+                    && window.rect.height() > 0
+                    && (window.update_pending || window.erase_pending)
+            })
+            .count();
+        let _ = writeln!(
+            &mut out,
+            "    tid={thread_id} sent={} messages={} visible_messages={} dirty_visible_windows={dirty_visible_windows}",
+            kernel.thread_has_pending_sent_message(thread_id),
+            kernel.gwe.has_message_filtered(thread_id, None, 0, 0),
+            kernel
+                .gwe
+                .has_visible_window_message_filtered(thread_id, None, 0, 0)
+        );
+    }
+    out.push_str(&live_kernel_waits_text(kernel));
+    out
+}
+
+fn live_mapped_blob_ranges_text(cpu: &UnicornMips) -> String {
+    let mut out = String::from("  mapped blobs:\n");
+    let blobs = cpu.mapped_blob_ranges();
+    if blobs.is_empty() {
+        out.push_str("    none\n");
+        return out;
+    }
+    for blob in blobs {
+        let end = blob.base.saturating_add(blob.size);
+        out.push_str(&format!(
+            "    0x{:08x}-0x{:08x} size=0x{:x} {}\n",
+            blob.base, end, blob.size, blob.name
+        ));
+    }
+    out
 }
 
 fn print_unicorn_stop(snapshot: &wince_emulation_v3::emulator::cpu::UnicornDebugSnapshot) {
@@ -1577,7 +1955,7 @@ fn monitor_continue_process_handoff(
         return false;
     };
     let host_wall_clock_stop = snapshot.host_wall_clock_stop.is_some();
-    let message_waiter = snapshot_has_blocked_get_message(snapshot);
+    let message_waiter = snapshot_has_live_blocked_message_waiter(snapshot, kernel);
     let should_rotate_process = should_rotate_parked_process(
         cpu.has_parked_child_processes(),
         cpu.has_runnable_parked_process(kernel),
@@ -1828,8 +2206,34 @@ fn live_kernel_messages_text(kernel: &CeKernel) -> String {
     out
 }
 
-fn live_kernel_devices_text(kernel: &CeKernel) -> String {
+fn live_kernel_message_boxes_text(kernel: &CeKernel) -> String {
     let mut out = String::new();
+    let records = kernel.shell.message_boxes().collect::<Vec<_>>();
+    if records.is_empty() {
+        let _ = writeln!(out, "  message boxes: none");
+        return out;
+    }
+    let _ = writeln!(out, "  message boxes:");
+    for (index, record) in records.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "    {index}: tid={} owner=0x{:08x} dialog=0x{:08x} style=0x{:08x} result={} rendered={} active={} caption={:?} text={:?}",
+            record.thread_id,
+            record.owner_hwnd,
+            record.dialog_hwnd,
+            record.style,
+            record.result,
+            record.rendered,
+            record.dialog_was_active,
+            record.caption,
+            record.text
+        );
+    }
+    out
+}
+
+fn live_kernel_devices_text(kernel: &CeKernel) -> String {
+    let mut out = kernel.device_debug_text();
     push_monitor_records(&mut out, "live device ops", kernel.recent_device_ops());
     out
 }
@@ -3106,8 +3510,18 @@ mod tests {
     }
 
     #[test]
-    fn live_wall_stop_rotates_parked_processes() {
-        assert!(should_rotate_parked_process(
+    fn live_pump_disables_instruction_limit_for_safe_wall_clock_stops() {
+        assert_eq!(effective_instruction_limit(5_000_000, true, false), 0);
+        assert_eq!(
+            effective_instruction_limit(0, false, true),
+            FAST_START_RUN_SLICE_INSTRUCTIONS
+        );
+        assert_eq!(effective_instruction_limit(1234, false, true), 1234);
+    }
+
+    #[test]
+    fn live_wall_stop_rotates_only_for_ready_work() {
+        assert!(!should_rotate_parked_process(
             true, false, false, false, false, true, true, false
         ));
         assert!(should_rotate_parked_process(
@@ -3116,11 +3530,20 @@ mod tests {
         assert!(should_rotate_parked_process(
             true, true, false, false, true, false, false, true
         ));
+        assert!(should_rotate_parked_process(
+            true, true, false, false, true, false, true, true
+        ));
+        assert!(should_rotate_parked_process(
+            true, true, false, false, true, false, true, false
+        ));
         assert!(!should_rotate_parked_process(
             true, false, false, false, true, false, false, true
         ));
         assert!(should_rotate_parked_process(
             true, false, false, true, false, true, true, true
+        ));
+        assert!(should_rotate_parked_process(
+            true, true, false, false, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
             true, false, false, false, false, true, true, true
@@ -3130,6 +3553,57 @@ mod tests {
         ));
         assert!(!should_rotate_parked_process(
             false, false, true, true, true, true, true, false
+        ));
+    }
+
+    #[test]
+    fn live_message_waiter_runs_active_visible_work_instead_of_idling() {
+        assert!(should_run_active_visible_work_for_live_message_waiter(
+            true, true, true
+        ));
+        assert!(!should_run_active_visible_work_for_live_message_waiter(
+            true, true, false
+        ));
+        assert!(!should_run_active_visible_work_for_live_message_waiter(
+            true, false, true
+        ));
+        assert!(!should_run_active_visible_work_for_live_message_waiter(
+            false, true, true
+        ));
+    }
+
+    #[test]
+    fn idle_remote_receiver_rotation_preserves_active_ui_work() {
+        assert!(should_rotate_idle_remote_receiver_parked_process(
+            false, false
+        ));
+        assert!(!should_rotate_idle_remote_receiver_parked_process(
+            true, false
+        ));
+        assert!(!should_rotate_idle_remote_receiver_parked_process(
+            false, true
+        ));
+        assert!(!should_rotate_idle_remote_receiver_parked_process(
+            true, true
+        ));
+    }
+
+    #[test]
+    fn pending_create_process_handoff_preserves_active_visible_ui_work() {
+        assert!(should_rotate_for_pending_parked_create_process(
+            true, false, true, false
+        ));
+        assert!(should_rotate_for_pending_parked_create_process(
+            true, false, false, true
+        ));
+        assert!(!should_rotate_for_pending_parked_create_process(
+            true, true, true, true
+        ));
+        assert!(!should_rotate_for_pending_parked_create_process(
+            false, false, true, true
+        ));
+        assert!(!should_rotate_for_pending_parked_create_process(
+            true, false, false, false
         ));
     }
 

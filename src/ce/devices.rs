@@ -55,6 +55,8 @@ pub struct DeviceConfig {
     #[serde(default)]
     pub host: Option<String>,
     #[serde(default)]
+    pub remote_gps: bool,
+    #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub note: Option<String>,
@@ -244,14 +246,16 @@ impl DeviceNamespace {
     pub fn remote_gps_target(&self) -> Option<String> {
         let mut fallback = None;
         for device in self.devices.values() {
+            if device.kind == DeviceKind::Serial && device.remote_gps {
+                return Some(device.guest.clone());
+            }
+        }
+        for device in self.devices.values() {
             if device.kind != DeviceKind::Serial {
                 continue;
             }
-            if device.backend == DeviceBackend::Win32Com
-                && let Some(host) = &device.host
-                && !host.is_empty()
-            {
-                return Some(host.clone());
+            if device.backend == DeviceBackend::Win32Com {
+                return Some(device.guest.clone());
             }
             fallback.get_or_insert_with(|| device.guest.clone());
         }
@@ -376,6 +380,21 @@ impl DeviceSession {
         input: &[u8],
         output_capacity: u32,
     ) -> DeviceIoControlResult {
+        self.device_io_control_with_output_buffer(
+            ioctl_code,
+            input,
+            output_capacity,
+            output_capacity > 0,
+        )
+    }
+
+    pub fn device_io_control_with_output_buffer(
+        &mut self,
+        ioctl_code: u32,
+        input: &[u8],
+        output_capacity: u32,
+        output_buffer_present: bool,
+    ) -> DeviceIoControlResult {
         tracing::debug!(
             target: "ce.devices",
             device = self.guest_name.as_str(),
@@ -394,7 +413,7 @@ impl DeviceSession {
                 sensor.device_io_control(ioctl_code, input, output_capacity)
             }
             DeviceRuntime::Magnetometer(sensor) => {
-                sensor.device_io_control(ioctl_code, input, output_capacity)
+                sensor.device_io_control(ioctl_code, input, output_capacity, output_buffer_present)
             }
             DeviceRuntime::NandUuid(device) => {
                 device.device_io_control(ioctl_code, input, output_capacity)
@@ -717,12 +736,62 @@ mod tests {
                 kind: DeviceKind::Serial,
                 backend: DeviceBackend::Stub,
                 host: None,
+                remote_gps: false,
                 enabled: true,
                 note: None,
             }],
         });
 
         assert_eq!(namespace.open("com7").unwrap().guest_name, "COM7:");
+    }
+
+    #[test]
+    fn remote_gps_target_uses_guest_name_for_win32_backed_serial() {
+        let namespace = DeviceNamespace::from_config(DeviceConfigFile {
+            version: 1,
+            defaults: DeviceDefaults::default(),
+            devices: vec![DeviceConfig {
+                guest: "COM7:".to_owned(),
+                kind: DeviceKind::Serial,
+                backend: DeviceBackend::Win32Com,
+                host: Some("COM21".to_owned()),
+                remote_gps: false,
+                enabled: true,
+                note: None,
+            }],
+        });
+
+        assert_eq!(namespace.remote_gps_target().as_deref(), Some("COM7:"));
+    }
+
+    #[test]
+    fn remote_gps_target_prefers_explicit_serial_flag() {
+        let namespace = DeviceNamespace::from_config(DeviceConfigFile {
+            version: 1,
+            defaults: DeviceDefaults::default(),
+            devices: vec![
+                DeviceConfig {
+                    guest: "COM1:".to_owned(),
+                    kind: DeviceKind::Serial,
+                    backend: DeviceBackend::Win32Com,
+                    host: Some("COM21".to_owned()),
+                    remote_gps: false,
+                    enabled: true,
+                    note: None,
+                },
+                DeviceConfig {
+                    guest: "COM7:".to_owned(),
+                    kind: DeviceKind::Serial,
+                    backend: DeviceBackend::Stub,
+                    host: None,
+                    remote_gps: true,
+                    enabled: true,
+                    note: None,
+                },
+            ],
+        });
+
+        assert_eq!(namespace.remote_gps_target().as_deref(), Some("COM7:"));
     }
 
     #[test]
@@ -735,6 +804,7 @@ mod tests {
                 kind: DeviceKind::Serial,
                 backend: DeviceBackend::Win32Com,
                 host: None,
+                remote_gps: false,
                 enabled: true,
                 note: None,
             }],
@@ -765,6 +835,7 @@ mod tests {
                     kind: DeviceKind::IoctlDevice,
                     backend: DeviceBackend::Accelerometer,
                     host: None,
+                    remote_gps: false,
                     enabled: true,
                     note: None,
                 },
@@ -773,6 +844,7 @@ mod tests {
                     kind: DeviceKind::IoctlDevice,
                     backend: DeviceBackend::LightSensor,
                     host: None,
+                    remote_gps: false,
                     enabled: true,
                     note: None,
                 },
@@ -781,6 +853,7 @@ mod tests {
                     kind: DeviceKind::IoctlDevice,
                     backend: DeviceBackend::Magnetometer,
                     host: None,
+                    remote_gps: false,
                     enabled: true,
                     note: None,
                 },
@@ -789,6 +862,7 @@ mod tests {
                     kind: DeviceKind::IoctlDevice,
                     backend: DeviceBackend::I2cBus,
                     host: None,
+                    remote_gps: false,
                     enabled: true,
                     note: None,
                 },
@@ -797,6 +871,7 @@ mod tests {
                     kind: DeviceKind::IoctlDevice,
                     backend: DeviceBackend::I2cBus,
                     host: None,
+                    remote_gps: false,
                     enabled: true,
                     note: None,
                 },
@@ -805,6 +880,7 @@ mod tests {
                     kind: DeviceKind::IoctlDevice,
                     backend: DeviceBackend::I2cBus,
                     host: None,
+                    remote_gps: false,
                     enabled: true,
                     note: None,
                 },
@@ -844,11 +920,18 @@ mod tests {
         let mag_read =
             mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0x40, 1, 0], 1);
         assert_eq!(mag_read.output, vec![0xaa]);
-        let mag_poll =
+        let mag_no_output_buffer =
             mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0x40, 1, 0], 0);
-        assert!(mag_poll.success);
-        assert_eq!(mag_poll.bytes_returned, 0);
-        assert!(mag_poll.output.is_empty());
+        assert!(!mag_no_output_buffer.success);
+        let mag_zero_capacity_with_output_buffer = mag.device_io_control_with_output_buffer(
+            magnetometer::IOCTL_MFS_READ_REGISTERS,
+            &[0, 0x40, 1, 0],
+            0,
+            true,
+        );
+        assert!(mag_zero_capacity_with_output_buffer.success);
+        assert_eq!(mag_zero_capacity_with_output_buffer.bytes_returned, 1);
+        assert_eq!(mag_zero_capacity_with_output_buffer.output, vec![0xaa]);
 
         let mut i2c = namespace.open("I2C2:").unwrap();
         assert!(
@@ -889,6 +972,7 @@ mod tests {
                     kind: DeviceKind::IoctlDevice,
                     backend: DeviceBackend::Accelerometer,
                     host: None,
+                    remote_gps: false,
                     enabled: true,
                     note: None,
                 },
@@ -897,6 +981,7 @@ mod tests {
                     kind: DeviceKind::IoctlDevice,
                     backend: DeviceBackend::Magnetometer,
                     host: None,
+                    remote_gps: false,
                     enabled: true,
                     note: None,
                 },
@@ -946,6 +1031,7 @@ mod tests {
                 kind: DeviceKind::IoctlDevice,
                 backend: DeviceBackend::NandUuid,
                 host: None,
+                remote_gps: false,
                 enabled: true,
                 note: None,
             }],
@@ -988,6 +1074,7 @@ mod tests {
                 kind: DeviceKind::IoctlDevice,
                 backend: DeviceBackend::PicController,
                 host: None,
+                remote_gps: false,
                 enabled: true,
                 note: None,
             }],

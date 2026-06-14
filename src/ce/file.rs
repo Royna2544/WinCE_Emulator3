@@ -32,6 +32,9 @@ const CE_VOLUME_ATTRIBUTE_SYSTEM: u32 = 0x0000_0008;
 const CE_VOLUME_FLAG_STORE: u32 = 0x0000_0020;
 const CE_VOLUME_FLAG_RAMFS: u32 = 0x0000_0040;
 const CE_VOLUME_DEFAULT_BLOCK_SIZE: u32 = 4096;
+const AFS_FLAG_HIDDEN: u32 = 0x0001;
+const AFS_FLAG_SYSTEM: u32 = 0x0020;
+const AFS_FLAG_PERMANENT: u32 = 0x0040;
 
 #[derive(Debug, Clone)]
 pub struct HostFileSystem {
@@ -91,6 +94,12 @@ pub struct VolumeInfo {
     pub block_size: u32,
     pub store_name: String,
     pub partition_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountTableVolumeInfo {
+    pub name: String,
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -371,6 +380,48 @@ impl HostFileSystem {
         });
     }
 
+    pub fn register_fsdmgr_mount_name(&mut self, mount_name: &str) -> Option<(String, bool)> {
+        let mut mount_name = mount_name.trim();
+        while mount_name.starts_with('\\') || mount_name.starts_with('/') {
+            mount_name = &mount_name[1..];
+        }
+        mount_name = mount_name.trim_matches(['\\', '/']);
+        if mount_name.is_empty() {
+            return None;
+        }
+        let normalized_base = normalize_guest_path(mount_name);
+        if normalized_base.is_empty() {
+            return None;
+        }
+        if self.mounts.contains_key(&normalized_base) {
+            return Some((format!("\\{}", normalized_base.replace('/', "\\")), false));
+        }
+        for suffix in 1..=9 {
+            let candidate = if suffix == 1 {
+                normalized_base.clone()
+            } else {
+                format!("{normalized_base}{suffix}")
+            };
+            if self.mounts.contains_key(&candidate) {
+                continue;
+            }
+            let guest_root = format!("\\{}", candidate.replace('/', "\\"));
+            self.mount(MountConfig {
+                name: None,
+                guest_root: guest_root.clone(),
+                host_root: None,
+                total_mbytes: 8192,
+                free_mbytes: 4096,
+                writable: true,
+                removable: true,
+                system: false,
+                hidden: false,
+            });
+            return Some((guest_root, true));
+        }
+        None
+    }
+
     pub fn unmount_guest_root(&mut self, guest_root: &str) -> Option<FileMount> {
         let guest_root = normalize_guest_path(guest_root);
         let mount = self.mounts.get(&guest_root)?;
@@ -471,6 +522,28 @@ impl HostFileSystem {
         }
     }
 
+    pub fn mount_table_volume_info_for_guest_root(
+        &self,
+        guest_root: &str,
+    ) -> Option<MountTableVolumeInfo> {
+        let guest_root = normalize_guest_path(guest_root);
+        let mount = self.mounts.get(&guest_root)?;
+        let mut flags = 0;
+        if mount.hidden {
+            flags |= AFS_FLAG_HIDDEN;
+        }
+        if mount.system {
+            flags |= AFS_FLAG_SYSTEM;
+        }
+        if !mount.removable {
+            flags |= AFS_FLAG_PERMANENT;
+        }
+        Some(MountTableVolumeInfo {
+            name: volume_name_from_guest_root(&mount.guest_root),
+            flags,
+        })
+    }
+
     pub fn io_stats(&self) -> FileIoStats {
         self.io_stats
     }
@@ -542,7 +615,9 @@ impl HostFileSystem {
                     )));
                 }
                 CREATE_NEW | CREATE_ALWAYS => {
-                    (FileBacking::Memory(Vec::new()), 0, requested_writable)
+                    let file =
+                        create_host_file(&host_path, creation_disposition == CREATE_NEW, true)?;
+                    (FileBacking::HostFile(file), 0, requested_writable)
                 }
                 OPEN_EXISTING if !exists => {
                     return Err(Error::InvalidArgument(format!(
@@ -558,9 +633,13 @@ impl HostFileSystem {
                     let (file, writable) = open_existing_host_file(&host_path, requested_writable)?;
                     (FileBacking::HostFile(file), file_len, writable)
                 }
-                OPEN_ALWAYS => (FileBacking::Memory(Vec::new()), 0, requested_writable),
+                OPEN_ALWAYS => {
+                    let file = create_host_file(&host_path, false, false)?;
+                    (FileBacking::HostFile(file), 0, requested_writable)
+                }
                 TRUNCATE_EXISTING if exists && requested_writable => {
-                    (FileBacking::Memory(Vec::new()), 0, true)
+                    let file = create_host_file(&host_path, false, true)?;
+                    (FileBacking::HostFile(file), 0, true)
                 }
                 TRUNCATE_EXISTING if !exists => {
                     return Err(Error::InvalidArgument(format!(
@@ -1595,6 +1674,30 @@ fn open_existing_host_file(host_path: &Path, requested_writable: bool) -> Result
         })
 }
 
+fn create_host_file(host_path: &Path, create_new: bool, truncate: bool) -> Result<fs::File> {
+    if let Some(parent) = host_path.parent() {
+        fs::create_dir_all(parent).map_err(|source| Error::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true);
+    if create_new {
+        options.create_new(true);
+    } else {
+        options.create(true);
+    }
+    if truncate {
+        options.truncate(true);
+    }
+    options.open(host_path).map_err(|source| Error::Io {
+        path: host_path.to_path_buf(),
+        source,
+    })
+}
+
 const HOST_READ_CACHE_CHUNK: usize = 64 * 1024;
 
 fn read_cached_host_file_into<F>(
@@ -1798,6 +1901,25 @@ mod tests {
             fs.create_file_w("\\", GENERIC_WRITE, CREATE_ALWAYS)
                 .is_err()
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn open_always_new_writable_file_creates_host_backing_immediately() {
+        let root =
+            std::env::temp_dir().join(format!("wince_file_open_always_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w("\\iNaviData\\SDLock.dat", GENERIC_WRITE, OPEN_ALWAYS)
+            .unwrap();
+
+        assert!(fs.open_file(id).unwrap().is_host_file_backed());
+        assert!(root.join("iNaviData").join("SDLock.dat").is_file());
+        assert!(fs.close(id).is_ok());
 
         fs::remove_dir_all(root).unwrap();
     }

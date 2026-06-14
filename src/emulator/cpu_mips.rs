@@ -431,6 +431,25 @@ pub(crate) fn decode_trampoline_sentinel_target(
     Some(((instruction & 0xffff) << 16) | (next_instruction & 0xffff))
 }
 
+pub(crate) fn decode_trampoline_long_jump_target(
+    instruction: u32,
+    next_instruction: u32,
+    jump_instruction: u32,
+    delay_slot: u32,
+) -> Option<u32> {
+    let register = decode_mips_lui_rt(instruction)?;
+    let next_opcode = next_instruction >> 26;
+    let next_rs = (next_instruction >> 21) & 0x1f;
+    let next_rt = (next_instruction >> 16) & 0x1f;
+    if next_opcode != 0x0d || next_rs != register || next_rt != register {
+        return None;
+    }
+    if !is_mips_jr(jump_instruction, register) || delay_slot != MIPS_NOP {
+        return None;
+    }
+    Some(((instruction & 0xffff) << 16) | (next_instruction & 0xffff))
+}
+
 pub(crate) fn is_patched_trampoline_jump(
     instruction: u32,
     next_instruction: u32,

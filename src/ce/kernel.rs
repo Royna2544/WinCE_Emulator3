@@ -22,10 +22,10 @@ use crate::{
         object::{
             CE_THREAD_PRIORITY_NORMAL, FileChangeNotificationObject, FileChangeRecord, FileObject,
             FindFileObject, HandleTable, KernelObject, MAX_SUSPEND_COUNT, ThreadResumeResult,
-            ThreadSuspendResult, WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
-            win32_thread_priority_to_ce,
+            ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
+            ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
-        registry::Registry,
+        registry::{Registry, RegistryValue},
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
         resource::ResourceSystem,
         scheduler::{
@@ -36,7 +36,7 @@ use crate::{
             NotifyIconData, ShellChangeNotifyRegistration, ShellNotificationCallbackMethod,
             ShellNotificationCallbackRecord, ShellNotificationRecord, ShellSystem,
         },
-        thread::ThreadSystem,
+        thread::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_SUCCESS, ThreadSystem},
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
@@ -46,8 +46,17 @@ use crate::{
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
     path::PathBuf,
 };
+
+pub const FSDMGR_INTERNAL_PROCESS_ID: u32 = 0xffff_fffe;
+const FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE: u32 = 512;
+const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
+const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
+const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
+const DISK_IOCTL_INITIALIZED: u32 = 4;
+const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePumpResult {
@@ -68,6 +77,14 @@ struct RemoteInputDrain {
     posted: usize,
     target_thread_ids: Vec<u32>,
     detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FsdmgrCacheEntry {
+    disk_ptr: u32,
+    block_size: u32,
+    disable_delete: bool,
+    disable_flush: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -120,12 +137,14 @@ pub struct CeKernel {
     recent_event_ops: Vec<EventTraceRecord>,
     recent_message_ops: Vec<MessageTraceRecord>,
     recent_device_ops: Vec<DeviceTraceRecord>,
+    fsdmgr_disk_sectors: BTreeMap<(u32, u32), Vec<u8>>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
     live_pump_timeout_stop_tick: Option<u32>,
     runtime_loader_stats: RuntimeLoaderStats,
     pulsed_wait_handles: BTreeMap<u64, u32>,
     comm_event_mask_changed_waits: BTreeSet<u64>,
     font_families: Vec<CeFontFamily>,
+    fsdmgr_caches: Vec<Option<FsdmgrCacheEntry>>,
 }
 
 /// Font family entry for CE system font enumeration (EnumFontFamiliesExW).
@@ -646,10 +665,62 @@ pub const CE_CURRENT_PROCESS_PSEUDO_HANDLE: u32 = CE_SYS_HANDLE_BASE + CE_SH_CUR
 pub const STILL_ACTIVE: u32 = 259;
 pub const SW_SHOWNORMAL: u32 = 1;
 
+fn seed_testime_sample_dictionary(registry: &mut Registry) {
+    const ROOT: &str = r"HKLM\SOFTWARE\Microsoft\testime\Windows\testime.DIC";
+
+    let digits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+    for (start, reading) in digits.iter().enumerate() {
+        let candidates: Vec<String> = (0..5)
+            .map(|offset| digits[(start + offset) % digits.len()].to_string())
+            .collect();
+        seed_testime_sample_candidates(registry, ROOT, &reading.to_string(), candidates);
+    }
+
+    for ch in 'A'..='Z' {
+        seed_testime_sample_candidates(
+            registry,
+            ROOT,
+            &ch.to_string(),
+            vec![ch.to_string(), ch.to_ascii_lowercase().to_string()],
+        );
+    }
+
+    seed_testime_sample_candidates(registry, ROOT, "a", vec!["a".to_owned(), "aa".to_owned()]);
+    // testime.reg contains two identical [...\b\b] sections; the later default
+    // value wins in regedit import before TESTIME's lowercase-section guard hides it.
+    seed_testime_sample_candidates(registry, ROOT, "b", vec!["bbbbb".to_owned()]);
+    for ch in 'c'..='z' {
+        seed_testime_sample_candidates(
+            registry,
+            ROOT,
+            &ch.to_string(),
+            vec![ch.to_ascii_uppercase().to_string(), ch.to_string()],
+        );
+    }
+}
+
+fn seed_testime_sample_candidates(
+    registry: &mut Registry,
+    root: &str,
+    reading: &str,
+    candidates: Vec<String>,
+) {
+    let path = format!(r"{root}\{reading}");
+    for (index, candidate) in candidates.into_iter().enumerate() {
+        registry.set_value(
+            &path,
+            &format!("__testime_sample_{index:03}"),
+            RegistryValue::string(candidate),
+        );
+    }
+}
+
 impl CeKernel {
     pub fn boot(config: RuntimeConfig) -> Self {
+        let mut registry = Registry::from_dump(config.registry);
+        seed_testime_sample_dictionary(&mut registry);
         Self {
-            registry: Registry::from_dump(config.registry),
+            registry,
             devices: DeviceNamespace::from_config(config.devices),
             files: HostFileSystem::from_storage(config.storage),
             handles: HandleTable::default(),
@@ -691,12 +762,14 @@ impl CeKernel {
             recent_event_ops: Vec::new(),
             recent_message_ops: Vec::new(),
             recent_device_ops: Vec::new(),
+            fsdmgr_disk_sectors: BTreeMap::new(),
             modal_dialog_results: BTreeMap::new(),
             live_pump_timeout_stop_tick: None,
             runtime_loader_stats: RuntimeLoaderStats::default(),
             pulsed_wait_handles: BTreeMap::new(),
             comm_event_mask_changed_waits: BTreeSet::new(),
             font_families: ce_system_font_families(),
+            fsdmgr_caches: Vec::new(),
         }
     }
 
@@ -1374,6 +1447,349 @@ impl CeKernel {
         }
     }
 
+    pub fn create_volume_handle_for_guest_root(&mut self, guest_root: &str) -> Result<u32> {
+        let guest_root = normalize_shell_change_path(&canonical_shell_change_path(guest_root));
+        match self.files.volume_root_for_guest_path(&guest_root) {
+            Some(volume_root) if volume_root.eq_ignore_ascii_case(&guest_root) => {
+                Ok(self.handles.insert(KernelObject::Volume(VolumeObject {
+                    owner_process_id: self.current_process_id,
+                    guest_root,
+                    disk_ptr: None,
+                    fsd_volume_context: None,
+                })))
+            }
+            _ => Err(Error::InvalidArgument(format!(
+                "volume root is not mounted: {guest_root}"
+            ))),
+        }
+    }
+
+    pub fn fsdmgr_register_volume(
+        &mut self,
+        disk_ptr: u32,
+        mount_name: &str,
+        fsd_volume_context: u32,
+    ) -> Result<u32> {
+        if disk_ptr == 0 {
+            return Err(Error::InvalidArgument(
+                "null FSDMGR disk pointer".to_owned(),
+            ));
+        }
+        if self.fsdmgr_volume_handle_for_disk(disk_ptr).is_some() {
+            return Err(Error::AlreadyExists(format!(
+                "FSDMGR disk pointer 0x{disk_ptr:08x} is already registered"
+            )));
+        }
+        let (guest_root, created) = self
+            .files
+            .register_fsdmgr_mount_name(mount_name)
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!("invalid FSDMGR mount name: {mount_name}"))
+            })?;
+        let handle = self.handles.insert(KernelObject::Volume(VolumeObject {
+            owner_process_id: self.current_process_id,
+            guest_root: guest_root.clone(),
+            disk_ptr: Some(disk_ptr),
+            fsd_volume_context: (fsd_volume_context != 0).then_some(fsd_volume_context),
+        }));
+        if created {
+            self.post_shell_file_change_notifications(SHCNE_DRIVEADD, Some(&guest_root), None);
+            self.signal_file_change_notifications(SHCNE_DRIVEADD, Some(&guest_root), None);
+            self.send_notify_message_w(
+                0,
+                crate::ce::gwe::HWND_BROADCAST,
+                WM_DEVICECHANGE,
+                DBT_DEVICEARRIVAL,
+                0,
+            );
+        }
+        Ok(handle)
+    }
+
+    pub fn fsdmgr_volume_handle_for_disk(&self, disk_ptr: u32) -> Option<u32> {
+        if disk_ptr == 0 {
+            return None;
+        }
+        self.handles
+            .iter()
+            .find_map(|(handle, object)| match object {
+                KernelObject::Volume(volume) if volume.disk_ptr == Some(disk_ptr) => Some(handle),
+                _ => None,
+            })
+    }
+
+    pub fn fsdmgr_create_cache(&mut self, disk_ptr: u32, block_size: u32) -> Option<u32> {
+        if disk_ptr == 0 || block_size == 0 {
+            return None;
+        }
+        let entry = FsdmgrCacheEntry {
+            disk_ptr,
+            block_size,
+            disable_delete: false,
+            disable_flush: false,
+        };
+        if let Some((index, slot)) = self
+            .fsdmgr_caches
+            .iter_mut()
+            .enumerate()
+            .find(|(_, slot)| slot.is_none())
+        {
+            *slot = Some(entry);
+            return Some(index as u32);
+        }
+        let cache_id = u32::try_from(self.fsdmgr_caches.len()).ok()?;
+        self.fsdmgr_caches.push(Some(entry));
+        Some(cache_id)
+    }
+
+    pub fn fsdmgr_delete_cache(&mut self, cache_id: u32) -> u32 {
+        let Some(slot) = self.fsdmgr_caches.get_mut(cache_id as usize) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if slot.is_none() {
+            return ERROR_INVALID_PARAMETER;
+        }
+        *slot = None;
+        ERROR_SUCCESS
+    }
+
+    fn fsdmgr_cache_entry(&self, cache_id: u32) -> Option<&FsdmgrCacheEntry> {
+        self.fsdmgr_caches
+            .get(cache_id as usize)
+            .and_then(Option::as_ref)
+    }
+
+    fn fsdmgr_cache_entry_mut(&mut self, cache_id: u32) -> Option<&mut FsdmgrCacheEntry> {
+        self.fsdmgr_caches
+            .get_mut(cache_id as usize)
+            .and_then(Option::as_mut)
+    }
+
+    pub fn fsdmgr_cache_block_size(&self, cache_id: u32) -> Option<u32> {
+        self.fsdmgr_cache_entry(cache_id)
+            .map(|entry| entry.block_size)
+    }
+
+    pub fn fsdmgr_cached_read(
+        &self,
+        cache_id: u32,
+        block_num: u32,
+        blocks: u32,
+    ) -> Result<Vec<u8>> {
+        let Some(entry) = self.fsdmgr_cache_entry(cache_id) else {
+            return Err(Error::InvalidArgument(format!(
+                "invalid FSDMGR cache id {cache_id}"
+            )));
+        };
+        self.fsdmgr_read_disk(entry.disk_ptr, block_num, blocks, entry.block_size)
+    }
+
+    pub fn fsdmgr_cached_write(
+        &mut self,
+        cache_id: u32,
+        block_num: u32,
+        blocks: u32,
+        bytes: &[u8],
+    ) -> u32 {
+        let Some(entry) = self.fsdmgr_cache_entry(cache_id).copied() else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        self.fsdmgr_write_disk(entry.disk_ptr, block_num, blocks, entry.block_size, bytes)
+    }
+
+    pub fn fsdmgr_resize_cache(&self, _cache_id: u32) -> u32 {
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_flush_cache(&mut self, cache_id: u32) -> u32 {
+        let Some(entry) = self.fsdmgr_cache_entry_mut(cache_id) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        entry.disable_flush = true;
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_sync_cache(&self, _cache_id: u32) -> u32 {
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_invalidate_cache(&self, _cache_id: u32) -> u32 {
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_cache_io_control(&mut self, cache_id: u32, ioctl: u32) -> u32 {
+        let Some(entry) = self.fsdmgr_cache_entry_mut(cache_id) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if ioctl == IOCTL_DISK_DELETE_SECTORS {
+            entry.disable_delete = true;
+            return 1;
+        }
+        0
+    }
+
+    pub fn fsdmgr_read_disk(
+        &self,
+        disk_ptr: u32,
+        sector: u32,
+        sectors: u32,
+        bytes_per_sector: u32,
+    ) -> Result<Vec<u8>> {
+        if disk_ptr == 0 || bytes_per_sector == 0 {
+            return Err(Error::InvalidArgument(
+                "invalid FSDMGR disk read parameters".to_owned(),
+            ));
+        }
+        let byte_len = sectors
+            .checked_mul(bytes_per_sector)
+            .ok_or_else(|| Error::InvalidArgument("FSDMGR disk read size overflow".to_owned()))?;
+        let mut out = vec![0; byte_len as usize];
+        let copy_len = FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE.min(bytes_per_sector) as usize;
+        for relative_sector in 0..sectors {
+            let sector_key = sector.wrapping_add(relative_sector);
+            if let Some(stored) = self.fsdmgr_disk_sectors.get(&(disk_ptr, sector_key)) {
+                let start = (relative_sector * bytes_per_sector) as usize;
+                out[start..start + copy_len].copy_from_slice(&stored[..copy_len]);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn fsdmgr_write_disk(
+        &mut self,
+        disk_ptr: u32,
+        sector: u32,
+        sectors: u32,
+        bytes_per_sector: u32,
+        bytes: &[u8],
+    ) -> u32 {
+        if disk_ptr == 0 || bytes_per_sector == 0 {
+            return ERROR_INVALID_PARAMETER;
+        }
+        let Some(expected_len) = sectors
+            .checked_mul(bytes_per_sector)
+            .map(|len| len as usize)
+        else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if bytes.len() < expected_len {
+            return ERROR_INVALID_PARAMETER;
+        }
+        let copy_len = FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE.min(bytes_per_sector) as usize;
+        for relative_sector in 0..sectors {
+            let start = (relative_sector * bytes_per_sector) as usize;
+            let sector_key = sector.wrapping_add(relative_sector);
+            let mut stored = vec![0; FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE as usize];
+            stored[..copy_len].copy_from_slice(&bytes[start..start + copy_len]);
+            if stored.iter().all(|byte| *byte == 0) {
+                self.fsdmgr_disk_sectors.remove(&(disk_ptr, sector_key));
+            } else {
+                self.fsdmgr_disk_sectors
+                    .insert((disk_ptr, sector_key), stored);
+            }
+        }
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_delete_disk_sectors(&mut self, disk_ptr: u32, sector: u32, sectors: u32) -> u32 {
+        if disk_ptr == 0 {
+            return ERROR_INVALID_PARAMETER;
+        }
+        for relative_sector in 0..sectors {
+            self.fsdmgr_disk_sectors
+                .remove(&(disk_ptr, sector.wrapping_add(relative_sector)));
+        }
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_format_disk(&mut self, disk_ptr: u32) -> u32 {
+        if disk_ptr == 0 {
+            return ERROR_INVALID_PARAMETER;
+        }
+        self.fsdmgr_disk_sectors
+            .retain(|(stored_disk_ptr, _), _| *stored_disk_ptr != disk_ptr);
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_disk_name(&self, disk_ptr: u32) -> Option<String> {
+        if disk_ptr == 0 {
+            return None;
+        }
+        let name = self
+            .handles
+            .iter()
+            .find_map(|(_, object)| match object {
+                KernelObject::Volume(volume) if volume.disk_ptr == Some(disk_ptr) => {
+                    Some(volume.guest_root.trim_matches('\\').to_owned())
+                }
+                _ => None,
+            })
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Storage Card".to_owned());
+        Some(name)
+    }
+
+    pub fn fsdmgr_disk_info(&self, disk_ptr: u32) -> Option<[u32; 6]> {
+        if disk_ptr == 0 {
+            return None;
+        }
+        let total_sectors = 0x0002_0000;
+        Some([
+            total_sectors.max(1),
+            FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE,
+            1,
+            1,
+            total_sectors.max(1),
+            0,
+        ])
+    }
+
+    pub fn fsdmgr_disk_io_control_status(&mut self, disk_ptr: u32, ioctl: u32) -> u32 {
+        if disk_ptr == 0 {
+            return ERROR_INVALID_PARAMETER;
+        }
+        match ioctl {
+            1
+            | 0x0007_1c00
+            | DISK_IOCTL_INITIALIZED
+            | IOCTL_DISK_INITIALIZED
+            | DISK_IOCTL_FORMAT_MEDIA
+            | IOCTL_DISK_FORMAT_MEDIA
+            | IOCTL_DISK_DELETE_SECTORS
+            | 0x0007_1c54 => ERROR_SUCCESS,
+            2 | 3 | 0x0007_4008 | 0x0007_800c => ERROR_NOT_SUPPORTED,
+            _ => ERROR_NOT_SUPPORTED,
+        }
+    }
+
+    fn ensure_volume_owner(&self, volume: &VolumeObject, handle: u32) -> Result<()> {
+        if volume.owner_process_id != self.current_process_id {
+            return Err(Error::AccessDenied(format!(
+                "process {} cannot access volume handle 0x{handle:08x} owned by process {}",
+                self.current_process_id, volume.owner_process_id
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn unmount_volume_handle(&mut self, handle: u32) -> Result<bool> {
+        let KernelObject::Volume(volume) = self.handles.get(handle)?.clone() else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.ensure_volume_owner(&volume, handle)?;
+        self.unmount_guest_root(&volume.guest_root);
+        self.handles.close(handle)?;
+        Ok(true)
+    }
+
+    pub fn volume_root_for_handle(&self, handle: u32) -> Result<String> {
+        let KernelObject::Volume(volume) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.ensure_volume_owner(volume, handle)?;
+        Ok(volume.guest_root.clone())
+    }
+
     pub fn host_path_to_guest_mount(&self, host_path: &std::path::Path) -> Option<String> {
         self.files.host_path_to_guest_mount(host_path)
     }
@@ -1404,6 +1820,72 @@ impl CeKernel {
 
     pub fn recent_device_ops(&self) -> &[DeviceTraceRecord] {
         &self.recent_device_ops
+    }
+
+    pub fn device_debug_text(&self) -> String {
+        let mut out = String::new();
+        let status = self.remote_status();
+        let enabled_names = self.devices.enabled_names();
+        let _ = writeln!(
+            out,
+            "  device config: enabled={} names={}",
+            enabled_names.len(),
+            if enabled_names.is_empty() {
+                "none".to_owned()
+            } else {
+                enabled_names.join(", ")
+            }
+        );
+        let _ = writeln!(
+            out,
+            "  remote: gps_target={} queued_serial_bytes={} queued_touch_events={} queued_key_events={} imu={}",
+            if status.gps_target.is_empty() {
+                "<none>"
+            } else {
+                status.gps_target.as_str()
+            },
+            status.queued_serial_bytes,
+            status.queued_touch_events,
+            status.queued_key_events,
+            self.remote.imu_state()
+        );
+
+        let mut devices = self
+            .handles
+            .iter()
+            .filter_map(|(handle, object)| match object {
+                KernelObject::Device(device) => Some((handle, device)),
+                _ => None,
+            })
+            .peekable();
+        let _ = writeln!(out, "  open device handles:");
+        if devices.peek().is_none() {
+            let _ = writeln!(out, "    none");
+        } else {
+            let gps_target = self.remote_gps_target();
+            for (handle, device) in devices {
+                let (rx, tx) = device.queue_lengths();
+                let remote_serial =
+                    if !gps_target.is_empty() && device.accepts_remote_serial_target(&gps_target) {
+                        " remote-gps-target"
+                    } else {
+                        ""
+                    };
+                let _ = writeln!(
+                    out,
+                    "    0x{handle:08x} {} kind={:?} backend={:?} host={} serial={} rx={} tx={}{}",
+                    device.guest_name,
+                    device.kind,
+                    device.backend,
+                    device.host.as_deref().unwrap_or("<none>"),
+                    device.is_serial(),
+                    rx,
+                    tx,
+                    remote_serial
+                );
+            }
+        }
+        out
     }
 
     pub fn file_io_stats(&self) -> FileIoStats {
@@ -2361,13 +2843,39 @@ impl CeKernel {
         Ok(())
     }
 
+    fn ensure_internal_file_change_notification_owner(
+        &self,
+        notification: &FileChangeNotificationObject,
+        handle: u32,
+    ) -> Result<()> {
+        if notification.owner_process_id != FSDMGR_INTERNAL_PROCESS_ID {
+            return Err(Error::AccessDenied(format!(
+                "internal FSDMGR notification access denied for handle 0x{handle:08x} owned by process {}",
+                notification.owner_process_id
+            )));
+        }
+        Ok(())
+    }
+
     pub fn find_next_change_notification(&mut self, handle: u32) -> Result<bool> {
+        self.find_next_change_notification_impl(handle, false)
+    }
+
+    pub fn find_next_change_notification_internal(&mut self, handle: u32) -> Result<bool> {
+        self.find_next_change_notification_impl(handle, true)
+    }
+
+    fn find_next_change_notification_impl(&mut self, handle: u32, internal: bool) -> Result<bool> {
         {
             let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)?
             else {
                 return Err(Error::InvalidHandle(handle));
             };
-            self.ensure_file_change_notification_owner(notification, handle)?;
+            if internal {
+                self.ensure_internal_file_change_notification_owner(notification, handle)?;
+            } else {
+                self.ensure_file_change_notification_owner(notification, handle)?;
+            }
         }
         let KernelObject::FileChangeNotification(notification) = self.handles.get_mut(handle)?
         else {
@@ -2384,10 +2892,29 @@ impl CeKernel {
     }
 
     pub fn file_change_notification_records(&self, handle: u32) -> Result<Vec<FileChangeRecord>> {
+        self.file_change_notification_records_impl(handle, false)
+    }
+
+    pub fn file_change_notification_records_internal(
+        &self,
+        handle: u32,
+    ) -> Result<Vec<FileChangeRecord>> {
+        self.file_change_notification_records_impl(handle, true)
+    }
+
+    fn file_change_notification_records_impl(
+        &self,
+        handle: u32,
+        internal: bool,
+    ) -> Result<Vec<FileChangeRecord>> {
         let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)? else {
             return Err(Error::InvalidHandle(handle));
         };
-        self.ensure_file_change_notification_owner(notification, handle)?;
+        if internal {
+            self.ensure_internal_file_change_notification_owner(notification, handle)?;
+        } else {
+            self.ensure_file_change_notification_owner(notification, handle)?;
+        }
         if notification.pending_signal_count == 0 {
             return Ok(Vec::new());
         }
@@ -2399,12 +2926,51 @@ impl CeKernel {
         handle: u32,
         count: usize,
     ) -> Result<bool> {
+        self.drain_file_change_notification_records_impl(handle, count, true)
+    }
+
+    pub fn drain_file_change_notification_records_without_requeue(
+        &mut self,
+        handle: u32,
+        count: usize,
+    ) -> Result<bool> {
+        self.drain_file_change_notification_records_impl(handle, count, false)
+    }
+
+    pub fn drain_file_change_notification_records_without_requeue_internal(
+        &mut self,
+        handle: u32,
+        count: usize,
+    ) -> Result<bool> {
+        self.drain_file_change_notification_records_impl_with_access(handle, count, false, true)
+    }
+
+    fn drain_file_change_notification_records_impl(
+        &mut self,
+        handle: u32,
+        count: usize,
+        requeue: bool,
+    ) -> Result<bool> {
+        self.drain_file_change_notification_records_impl_with_access(handle, count, requeue, false)
+    }
+
+    fn drain_file_change_notification_records_impl_with_access(
+        &mut self,
+        handle: u32,
+        count: usize,
+        requeue: bool,
+        internal: bool,
+    ) -> Result<bool> {
         {
             let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)?
             else {
                 return Err(Error::InvalidHandle(handle));
             };
-            self.ensure_file_change_notification_owner(notification, handle)?;
+            if internal {
+                self.ensure_internal_file_change_notification_owner(notification, handle)?;
+            } else {
+                self.ensure_file_change_notification_owner(notification, handle)?;
+            }
         }
         let KernelObject::FileChangeNotification(notification) = self.handles.get_mut(handle)?
         else {
@@ -2418,6 +2984,45 @@ impl CeKernel {
         if notification.pending_signal_count == 0 {
             notification.pending.clear();
         }
+        notification.signaled = requeue && notification.pending_signal_count > 0;
+        let still_pending = notification.signaled;
+        if still_pending {
+            self.queue_object_wake_candidates(handle);
+        }
+        Ok(still_pending)
+    }
+
+    pub fn requeue_file_change_notification_if_pending(&mut self, handle: u32) -> Result<bool> {
+        self.requeue_file_change_notification_if_pending_impl(handle, false)
+    }
+
+    pub fn requeue_file_change_notification_if_pending_internal(
+        &mut self,
+        handle: u32,
+    ) -> Result<bool> {
+        self.requeue_file_change_notification_if_pending_impl(handle, true)
+    }
+
+    fn requeue_file_change_notification_if_pending_impl(
+        &mut self,
+        handle: u32,
+        internal: bool,
+    ) -> Result<bool> {
+        {
+            let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)?
+            else {
+                return Err(Error::InvalidHandle(handle));
+            };
+            if internal {
+                self.ensure_internal_file_change_notification_owner(notification, handle)?;
+            } else {
+                self.ensure_file_change_notification_owner(notification, handle)?;
+            }
+        }
+        let KernelObject::FileChangeNotification(notification) = self.handles.get_mut(handle)?
+        else {
+            return Err(Error::InvalidHandle(handle));
+        };
         notification.signaled = notification.pending_signal_count > 0;
         let still_pending = notification.signaled;
         if still_pending {
@@ -2428,6 +3033,10 @@ impl CeKernel {
 
     pub fn clear_file_change_notification(&mut self, handle: u32) -> Result<bool> {
         self.find_next_change_notification(handle)
+    }
+
+    pub fn clear_file_change_notification_internal(&mut self, handle: u32) -> Result<bool> {
+        self.find_next_change_notification_internal(handle)
     }
 
     pub fn find_close_change_notification(&mut self, handle: u32) -> Result<bool> {
@@ -2446,6 +3055,18 @@ impl CeKernel {
         }
     }
 
+    pub fn find_close_change_notification_internal(&mut self, handle: u32) -> Result<bool> {
+        {
+            let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)?
+            else {
+                return Err(Error::InvalidHandle(handle));
+            };
+            self.ensure_internal_file_change_notification_owner(notification, handle)?;
+        }
+        self.handles.close(handle)?;
+        Ok(true)
+    }
+
     pub fn device_io_control(
         &mut self,
         handle: u32,
@@ -2453,13 +3074,35 @@ impl CeKernel {
         input: &[u8],
         output_capacity: u32,
     ) -> Result<DeviceIoControlResult> {
+        self.device_io_control_with_output_buffer(
+            handle,
+            ioctl_code,
+            input,
+            output_capacity,
+            output_capacity > 0,
+        )
+    }
+
+    pub fn device_io_control_with_output_buffer(
+        &mut self,
+        handle: u32,
+        ioctl_code: u32,
+        input: &[u8],
+        output_capacity: u32,
+        output_buffer_present: bool,
+    ) -> Result<DeviceIoControlResult> {
         let remote_imu = self.remote.imu_state().clone();
         let (device, backend, detail, result) = match self.handles.get_mut(handle)? {
             KernelObject::Device(device) => {
                 let device_name = device.guest_name.clone();
                 let backend = format!("{:?}", device.backend);
                 device.apply_remote_imu(&remote_imu);
-                let result = device.device_io_control(ioctl_code, input, output_capacity);
+                let result = device.device_io_control_with_output_buffer(
+                    ioctl_code,
+                    input,
+                    output_capacity,
+                    output_buffer_present,
+                );
                 (Some(device_name), Some(backend), None, result)
             }
             other => (
@@ -2490,6 +3133,10 @@ impl CeKernel {
         Ok(result)
     }
 
+    pub fn is_file_handle(&self, handle: u32) -> Result<bool> {
+        Ok(matches!(self.handles.get(handle)?, KernelObject::File(_)))
+    }
+
     pub fn close_handle(&mut self, handle: u32) -> Result<bool> {
         let object = self.handles.get(handle)?.clone();
         let detail = self.describe_handle(handle);
@@ -2509,7 +3156,19 @@ impl CeKernel {
         );
         match object {
             KernelObject::File(file) => {
-                self.files.close(file.file_id)?;
+                let close_result = self.files.close(file.file_id);
+                self.push_file_trace(FileTraceRecord {
+                    op: "CloseHandle",
+                    handle: Some(handle),
+                    path: Some(file.guest_path.clone()),
+                    preview: Some(format!("file_id=0x{:08x}", file.file_id)),
+                    requested: Some(file.file_id),
+                    transferred: None,
+                    position: None,
+                    result: Some(u32::from(close_result.is_ok())),
+                    error: close_result.as_ref().err().map(ToString::to_string),
+                });
+                close_result?;
                 if file.notify_change_pending {
                     self.signal_file_change_notification_path(
                         FILE_NOTIFY_CHANGE_ATTRIBUTES
@@ -2523,6 +3182,13 @@ impl CeKernel {
                 }
             }
             KernelObject::FindFile(find) => self.files.find_close(find.find_id)?,
+            KernelObject::Volume(volume) => {
+                self.ensure_volume_owner(&volume, handle)?;
+                self.unmount_guest_root(&volume.guest_root);
+            }
+            KernelObject::FileChangeNotification(notification) => {
+                self.ensure_file_change_notification_owner(&notification, handle)?;
+            }
             KernelObject::Event(event) if event.name.is_some() => {
                 self.record_event_trace(EventTraceRecord {
                     op: "CloseHandle",
@@ -2587,6 +3253,11 @@ impl CeKernel {
                     find_id: duplicate_find_id,
                 })
             }
+            KernelObject::Volume(mut volume) => {
+                self.ensure_volume_owner(&volume, handle)?;
+                volume.owner_process_id = target_process_id;
+                KernelObject::Volume(volume)
+            }
             KernelObject::FileChangeNotification(mut notification) => {
                 self.ensure_file_change_notification_owner(&notification, handle)?;
                 notification.owner_process_id = target_process_id;
@@ -2596,7 +3267,11 @@ impl CeKernel {
         };
         let duplicate = self.handles.insert(duplicate_object);
         if close_source {
-            self.close_handle(handle)?;
+            if matches!(self.handles.get(handle)?, KernelObject::Volume(_)) {
+                self.handles.close(handle)?;
+            } else {
+                self.close_handle(handle)?;
+            }
         }
         Ok(duplicate)
     }
@@ -4201,12 +4876,13 @@ impl CeKernel {
         let callback_ptr = if record.callback_ptr != 0 {
             record.callback_ptr
         } else {
-            self.com
-                .co_create_instance_guid_values(
-                    record.clsid,
-                    crate::ce::shell::IID_ISHELL_NOTIFICATION_CALLBACK,
-                )
-                .unwrap_or(0)
+            match self.com.co_create_instance_guid_values(
+                record.clsid,
+                crate::ce::shell::IID_ISHELL_NOTIFICATION_CALLBACK,
+            ) {
+                Ok(callback_ptr) => callback_ptr,
+                Err(_) => return false,
+            }
         };
         self.shell
             .record_notification_callback(ShellNotificationCallbackRecord {
@@ -4936,7 +5612,6 @@ impl CeKernel {
         let _ = self.remove_blocked_waiter(wait_id);
         let removed_get_message_waits =
             self.remove_dialog_get_message_waiters(thread_id, dialog_hwnd);
-        let _ = self.destroy_window_with_reason(dialog_hwnd, "DialogModalButton");
         self.record_message_trace(MessageTraceRecord {
             op: "dialog_modal_button_dismiss",
             thread_id,
@@ -4948,7 +5623,7 @@ impl CeKernel {
             source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_POST),
             result: Some(1),
             detail: Some(format!(
-                "wait_id={wait_id}/get_message_waits={removed_get_message_waits}"
+                "wait_id={wait_id}/get_message_waits={removed_get_message_waits}/destroy=deferred"
             )),
         });
         self.queue_message_wake_candidates(thread_id);
@@ -6470,12 +7145,9 @@ mod tests {
         assert!(kernel.blocked_waiter(dialog_get_message_wait_id).is_none());
         assert_eq!(kernel.take_modal_dialog_result(thread_id, dialog), Some(1));
         assert_eq!(kernel.take_modal_dialog_result(thread_id, dialog), None);
-        assert!(!kernel.gwe.is_window(dialog));
-        assert!(!kernel.gwe.is_window(button));
-        assert_eq!(
-            kernel.gwe.update_rect(background).unwrap().rect,
-            Rect::from_origin_size(40, 40, 120, 90)
-        );
+        assert!(kernel.gwe.is_window(dialog));
+        assert!(kernel.gwe.is_window(button));
+        assert!(kernel.gwe.update_rect(background).is_none());
         let ready =
             kernel.select_ready_blocked_waiter(0, kernel.timers.tick_count(), |blocked, kernel| {
                 match blocked.kind {
@@ -6489,7 +7161,8 @@ mod tests {
                     _ => false,
                 }
             });
-        assert_eq!(ready, Some(background_wait_id));
+        assert_ne!(ready, Some(background_wait_id));
+        assert!(ready.is_none());
         Ok(())
     }
 

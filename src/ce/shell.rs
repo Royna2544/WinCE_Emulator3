@@ -748,7 +748,7 @@ impl ShellNotificationRecord {
             flags: data.flags,
             clsid: data.clsid,
             hwnd_sink: data.hwnd_sink,
-            title: data.title,
+            title: taskbar_label_text(data.title),
             html: data.html,
             lparam: data.lparam,
             callback_ptr: data.callback_ptr,
@@ -771,8 +771,16 @@ impl ShellNotificationRecord {
             self.html = data.html;
         }
         if update_mask & SHNUM_TITLE != 0 {
-            self.title = data.title;
+            self.title = taskbar_label_text(data.title);
         }
+    }
+}
+
+fn taskbar_label_text(title: String) -> String {
+    if title.encode_utf16().count() >= 260 {
+        String::new()
+    } else {
+        title
     }
 }
 
