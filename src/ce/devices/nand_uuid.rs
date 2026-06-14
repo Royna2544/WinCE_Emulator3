@@ -35,7 +35,7 @@ const DEFAULT_UUID: u32 = 20_111_201;
 #[derive(Debug, Clone)]
 pub struct NandUuid {
     uuid: u32,
-    sector_uuids: BTreeMap<u32, u32>,
+    sector_uuids: BTreeMap<u32, [u8; 16]>,
     cpu_load_control: u32,
     touchpad_locked: bool,
     micom_locked: bool,
@@ -105,27 +105,56 @@ impl NandUuid {
         let Some(sector) = read_u32_le(input, 0) else {
             return failure();
         };
-        let value = self
+        let bytes = self
             .sector_uuids
             .get(&sector)
             .copied()
-            .unwrap_or_else(|| self.sector_default_uuid(sector));
-        write_u32_output(output_capacity, value)
+            .unwrap_or_else(|| self.sector_default_uuid_bytes(sector));
+        if output_capacity >= 16 {
+            success(bytes.to_vec())
+        } else {
+            write_u32_output(
+                output_capacity,
+                u32::from_le_bytes(bytes[0..4].try_into().expect("uuid word")),
+            )
+        }
     }
 
     fn write_uuid_by_sector(&mut self, input: &[u8]) -> DeviceIoControlResult {
         let Some(sector) = read_u32_le(input, 0) else {
             return failure();
         };
-        let value = read_u32_le(input, 4).unwrap_or(self.uuid);
+        let value = if let Some(bytes) = input.get(4..20) {
+            bytes.try_into().expect("sector uuid bytes")
+        } else {
+            self.sector_default_uuid_bytes(sector)
+        };
         self.sector_uuids.insert(sector, value);
         success(Vec::new())
     }
 
-    fn sector_default_uuid(&self, sector: u32) -> u32 {
-        self.uuid
+    fn sector_default_uuid_bytes(&self, sector: u32) -> [u8; 16] {
+        let first_word = self
+            .uuid
             .wrapping_add(sector.rotate_left(5))
-            .wrapping_rem(100_000_000)
+            .wrapping_rem(100_000_000);
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&first_word.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.uuid.rotate_left(7).wrapping_add(sector).to_le_bytes());
+        bytes[8..12].copy_from_slice(
+            &sector
+                .rotate_left(13)
+                .wrapping_add(0x5549_4431)
+                .to_le_bytes(),
+        );
+        bytes[12..16].copy_from_slice(
+            &self
+                .uuid
+                .wrapping_mul(33)
+                .wrapping_add(sector.rotate_right(3))
+                .to_le_bytes(),
+        );
+        bytes
     }
 }
 

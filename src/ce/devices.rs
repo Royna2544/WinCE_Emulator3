@@ -1051,6 +1051,29 @@ mod tests {
         assert!(sector_uuid.success);
         assert_eq!(sector_uuid.bytes_returned, 4);
 
+        let sector_uuid_16 = uid.device_io_control(
+            nand_uuid::IOCTL_NAND_UPD_READ_UUID_BY_SECTORNUM,
+            &sector,
+            16,
+        );
+        assert!(sector_uuid_16.success);
+        assert_eq!(sector_uuid_16.bytes_returned, 16);
+        assert_eq!(&sector_uuid_16.output[0..4], &sector_uuid.output);
+
+        let sector_write_input = [sector.as_slice(), b"0123456789abcdef".as_slice()].concat();
+        let sector_write = uid.device_io_control(
+            nand_uuid::IOCTL_NAND_UPD_WRITE_UUID_BY_SECTORNUM,
+            &sector_write_input,
+            0,
+        );
+        assert!(sector_write.success);
+        let sector_uuid_written = uid.device_io_control(
+            nand_uuid::IOCTL_NAND_UPD_READ_UUID_BY_SECTORNUM,
+            &sector,
+            16,
+        );
+        assert_eq!(sector_uuid_written.output, b"0123456789abcdef");
+
         let load = uid.device_io_control(
             nand_uuid::IOCTL_NAND_CPU_LOAD_CONTROL,
             &42u32.to_le_bytes(),

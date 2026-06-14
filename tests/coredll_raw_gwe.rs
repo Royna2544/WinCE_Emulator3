@@ -23,8 +23,8 @@ use wince_emulation_v3::{
             ORD_DRAW_FRAME_CONTROL, ORD_DRAW_ICON_EX, ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W,
             ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE, ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW,
             ORD_END_DIALOG, ORD_END_PAINT, ORD_ENUM_WINDOWS, ORD_EQUAL_RECT, ORD_EXCLUDE_CLIP_RECT,
-            ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE, ORD_FIND_RESOURCE_W,
-            ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU,
+            ORD_EXT_ESCAPE, ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE,
+            ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU,
             ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_BK_COLOR, ORD_GET_BK_MODE,
             ORD_GET_CAPTURE, ORD_GET_CARET_BLINK_TIME, ORD_GET_CARET_POS, ORD_GET_CHAR_ABCWIDTHS,
             ORD_GET_CHAR_ABCWIDTHS_I, ORD_GET_CHAR_WIDTH32, ORD_GET_CLASS_INFO_W,
@@ -138,7 +138,7 @@ use wince_emulation_v3::{
         memory::PROCESS_HEAP_HANDLE,
         resource::{AcceleratorEntry, ResourceId},
         thread::{
-            ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
+            ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_ACCESS, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_SUPPORTED,
             ERROR_RESOURCE_NAME_NOT_FOUND,
         },
@@ -451,6 +451,239 @@ fn coredll_raw_gwe_rect_helpers_match_win32_semantics() -> Result<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Result<()> {
+    const QUERYESCSUPPORT: u32 = 8;
+    const DRVESC_GETGAMMAVALUE: u32 = 6202;
+    const DRVESC_GETSCREENROTATION: u32 = 6302;
+    const DRVESC_GETRAWFRAMEBUFFER: u32 = 0x0002_0001;
+    const DISPPERF_EXTESC_GETSIZE: u32 = 0xfefefff0;
+    const DISPPERF_EXTESC_GETTIMING: u32 = 0xfefefff1;
+    const DISPPERF_EXTESC_CLEARTIMING: u32 = 0xfefefff2;
+    const DISPPERF_EXTESC_GETUNHANDLED: u32 = 0xfefefff3;
+    const DISPPERF_TIMING_TABLE_SIZE: u32 = 2048;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let query_ptr = 0x3000_1000;
+    let dispperf_out = 0x3000_2000;
+    memory.map_words(query_ptr, 1);
+    memory.map_words(dispperf_out, DISPPERF_TIMING_TABLE_SIZE / 4);
+
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hdc),
+            ..
+        } if hdc != 0 => hdc,
+        other => panic!("GetDC did not return a desktop HDC: {other:?}"),
+    };
+
+    memory.write_word(query_ptr, DRVESC_GETGAMMAVALUE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, QUERYESCSUPPORT, 4, query_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(query_ptr, DISPPERF_EXTESC_GETSIZE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, QUERYESCSUPPORT, 4, query_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, DISPPERF_EXTESC_GETSIZE, 0, 0, 4, dispperf_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(dispperf_out)?, DISPPERF_TIMING_TABLE_SIZE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(dispperf_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, DISPPERF_EXTESC_GETUNHANDLED, 0, 0, 4, dispperf_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(dispperf_out)?, 0);
+
+    memory.write_word(dispperf_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [
+                hdc,
+                DISPPERF_EXTESC_GETTIMING,
+                0,
+                0,
+                DISPPERF_TIMING_TABLE_SIZE,
+                dispperf_out
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_bytes(dispperf_out, DISPPERF_TIMING_TABLE_SIZE as usize),
+        vec![0; DISPPERF_TIMING_TABLE_SIZE as usize]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, DISPPERF_EXTESC_CLEARTIMING, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    memory.write_word(dispperf_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, DISPPERF_EXTESC_GETSIZE, 0, 0, 0, dispperf_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(dispperf_out)?, 0xfeed_beef);
+
+    memory.write_word(query_ptr, DRVESC_GETRAWFRAMEBUFFER);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, QUERYESCSUPPORT, 4, query_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, DRVESC_GETSCREENROTATION, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_ACCESS
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [0x1234_5678, QUERYESCSUPPORT, 4, query_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, QUERYESCSUPPORT, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     Ok(())
 }
 

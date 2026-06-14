@@ -17,12 +17,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(any(
+    all(windows, feature = "win32-audio"),
+    all(target_os = "linux", feature = "linux-audio")
+))]
+use wince_emulation_v3::ce::audio::HostAudioSink;
 #[allow(unused_imports)]
 use wince_emulation_v3::emulator::cpu::CpuBackend as _;
 use wince_emulation_v3::{
     Result,
     ce::{
-        audio::{HostAudioSink, WaveFormat},
+        audio::WaveFormat,
         desktop::{VirtualDesktop, VirtualInputEvent},
         framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, VirtualFramebuffer},
         gwe::WM_TIMER,
@@ -104,6 +109,13 @@ enum DesktopRuntime {
         VirtualDesktop<
             wince_emulation_v3::ce::win32_desktop::Win32Input,
             wince_emulation_v3::ce::win32_desktop::Win32Presenter,
+        >,
+    ),
+    #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+    Host(
+        VirtualDesktop<
+            wince_emulation_v3::ce::linux_x11_desktop::LinuxX11Input,
+            wince_emulation_v3::ce::linux_x11_desktop::LinuxX11Presenter,
         >,
     ),
 }
@@ -398,7 +410,9 @@ fn run_cpu_loop(
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
-            if cpu.rotate_to_receiver_parked_process_with_framebuffer(
+            if should_rotate_remote_input_receiver_parked_process(
+                cpu.active_process_has_visible_receiver_work(kernel),
+            ) && cpu.rotate_to_receiver_parked_process_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
             ) {
@@ -600,7 +614,9 @@ fn run_cpu_loop(
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
-            if cpu.rotate_to_receiver_parked_process_with_framebuffer(
+            if should_rotate_remote_input_receiver_parked_process(
+                cpu.active_process_has_visible_receiver_work(kernel),
+            ) && cpu.rotate_to_receiver_parked_process_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
             ) {
@@ -920,6 +936,12 @@ fn should_rotate_for_pending_parked_create_process(
     has_runnable_parked_process
         && !active_has_visible_receiver_work
         && (active_stopped_in_create_process_w || kernel_has_unreturned_parked_process)
+}
+
+fn should_rotate_remote_input_receiver_parked_process(
+    active_has_visible_receiver_work: bool,
+) -> bool {
+    !active_has_visible_receiver_work
 }
 
 fn snapshot_is_create_process_w_stop(snapshot: &UnicornDebugSnapshot) -> bool {
@@ -2569,6 +2591,8 @@ impl DesktopRuntime {
             Self::Virtual(desktop) => desktop.framebuffer(),
             #[cfg(all(windows, feature = "win32-desktop"))]
             Self::Host(desktop) => desktop.framebuffer(),
+            #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+            Self::Host(desktop) => desktop.framebuffer(),
         }
     }
 
@@ -2576,6 +2600,8 @@ impl DesktopRuntime {
         match self {
             Self::Virtual(desktop) => desktop.framebuffer_mut(),
             #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => desktop.framebuffer_mut(),
+            #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
             Self::Host(desktop) => desktop.framebuffer_mut(),
         }
     }
@@ -2589,6 +2615,10 @@ impl DesktopRuntime {
             Self::Host(desktop) => {
                 let _ = desktop.present()?;
             }
+            #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+            Self::Host(desktop) => {
+                let _ = desktop.present()?;
+            }
         }
         Ok(())
     }
@@ -2597,6 +2627,10 @@ impl DesktopRuntime {
         match self {
             Self::Virtual(_) => {}
             #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => {
+                desktop.presenter_mut().show_stopped_message(_message)?;
+            }
+            #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
             Self::Host(desktop) => {
                 desktop.presenter_mut().show_stopped_message(_message)?;
             }
@@ -2642,6 +2676,21 @@ impl DesktopRuntime {
                     limits,
                 )
             }
+            #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+            Self::Host(desktop) => {
+                let (framebuffer, presenter) = desktop.framebuffer_and_presenter_mut();
+                presenter.blit(framebuffer)?;
+                let mut live_framebuffer = LinuxHostLiveFramebuffer::new(
+                    framebuffer,
+                    presenter,
+                    kernel.remote_server.clone(),
+                );
+                cpu.run_until_import_trap_with_framebuffer_limits(
+                    kernel,
+                    &mut live_framebuffer,
+                    limits,
+                )
+            }
         }
     }
 
@@ -2649,6 +2698,8 @@ impl DesktopRuntime {
         match self {
             Self::Virtual(desktop) => desktop.poll_input(),
             #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => desktop.poll_input(),
+            #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
             Self::Host(desktop) => desktop.poll_input(),
         }
     }
@@ -2658,6 +2709,8 @@ impl DesktopRuntime {
             Self::Virtual(_) => "virtual/null presenter",
             #[cfg(all(windows, feature = "win32-desktop"))]
             Self::Host(_) => "win32 host presenter",
+            #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+            Self::Host(_) => "linux X11 host presenter",
         }
     }
 }
@@ -2818,6 +2871,94 @@ impl Framebuffer for HostLiveFramebuffer<'_> {
     }
 }
 
+#[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+struct LinuxHostLiveFramebuffer<'a> {
+    framebuffer: &'a mut VirtualFramebuffer,
+    presenter: &'a mut wince_emulation_v3::ce::linux_x11_desktop::LinuxX11Presenter,
+    remote_server: Option<RemoteServer>,
+    last_blit: Instant,
+    blit_interval: Duration,
+    pending_guest_dirty: bool,
+    pending_error: Option<wince_emulation_v3::Error>,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+impl<'a> LinuxHostLiveFramebuffer<'a> {
+    fn new(
+        framebuffer: &'a mut VirtualFramebuffer,
+        presenter: &'a mut wince_emulation_v3::ce::linux_x11_desktop::LinuxX11Presenter,
+        remote_server: Option<RemoteServer>,
+    ) -> Self {
+        Self {
+            framebuffer,
+            presenter,
+            remote_server,
+            last_blit: Instant::now()
+                .checked_sub(Duration::from_millis(16))
+                .unwrap_or_else(Instant::now),
+            blit_interval: Duration::from_millis(16),
+            pending_guest_dirty: false,
+            pending_error: None,
+        }
+    }
+
+    fn blit_if_due(&mut self, force: bool) -> Result<()> {
+        self.presenter.pump_messages();
+        if !self.pending_guest_dirty {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if !force && now.duration_since(self.last_blit) < self.blit_interval {
+            return Ok(());
+        }
+        self.presenter.blit(self.framebuffer)?;
+        if let Some(server) = self.remote_server.as_ref() {
+            server.publish_framebuffer(self.framebuffer);
+        }
+        self.last_blit = now;
+        self.pending_guest_dirty = false;
+        Ok(())
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+impl Framebuffer for LinuxHostLiveFramebuffer<'_> {
+    fn info(&self) -> FramebufferInfo {
+        self.framebuffer.info()
+    }
+
+    fn pixels(&self) -> &[u8] {
+        self.framebuffer.pixels()
+    }
+
+    fn pixels_mut(&mut self) -> &mut [u8] {
+        self.framebuffer.pixels_mut()
+    }
+
+    fn mark_dirty(&mut self, rect: FramebufferRect) {
+        self.framebuffer.mark_dirty(rect);
+        self.pending_guest_dirty = true;
+        if let Err(err) = self.blit_if_due(is_large_dirty_rect(rect, self.framebuffer.info())) {
+            self.pending_error = Some(err);
+        }
+    }
+
+    fn dirty_rects(&self) -> &[FramebufferRect] {
+        self.framebuffer.dirty_rects()
+    }
+
+    fn take_dirty_rects(&mut self) -> Vec<FramebufferRect> {
+        self.framebuffer.take_dirty_rects()
+    }
+
+    fn emulator_tick(&mut self) -> Result<()> {
+        if let Some(err) = self.pending_error.take() {
+            return Err(err);
+        }
+        self.blit_if_due(false)
+    }
+}
+
 fn is_large_dirty_rect(rect: FramebufferRect, info: FramebufferInfo) -> bool {
     let dirty_area = u64::from(rect.width).saturating_mul(u64::from(rect.height));
     let frame_area = u64::from(info.width).saturating_mul(u64::from(info.height));
@@ -2850,11 +2991,40 @@ fn create_host_desktop(image_path: Option<&Path>) -> Result<DesktopRuntime> {
     )))
 }
 
-#[cfg(not(all(windows, feature = "win32-desktop")))]
+#[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
+fn create_host_desktop(image_path: Option<&Path>) -> Result<DesktopRuntime> {
+    let framebuffer = VirtualFramebuffer::default_primary()?;
+    let title = image_path
+        .map(|path| format!("WinCE virtual desktop - {}", path.display()))
+        .unwrap_or_else(|| "WinCE virtual desktop".to_owned());
+    let presenter = wince_emulation_v3::ce::linux_x11_desktop::LinuxX11Presenter::new(
+        framebuffer.width(),
+        framebuffer.height(),
+        title,
+        image_path,
+    )?;
+    Ok(DesktopRuntime::Host(VirtualDesktop::with_parts(
+        framebuffer,
+        wince_emulation_v3::ce::linux_x11_desktop::LinuxX11Input::new(),
+        presenter,
+    )))
+}
+
+#[cfg(not(any(
+    all(windows, feature = "win32-desktop"),
+    all(target_os = "linux", feature = "linux-x11-desktop")
+)))]
 fn create_host_desktop(_image_path: Option<&Path>) -> Result<DesktopRuntime> {
-    Err(wince_emulation_v3::Error::InvalidArgument(
-        "--desktop host requires Windows and the `win32-desktop` feature".to_owned(),
-    ))
+    let requirement = if cfg!(windows) {
+        "Windows and the `win32-desktop` feature"
+    } else if cfg!(target_os = "linux") {
+        "Linux and the `linux-x11-desktop` feature"
+    } else {
+        "a supported host desktop backend"
+    };
+    Err(wince_emulation_v3::Error::InvalidArgument(format!(
+        "--desktop host requires {requirement}"
+    )))
 }
 
 fn enqueue_desktop_input(desktop: &mut DesktopRuntime, kernel: &mut CeKernel) -> Result<usize> {
@@ -2947,7 +3117,7 @@ fn attach_virtual_audio(kernel: &mut CeKernel) -> String {
 }
 
 fn attach_host_audio(kernel: &mut CeKernel) -> String {
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "win32-audio"))]
     {
         let sink = HostAudioSink::winmm("host", 32);
         let status = match sink.backend() {
@@ -2970,10 +3140,30 @@ fn attach_host_audio(kernel: &mut CeKernel) -> String {
             "winmm host sink already registered".to_owned()
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(all(windows, not(feature = "win32-audio")))]
     {
         let _ = kernel;
-        "not registered on non-Windows host".to_owned()
+        "winmm host sink unavailable; enable the `win32-audio` feature".to_owned()
+    }
+    #[cfg(all(target_os = "linux", feature = "linux-audio"))]
+    {
+        let sink = HostAudioSink::alsa("host", 32);
+        let registered = kernel.audio.register_sink(sink);
+        if registered {
+            "alsa host sink registered".to_owned()
+        } else {
+            "alsa host sink already registered".to_owned()
+        }
+    }
+    #[cfg(all(target_os = "linux", not(feature = "linux-audio")))]
+    {
+        let _ = kernel;
+        "alsa host sink unavailable; enable the `linux-audio` feature".to_owned()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = kernel;
+        "not registered on unsupported host platform".to_owned()
     }
 }
 
@@ -3586,6 +3776,12 @@ mod tests {
         assert!(!should_rotate_idle_remote_receiver_parked_process(
             true, true
         ));
+    }
+
+    #[test]
+    fn remote_input_receiver_rotation_preserves_active_visible_ui_work() {
+        assert!(should_rotate_remote_input_receiver_parked_process(false));
+        assert!(!should_rotate_remote_input_receiver_parked_process(true));
     }
 
     #[test]

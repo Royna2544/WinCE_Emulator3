@@ -45,6 +45,8 @@ eVC4 toolchain for testsuite: `C:\Program Files (x86)\Microsoft eMbedded C++ 4.0
 
 ImageMagick for framebuffer/image conversion: `C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe`
 
+Use `-NoProfile` argument to PowerShell.
+
 ---
 
 ## Hard User Rule

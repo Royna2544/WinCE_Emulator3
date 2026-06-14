@@ -843,6 +843,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     CPU wall-clock limit is active. v3 now drains those inputs from the normal
     Unicorn live tick before the optional wall-stop check, so no-wall host
     launches stay interactive while guest code is executing.
+  - The local `RemoteServer` is part of that input path, so publishing a REST
+    URL before the accept loop is actually alive makes later UI-driving evidence
+    ambiguous. v3 keeps the listening socket in the shared `RemoteServerState`,
+    has the accept thread call `accept()` on that state-owned listener, and
+    self-probes `/api/v1/status` before `RemoteServer::start` reports success.
+    Detached `drive97` then verified the optimized host process path by
+    answering `/api/v1/status`, serving `/api/v1/frame.jpg`, and draining a
+    top-right tap into posted iNavi mouse messages through the active-window
+    scheduler wake path.
   - Host/presenter input must enter the same CE message queue and scheduler
     waiter path as guest/remote input. v3 now drains newly polled host input
     into the blocked raw `GetMessageW` thread/window when the host run loop is
@@ -2073,9 +2082,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     cross-process send-yield debug snapshots once the corresponding GWE
     sent-message record has been completed or removed; the remote and monitor
     handoff loops then use current queue/wait state instead of re-routing on an
-    orphaned snapshot from an earlier modal/send stop. Reentrant cross-thread
-    scheduling, a public raw `ReplyMessage` export if the target import table
-    exposes one, and broader nested destroyed-target edge behavior remain open.
+    orphaned snapshot from an earlier modal/send stop. The direct-send WNDPROC
+    cleanup pass now also checks the saved/live PC before discarding a
+    SendMessage-owned pending WNDPROC return, so a temporarily orphaned GWE send
+    record cannot erase the live guest callout until execution has actually
+    reached that return PC. Reentrant cross-thread scheduling, a public raw
+    `ReplyMessage` export if the target import table exposes one, and broader
+    nested destroyed-target edge behavior remain open.
   - CE `cmsgque.h` exposes `MsgWaitForMultipleObjectsEx_I` as a message-queue
     wait entrypoint with an owned handle list. Local raw dispatch now probes
     those handles with the no-record multiple-wait helper, preserving CE
@@ -3053,3 +3066,41 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     hotkeys yet, but `ImmGetHotKey` now returns CE-shaped `FALSE` with optional
     modifier, vkey, and HKL output pointers cleared so callers do not observe
     stale guest memory as a configured hotkey.
+
+- CE kernel string-compression wrapper authority:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\compr2.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kwin32.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`
+  - `compr2.c::NKStringCompress` splits input bytes into even and odd streams,
+    writes a 16-bit packet header with `STRPART1RAW`/`STRPART2RAW` bits when it
+    falls back to raw stream storage, returns `CECOMPRESS_ALLZEROS` for entirely
+    zero input, and returns `CECOMPRESS_FAILED` when the resulting packet is not
+    smaller than the original. `NKStringDecompress` reverses those raw/all-zero
+    packet branches and delegates non-raw stream payloads to `CEDecompress`.
+    Rust now implements the CE all-zero and shorter raw-packet branches for
+    `StringCompress`/`StringDecompress`, including low-byte-only and
+    high-byte-only packets, odd-length padded output, size-only compression
+    queries, compressed-half fail-closed behavior, and the non-shrinking raw
+    failure rule. `CECompress`/`CEDecompress` are declared and called in the
+    reviewed tree, but the engine body was not present in the searched CE source
+    files, so that opaque payload path remains unsupported instead of being
+    guessed.
+
+- CE GDI display escape authority:
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwingdi.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\dispperf.h`,
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\GPE\ddi_if.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\VGAFLAT\gpeflat.cpp`
+  - `pwingdi.h` defines `EXTESC_NOTSUPPORTED`, `EXTESC_SUPPORTED`,
+    `EXTESC_ERROR`, `QUERYESCSUPPORT`, and the display-driver escape IDs for
+    gamma and screen rotation. `dispperf.h` defines the display-performance
+    escape IDs, query-support list, and 32-entry `DISPPERF_TIMING` table shape
+    used by `DispPerfDrvEscape`. The CE GDIAPI `dc.cpp`
+    `ExtEscapeInvalidAccess` test expects direct private display escapes to
+    return `EXTESC_ERROR` with invalid-access status, while
+    `QUERYESCSUPPORT` for the raw-framebuffer escape reports not supported.
+    Rust now implements that query/protected-error surface and the CE-sized
+    zeroed `DISPPERF_EXTESC_GETSIZE`/`GETTIMING`/`CLEARTIMING`/`GETUNHANDLED`
+    payload contract for raw `ExtEscape` while leaving real driver escape
+    payload execution unsupported.

@@ -88,9 +88,9 @@ use std::{
     collections::{BTreeMap, VecDeque},
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use image::{ColorType, ImageEncoder, codecs::jpeg::JpegEncoder, codecs::png::PngEncoder};
@@ -149,6 +149,7 @@ pub struct RemoteServer {
 #[derive(Debug)]
 struct RemoteServerState {
     config: RemoteServerConfig,
+    listener: TcpListener,
     pending_control: Mutex<VecDeque<Value>>,
     latest_status: Mutex<Value>,
     latest_framebuffer: Mutex<Option<RemoteFramebufferImage>>,
@@ -196,6 +197,7 @@ impl RemoteServer {
         let server = Self {
             state: Arc::new(RemoteServerState {
                 config,
+                listener,
                 pending_control: Mutex::new(VecDeque::new()),
                 latest_status: Mutex::new(v2_status_json(&RemoteStatus {
                     running: true,
@@ -232,16 +234,40 @@ impl RemoteServer {
             local_addr,
         };
         let worker = server.clone();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         thread::Builder::new()
             .name("wince-remote-server".to_owned())
-            .spawn(move || worker.serve(listener))
+            .spawn(move || {
+                let _ = ready_tx.send(());
+                worker.serve();
+            })
             .map_err(|err| Error::Backend(format!("start remote server thread: {err}")))?;
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|err| {
+                Error::Backend(format!(
+                    "remote server accept thread did not start for {local_addr}: {err}"
+                ))
+            })?;
+        wait_until_http_ready(local_addr).map_err(|err| {
+            Error::Backend(format!(
+                "remote server did not answer startup probe for {local_addr}: {err}"
+            ))
+        })?;
         println!("  remote server: http://{local_addr}");
         Ok(server)
     }
 
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    #[cfg(test)]
+    fn listener_guard_addr(&self) -> SocketAddr {
+        self.state
+            .listener
+            .local_addr()
+            .expect("remote listener guard local addr")
     }
 
     pub fn audio_sink(&self) -> RemoteAudioSink {
@@ -365,10 +391,10 @@ impl RemoteServer {
             .len()
     }
 
-    fn serve(self, listener: TcpListener) {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
+    fn serve(self) {
+        loop {
+            match self.state.listener.accept() {
+                Ok((stream, _)) => {
                     let server = self.clone();
                     let _ = thread::Builder::new()
                         .name("wince-remote-client".to_owned())
@@ -982,6 +1008,47 @@ pub fn v2_status_json(status: &RemoteStatus) -> Value {
     })
 }
 
+fn wait_until_http_ready(addr: SocketAddr) -> std::result::Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut last_error = String::from("not attempted");
+    while Instant::now() < deadline {
+        match probe_status_endpoint(addr) {
+            Ok(()) => return Ok(()),
+            Err(err) => last_error = err,
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    Err(last_error)
+}
+
+fn probe_status_endpoint(addr: SocketAddr) -> std::result::Result<(), String> {
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(250))
+        .map_err(|err| format!("connect failed: {err}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .map_err(|err| format!("set read timeout failed: {err}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(500)))
+        .map_err(|err| format!("set write timeout failed: {err}"))?;
+    stream
+        .write_all(
+            b"GET /api/v1/status HTTP/1.1\r\nHost: startup-probe\r\nConnection: close\r\n\r\n",
+        )
+        .map_err(|err| format!("write probe failed: {err}"))?;
+    let mut response = [0u8; 64];
+    let read = stream
+        .read(&mut response)
+        .map_err(|err| format!("read probe failed: {err}"))?;
+    if response[..read].starts_with(b"HTTP/1.1 200 ") {
+        Ok(())
+    } else {
+        Err(format!(
+            "unexpected probe response: {}",
+            String::from_utf8_lossy(&response[..read])
+        ))
+    }
+}
+
 fn queue_control_message(state: &RemoteServerState, message: Value) -> usize {
     let mut pending = state.pending_control.lock().expect("remote control mutex");
     pending.push_back(message);
@@ -1577,6 +1644,23 @@ mod tests {
         assert_eq!(queued[0]["phase"], "tap");
         assert_eq!(queued[0]["x"], 12);
         assert_eq!(queued[0]["y"], 34);
+    }
+
+    #[test]
+    fn remote_server_start_keeps_listener_guard_and_accepts_immediately() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+
+        assert_eq!(server.listener_guard_addr(), server.local_addr());
+        let response = http_request(
+            server.local_addr(),
+            "GET /api/v1/status HTTP/1.1\r\nHost: local\r\n\r\n",
+        );
+        assert!(response.contains("200 OK"));
+        assert!(response.contains(r#""running":true"#));
     }
 
     #[test]

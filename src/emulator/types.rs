@@ -563,6 +563,8 @@ pub struct UnicornWndProcReturn {
     pub return_pc: u32,
     pub return_pc_trampoline_origin: Option<u32>,
     pub result: u32,
+    pub live_fp: Option<u32>,
+    pub caller_fp: Option<u32>,
     pub class_name: Option<String>,
 }
 
@@ -577,6 +579,8 @@ pub struct UnicornWndProcCallTrace {
     pub return_pc: u32,
     pub return_pc_trampoline_origin: Option<u32>,
     pub result: u32,
+    pub live_fp: Option<u32>,
+    pub caller_fp: Option<u32>,
     pub class_name: Option<String>,
     pub calls: Vec<UnicornLastCall>,
     pub imports: Vec<UnicornLastImport>,

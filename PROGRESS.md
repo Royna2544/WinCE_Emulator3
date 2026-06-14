@@ -2618,3 +2618,142 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `CeFsIoControlW(FSCTL_SET_FILE_CACHE)` remains unsupported. Broader external
   cache DLL/filter behavior stays queued with the remaining storage fidelity
   gaps.
+- `cargo fmt`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop coredll_raw_file_handle_set_file_cache_follows_cache_filter_shape -- --nocapture`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  file-handle `FSCTL_SET_FILE_CACHE` work; the eVC4 MIPSII fixture remains
+  ignored because that toolchain is not configured.
+- `src/emulator/unicorn.rs`, `src/emulator/types.rs`, `SOURCE_REFERENCES.md`,
+  `TODO.md`, and `KNOWN_BUGS.md`: direct SendMessage-owned WNDPROC cleanup now
+  preserves pending live callouts until the saved/debug PC reaches the callout's
+  return PC, avoiding loss of a live guest WNDPROC return when the GWE
+  sent-message record has temporarily disappeared during iNavi/Happyway modal
+  handoff diagnostics. WNDPROC return traces now include live/caller frame
+  pointers, and the optional `WINCE_EMU_INAVI_GLOBAL_TRACE` hooks capture the
+  object/thunk globals used while narrowing the animated-splash frontier.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop direct_send_wndproc_cleanup_keeps_live_callout_until_return_pc -- --nocapture`
+  passed after the direct-send WNDPROC cleanup work.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test basic_subsystems`
+  passed after the direct-send WNDPROC cleanup work.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  direct-send WNDPROC cleanup work; the eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured.
+- `src/remote_server.rs`, `PLAN.MD`, `TODO.md`, and `KNOWN_BUGS.md`: the remote
+  REST server now keeps a cloned listener guard in shared server state and waits
+  for the accept thread to enter `serve` before `RemoteServer::start` prints and
+  returns. This hardens the detached-launch listener lifetime regression that
+  blocked unattended iNavi UI driving; a full detached host/remote launch recheck
+  remains queued before treating REST screenshot/input control as reliable in
+  the live app flow.
+- `cargo fmt` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop remote_server_start_keeps_listener_guard_and_accepts_immediately -- --nocapture`
+  passed after the remote-server listener hardening.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop remote_server::tests -- --nocapture`
+  passed after the remote-server listener hardening.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  remote-server listener hardening; the eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured.
+- Detached debug `drive94` iNavi launch on `127.0.0.1:8766` rechecked the
+  remote-server listener hardening in the host process path:
+  `cargo build --features unicorn` refreshed the debug binary, then
+  `target\debug\wince_emulation_v3.exe --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir D:\INAVI_Emulator\DUMPPLZ\Windows --mount-config mounts.toml --desktop virtual --remote-server 127.0.0.1:8766 --run-cpu --remote-video-fps 5 --remote-jpeg-quality 80 --cpu-instruction-limit 8000000 --verbose`
+  printed `remote server: http://127.0.0.1:8766`. Unlike prior `drive93`
+  listener failures, `/api/v1/status` answered with `running: true`,
+  `/api/v1/frame.jpg` wrote `target\drive94_frame.jpg`, and
+  `/api/v1/input/touch` accepted a top-right tap. The remote input debug route
+  showed the tap drained through the active route into `hwnd=0x00020008` as
+  `WM_LBUTTONDOWN`/move-style mouse messages for iNavi's thread. The remaining
+  frontier is not REST listener lifetime: `target\drive94_screenshot.png` was
+  still black while iNavi had dirty visible windows and active thread work, so
+  map/splash rendering remains open.
+- `src/remote_server.rs`: `drive96` reproduced the optimized detached false-URL
+  failure after the cloned-listener guard work: the release process printed
+  `remote server: http://127.0.0.1:8768` but `/api/v1/status` timed out/refused
+  while the process remained alive. The remote server now owns the actual
+  `TcpListener` in shared `RemoteServerState`, the accept thread calls
+  `accept()` on that state-owned listener, and startup self-probes
+  `/api/v1/status` before printing the URL. This makes listener lifetime match
+  the `RemoteServer` handle stored by the kernel instead of a moved listener
+  clone.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop remote_server::tests -- --nocapture`
+  passed after the state-owned remote listener and startup probe fix. The same
+  test build also caught and fixed a test-only MIPS `reg_write` type mismatch in
+  the direct-send WNDPROC regression.
+- `cargo build --release --features unicorn,trace,win32-desktop` passed after
+  stopping the stale detached release process that had locked
+  `target\release\wince_emulation_v3.exe`.
+- Detached release `drive97` on `127.0.0.1:8769` validated the fixed optimized
+  host path: `/api/v1/status` returned `running: true`, `/api/v1/frame.jpg`
+  wrote `target\drive97_frame.jpg` with the real iNavi SE splash art, and
+  `/api/v1/input/touch` accepted a top-right tap. The remote input debug route
+  showed the tap drained through the active iNavi window (`hwnd=0x00020008`) as
+  posted mouse messages, and file traces had advanced through map/config/search
+  data (`mapinfo.bin`, `config.bin`, `GpsPosition.bin`, search DB/MRData files).
+  The remaining route-flow frontier is now post-splash map UI transition, not
+  listener lifetime or black framebuffer output.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
+  state-owned remote listener/startup-probe fix and the direct-send WNDPROC
+  regression update. The eVC4 MIPSII fixture remains intentionally ignored.
+- `src/ce/coredll.rs`: implemented the CE `compr2.c` raw/all-zero packet
+  branches for `StringCompress`/`StringDecompress`. The new raw kernel
+  regression covers UTF-16-style low-byte raw packet round-trip, all-zero
+  packets, size-only compression queries, the CE non-shrinking raw
+  `CECOMPRESS_FAILED` rule, and fail-closed behavior for still-unsupported
+  opaque compressed stream payloads.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel coredll_raw_string_compress_decompress_matches_ce_raw_packet_edges -- --nocapture`
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`
+  passed after the `StringCompress`/`StringDecompress` slice.
+- `cargo check --features unicorn,trace,win32-desktop` and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed outside the
+  sandbox after the CE string-compression wrapper slice; the sandboxed
+  `cargo check` attempt had failed only because Ninja execution was blocked in
+  the sandbox cwd.
+- `src/ce/coredll.rs`, `src/ce/thread.rs`, and `tests/coredll_raw_gwe.rs`: raw
+  `ExtEscape` now follows the CE display-driver `QUERYESCSUPPORT` and
+  protected-escape surface from `pwingdi.h`, `dispperf.h`, `dc.cpp`,
+  `ddi_if.cpp`, and `gpeflat.cpp`. The new regression covers supported gamma
+  and display-performance support queries, unsupported raw-framebuffer queries,
+  direct privileged screen-rotation escape denial with `ERROR_INVALID_ACCESS`,
+  invalid HDCs, and invalid query buffers.
+- `cargo fmt --check` and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passed after the raw `ExtEscape` slice. The run also fixed the full-feature
+  test compile break by retaining the single shared
+  `blocked_get_message_has_visible_receiver_work` scheduler helper instead of a
+  duplicate definition.
+- The full-feature test suite initially exposed stale scheduler regression
+  fixtures in `direct_send_wndproc_cleanup_keeps_live_callout_until_return_pc`
+  and `escaped_get_message_sent_callout_completes_active_send`; the fixtures now
+  preserve the live pending callout and restore the guarded `GetMessageW`
+  import arguments. Both focused tests pass, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` now passes again
+  with the eVC4 MIPSII fixture still intentionally ignored.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `ExtEscape` now
+  implements the CE `DispPerfDrvEscape` payload contract for
+  `DISPPERF_EXTESC_GETSIZE`, `GETTIMING`, `CLEARTIMING`, and `GETUNHANDLED`.
+  `GETSIZE` reports the CE 32-entry, 64-byte `DISPPERF_TIMING` table size
+  (2048 bytes), `GETTIMING` returns a zeroed table, `CLEARTIMING` succeeds as a
+  no-op, and `GETUNHANDLED` reports zero unhandled operations while preserving
+  CE invalid-output-buffer failures.
+- `src/ce/linux_x11_desktop.rs` now parses and formats as the Linux X11 host
+  desktop backend behind the existing `linux-x11-desktop` feature wiring; the
+  key-symbol range patterns were normalized to valid Rust literal ranges so
+  rustfmt can resolve the module.
+- `Cargo.toml`: `win32-desktop` now enables `win32-audio`, matching the host
+  desktop code path that registers the WinMM sink on Windows. This keeps the
+  requested `unicorn,trace,win32-desktop` feature set buildable without asking
+  callers to remember a separate audio feature.
+- Validation after the DISPPERF payload slice: `cargo fmt --check`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, `cargo check --features unicorn,trace,win32-desktop`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` all pass; the eVC4
+  MIPSII fixture remains intentionally ignored.
+- `tests/coredll_raw_kernel.rs`: expanded the CE `compr2.c`
+  `StringCompress`/`StringDecompress` regression to cover high-byte-only raw
+  packets (`STRPART2RAW` without `STRPART1RAW`), odd-length raw packets that
+  decompress to CE's padded even byte count, and fail-closed behavior when only
+  one stream is raw and the other would require the unavailable
+  `CEDecompress` engine. A source search found declarations/callers for
+  `CECompress`/`CEDecompress`, but not the engine body, so the opaque branch is
+  still intentionally unsupported rather than guessed.

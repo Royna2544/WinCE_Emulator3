@@ -45,9 +45,9 @@ use crate::{
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
-            ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
-            ERROR_INVALID_WINDOW_HANDLE, ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY,
-            ERROR_NOT_OWNER, ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
+            ERROR_FILE_NOT_FOUND, ERROR_INVALID_ACCESS, ERROR_INVALID_HANDLE,
+            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NO_MORE_FILES,
+            ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_OWNER, ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
             ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
         },
     },
@@ -1611,14 +1611,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0xffff_ffff))
         }
-        ORD_EXT_ESCAPE => {
-            // ExtEscape(hdc, iEscape, cbInput, lpszInData, cbOutput, lpszOutData) — driver escape.
-            // Not supported; return 0 (not implemented).
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_EXT_ESCAPE => Some(CoredllValue::U32(ext_escape_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_FILE_VERSION_INFO_SIZE_W => {
             // GetFileVersionInfoSizeW(lptstrFilename, lpdwHandle) — returns 0 (no version info).
             let handle_ptr = raw_arg(args, 1);
@@ -4600,14 +4595,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_STRING_COMPRESS | ORD_STRING_DECOMPRESS => {
-            // StringCompress/StringDecompress — CE string compression; not implemented.
-            // Return 0 (failure / 0 bytes written).
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_STRING_COMPRESS => Some(CoredllValue::U32(string_compress_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_STRING_DECOMPRESS => Some(CoredllValue::U32(string_decompress_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_PROCESS_HEAP => Some(CoredllValue::Handle(kernel.memory.get_process_heap())),
         ORD_GET_MODULE_FILE_NAME_W => Some(CoredllValue::U32(get_module_file_name_w_raw(
             kernel,
@@ -35475,6 +35468,185 @@ fn get_device_caps_raw(kernel: &CeKernel, hdc: u32, index: u32) -> u32 {
     }
 }
 
+const EXTESC_NOTSUPPORTED: u32 = 0;
+const EXTESC_SUPPORTED: u32 = 1;
+const EXTESC_ERROR: u32 = u32::MAX;
+const QUERYESCSUPPORT: u32 = 8;
+const DRVESC_SETGAMMAVALUE: u32 = 6201;
+const DRVESC_GETGAMMAVALUE: u32 = 6202;
+const DRVESC_SETSCREENROTATION: u32 = 6301;
+const DRVESC_GETSCREENROTATION: u32 = 6302;
+const DRVESC_SETVIDEOPROTECTION: u32 = 6401;
+const DRVESC_GETVIDEOPROTECTION: u32 = 6402;
+const DRVESC_SAVEVIDEOMEM: u32 = 6501;
+const DRVESC_RESTOREVIDEOMEM: u32 = 6502;
+const DISPPERF_EXTESC_GETSIZE: u32 = 0xfefefff0;
+const DISPPERF_EXTESC_GETTIMING: u32 = 0xfefefff1;
+const DISPPERF_EXTESC_CLEARTIMING: u32 = 0xfefefff2;
+const DISPPERF_EXTESC_GETUNHANDLED: u32 = 0xfefefff3;
+const DISPPERF_TIMING_SIZE: u32 = 64;
+const DISPPERF_NUM_ROP_TIMES: u32 = 32;
+const DISPPERF_TIMING_TABLE_SIZE: u32 = DISPPERF_TIMING_SIZE * DISPPERF_NUM_ROP_TIMES;
+
+fn ext_escape_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hdc = raw_arg(args, 0);
+    let escape = raw_arg(args, 1);
+    let input_len = raw_arg(args, 2);
+    let input_ptr = raw_arg(args, 3);
+    let output_len = raw_arg(args, 4);
+    let output_ptr = raw_arg(args, 5);
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return EXTESC_NOTSUPPORTED;
+    }
+    if escape == QUERYESCSUPPORT {
+        if input_len < 4 || input_ptr == 0 {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return EXTESC_ERROR;
+        }
+        let Some(requested_escape) = read_guest_u32(kernel, memory, thread_id, input_ptr) else {
+            return EXTESC_ERROR;
+        };
+        if is_queryable_display_escape(requested_escape) {
+            kernel.threads.set_last_error(thread_id, 0);
+            EXTESC_SUPPORTED
+        } else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            EXTESC_NOTSUPPORTED
+        }
+    } else if is_dispperf_escape(escape) {
+        dispperf_ext_escape_raw(kernel, memory, thread_id, escape, output_len, output_ptr)
+    } else if is_privileged_display_escape(escape) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_ACCESS);
+        EXTESC_ERROR
+    } else {
+        let _ = (output_len, output_ptr);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        EXTESC_NOTSUPPORTED
+    }
+}
+
+fn dispperf_ext_escape_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    escape: u32,
+    output_len: u32,
+    output_ptr: u32,
+) -> u32 {
+    match escape {
+        DISPPERF_EXTESC_GETSIZE => {
+            if output_len < 4 || output_ptr == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return EXTESC_ERROR;
+            }
+            if !write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                output_ptr,
+                DISPPERF_TIMING_TABLE_SIZE,
+            ) {
+                return EXTESC_ERROR;
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            EXTESC_SUPPORTED
+        }
+        DISPPERF_EXTESC_GETTIMING => {
+            if output_len < DISPPERF_TIMING_TABLE_SIZE || output_ptr == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return EXTESC_ERROR;
+            }
+            let zeroed = vec![0u8; DISPPERF_TIMING_TABLE_SIZE as usize];
+            if !write_guest_bytes(kernel, memory, thread_id, output_ptr, &zeroed) {
+                return EXTESC_ERROR;
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            EXTESC_SUPPORTED
+        }
+        DISPPERF_EXTESC_CLEARTIMING => {
+            kernel.threads.set_last_error(thread_id, 0);
+            EXTESC_SUPPORTED
+        }
+        DISPPERF_EXTESC_GETUNHANDLED => {
+            if output_len < 4 || output_ptr == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return EXTESC_ERROR;
+            }
+            if !write_guest_u32(kernel, memory, thread_id, output_ptr, 0) {
+                return EXTESC_ERROR;
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            EXTESC_SUPPORTED
+        }
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            EXTESC_ERROR
+        }
+    }
+}
+
+fn is_queryable_display_escape(escape: u32) -> bool {
+    matches!(
+        escape,
+        DRVESC_SETGAMMAVALUE
+            | DRVESC_GETGAMMAVALUE
+            | DRVESC_SETSCREENROTATION
+            | DRVESC_GETSCREENROTATION
+            | DISPPERF_EXTESC_GETSIZE
+            | DISPPERF_EXTESC_GETTIMING
+            | DISPPERF_EXTESC_CLEARTIMING
+            | DISPPERF_EXTESC_GETUNHANDLED
+    )
+}
+
+fn is_dispperf_escape(escape: u32) -> bool {
+    matches!(
+        escape,
+        DISPPERF_EXTESC_GETSIZE
+            | DISPPERF_EXTESC_GETTIMING
+            | DISPPERF_EXTESC_CLEARTIMING
+            | DISPPERF_EXTESC_GETUNHANDLED
+    )
+}
+
+fn is_privileged_display_escape(escape: u32) -> bool {
+    matches!(
+        escape,
+        DRVESC_SETGAMMAVALUE
+            | DRVESC_GETGAMMAVALUE
+            | DRVESC_SETSCREENROTATION
+            | DRVESC_GETSCREENROTATION
+            | DRVESC_SETVIDEOPROTECTION
+            | DRVESC_GETVIDEOPROTECTION
+            | DRVESC_SAVEVIDEOMEM
+            | DRVESC_RESTOREVIDEOMEM
+    )
+}
+
 fn create_compatible_dc_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
     let _ = hdc;
     kernel.threads.set_last_error(thread_id, 0);
@@ -45918,6 +46090,226 @@ fn interlocked_compare_store<M: CoredllGuestMemory>(
         write_guest_u32(kernel, memory, thread_id, addr, exchange);
     }
     old_value
+}
+
+const CECOMPRESS_ALLZEROS: u32 = 0;
+const CECOMPRESS_FAILED: u32 = u32::MAX;
+const CEDECOMPRESS_FAILED: u32 = u32::MAX;
+const STRING_COMPRESS_SIZE_MASK: u16 = 0x3fff;
+const STRING_COMPRESS_PART1_RAW: u16 = 0x8000;
+const STRING_COMPRESS_PART2_RAW: u16 = 0x4000;
+
+fn string_compress_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let input_ptr = raw_arg(args, 0);
+    let input_len = raw_arg(args, 1);
+    let output_ptr = raw_arg(args, 2);
+    let output_len = raw_arg(args, 3);
+    if input_len == 0 {
+        if output_ptr != 0 && !write_guest_u16(kernel, memory, thread_id, output_ptr, 0) {
+            return CECOMPRESS_FAILED;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return CECOMPRESS_ALLZEROS;
+    }
+    let Some(input) = read_guest_bytes(kernel, memory, thread_id, input_ptr, input_len) else {
+        return CECOMPRESS_FAILED;
+    };
+    if input.iter().all(|&byte| byte == 0) {
+        if output_ptr != 0 {
+            if output_len < 2 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return CECOMPRESS_FAILED;
+            }
+            if !write_guest_u16(kernel, memory, thread_id, output_ptr, 0) {
+                return CECOMPRESS_FAILED;
+            }
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return CECOMPRESS_ALLZEROS;
+    }
+
+    let even_stream: Vec<u8> = input.iter().step_by(2).copied().collect();
+    let odd_stream: Vec<u8> = input.iter().skip(1).step_by(2).copied().collect();
+    if even_stream.len() > usize::from(STRING_COMPRESS_SIZE_MASK) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CECOMPRESS_FAILED;
+    }
+
+    let even_raw = !even_stream.iter().all(|&byte| byte == 0);
+    let odd_raw = !odd_stream.iter().all(|&byte| byte == 0);
+    let mut header = if even_raw {
+        STRING_COMPRESS_PART1_RAW | even_stream.len() as u16
+    } else {
+        0
+    };
+    if odd_raw {
+        header |= STRING_COMPRESS_PART2_RAW;
+    }
+
+    let raw_even_len = even_raw.then_some(even_stream.len()).unwrap_or(0);
+    let raw_odd_len = odd_raw.then_some(odd_stream.len()).unwrap_or(0);
+    let packet_len = 2usize
+        .saturating_add(raw_even_len)
+        .saturating_add(raw_odd_len);
+    if packet_len >= input_len as usize {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CECOMPRESS_FAILED;
+    }
+    if output_ptr != 0 {
+        if packet_len > output_len as usize {
+            kernel.threads.set_last_error(thread_id, 0);
+            return CECOMPRESS_FAILED;
+        }
+        if !write_guest_u16(kernel, memory, thread_id, output_ptr, header) {
+            return CECOMPRESS_FAILED;
+        }
+        let mut cursor = output_ptr.wrapping_add(2);
+        if even_raw {
+            if !write_guest_bytes(kernel, memory, thread_id, cursor, &even_stream) {
+                return CECOMPRESS_FAILED;
+            }
+            cursor = cursor.wrapping_add(even_stream.len() as u32);
+        }
+        if odd_raw && !write_guest_bytes(kernel, memory, thread_id, cursor, &odd_stream) {
+            return CECOMPRESS_FAILED;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    packet_len as u32
+}
+
+fn string_decompress_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let input_ptr = raw_arg(args, 0);
+    let input_len = raw_arg(args, 1);
+    let output_ptr = raw_arg(args, 2);
+    let output_len = raw_arg(args, 3);
+    if input_len < 2 || output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return CEDECOMPRESS_FAILED;
+    }
+    let Some(header) = read_guest_u16(kernel, memory, thread_id, input_ptr) else {
+        return CEDECOMPRESS_FAILED;
+    };
+    let part1_size = usize::from(header & STRING_COMPRESS_SIZE_MASK);
+    let Some(part2_size) = (input_len as usize)
+        .checked_sub(2)
+        .and_then(|payload| payload.checked_sub(part1_size))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return CEDECOMPRESS_FAILED;
+    };
+
+    if part1_size == 0 {
+        for offset in (0..output_len).step_by(2) {
+            if !write_guest_u8(
+                kernel,
+                memory,
+                thread_id,
+                output_ptr.wrapping_add(offset),
+                0,
+            ) {
+                return CEDECOMPRESS_FAILED;
+            }
+        }
+    } else if header & STRING_COMPRESS_PART1_RAW != 0 {
+        if part1_size.saturating_mul(2) > output_len as usize {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return CEDECOMPRESS_FAILED;
+        }
+        let Some(bytes) = read_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr.wrapping_add(2),
+            part1_size as u32,
+        ) else {
+            return CEDECOMPRESS_FAILED;
+        };
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            if !write_guest_u8(
+                kernel,
+                memory,
+                thread_id,
+                output_ptr.wrapping_add((index * 2) as u32),
+                byte,
+            ) {
+                return CEDECOMPRESS_FAILED;
+            }
+        }
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return CEDECOMPRESS_FAILED;
+    }
+
+    if part2_size == 0 {
+        for offset in (1..output_len).step_by(2) {
+            if !write_guest_u8(
+                kernel,
+                memory,
+                thread_id,
+                output_ptr.wrapping_add(offset),
+                0,
+            ) {
+                return CEDECOMPRESS_FAILED;
+            }
+        }
+    } else if header & STRING_COMPRESS_PART2_RAW != 0 {
+        if part2_size.saturating_mul(2) > output_len as usize {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return CEDECOMPRESS_FAILED;
+        }
+        let Some(bytes) = read_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr.wrapping_add(2 + part1_size as u32),
+            part2_size as u32,
+        ) else {
+            return CEDECOMPRESS_FAILED;
+        };
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            if !write_guest_u8(
+                kernel,
+                memory,
+                thread_id,
+                output_ptr.wrapping_add((index * 2 + 1) as u32),
+                byte,
+            ) {
+                return CEDECOMPRESS_FAILED;
+            }
+        }
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return CEDECOMPRESS_FAILED;
+    }
+
+    let out_size = part1_size.max(part2_size).saturating_mul(2);
+    kernel.threads.set_last_error(thread_id, 0);
+    out_size as u32
 }
 
 pub(crate) fn read_guest_bytes<M: CoredllGuestMemory>(

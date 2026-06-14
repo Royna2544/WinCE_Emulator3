@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 use std::mem::size_of;
 
 pub type MmResult = u32;
@@ -97,27 +97,40 @@ pub struct NullAudioSink {
 #[derive(Debug)]
 pub enum HostAudioBackend {
     Unplugged,
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "win32-audio"))]
     Winmm(WinmmAudioBackend),
+    #[cfg(all(target_os = "linux", feature = "linux-audio"))]
+    Alsa(AlsaAudioBackend),
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 pub struct WinmmAudioBackend {
     device_count: u32,
     output: Option<WinmmWaveOut>,
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 struct WinmmWaveOut {
     handle: windows::Win32::Media::Audio::HWAVEOUT,
     format: WaveFormat,
     queued: VecDeque<WinmmQueuedBuffer>,
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 struct WinmmQueuedBuffer {
     header: Box<windows::Win32::Media::Audio::WAVEHDR>,
     _payload: Box<[u8]>,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-audio"))]
+pub struct AlsaAudioBackend {
+    output: Option<AlsaPcmOut>,
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-audio"))]
+struct AlsaPcmOut {
+    pcm: alsa::pcm::PCM,
+    format: WaveFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -550,13 +563,24 @@ impl HostAudioSink {
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "win32-audio"))]
     pub fn winmm(name: impl Into<String>, max_chunks: usize) -> Self {
         let device_count = unsafe { windows::Win32::Media::Audio::waveOutGetNumDevs() };
         Self {
             name: name.into(),
             backend: HostAudioBackend::Winmm(WinmmAudioBackend::new(device_count)),
             connected: device_count > 0,
+            submitted: VecDeque::new(),
+            max_chunks: max_chunks.max(1),
+        }
+    }
+
+    #[cfg(all(target_os = "linux", feature = "linux-audio"))]
+    pub fn alsa(name: impl Into<String>, max_chunks: usize) -> Self {
+        Self {
+            name: name.into(),
+            backend: HostAudioBackend::Alsa(AlsaAudioBackend::new()),
+            connected: true,
             submitted: VecDeque::new(),
             max_chunks: max_chunks.max(1),
         }
@@ -651,40 +675,53 @@ impl NullAudioSink {
 }
 
 impl HostAudioBackend {
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "win32-audio"))]
     pub fn device_count(&self) -> Option<u32> {
         match self {
             HostAudioBackend::Unplugged => None,
             HostAudioBackend::Winmm(backend) => Some(backend.device_count()),
+            #[cfg(all(target_os = "linux", feature = "linux-audio"))]
+            HostAudioBackend::Alsa(_) => None,
         }
     }
 
     fn submit_pcm(&mut self, payload: &[u8], format: &WaveFormat) -> bool {
+        #[cfg(not(any(
+            all(windows, feature = "win32-audio"),
+            all(target_os = "linux", feature = "linux-audio")
+        )))]
+        let _ = (payload, format);
         match self {
             HostAudioBackend::Unplugged => true,
-            #[cfg(windows)]
+            #[cfg(all(windows, feature = "win32-audio"))]
             HostAudioBackend::Winmm(backend) => backend.submit_pcm(payload, format),
+            #[cfg(all(target_os = "linux", feature = "linux-audio"))]
+            HostAudioBackend::Alsa(backend) => backend.submit_pcm(payload, format),
         }
     }
 
     fn unplug(&mut self) {
         match self {
             HostAudioBackend::Unplugged => {}
-            #[cfg(windows)]
+            #[cfg(all(windows, feature = "win32-audio"))]
             HostAudioBackend::Winmm(backend) => backend.close(),
+            #[cfg(all(target_os = "linux", feature = "linux-audio"))]
+            HostAudioBackend::Alsa(backend) => backend.close(),
         }
     }
 
     fn flush(&mut self) {
         match self {
             HostAudioBackend::Unplugged => {}
-            #[cfg(windows)]
+            #[cfg(all(windows, feature = "win32-audio"))]
             HostAudioBackend::Winmm(backend) => backend.reclaim_done(),
+            #[cfg(all(target_os = "linux", feature = "linux-audio"))]
+            HostAudioBackend::Alsa(backend) => backend.flush(),
         }
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 impl std::fmt::Debug for WinmmAudioBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WinmmAudioBackend")
@@ -702,7 +739,7 @@ impl std::fmt::Debug for WinmmAudioBackend {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 impl WinmmAudioBackend {
     fn new(device_count: u32) -> Self {
         Self {
@@ -748,7 +785,7 @@ impl WinmmAudioBackend {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 impl std::fmt::Debug for WinmmWaveOut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WinmmWaveOut")
@@ -758,7 +795,7 @@ impl std::fmt::Debug for WinmmWaveOut {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 impl WinmmWaveOut {
     fn open(format: WaveFormat) -> Option<Self> {
         use windows::Win32::Media::Audio::{CALLBACK_NULL, HWAVEOUT, WAVE_MAPPER, WAVEFORMATEX};
@@ -874,7 +911,7 @@ impl WinmmWaveOut {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 impl Drop for WinmmWaveOut {
     fn drop(&mut self) {
         unsafe {
@@ -889,7 +926,7 @@ impl Drop for WinmmWaveOut {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "win32-audio"))]
 impl WinmmQueuedBuffer {
     fn is_done(&self) -> bool {
         let flags = unsafe { std::ptr::addr_of!((*self.header).dwFlags).read_unaligned() };
@@ -903,6 +940,95 @@ impl WinmmQueuedBuffer {
                 self.header.as_mut() as *mut windows::Win32::Media::Audio::WAVEHDR,
                 size_of::<windows::Win32::Media::Audio::WAVEHDR>() as u32,
             );
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-audio"))]
+impl std::fmt::Debug for AlsaAudioBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlsaAudioBackend")
+            .field("open", &self.output.is_some())
+            .finish()
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-audio"))]
+impl AlsaAudioBackend {
+    fn new() -> Self {
+        Self { output: None }
+    }
+
+    fn submit_pcm(&mut self, payload: &[u8], format: &WaveFormat) -> bool {
+        if payload.is_empty()
+            || !format.is_pcm()
+            || format.bits_per_sample != 16
+            || format.channels == 0
+            || format.samples_per_sec == 0
+        {
+            return false;
+        }
+        if self
+            .output
+            .as_ref()
+            .is_none_or(|output| output.format != *format)
+        {
+            self.close();
+            let Some(output) = AlsaPcmOut::open(format.clone()) else {
+                return false;
+            };
+            self.output = Some(output);
+        }
+        self.output
+            .as_ref()
+            .is_some_and(|output| output.submit_pcm(payload))
+    }
+
+    fn flush(&mut self) {
+        if let Some(output) = self.output.as_ref() {
+            let _ = output.pcm.wait(Some(0));
+        }
+    }
+
+    fn close(&mut self) {
+        self.output.take();
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "linux-audio"))]
+impl AlsaPcmOut {
+    fn open(format: WaveFormat) -> Option<Self> {
+        use alsa::{
+            Direction, ValueOr,
+            pcm::{Access, Format, HwParams, PCM},
+        };
+
+        let pcm = PCM::new("default", Direction::Playback, false).ok()?;
+        {
+            let params = HwParams::any(&pcm).ok()?;
+            params.set_access(Access::RWInterleaved).ok()?;
+            params.set_format(Format::S16LE).ok()?;
+            params.set_channels(u32::from(format.channels)).ok()?;
+            params
+                .set_rate_near(format.samples_per_sec, ValueOr::Nearest)
+                .ok()?;
+            pcm.hw_params(&params).ok()?;
+        }
+        pcm.prepare().ok()?;
+        Some(Self { pcm, format })
+    }
+
+    fn submit_pcm(&self, payload: &[u8]) -> bool {
+        let io = self.pcm.io_bytes();
+        match io.writei(payload) {
+            Ok(_) => true,
+            Err(err) => {
+                drop(io);
+                if self.pcm.try_recover(err, true).is_err() {
+                    return false;
+                }
+                self.pcm.io_bytes().writei(payload).is_ok()
+            }
         }
     }
 }

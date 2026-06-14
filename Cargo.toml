@@ -17,13 +17,20 @@ unicorn-engine = { version = "2", optional = true }
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Devices_Communication", "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_UI_WindowsAndMessaging"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa = { version = "0.9", optional = true }
+x11rb = { version = "0.13", optional = true }
+
 [features]
 default = []
 unicorn = ["dep:unicorn-engine"]
 evc4-fixtures = []
 trace = []
-desktop = ["win32-desktop"]
+desktop = ["win32-desktop", "win32-audio", "linux-x11-desktop", "linux-audio"]
+linux-x11-desktop = ["dep:x11rb"]
+linux-audio = ["dep:alsa"]
 win32-desktop = []
+win32-audio = []
 
 [profile.release]
 debug = true
