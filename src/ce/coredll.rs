@@ -33,9 +33,9 @@ use crate::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HKey, RegOpenResult, RegQueryValueResult,
         },
         resource::{
-            AcceleratorEntry, FontObject, ImageListDraw, MenuItem, PopupMenuCommandSelection,
-            PopupMenuNotification, PopupMenuTracking, RegionObject, ResourceId, ResourceSystem,
-            stock_object_handle,
+            AcceleratorEntry, FontObject, IconObject, ImageListDraw, MenuItem,
+            PopupMenuCommandSelection, PopupMenuNotification, PopupMenuTracking, RegionObject,
+            ResourceId, ResourceSystem, stock_object_handle,
         },
         shell::{
             MessageBoxButton, MessageBoxButtonLabel, MessageBoxButtonSlot, MessageBoxIcon,
@@ -7789,7 +7789,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ) as u32)),
         ORD_IMAGE_LIST_REPLACE_ICON => Some(CoredllValue::U32(image_list_replace_icon_raw(
-            kernel, thread_id, args,
+            kernel, memory, thread_id, args,
         ) as u32)),
         ORD_IMAGE_LIST_REPLACE => Some(CoredllValue::Bool(image_list_replace_raw(
             kernel, memory, thread_id, args,
@@ -27672,11 +27672,57 @@ fn create_image_list_mask_bitmap<M: CoredllGuestMemory>(
     Some(mask)
 }
 
-fn image_list_replace_icon_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> i32 {
+fn image_list_replace_icon_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> i32 {
     let handle = raw_arg(args, 0);
     let index = raw_i32_arg(args, 1);
     let icon = raw_arg(args, 2);
     let old_owned_bitmaps = image_list_owned_bitmap_handles(kernel, handle);
+    if let Some(icon_obj) = kernel.resources.icon(icon).cloned() {
+        let Some((bitmap, mask)) =
+            snapshot_icon_for_image_list(kernel, memory, thread_id, handle, &icon_obj)
+        else {
+            return -1;
+        };
+        let result = if index < 0 {
+            kernel
+                .resources
+                .add_masked_image_list_image_with_mask(handle, bitmap, mask, CLR_NONE)
+                .map(|index| index >= 0)
+        } else {
+            kernel
+                .resources
+                .replace_image_list_image(handle, index, bitmap, mask)
+        };
+        match result {
+            Some(true) => {
+                delete_unreferenced_image_list_owned_bitmaps(kernel, handle, old_owned_bitmaps);
+                kernel.threads.set_last_error(thread_id, 0);
+                return if index < 0 {
+                    kernel
+                        .resources
+                        .image_list_count(handle)
+                        .and_then(|count| i32::try_from(count).ok())
+                        .map(|count| count - 1)
+                        .unwrap_or(-1)
+                } else {
+                    index
+                };
+            }
+            Some(false) | None => {
+                delete_owned_bitmap(kernel, bitmap);
+                delete_owned_bitmap(kernel, mask);
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return -1;
+            }
+        }
+    }
     match kernel
         .resources
         .replace_image_list_icon(handle, index, icon)
@@ -27693,6 +27739,134 @@ fn image_list_replace_icon_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u3
             -1
         }
     }
+}
+
+fn snapshot_icon_for_image_list<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    icon: &IconObject,
+) -> Option<(u32, u32)> {
+    const ILC_MASK: u32 = 0x0001;
+    let list = kernel.resources.image_list(handle)?;
+    if list.width <= 0 || list.height <= 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let width = list.width;
+    let height = list.height;
+    let has_list_mask = list.flags & ILC_MASK != 0;
+    let background = if list.bk_color == CLR_NONE || list.bk_color == CLR_DEFAULT {
+        [0, 0, 0]
+    } else {
+        colorref_rgb(list.bk_color)
+    };
+    let source_color = kernel.resources.bitmap(icon.color_bitmap).cloned();
+    let source_mask = kernel.resources.bitmap(icon.mask_bitmap).cloned();
+    if source_color.is_none() && source_mask.is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let bitmap = create_blank_owned_bitmap(kernel, memory, thread_id, width, height, 32)?;
+    let bitmap_obj = kernel.resources.bitmap(bitmap).cloned()?;
+    for y in 0..height {
+        for x in 0..width {
+            let _ = write_bitmap_pixel_rgb(memory, &bitmap_obj, x, y, background);
+        }
+    }
+
+    let color_bytes = source_color
+        .as_ref()
+        .and_then(|bitmap| read_bitmap_object_bytes(memory, bitmap));
+    let mask_bytes = source_mask
+        .as_ref()
+        .and_then(|bitmap| read_bitmap_object_bytes(memory, bitmap));
+    if let Some(source) = source_color.as_ref() {
+        let copy_width = width.min(source.width.abs());
+        let copy_height = height.min(source.height);
+        for y in 0..copy_height {
+            for x in 0..copy_width {
+                let transparent = source_mask
+                    .as_ref()
+                    .zip(mask_bytes.as_ref())
+                    .and_then(|(mask, bytes)| bitmap_pixel_rgb(mask, bytes, x, y))
+                    .is_some_and(|rgb| rgb != [0, 0, 0]);
+                if transparent {
+                    continue;
+                }
+                if let Some(rgb) = color_bytes
+                    .as_ref()
+                    .and_then(|bytes| bitmap_pixel_rgb(source, bytes, x, y))
+                {
+                    let _ = write_bitmap_pixel_rgb(memory, &bitmap_obj, x, y, rgb);
+                }
+            }
+        }
+    }
+
+    let mask = if has_list_mask {
+        let mask = create_blank_owned_bitmap(kernel, memory, thread_id, width, height, 1)?;
+        if let Some(mask_obj) = kernel.resources.bitmap_mut(mask) {
+            mask_obj.color_table = vec![[0, 0, 0, 0], [0xff, 0xff, 0xff, 0]];
+        }
+        let mask_obj = kernel.resources.bitmap(mask).cloned()?;
+        if let Some(source) = source_mask.as_ref() {
+            let copy_width = width.min(source.width.abs());
+            let copy_height = height.min(source.height);
+            for y in 0..copy_height {
+                for x in 0..copy_width {
+                    if let Some(rgb) = mask_bytes
+                        .as_ref()
+                        .and_then(|bytes| bitmap_pixel_rgb(source, bytes, x, y))
+                    {
+                        let _ = write_bitmap_pixel_rgb(memory, &mask_obj, x, y, rgb);
+                    }
+                }
+            }
+        }
+        mask
+    } else {
+        0
+    };
+    Some((bitmap, mask))
+}
+
+fn create_blank_owned_bitmap<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    width: i32,
+    height: i32,
+    bits_pixel: u16,
+) -> Option<u32> {
+    let bits_per_row = (width.unsigned_abs() as u64).checked_mul(u64::from(bits_pixel))?;
+    let width_bytes = (((bits_per_row + 31) / 32) * 4).min(i32::MAX as u64) as u32;
+    let byte_count = width_bytes.checked_mul(height.unsigned_abs())?;
+    let Some(bits_ptr) =
+        kernel
+            .memory
+            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return None;
+    };
+    let zeroes = vec![0; byte_count as usize];
+    if !write_guest_bytes(kernel, memory, thread_id, bits_ptr, &zeroes) {
+        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+        return None;
+    }
+    Some(
+        kernel
+            .resources
+            .create_owned_bitmap(width, height, 1, bits_pixel, bits_ptr),
+    )
 }
 
 fn image_list_replace_raw<M: CoredllGuestMemory>(

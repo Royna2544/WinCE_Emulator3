@@ -15,6 +15,29 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, and
+  `SOURCE_REFERENCES.md`: raw `ImageList_ReplaceIcon` now follows the CE
+  `imagelist.cpp` bitmap-backed path for real icons by snapshotting rendered
+  color plus optional `DI_MASK` output into owned image-list bitmap/mask
+  storage. Synthetic shell pseudo-icons still store their handle metadata. The
+  GWE regression destroys the source icon before drawing the image-list entry,
+  proving the list owns a durable rendered snapshot.
+- `src/emulator/unicorn.rs` and `src/main.rs`: post-run wall-clock stop
+  snapshots now also canonicalize a parked MIPS `jr` import thunk PC to the
+  actual import-trap page target before restart/debug bookkeeping, and the CLI
+  rotation gate now treats a captured wall-clock stop as rotatable even when the
+  snapshot carries a trap address. This covers the case where the run stops
+  after the thunk branch but before the trap PC is reflected in the saved
+  snapshot.
+- Validation after the ImageList_ReplaceIcon snapshot and wall-clock rotation
+  slice: `cargo fmt --check`, `git diff --check`, `CARGO_INCREMENTAL=0 cargo
+  check --features unicorn,trace,win32-desktop`, focused `coredll_raw_gwe`,
+  `coredll_raw_kernel`, `wall_clock_import_jr_thunk_resumes_at_import_trap`,
+  and `idle_poll_detects_saved_get_message_waiter` tests, plus full
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured, and Cargo still emits the existing
+  unused-code warnings.
 - `tests/coredll_raw_kernel.rs`, `PLAN.MD`, and `SOURCE_REFERENCES.md`: raw
   `ExtractIconExW` PE coverage now includes a dedicated 32bpp `BI_RGB`
   `RT_ICON` fixture, verifying extracted bitmap metadata, trailing AND-mask

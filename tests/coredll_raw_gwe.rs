@@ -53,29 +53,29 @@ use wince_emulation_v3::{
             ORD_GET_WINDOW_ORG_EX, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
             ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
             ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL,
-            ORD_HIDE_CARET, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_GET_ICON, ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT,
-            ORD_IMM_CREATE_IMCC, ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC,
-            ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME, ORD_IMM_ENUM_REGISTER_WORD_W,
-            ORD_IMM_ESCAPE_W, ORD_IMM_GENERATE_MESSAGE, ORD_IMM_GET_CANDIDATE_LIST_COUNT_W,
-            ORD_IMM_GET_CANDIDATE_LIST_W, ORD_IMM_GET_CANDIDATE_WINDOW,
-            ORD_IMM_GET_COMPOSITION_FONT_W, ORD_IMM_GET_COMPOSITION_STRING_W,
-            ORD_IMM_GET_COMPOSITION_WINDOW, ORD_IMM_GET_CONTEXT, ORD_IMM_GET_CONVERSION_LIST_W,
-            ORD_IMM_GET_CONVERSION_STATUS, ORD_IMM_GET_DEFAULT_IMEWND, ORD_IMM_GET_DESCRIPTION_W,
-            ORD_IMM_GET_GUIDE_LINE_W, ORD_IMM_GET_HOT_KEY, ORD_IMM_GET_IMCCLOCK_COUNT,
-            ORD_IMM_GET_IMCCSIZE, ORD_IMM_GET_IMCLOCK_COUNT, ORD_IMM_GET_IMEFILE_NAME_W,
-            ORD_IMM_GET_KEYBOARD_LAYOUT, ORD_IMM_GET_OPEN_STATUS, ORD_IMM_GET_PROPERTY,
-            ORD_IMM_GET_REGISTER_WORD_STYLE_W, ORD_IMM_GET_STATUS_WINDOW_POS, ORD_IMM_IS_IME,
-            ORD_IMM_IS_UIMESSAGE_W, ORD_IMM_LOCK_IMC, ORD_IMM_LOCK_IMCC, ORD_IMM_NOTIFY_IME,
-            ORD_IMM_RE_SIZE_IMCC, ORD_IMM_REGISTER_WORD_W, ORD_IMM_RELEASE_CONTEXT,
-            ORD_IMM_SET_CANDIDATE_WINDOW, ORD_IMM_SET_COMPOSITION_FONT_W,
-            ORD_IMM_SET_COMPOSITION_STRING_W, ORD_IMM_SET_COMPOSITION_WINDOW,
-            ORD_IMM_SET_CONVERSION_STATUS, ORD_IMM_SET_OPEN_STATUS, ORD_IMM_SET_STATUS_WINDOW_POS,
-            ORD_IMM_SIPANEL_STATE, ORD_IMM_UNLOCK_IMC, ORD_IMM_UNLOCK_IMCC,
-            ORD_IMM_UNREGISTER_WORD_W, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT, ORD_INSERT_MENU_W,
-            ORD_INTERSECT_CLIP_RECT, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_INVERT_RECT,
-            ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW,
-            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT,
+            ORD_HIDE_CARET, ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX,
+            ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
+            ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
+            ORD_IMM_ENUM_REGISTER_WORD_W, ORD_IMM_ESCAPE_W, ORD_IMM_GENERATE_MESSAGE,
+            ORD_IMM_GET_CANDIDATE_LIST_COUNT_W, ORD_IMM_GET_CANDIDATE_LIST_W,
+            ORD_IMM_GET_CANDIDATE_WINDOW, ORD_IMM_GET_COMPOSITION_FONT_W,
+            ORD_IMM_GET_COMPOSITION_STRING_W, ORD_IMM_GET_COMPOSITION_WINDOW, ORD_IMM_GET_CONTEXT,
+            ORD_IMM_GET_CONVERSION_LIST_W, ORD_IMM_GET_CONVERSION_STATUS,
+            ORD_IMM_GET_DEFAULT_IMEWND, ORD_IMM_GET_DESCRIPTION_W, ORD_IMM_GET_GUIDE_LINE_W,
+            ORD_IMM_GET_HOT_KEY, ORD_IMM_GET_IMCCLOCK_COUNT, ORD_IMM_GET_IMCCSIZE,
+            ORD_IMM_GET_IMCLOCK_COUNT, ORD_IMM_GET_IMEFILE_NAME_W, ORD_IMM_GET_KEYBOARD_LAYOUT,
+            ORD_IMM_GET_OPEN_STATUS, ORD_IMM_GET_PROPERTY, ORD_IMM_GET_REGISTER_WORD_STYLE_W,
+            ORD_IMM_GET_STATUS_WINDOW_POS, ORD_IMM_IS_IME, ORD_IMM_IS_UIMESSAGE_W,
+            ORD_IMM_LOCK_IMC, ORD_IMM_LOCK_IMCC, ORD_IMM_NOTIFY_IME, ORD_IMM_RE_SIZE_IMCC,
+            ORD_IMM_REGISTER_WORD_W, ORD_IMM_RELEASE_CONTEXT, ORD_IMM_SET_CANDIDATE_WINDOW,
+            ORD_IMM_SET_COMPOSITION_FONT_W, ORD_IMM_SET_COMPOSITION_STRING_W,
+            ORD_IMM_SET_COMPOSITION_WINDOW, ORD_IMM_SET_CONVERSION_STATUS, ORD_IMM_SET_OPEN_STATUS,
+            ORD_IMM_SET_STATUS_WINDOW_POS, ORD_IMM_SIPANEL_STATE, ORD_IMM_UNLOCK_IMC,
+            ORD_IMM_UNLOCK_IMCC, ORD_IMM_UNREGISTER_WORD_W, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT,
+            ORD_INSERT_MENU_W, ORD_INTERSECT_CLIP_RECT, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
+            ORD_INVERT_RECT, ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY,
+            ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT,
             ORD_KEYBD_VKEY_TO_UNICODE, ORD_KILL_TIMER, ORD_LINE_TO, ORD_LOAD_ACCELERATORS_W,
             ORD_LOAD_BITMAP_W, ORD_LOAD_CURSOR_W, ORD_LOAD_ICON_W, ORD_LOAD_KEYBOARD_LAYOUT_W,
             ORD_LOAD_MENU_W, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT,
@@ -1659,6 +1659,114 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
         framebuffer_rgb565_at(&bitmap_framebuffer, 5, 5),
         0x0000,
         "bitmap-backed DrawIconEx should leave framebuffer pixels outside the target rect untouched"
+    );
+
+    let replace_icon_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, 0x0001, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(replace icon) did not return a handle: {other:?}"),
+    };
+    assert_ne!(replace_icon_list, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REPLACE_ICON,
+            [replace_icon_list, 0xffff_ffff, scaled_icon],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let replaced_entry = kernel
+        .resources
+        .image_list(replace_icon_list)
+        .expect("replace-icon image list")
+        .images[0]
+        .clone();
+    assert_eq!(
+        replaced_entry.icon, 0,
+        "CE ImageList_ReplaceIcon renders bitmap-backed icons into list storage"
+    );
+    assert_ne!(replaced_entry.bitmap, 0);
+    assert_ne!(replaced_entry.mask, 0);
+    assert_eq!(
+        kernel
+            .resources
+            .bitmap(replaced_entry.bitmap)
+            .expect("replace-icon color bitmap")
+            .bits_pixel,
+        32
+    );
+    assert_eq!(
+        kernel
+            .resources
+            .bitmap(replaced_entry.mask)
+            .expect("replace-icon mask bitmap")
+            .bits_pixel,
+        1
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DESTROY_ICON,
+            [scaled_icon],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(
+        kernel.resources.icon(scaled_icon).is_none(),
+        "the source icon is gone before drawing the image-list snapshot"
+    );
+    let mut replace_icon_framebuffer = VirtualFramebuffer::new(4, 4, PixelFormat::Rgb565)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut replace_icon_framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [replace_icon_list, 0, hdc, 1, 1, 2, 2, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        framebuffer_rgb565_at(&replace_icon_framebuffer, 1, 1),
+        0xf800,
+        "ImageList_ReplaceIcon snapshot should preserve the icon's red pixel"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&replace_icon_framebuffer, 2, 1),
+        0x07e0,
+        "ImageList_ReplaceIcon snapshot should preserve the icon's green pixel"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&replace_icon_framebuffer, 1, 2),
+        0x001f,
+        "ImageList_ReplaceIcon snapshot should preserve the icon's blue pixel"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&replace_icon_framebuffer, 2, 2),
+        0xffff,
+        "ImageList_ReplaceIcon snapshot should preserve the icon's white pixel"
     );
 
     let (_, mono_mask_bitmap, mono_mask_bits, mono_mask_stride) =

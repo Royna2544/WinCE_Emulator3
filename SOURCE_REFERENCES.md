@@ -1303,6 +1303,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and uses `ILCF_SWAP` only for a same-list slot exchange. Raw
     `ImageList_Copy` now matches that same-list-only behavior instead of
     treating flag zero as a cross-list move/removal path.
+    CE `imagelist.cpp::ReplaceIcon` fills the image-list color rectangle, calls
+    `DrawIconEx_I(..., DI_NORMAL)`, and separately renders `DI_MASK` when the
+    image list has mask storage; raw `ImageList_ReplaceIcon` now snapshots real
+    bitmap-backed icon color/mask output into owned image-list bitmaps while
+    preserving synthetic pseudo-icon handles for shell/system image lists.
     Raw `ExtractIconExW` now supports `nIconIndex == -1` count probes,
     extracts PE `RT_GROUP_ICON`/`RT_ICON` resources into bitmap-backed icon
     handles, selects separate large/small icon entries from multi-size groups,

@@ -7578,6 +7578,23 @@ impl UnicornMips {
         // ── Post-run: sync state, capture debug snapshot ──────────────────────────
         self.import_traps = import_traps_live.borrow().clone();
         let mut snapshot_pc = read_mips_reg(&uc, RegisterMIPS::PC);
+        if let Some(target) = import_trap_page_target_for_mips_jr_thunk(&uc, snapshot_pc) {
+            snapshot_pc = target;
+            let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
+            if host_wall_clock_stop.borrow().is_some() {
+                let elapsed_ms = host_wall_clock_stop.borrow().as_ref().map_or_else(
+                    || host_wall_clock_started.elapsed().as_millis() as u64,
+                    |stop| stop.elapsed_ms,
+                );
+                *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
+                    pc: target,
+                    ra: read_mips_reg(&uc, RegisterMIPS::RA),
+                    sp: read_mips_reg(&uc, RegisterMIPS::SP),
+                    instruction: read_unicorn_u32(&uc, target),
+                    elapsed_ms,
+                });
+            }
+        }
         if host_wall_clock_stop.borrow().is_some() {
             let post_run_mapped_code = MappedCodeIndex::new(self.mapped_blobs.clone());
             let restart_pc = {

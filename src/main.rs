@@ -938,7 +938,7 @@ fn snapshot_has_blocked_get_message(snapshot: &UnicornDebugSnapshot) -> bool {
 }
 
 fn snapshot_can_rotate_on_wall_stop(snapshot: &UnicornDebugSnapshot) -> bool {
-    snapshot.host_wall_clock_stop.is_some() && snapshot.trap_address.is_none()
+    snapshot.host_wall_clock_stop.is_some()
 }
 
 fn snapshot_has_saved_get_message_waiter(snapshot: &UnicornDebugSnapshot) -> bool {
@@ -3950,6 +3950,17 @@ mod tests {
         assert!(!snapshot_has_blocked_get_message(&snapshot));
         assert!(!snapshot_is_idle_message_wait_only(&snapshot));
         assert!(!snapshot_can_rotate_on_wall_stop(&snapshot));
+
+        snapshot.host_wall_clock_stop = Some(
+            wince_emulation_v3::emulator::cpu::UnicornHostWallClockStop {
+                pc: 0x7fff_2a00,
+                ra: 0x1000,
+                sp: 0x7fff_f000,
+                instruction: Some(0),
+                elapsed_ms: 24_000,
+            },
+        );
+        assert!(snapshot_can_rotate_on_wall_stop(&snapshot));
     }
 
     #[test]
