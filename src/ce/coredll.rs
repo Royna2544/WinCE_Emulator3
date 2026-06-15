@@ -6367,9 +6367,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             let dx = raw_i32_arg(args, 1);
             let dy = raw_i32_arg(args, 2);
             match kernel.resources.offset_region(hrgn, dx, dy) {
-                Some(non_empty) => {
+                Some(_) => {
                     kernel.threads.set_last_error(thread_id, 0);
-                    Some(CoredllValue::U32(if non_empty { 2 } else { 1 })) // COMPLEXREGION=3, SIMPLEREGION=2, NULLREGION=1
+                    Some(CoredllValue::U32(
+                        kernel
+                            .resources
+                            .region(hrgn)
+                            .map(region_status_object)
+                            .unwrap_or(ERROR_REGION),
+                    ))
                 }
                 None => {
                     kernel
