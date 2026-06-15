@@ -15,6 +15,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
+  `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
+  `FSDMGR_GetRegistryValue @20` imports now patch through the normal import
+  trap table and fail closed with CE-style missing-registry output clearing
+  instead of leaving stale caller buffers behind.
 - `src/ce/coredll.rs`, `tests/coredll_raw_memory_file.rs`, and
   `SOURCE_REFERENCES.md`: raw `DPA_EnumCallback`/`DSA_EnumCallback` now treat a
   null callback as a successful no-op instead of a raw unsupported callback
@@ -4851,3 +4856,19 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   the guest and the queued serial buffer grew, so the sensor path is waiting on
   the app to reach its GPS consumer. The app remained on the SE splash while
   active guest code continued reading `\SDMMC Disk\INavi\res\resmapi_800x480.bin`.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: fsdmgr import traps now cover
+  CE `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
+  `FSDMGR_GetRegistryValue @20` from `fsdmgr.def`, `fsdmgrapi.cpp`,
+  `logicaldisk.cpp`, and `fsdhelper.cpp`. The synthetic-disk baseline follows
+  the CE missing-value surface by returning false, setting `ERROR_FILE_NOT_FOUND`,
+  clearing missing DWORD/string outputs, and leaving flags unchanged; null disk
+  pointers return `ERROR_GEN_FAILURE`. Real logical-disk registry-root lookup
+  and cache DLL/filter behavior remain queued.
+- Focused validation after the FSDMGR registry-helper baseline:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_registry_imports_clear_missing_outputs_like_ce -- --nocapture` and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop patches_supported_fsdmgr_imports_only --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.

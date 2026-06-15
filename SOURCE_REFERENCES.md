@@ -2993,6 +2993,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_CreateSearchHandle @8`, `FSDMGR_DeregisterVolume @10`,
     `FSDMGR_DeviceHandleToHDSK @11`, `FSDMGR_FormatVolume @15`,
     `FSDMGR_GetDiskInfo @16`, `FSDMGR_GetDiskName @17`,
+    `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`,
+    `FSDMGR_GetRegistryValue @20`,
     `FSDMGR_GetVolumeHandle @21`, `FSDMGR_GetVolumeName @22`,
     `FSDMGR_RegisterVolume @27`, `FSDMGR_ScanVolume @31`,
     `FSDMGR_GetMountFlags @37`, `FSDMGR_AsyncEnterVolume @80`,
@@ -3022,6 +3024,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_ScanVolume` call a utility DLL named by the disk's `Util` registry
     value; when that value is absent, `CallUtilApi` returns
     `ERROR_FILE_NOT_FOUND`.
+    `fsdmgrapi.cpp::FSDMGR_GetRegistryValue`,
+    `FSDMGR_GetRegistryString`, and `FSDMGR_GetRegistryFlag` delegate through
+    the logical disk's registry-root list. `logicaldisk.cpp` clears missing
+    DWORD outputs to zero, clears missing strings to empty, and leaves flag
+    words unchanged when the backing DWORD is absent; `fsdhelper.cpp` accepts
+    only `REG_DWORD` for values and `REG_SZ`/`REG_MULTI_SZ` for strings.
     `fsdmgrapi.cpp::FSDMGR_AsyncEnterVolume` resolves the `HVOL` with
     `LockAPIHandle`, returns `ERROR_DEVICE_REMOVED` when the volume cannot be
     locked, copies the acquired lock handle and mounted-volume pointer to the
@@ -3060,6 +3068,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     direct CE `FSDMGR_DeviceHandleToHDSK` identity mapping,
     `FSDMGR_FormatVolume`/`FSDMGR_ScanVolume` no-utility failure status, direct
     CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path,
+    `FSDMGR_GetRegistryFlag`/`String`/`Value` missing-value status and
+    output-clearing behavior,
     `FSDMGR_AsyncEnterVolume`/`FSDMGR_AsyncExitVolume` registered-HVOL
     validation with a synthetic HVOL lock token,
     `FSDMGR_ParseSecurityDescriptor` output/null/malformed validation with
@@ -3079,7 +3089,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
     for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
-    forwarding, external cache DLL/filter behavior, real CE mounted-volume
+    forwarding, real logical-disk registry-root lookup/cache DLL/filter behavior, real CE mounted-volume
     enter/exit lifetime accounting, broader file-security ACL storage and
     enforcement, real utility DLL
     format/scan execution, real static sector address mapping, real

@@ -786,6 +786,9 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 15
                     | 16
                     | 17
+                    | 18
+                    | 19
+                    | 20
                     | 21
                     | 22
                     | 24
@@ -1147,45 +1150,63 @@ mod tests {
                 ImportThunk {
                     thunk_rva: 0x2050,
                     iat_rva: 0x3050,
-                    import: ImportBy::Ordinal(11),
+                    import: ImportBy::Ordinal(18),
                 },
                 ImportThunk {
                     thunk_rva: 0x2054,
                     iat_rva: 0x3054,
                     import: ImportBy::Name {
                         hint: 0,
-                        name: "FSDMGR_FormatVolume".to_owned(),
+                        name: "FSDMGR_GetRegistryString".to_owned(),
                     },
                 },
                 ImportThunk {
                     thunk_rva: 0x2058,
                     iat_rva: 0x3058,
-                    import: ImportBy::Ordinal(31),
+                    import: ImportBy::Ordinal(20),
                 },
                 ImportThunk {
                     thunk_rva: 0x205c,
                     iat_rva: 0x305c,
-                    import: ImportBy::Ordinal(80),
+                    import: ImportBy::Ordinal(11),
                 },
                 ImportThunk {
                     thunk_rva: 0x2060,
                     iat_rva: 0x3060,
                     import: ImportBy::Name {
                         hint: 0,
-                        name: "FSDMGR_AsyncExitVolume".to_owned(),
+                        name: "FSDMGR_FormatVolume".to_owned(),
                     },
                 },
                 ImportThunk {
                     thunk_rva: 0x2064,
                     iat_rva: 0x3064,
+                    import: ImportBy::Ordinal(31),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2068,
+                    iat_rva: 0x3068,
+                    import: ImportBy::Ordinal(80),
+                },
+                ImportThunk {
+                    thunk_rva: 0x206c,
+                    iat_rva: 0x306c,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_AsyncExitVolume".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2070,
+                    iat_rva: 0x3070,
                     import: ImportBy::Name {
                         hint: 0,
                         name: "FSDMGR_ParseSecurityDescriptor".to_owned(),
                     },
                 },
                 ImportThunk {
-                    thunk_rva: 0x2068,
-                    iat_rva: 0x3068,
+                    thunk_rva: 0x2074,
+                    iat_rva: 0x3074,
                     import: ImportBy::Name {
                         hint: 0,
                         name: "FSEXT_UnsupportedStorageApi".to_owned(),
@@ -1203,8 +1224,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(table.len(), 26);
-        for index in 0..26 {
+        assert_eq!(table.len(), 29);
+        for index in 0..29 {
             let iat = 0x3000 + index * 4;
             assert_eq!(
                 u32::from_le_bytes(mapped[iat..iat + 4].try_into().unwrap()),
@@ -1212,7 +1233,7 @@ mod tests {
             );
         }
         assert_eq!(
-            u32::from_le_bytes(mapped[0x3068..0x306c].try_into().unwrap()),
+            u32::from_le_bytes(mapped[0x3074..0x3078].try_into().unwrap()),
             0
         );
         assert_eq!(
@@ -1355,7 +1376,7 @@ mod tests {
                 .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 20)
                 .unwrap()
                 .ordinal,
-            Some(11)
+            Some(18)
         );
         assert_eq!(
             table
@@ -1363,21 +1384,21 @@ mod tests {
                 .unwrap()
                 .name
                 .as_deref(),
-            Some("FSDMGR_FormatVolume")
+            Some("FSDMGR_GetRegistryString")
         );
         assert_eq!(
             table
                 .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 22)
                 .unwrap()
                 .ordinal,
-            Some(31)
+            Some(20)
         );
         assert_eq!(
             table
                 .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 23)
                 .unwrap()
                 .ordinal,
-            Some(80)
+            Some(11)
         );
         assert_eq!(
             table
@@ -1385,11 +1406,33 @@ mod tests {
                 .unwrap()
                 .name
                 .as_deref(),
-            Some("FSDMGR_AsyncExitVolume")
+            Some("FSDMGR_FormatVolume")
         );
         assert_eq!(
             table
                 .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 25)
+                .unwrap()
+                .ordinal,
+            Some(31)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 26)
+                .unwrap()
+                .ordinal,
+            Some(80)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 27)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("FSDMGR_AsyncExitVolume")
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 28)
                 .unwrap()
                 .name
                 .as_deref(),
@@ -2920,6 +2963,126 @@ mod tests {
             kernel.threads.get_last_error(11),
             crate::ce::thread::ERROR_INVALID_PARAMETER
         );
+    }
+
+    #[test]
+    fn fsdmgr_registry_imports_clear_missing_outputs_like_ce() {
+        const ERROR_GEN_FAILURE: u32 = 31;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_GetRegistryValue".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(19),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_GetRegistryFlag".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let disk_ptr = 0x1000_6000;
+        let value_name_ptr = 0x1000_7000;
+        let dword_out_ptr = 0x1000_8000;
+        let string_out_ptr = 0x1000_9000;
+        let flag_out_ptr = 0x1000_a000;
+
+        memory.map_wide_z(value_name_ptr, "CacheDll");
+        memory.map_word(dword_out_ptr, 0xfeed_cafe);
+        memory.map_wide_z(string_out_ptr, "unchanged");
+        memory.map_word(flag_out_ptr, 0x0000_00f0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, value_name_ptr, dword_out_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(dword_out_ptr), 0);
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_FILE_NOT_FOUND
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, value_name_ptr, string_out_ptr, 16],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.read_wide_z(string_out_ptr, 16), "");
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_FILE_NOT_FOUND
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [disk_ptr, value_name_ptr, flag_out_ptr, 0x0000_0008],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(flag_out_ptr), 0x0000_00f0);
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_FILE_NOT_FOUND
+        );
+
+        memory.map_word(dword_out_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [0, value_name_ptr, dword_out_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(dword_out_ptr), 0xfeed_cafe);
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_GEN_FAILURE);
     }
 
     #[test]

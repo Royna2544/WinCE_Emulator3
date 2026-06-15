@@ -11662,6 +11662,9 @@ enum FsdmgrImport {
     FsdmgrFormatVolume,
     FsdmgrGetDiskInfo,
     FsdmgrGetDiskName,
+    FsdmgrGetRegistryFlag,
+    FsdmgrGetRegistryString,
+    FsdmgrGetRegistryValue,
     FsdmgrGetVolumeHandle,
     FsdmgrGetVolumeName,
     FsdmgrGetMountFlags,
@@ -11779,6 +11782,28 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+        )),
+        FsdmgrImport::FsdmgrGetRegistryFlag => u32::from(fsdmgr_get_registry_flag_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
+        )),
+        FsdmgrImport::FsdmgrGetRegistryString => u32::from(fsdmgr_get_registry_string_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        )),
+        FsdmgrImport::FsdmgrGetRegistryValue => u32::from(fsdmgr_get_registry_value_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
         )),
         FsdmgrImport::FsdmgrGetVolumeHandle => {
             fsdmgr_get_volume_handle_raw(kernel, thread_id, raw_arg(args, 0))
@@ -11919,6 +11944,9 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         15 => Some(FsdmgrImport::FsdmgrFormatVolume),
         16 => Some(FsdmgrImport::FsdmgrGetDiskInfo),
         17 => Some(FsdmgrImport::FsdmgrGetDiskName),
+        18 => Some(FsdmgrImport::FsdmgrGetRegistryFlag),
+        19 => Some(FsdmgrImport::FsdmgrGetRegistryString),
+        20 => Some(FsdmgrImport::FsdmgrGetRegistryValue),
         21 => Some(FsdmgrImport::FsdmgrGetVolumeHandle),
         22 => Some(FsdmgrImport::FsdmgrGetVolumeName),
         24 => Some(FsdmgrImport::FsdmgrInvalidateCache),
@@ -11965,6 +11993,9 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsdmgr_formatvolume" => Some(FsdmgrImport::FsdmgrFormatVolume),
         "fsdmgr_getdiskinfo" => Some(FsdmgrImport::FsdmgrGetDiskInfo),
         "fsdmgr_getdiskname" => Some(FsdmgrImport::FsdmgrGetDiskName),
+        "fsdmgr_getregistryflag" => Some(FsdmgrImport::FsdmgrGetRegistryFlag),
+        "fsdmgr_getregistrystring" => Some(FsdmgrImport::FsdmgrGetRegistryString),
+        "fsdmgr_getregistryvalue" => Some(FsdmgrImport::FsdmgrGetRegistryValue),
         "fsdmgr_getvolumehandle" => Some(FsdmgrImport::FsdmgrGetVolumeHandle),
         "fsdmgr_getvolumename" => Some(FsdmgrImport::FsdmgrGetVolumeName),
         "fsdmgr_getmountflags" => Some(FsdmgrImport::FsdmgrGetMountFlags),
@@ -12350,6 +12381,62 @@ fn fsdmgr_get_disk_name_raw<M: CoredllGuestMemory>(
     name_ptr: u32,
 ) -> bool {
     fsdmgr_disk_get_name_raw(kernel, memory, thread_id, disk_ptr, name_ptr, 260 * 2, 0)
+}
+
+fn fsdmgr_get_registry_value_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    value_out_ptr: u32,
+) -> bool {
+    let status = if disk_ptr == 0 {
+        ERROR_GEN_FAILURE
+    } else if value_out_ptr == 0 || memory.write_u32(value_out_ptr, 0).is_err() {
+        ERROR_GEN_FAILURE
+    } else {
+        ERROR_FILE_NOT_FOUND
+    };
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
+}
+
+fn fsdmgr_get_registry_string_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    value_out_ptr: u32,
+    value_chars: u32,
+) -> bool {
+    let status = if disk_ptr == 0 {
+        ERROR_GEN_FAILURE
+    } else if value_out_ptr != 0 && value_chars != 0 {
+        match memory.write_u16(value_out_ptr, 0) {
+            Ok(()) => ERROR_FILE_NOT_FOUND,
+            Err(_) => ERROR_GEN_FAILURE,
+        }
+    } else {
+        ERROR_FILE_NOT_FOUND
+    };
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
+}
+
+fn fsdmgr_get_registry_flag_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    _memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    _flag_ptr: u32,
+) -> bool {
+    let status = if disk_ptr == 0 {
+        ERROR_GEN_FAILURE
+    } else {
+        ERROR_FILE_NOT_FOUND
+    };
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
 }
 
 fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
