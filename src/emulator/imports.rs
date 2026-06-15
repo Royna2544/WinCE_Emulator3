@@ -249,7 +249,7 @@ impl ImportTrapTable {
         })
     }
 
-    fn insert(&mut self, trap: ImportTrap) {
+    pub(crate) fn insert(&mut self, trap: ImportTrap) {
         self.traps.insert(trap.address, trap);
     }
 }

@@ -162,6 +162,7 @@ struct MessageQueueState {
     flags: u32,
     max_messages: u32,
     max_message_bytes: u32,
+    alert: Option<MessageQueueMessage>,
     messages: VecDeque<MessageQueueMessage>,
     max_queue_messages: u32,
     readers: u16,
@@ -904,6 +905,7 @@ fn encode_devdetail_payload(class_guid: [u8; 16], name: &str, attached: bool) ->
 }
 
 impl CeKernel {
+    const MSGQUEUE_MSGALERT: u32 = 0x0000_0001;
     const MSGQUEUE_NOPRECOMMIT: u32 = 0x0000_0001;
     const MSGQUEUE_ALLOW_BROKEN: u32 = 0x0000_0002;
     const MSGQUEUE_VALID_FLAGS: u32 = Self::MSGQUEUE_NOPRECOMMIT | Self::MSGQUEUE_ALLOW_BROKEN;
@@ -1093,6 +1095,7 @@ impl CeKernel {
                     options.max_messages
                 },
                 max_message_bytes: options.max_message_bytes,
+                alert: None,
                 messages: VecDeque::new(),
                 max_queue_messages: 0,
                 readers: 0,
@@ -1197,18 +1200,26 @@ impl CeKernel {
         if queue.writers == 0 && queue.flags & Self::MSGQUEUE_ALLOW_BROKEN == 0 {
             return Ok(MessageQueueReadStatus::Broken);
         }
-        let Some(message) = queue.messages.front() else {
+        let Some(message) = queue.alert.as_ref().or_else(|| queue.messages.front()) else {
             return Ok(MessageQueueReadStatus::Empty);
         };
         if buffer_bytes < message.bytes.len() as u32 {
-            let mut message = queue.messages.pop_front().expect("front message exists");
+            let mut message = queue
+                .alert
+                .take()
+                .or_else(|| queue.messages.pop_front())
+                .expect("readable message exists");
             message.bytes.truncate(buffer_bytes as usize);
             return Ok(MessageQueueReadStatus::BufferTooSmall(MessageQueueRead {
                 bytes: message.bytes,
                 flags: message.flags,
             }));
         }
-        let message = queue.messages.pop_front().expect("front message exists");
+        let message = queue
+            .alert
+            .take()
+            .or_else(|| queue.messages.pop_front())
+            .expect("readable message exists");
         Ok(MessageQueueReadStatus::Message(MessageQueueRead {
             bytes: message.bytes,
             flags: message.flags,
@@ -1244,6 +1255,23 @@ impl CeKernel {
         }
         if queue.readers == 0 && queue.flags & Self::MSGQUEUE_ALLOW_BROKEN == 0 {
             return Ok(MessageQueueWriteStatus::Broken);
+        }
+        if flags & Self::MSGQUEUE_MSGALERT != 0 && queue.alert.is_none() {
+            queue.alert = Some(MessageQueueMessage { bytes, flags });
+            let handles: Vec<_> = self
+                .handles
+                .iter()
+                .filter_map(|(handle, object)| match object {
+                    KernelObject::MessageQueue(endpoint) if endpoint.queue_id == queue_id => {
+                        Some(handle)
+                    }
+                    _ => None,
+                })
+                .collect();
+            for handle in handles {
+                self.queue_object_wake_candidates(handle);
+            }
+            return Ok(MessageQueueWriteStatus::Written);
         }
         if queue.messages.len() >= queue.max_messages as usize {
             return Ok(MessageQueueWriteStatus::Full);
@@ -4583,7 +4611,7 @@ impl CeKernel {
             return if self
                 .message_queues
                 .get(&endpoint.queue_id)
-                .is_some_and(|queue| !queue.messages.is_empty())
+                .is_some_and(|queue| queue.alert.is_some() || !queue.messages.is_empty())
             {
                 WaitResult::Object0
             } else {
@@ -4944,7 +4972,7 @@ impl CeKernel {
             return self
                 .message_queues
                 .get(&endpoint.queue_id)
-                .map(|queue| !queue.messages.is_empty());
+                .map(|queue| queue.alert.is_some() || !queue.messages.is_empty());
         }
         self.handles.is_wait_ready(handle, thread_id)
     }

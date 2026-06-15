@@ -6952,6 +6952,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        &traps.borrow(),
                         unsafe { &*trampoline_jumps_ptr },
                         &pending_wndproc_returns_hook,
                     )
@@ -34462,12 +34463,26 @@ fn call_window_proc_target_is_executable(
 }
 
 #[cfg(feature = "unicorn")]
+fn coredll_import_trap_ordinal(
+    import_traps: &crate::emulator::imports::ImportTrapTable,
+    target: u32,
+) -> Option<u32> {
+    if let Some(trap) = import_traps.trap_at(target) {
+        return (trap.module_kind == crate::emulator::imports::ImportModuleKind::Coredll)
+            .then_some(trap.ordinal)
+            .flatten();
+    }
+    crate::emulator::imports::dynamic_coredll_proc_trap(target).and_then(|trap| trap.ordinal)
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_call_window_proc_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    import_traps: &crate::emulator::imports::ImportTrapTable,
     trampoline_jumps: &[MipsTrampolineJump],
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
@@ -34505,6 +34520,22 @@ fn try_enter_call_window_proc_callout<D>(
     }
     let mut call_wndproc = wndproc;
     if let Some((slot, target)) = resolve_mips_absolute_jump_thunk_target(uc, wndproc) {
+        if coredll_import_trap_ordinal(import_traps, target)
+            == Some(crate::ce::coredll_ordinals::ORD_DEF_WINDOW_PROC_W)
+        {
+            let result = default_window_proc_result(&mut kernel.gwe, hwnd, msg, wparam, lparam);
+            let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
+            tracing::debug!(
+                target: "ce.gwe",
+                hwnd = format_args!("0x{hwnd:08x}"),
+                msg = format_args!("0x{msg:08x}"),
+                wndproc = format_args!("0x{wndproc:08x}"),
+                thunk_slot = format_args!("0x{slot:08x}"),
+                thunk_target = format_args!("0x{target:08x}"),
+                "CallWindowProcW thunk target resolved to DefWindowProcW"
+            );
+            return true;
+        }
         if !call_window_proc_target_is_executable(kernel, target, trampoline_jumps) {
             tracing::warn!(
                 target: "ce.gwe",
@@ -37652,6 +37683,7 @@ mod unicorn_tests {
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_CALL_WINDOW_PROC_W),
             &[0x6004_f2b8, 0x0002_0004, 0x534c, 0, 0],
+            &crate::emulator::imports::ImportTrapTable::new(),
             &[],
             &pending,
         ));
@@ -37681,11 +37713,53 @@ mod unicorn_tests {
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_CALL_WINDOW_PROC_W),
             &[0x0001_35cc, 0x0002_0000, crate::ce::gwe::WM_PAINT, 0, 0],
+            &crate::emulator::imports::ImportTrapTable::new(),
             &[],
             &pending,
         ));
         assert!(pending.borrow().is_empty());
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0);
+    }
+
+    #[test]
+    fn call_window_proc_handles_thunk_to_def_window_proc_import_trap() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let pending = Rc::new(RefCell::new(Vec::<super::PendingWndProcReturn>::new()));
+        let mut import_traps = crate::emulator::imports::ImportTrapTable::new();
+        let def_window_proc_trap = crate::emulator::imports::IMPORT_TRAP_BASE + 0x0dc0;
+        import_traps.insert(crate::emulator::imports::ImportTrap {
+            address: def_window_proc_trap,
+            module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+            module_name: "COREDLL.dll".to_owned(),
+            ordinal: Some(crate::ce::coredll_ordinals::ORD_DEF_WINDOW_PROC_W),
+            name: Some("DefWindowProcW".to_owned()),
+            iat_va: 0x6006_7370,
+        });
+
+        uc.mem_map(0x0001_3000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_map(0x0052_5000, 0x1000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x0001_35cc, 0x3c08_0052);
+        write_u32(&mut uc, 0x0001_35d0, 0x8d08_504c);
+        write_u32(&mut uc, 0x0001_35d4, 0x0100_0008);
+        write_u32(&mut uc, 0x0001_35d8, 0);
+        write_u32(&mut uc, 0x0052_504c, def_window_proc_trap);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_f578).unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0005_e7d8).unwrap();
+
+        assert!(super::try_enter_call_window_proc_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_CALL_WINDOW_PROC_W),
+            &[0x0001_35cc, 0x0002_0000, crate::ce::gwe::WM_PAINT, 0, 0],
+            &import_traps,
+            &[],
+            &pending,
+        ));
+        assert!(pending.borrow().is_empty());
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
     }
 
     #[test]
