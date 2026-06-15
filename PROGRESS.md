@@ -15,6 +15,21 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/resource.rs`, `tests/basic_subsystems.rs`, and
+  `tests/coredll_raw_kernel.rs`: image-list objects now record CE's first-add
+  indexed palette latch for non-`ILC_COLORDDB` lists, preserving the first
+  source bitmap color table while leaving DDB lists and later additions
+  untouched; size changes clear the latched palette with the images/overlays.
+- Validation after the image-list palette latch slice: `cargo fmt`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test basic_subsystems
+  resource_system_image_list_create_add_count_info_bk_color_and_destroy`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed.
+  `cargo fmt --check`, `git diff --check`, and a full `cargo test -j 1
+  --features unicorn,trace,win32-desktop` also passed. Cargo still emits the
+  existing unused-code warnings plus Windows profile/incremental-cache cleanup
+  noise, and the eVC4 MIPSII fixture remains ignored because that toolchain is
+  not configured.
 - `tests/coredll_raw_gwe.rs`: `DrawIconEx` now covers shell/system
   `ImageList_GetIcon` pseudo handles with valid overlay flags and verifies
   invalid overlay slots above CE's four registered overlay entries stay ignored

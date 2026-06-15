@@ -4952,12 +4952,56 @@ fn resource_system_image_list_create_add_count_info_bk_color_and_destroy() {
     assert!(res.create_image_list(16, 0, 0, 0, 4).is_none());
 
     // Valid creation.
+    const ILC_COLOR8: u32 = 0x0008;
     const ILC_COLORDDB: u32 = 0x00fe;
     let ilh = res.create_image_list(16, 16, 0, 4, 4).unwrap();
     assert!(res.image_list(ilh).is_some());
     assert_eq!(res.gdi_object_kind(ilh), "image_list");
     assert_eq!(res.image_list(ilh).unwrap().flags, ILC_COLORDDB);
     assert_eq!(res.image_list_count(ilh), Some(0));
+
+    let palette_il = res.create_image_list(16, 16, ILC_COLOR8, 1, 1).unwrap();
+    let palette_bmp = res.create_bitmap(16, 16, 1, 8, 0x5100);
+    let palette_table = vec![[0x10, 0x20, 0x30, 0], [0x40, 0x50, 0x60, 0]];
+    res.bitmap_mut(palette_bmp).unwrap().color_table = palette_table.clone();
+    assert_eq!(
+        res.add_image_list_image(palette_il, palette_bmp, 0),
+        Some(0)
+    );
+    assert!(res.image_list(palette_il).unwrap().colors_set);
+    assert_eq!(
+        res.image_list(palette_il).unwrap().color_table,
+        palette_table
+    );
+
+    let second_palette_bmp = res.create_bitmap(16, 16, 1, 8, 0x5200);
+    res.bitmap_mut(second_palette_bmp).unwrap().color_table = vec![[0xaa, 0xbb, 0xcc, 0]];
+    assert_eq!(
+        res.add_image_list_image(palette_il, second_palette_bmp, 0),
+        Some(1)
+    );
+    assert_eq!(
+        res.image_list(palette_il).unwrap().color_table,
+        palette_table,
+        "CE latches only the first indexed bitmap palette for a non-DDB image list"
+    );
+
+    let ddb_palette_il = res.create_image_list(16, 16, ILC_COLORDDB, 1, 1).unwrap();
+    assert_eq!(
+        res.add_image_list_image(ddb_palette_il, palette_bmp, 0),
+        Some(0)
+    );
+    assert!(!res.image_list(ddb_palette_il).unwrap().colors_set);
+    assert!(
+        res.image_list(ddb_palette_il)
+            .unwrap()
+            .color_table
+            .is_empty()
+    );
+
+    assert_eq!(res.set_image_list_size(palette_il, 32, 32), Some(true));
+    assert!(!res.image_list(palette_il).unwrap().colors_set);
+    assert!(res.image_list(palette_il).unwrap().color_table.is_empty());
 
     // add_image_list_image: bitmap=0 returns None.
     assert!(res.add_image_list_image(ilh, 0, 0).is_none());

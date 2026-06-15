@@ -7194,6 +7194,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     const CLR_NONE: u32 = 0xffff_ffff;
     const CLR_DEFAULT: u32 = 0xff00_0000;
     const ILC_MASK: u32 = 0x0001;
+    const ILC_COLOR8: u32 = 0x0008;
     const ILC_COLORDDB: u32 = 0x00fe;
     const ILC_COLOR24: u32 = 0x0018;
     const ILC_COLOR32: u32 = 0x0020;
@@ -7364,6 +7365,126 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
+
+    let palette_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_COLOR8, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create rejected CE 8bpp palette flags: {other:?}"),
+    };
+    let first_palette_bitmap = kernel.resources.create_bitmap(1, 1, 1, 8, 0);
+    let first_palette = vec![[0x11, 0x22, 0x33, 0], [0x44, 0x55, 0x66, 0]];
+    kernel
+        .resources
+        .bitmap_mut(first_palette_bitmap)
+        .unwrap()
+        .color_table = first_palette.clone();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [palette_list, first_palette_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .resources
+            .image_list(palette_list)
+            .unwrap()
+            .colors_set
+    );
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(palette_list)
+            .unwrap()
+            .color_table,
+        first_palette
+    );
+
+    let second_palette_bitmap = kernel.resources.create_bitmap(1, 1, 1, 8, 0);
+    kernel
+        .resources
+        .bitmap_mut(second_palette_bitmap)
+        .unwrap()
+        .color_table = vec![[0xaa, 0xbb, 0xcc, 0]];
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [palette_list, second_palette_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(palette_list)
+            .unwrap()
+            .color_table,
+        first_palette,
+        "CE latches the first indexed source palette for non-DDB image lists"
+    );
+
+    let palette_ddb_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_COLORDDB, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create rejected CE DDB flags: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [palette_ddb_list, first_palette_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(
+        !kernel
+            .resources
+            .image_list(palette_ddb_list)
+            .unwrap()
+            .colors_set
+    );
+    assert!(
+        kernel
+            .resources
+            .image_list(palette_ddb_list)
+            .unwrap()
+            .color_table
+            .is_empty()
+    );
 
     let image_list = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,

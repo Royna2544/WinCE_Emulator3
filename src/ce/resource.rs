@@ -252,6 +252,8 @@ pub struct ImageListObject {
     pub flags: u32,
     pub grow: i32,
     pub bk_color: u32,
+    pub color_table: Vec<[u8; 4]>,
+    pub colors_set: bool,
     pub images: Vec<ImageListImage>,
     pub overlays: BTreeMap<u32, ImageListOverlay>,
     pub last_draw: Option<ImageListDraw>,
@@ -1341,6 +1343,8 @@ impl ResourceSystem {
                 flags,
                 grow,
                 bk_color: 0xffff_ffff,
+                color_table: Vec::new(),
+                colors_set: false,
                 images: Vec::with_capacity(initial.max(0) as usize),
                 overlays: BTreeMap::new(),
                 last_draw: None,
@@ -1360,6 +1364,8 @@ impl ResourceSystem {
                 flags: 0,
                 grow: 0,
                 bk_color: 0xffff_ffff,
+                color_table: Vec::new(),
+                colors_set: false,
                 images: Vec::new(),
                 overlays: BTreeMap::new(),
                 last_draw: None,
@@ -1384,6 +1390,8 @@ impl ResourceSystem {
         list.height = height;
         list.images.clear();
         list.overlays.clear();
+        list.color_table.clear();
+        list.colors_set = false;
         Some(true)
     }
 
@@ -1439,6 +1447,8 @@ impl ResourceSystem {
         let first_flags = first.flags;
         let first_grow = first.grow;
         let first_bk_color = first.bk_color;
+        let first_color_table = first.color_table.clone();
+        let first_colors_set = first.colors_set;
         let overlays = first.overlays.clone();
         let second = self.image_lists.get(&second_handle)?;
         let second_image = second.images.get(second_index as usize)?.clone();
@@ -1480,6 +1490,8 @@ impl ResourceSystem {
                 flags,
                 grow: first_grow,
                 bk_color: first_bk_color,
+                color_table: first_color_table,
+                colors_set: first_colors_set,
                 images: vec![first_image, second_image],
                 overlays,
                 last_draw: None,
@@ -1498,19 +1510,21 @@ impl ResourceSystem {
             .get(&bitmap)
             .map(|bitmap| bitmap.width.abs())
             .unwrap_or(0);
-        let list = self.image_lists.get_mut(&handle)?;
-        let index = list.images.len();
-        let count = image_list_bitmap_strip_count(bitmap_width, list.width);
+        let list_width = self.image_lists.get(&handle)?.width;
+        let count = image_list_bitmap_strip_count(bitmap_width, list_width);
         if count == 0 {
             return None;
         }
+        self.clone_first_image_list_color_table_from_bitmap(handle, bitmap);
+        let list = self.image_lists.get_mut(&handle)?;
+        let index = list.images.len();
         for strip in 0..count {
             list.images.push(ImageListImage {
                 bitmap,
                 mask,
                 icon: 0,
                 transparent_color: None,
-                source_x: strip.saturating_mul(list.width),
+                source_x: strip.saturating_mul(list_width),
                 source_y: 0,
             });
         }
@@ -1531,19 +1545,21 @@ impl ResourceSystem {
             .get(&bitmap)
             .map(|bitmap| bitmap.width.abs())
             .unwrap_or(0);
-        let list = self.image_lists.get_mut(&handle)?;
-        let index = list.images.len();
-        let count = image_list_bitmap_strip_count(bitmap_width, list.width);
+        let list_width = self.image_lists.get(&handle)?.width;
+        let count = image_list_bitmap_strip_count(bitmap_width, list_width);
         if count == 0 {
             return None;
         }
+        self.clone_first_image_list_color_table_from_bitmap(handle, bitmap);
+        let list = self.image_lists.get_mut(&handle)?;
+        let index = list.images.len();
         for strip in 0..count {
             list.images.push(ImageListImage {
                 bitmap,
                 mask: transparent_color,
                 icon: 0,
                 transparent_color: (transparent_color != 0xffff_ffff).then_some(transparent_color),
-                source_x: strip.saturating_mul(list.width),
+                source_x: strip.saturating_mul(list_width),
                 source_y: 0,
             });
         }
@@ -1565,23 +1581,47 @@ impl ResourceSystem {
             .get(&bitmap)
             .map(|bitmap| bitmap.width.abs())
             .unwrap_or(0);
-        let list = self.image_lists.get_mut(&handle)?;
-        let index = list.images.len();
-        let count = image_list_bitmap_strip_count(bitmap_width, list.width);
+        let list_width = self.image_lists.get(&handle)?.width;
+        let count = image_list_bitmap_strip_count(bitmap_width, list_width);
         if count == 0 {
             return None;
         }
+        self.clone_first_image_list_color_table_from_bitmap(handle, bitmap);
+        let list = self.image_lists.get_mut(&handle)?;
+        let index = list.images.len();
         for strip in 0..count {
             list.images.push(ImageListImage {
                 bitmap,
                 mask,
                 icon: 0,
                 transparent_color: (transparent_color != 0xffff_ffff).then_some(transparent_color),
-                source_x: strip.saturating_mul(list.width),
+                source_x: strip.saturating_mul(list_width),
                 source_y: 0,
             });
         }
         i32::try_from(index).ok()
+    }
+
+    fn clone_first_image_list_color_table_from_bitmap(&mut self, handle: u32, bitmap: u32) {
+        const ILC_COLORMASK: u32 = 0x00fe;
+        const ILC_COLORDDB: u32 = 0x00fe;
+        let Some(source) = self.bitmaps.get(&bitmap) else {
+            return;
+        };
+        if source.bits_pixel > 8 || source.color_table.is_empty() {
+            return;
+        }
+        let color_table = source.color_table.clone();
+        let Some(list) = self.image_lists.get_mut(&handle) else {
+            return;
+        };
+        if list.images.is_empty()
+            && (list.flags & ILC_COLORMASK) != ILC_COLORDDB
+            && !list.colors_set
+        {
+            list.color_table = color_table;
+            list.colors_set = true;
+        }
     }
 
     pub fn replace_image_list_image(
