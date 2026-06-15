@@ -38895,19 +38895,37 @@ fn apply_alpha_blend_channel(src: u8, dst: u8, alpha: u8) -> u8 {
     ((u16::from(src) * alpha + u16::from(dst) * inv) / 255) as u8
 }
 
+fn div255_round(value: u32) -> u8 {
+    let biased = value + 0x80;
+    ((biased + (biased >> 8)) >> 8).min(u32::from(u8::MAX)) as u8
+}
+
 fn apply_premultiplied_alpha_blend_rgb(
     src: [u8; 3],
     dst: [u8; 3],
     source_constant_alpha: u8,
     pixel_alpha: u8,
 ) -> [u8; 3] {
-    let constant_alpha = u16::from(source_constant_alpha);
-    let alpha = u16::from(pixel_alpha) * constant_alpha / 255;
-    let inv = 255u16 - alpha;
+    let scale = |value: u8, alpha: u8| div255_round(u32::from(value) * u32::from(alpha));
+    let src = if source_constant_alpha == u8::MAX {
+        src
+    } else {
+        [
+            scale(src[0], source_constant_alpha),
+            scale(src[1], source_constant_alpha),
+            scale(src[2], source_constant_alpha),
+        ]
+    };
+    let source_alpha = if source_constant_alpha == u8::MAX {
+        pixel_alpha
+    } else {
+        scale(pixel_alpha, source_constant_alpha)
+    };
+    let beta = u8::MAX - source_alpha;
     [
-        ((u16::from(src[0]) * constant_alpha + u16::from(dst[0]) * inv) / 255) as u8,
-        ((u16::from(src[1]) * constant_alpha + u16::from(dst[1]) * inv) / 255) as u8,
-        ((u16::from(src[2]) * constant_alpha + u16::from(dst[2]) * inv) / 255) as u8,
+        scale(dst[0], beta).saturating_add(src[0]),
+        scale(dst[1], beta).saturating_add(src[1]),
+        scale(dst[2], beta).saturating_add(src[2]),
     ]
 }
 
@@ -38956,10 +38974,17 @@ fn alpha_blend_pixel(
         }
         AlphaBlendMode::Premultiplied => {
             let pixel_alpha = src_pixel_alpha?;
-            let alpha = u16::from(pixel_alpha) * u16::from(source_constant_alpha) / 255;
-            if alpha == 0 && blend_flags & ALPHA_BLEND_DST_NEG == 0 {
+            if (pixel_alpha == 0 || source_constant_alpha == 0)
+                && blend_flags & ALPHA_BLEND_DST_NEG == 0
+            {
                 return None;
             }
+            let source_alpha = if source_constant_alpha == u8::MAX {
+                pixel_alpha
+            } else {
+                div255_round(u32::from(pixel_alpha) * u32::from(source_constant_alpha))
+            };
+            let beta = u8::MAX - source_alpha;
             Some(AlphaBlendPixel {
                 rgb: apply_premultiplied_alpha_blend_rgb(
                     src_rgb,
@@ -38967,7 +38992,8 @@ fn alpha_blend_pixel(
                     source_constant_alpha,
                     pixel_alpha,
                 ),
-                alpha: apply_alpha_blend_channel(pixel_alpha, dst_alpha, alpha as u8),
+                alpha: div255_round(u32::from(dst_alpha) * u32::from(beta))
+                    .saturating_add(source_alpha),
             })
         }
         AlphaBlendMode::NonPremultiplied => {
@@ -40874,7 +40900,11 @@ fn bitmap_pixel_rgb_from_memory<M: CoredllGuestMemory>(
         }
         32 => {
             let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 4);
-            let raw = memory.read_u32(addr).ok()?;
+            let blue = memory.read_u8(addr).ok()?;
+            let green = memory.read_u8(addr.wrapping_add(1)).ok()?;
+            let red = memory.read_u8(addr.wrapping_add(2)).ok()?;
+            let alpha = memory.read_u8(addr.wrapping_add(3)).ok()?;
+            let raw = u32::from_le_bytes([blue, green, red, alpha]);
             if let Some([red_mask, green_mask, blue_mask]) = bitmap.rgb_masks {
                 Some([
                     component_from_mask(raw, red_mask)?,
@@ -40882,8 +40912,7 @@ fn bitmap_pixel_rgb_from_memory<M: CoredllGuestMemory>(
                     component_from_mask(raw, blue_mask)?,
                 ])
             } else {
-                let bytes = raw.to_le_bytes();
-                Some([bytes[2], bytes[1], bytes[0]])
+                Some([red, green, blue])
             }
         }
         _ => None,

@@ -9161,6 +9161,96 @@ fn coredll_raw_alpha_blend_applies_per_pixel_alpha_between_selected_dibs() -> Re
 }
 
 #[test]
+fn coredll_raw_alpha_blend_matches_ce_per_pixel_alpha_32bpp_rows() -> Result<()> {
+    fn blend_function(source_alpha: u8) -> u32 {
+        (1u32 << 24) | (u32::from(source_alpha) << 16)
+    }
+
+    fn write_argb32(memory: &mut TestGuestMemory, addr: u32, value: u32) {
+        memory.write_bytes(addr, &value.to_le_bytes());
+    }
+
+    fn read_argb32(memory: &TestGuestMemory, addr: u32) -> u32 {
+        u32::from_le_bytes(
+            memory
+                .read_bytes(addr, 4)
+                .try_into()
+                .expect("32bpp DIB pixel should be readable"),
+        )
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dc, _bitmap, bits, stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\alphablend.h::g_stcPPAlpha
+    // rows used by draw.cpp::AlphaBlendPerPixelAlphaTest(top-down).
+    let cases = [
+        (3, 0x0012_3456, 0x00ab_cdef, 0x00ab_cdef, 0x7f),
+        (38, 0x0112_3456, 0x00ab_cdef, 0x00ab_cdf0, 0x02),
+        (39, 0x0112_3456, 0x00ab_cdef, 0x00b4_e7ff, 0x7f),
+        (40, 0x0112_3456, 0x00ab_cdef, 0x01bc_ffff, 0xfe),
+        (75, 0x0212_3456, 0x00ab_cdef, 0x01b3_e6ff, 0x7f),
+    ];
+
+    for (case_index, source, dest, expected, source_constant_alpha) in cases {
+        let dst_addr = bits;
+        let src_addr = bits + 4;
+        write_argb32(&mut memory, dst_addr, dest);
+        write_argb32(&mut memory, src_addr, source);
+        memory.write_bytes(bits + stride, &vec![0; stride as usize]);
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_ALPHA_BLEND,
+                [
+                    dc,
+                    0,
+                    0,
+                    1,
+                    1,
+                    dc,
+                    1,
+                    0,
+                    1,
+                    1,
+                    blend_function(source_constant_alpha)
+                ],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+
+        assert_eq!(
+            read_argb32(&memory, dst_addr),
+            expected,
+            "g_stcPPAlpha case {case_index}"
+        );
+        assert_eq!(
+            read_argb32(&memory, src_addr),
+            source,
+            "source pixel changed for g_stcPPAlpha case {case_index}"
+        );
+        assert_eq!(
+            memory.read_bytes(bits + stride, stride as usize),
+            vec![0; stride as usize],
+            "bottom row changed for g_stcPPAlpha case {case_index}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_alpha_blend_honors_ce_source_alpha_negation_between_selected_dibs() -> Result<()> {
     const BLT_ALPHASRCNEG: u32 = 32;
 

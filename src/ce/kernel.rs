@@ -4871,6 +4871,17 @@ impl CeKernel {
         Some(message)
     }
 
+    pub fn peek_ready_visible_message_w_filtered(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.gwe
+            .peek_visible_message_filtered(thread_id, hwnd, min_msg, max_msg)
+    }
+
     pub fn take_ready_sent_message_w_filtered(
         &mut self,
         thread_id: u32,

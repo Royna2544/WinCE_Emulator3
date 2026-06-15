@@ -390,6 +390,11 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
+        if cpu.prepare_cross_thread_visible_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if cpu.prepare_active_sent_message_callout(kernel) {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
@@ -440,6 +445,18 @@ fn run_cpu_loop(
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
+            if current_cpu_targeted && cpu.prepare_active_orphaned_visible_message_callout(kernel) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if cpu.prepare_cross_thread_visible_message_callout(kernel) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if current_cpu_targeted && cpu.prepare_active_sent_message_callout(kernel) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
             continue;
         }
         let desktop_queued =
@@ -454,6 +471,19 @@ fn run_cpu_loop(
                 kernel,
                 Some(desktop.framebuffer_mut()),
             )
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if args.remote_server.is_some()
+            && remote_drained.handled == 0
+            && desktop_queued == 0
+            && should_rotate_idle_runnable_parked_process(
+                cpu.active_process_has_visible_receiver_work(kernel),
+                cpu.has_runnable_parked_process(kernel),
+            )
+            && cpu.rotate_to_next_parked_process(kernel)
         {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
@@ -497,11 +527,24 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
+        if !cpu.active_process_has_visible_receiver_work(kernel)
+            && cpu.has_runnable_parked_process(kernel)
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
             continue;
         }
         if cpu.prepare_active_orphaned_visible_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if cpu.prepare_cross_thread_visible_message_callout(kernel) {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -706,6 +749,16 @@ fn run_cpu_loop(
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.prepare_active_orphaned_visible_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if cpu.prepare_cross_thread_visible_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if cpu.prepare_active_sent_message_callout(kernel) {
@@ -1048,6 +1101,13 @@ fn should_rotate_idle_remote_receiver_parked_process(
     active_has_visible_receiver_work: bool,
 ) -> bool {
     !active_has_receiver_work && !active_has_visible_receiver_work
+}
+
+fn should_rotate_idle_runnable_parked_process(
+    active_has_visible_receiver_work: bool,
+    has_runnable_parked_process: bool,
+) -> bool {
+    !active_has_visible_receiver_work && has_runnable_parked_process
 }
 
 fn effective_instruction_limit(
@@ -3825,6 +3885,13 @@ mod tests {
         assert!(!should_rotate_idle_remote_receiver_parked_process(
             true, true
         ));
+    }
+
+    #[test]
+    fn idle_runnable_parked_rotation_preserves_active_visible_ui_work() {
+        assert!(should_rotate_idle_runnable_parked_process(false, true));
+        assert!(!should_rotate_idle_runnable_parked_process(true, true));
+        assert!(!should_rotate_idle_runnable_parked_process(false, false));
     }
 
     #[test]

@@ -15,6 +15,16 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/gwe.rs`, `src/ce/kernel.rs`, `src/emulator/unicorn.rs`, and
+  `src/main.rs`: restored cross-thread visible-window message handoff after the
+  reset. The scheduler now peeks visible-only queues before taking a message,
+  refuses cross-process guest WNDPROC callouts until the WNDPROC address belongs
+  to a mapped runtime image, preserves live direct-send WNDPROC callouts while
+  the receiver context is still active, and rotates idle runnable parked
+  processes only when the active process has no visible UI work. Focused
+  validation passed for cross-thread mapped-WNDPROC handoff, live direct-send
+  cleanup preservation, idle visible-work rotation, and the release Unicorn
+  build.
 - `src/ce/devices.rs` and `serial_devices.json`: remote GPS serial routing is
   now config-selectable with an optional `remote_gps` device flag. The live
   `drive29` iNavi run starts with `gps_target=COM7:`, and when the guest opens
@@ -3931,3 +3941,14 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `git diff --check` passed. The full suite keeps the eVC4 MIPSII fixture
   ignored because that toolchain is not configured, and `git diff --check`
   output was limited to existing LF-to-CRLF warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw selected-DIB
+  `AlphaBlend(AC_SRC_ALPHA)` now matches selected CE
+  `alphablend.h::g_stcPPAlpha` 32bpp rows from
+  `draw.cpp::AlphaBlendPerPixelAlphaTest`. The implementation now uses CE
+  GPE-style rounded divide-by-255 source scaling, destination attenuation, and
+  saturating channel adds for premultiplied pixels, and byte-reads 32bpp DIB
+  destination pixels so byte-backed test DIBs do not fall back to black.
+- Focused validation after the CE per-pixel AlphaBlend table slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_alpha_blend_matches_ce_per_pixel_alpha_32bpp_rows`
+  passed. Cargo still emits the existing unused-code warnings.

@@ -2480,12 +2480,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `AlphaBlendConstAlphaTest`, `AlphaBlendPerPixelAlphaToPrimaryTest`, and
     `AlphaBlendPerPixelAlphaTest(..., TRUE/FALSE)` cover source-constant and
     top-down/bottom-up 32 bpp per-pixel alpha into primary or DIB surfaces.
+    CE `alphablend.h::g_stcPPAlpha` rows 3, 38, 39, 40, and 75 pin the
+    selected-DIB 32 bpp premultiplied-alpha rounding and saturation cases used
+    by `draw.cpp::AlphaBlendPerPixelAlphaTest`.
     Raw `AlphaBlend` now validates those fields before rendering, accepts empty
     rectangles as successful no-ops, rejects negative dimensions and
     out-of-bounds selected-DIB source rectangles, keeps source-constant-alpha
     selected-DIB blending covered, treats `AC_SRC_ALPHA` source RGB as
     premultiplied, accepts `AC_SRC_ALPHA_NONPREMULT` for non-premultiplied
-    source RGB, applies top-down and bottom-up 32 bpp per-pixel alpha between
+    source RGB, matches selected `g_stcPPAlpha` 32 bpp table rows, applies top-down and bottom-up 32 bpp per-pixel alpha between
     selected-memory DIBs, and applies source-constant plus top-down and
     bottom-up 32 bpp per-pixel alpha into framebuffer-backed window DCs, and
     clips negative selected-DIB and framebuffer destination origins while

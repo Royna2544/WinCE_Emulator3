@@ -4702,6 +4702,37 @@ impl Gwe {
         })
     }
 
+    pub fn peek_visible_message_filtered(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        if let Some(message) = self.sent_queues.get(&thread_id).and_then(|queue| {
+            queue.iter().find_map(|id| {
+                self.sent_messages.get(id).and_then(|sent| {
+                    (message_matches(&sent.message, hwnd, min_msg, max_msg)
+                        && self.message_targets_visible_window(&sent.message))
+                    .then(|| sent.message.clone())
+                })
+            })
+        }) {
+            return Some(message);
+        }
+        if let Some(message) = self.queues.get(&thread_id).and_then(|queue| {
+            queue.iter().find_map(|message| {
+                (message_matches(message, hwnd, min_msg, max_msg)
+                    && self.message_targets_visible_window(message))
+                .then(|| message.clone())
+            })
+        }) {
+            return Some(message);
+        }
+        self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
+            .filter(|message| self.message_targets_visible_window(message))
+    }
+
     fn message_targets_visible_window(&self, message: &Message) -> bool {
         self.windows
             .get(&message.hwnd)
