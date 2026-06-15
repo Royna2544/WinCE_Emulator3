@@ -4739,3 +4739,25 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored because that toolchain is not configured, and Cargo
   still emits the existing unused-code warnings.
+- `src/ce/coredll.rs`, `src/ce/kernel.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`:
+  raw `ExtEscape` now covers the DeviceEmulator display `CONTRASTCOMMAND`
+  escape from CE `pwingdi.h` and
+  `PLATFORM\DEVICEEMULATOR\SRC\DRIVERS\DISPLAY\LCD\s3c2410x_lcd.cpp`.
+  The local display model now tracks the LCDCON3 high nibble shared by
+  contrast and backlight, supports the `ContrastCmdInputParm` get/set/increase/
+  decrease/default/max commands, clamps signed set values to 0..15, accepts
+  null output for state-changing calls, preserves CE's default-command return
+  quirk, and tests the resulting backlight-bit coupling.
+- Focused validation after the DeviceEmulator contrast `ExtEscape` slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the DeviceEmulator contrast `ExtEscape` slice:
+  `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and Cargo
+  still emits the existing unused-code warnings.

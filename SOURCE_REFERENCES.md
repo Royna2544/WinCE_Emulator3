@@ -3465,7 +3465,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     direct get/set screen-rotation payloads with the packed supported-mask plus
     current-mode output and `cjIn` mode input, DeviceEmulator
     `SETBACKLIGHT`/`GETBACKLIGHT` payloads from `display_escapes.h` and
-    `s3c2410x_lcd.cpp` with fixed four-byte BOOL input/output buffers, and the
+    `s3c2410x_lcd.cpp` with fixed four-byte BOOL input/output buffers,
+    DeviceEmulator `CONTRASTCOMMAND` from `pwingdi.h` and
+    `s3c2410x_lcd.cpp::ContrastControlHelper` with the eight-byte
+    `ContrastCmdInputParm` command/parm input, optional four-byte output,
+    get/set/increase/decrease/default/max commands, signed 0..15 set-value
+    clamping, default-command zero return, max-value query, and the shared
+    LCDCON3 high-nibble/backlight-bit coupling, and the
     CE-sized
     `DISPPERF_EXTESC_GETSIZE`/`GETTIMING`/`CLEARTIMING`/`GETUNHANDLED` payload
     contract for raw `ExtEscape`, including local nonzero GPE timing rows for

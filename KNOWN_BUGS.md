@@ -31,7 +31,11 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   VGAFLAT/SMI3DR packed supported-mask/current-mode ABI and `cjIn` mode value.
   DeviceEmulator `SETBACKLIGHT`/`GETBACKLIGHT` payloads now round-trip local
   BOOL state with the fixed four-byte buffer contract from `display_escapes.h`
-  and `s3c2410x_lcd.cpp`.
+  and `s3c2410x_lcd.cpp`. DeviceEmulator `CONTRASTCOMMAND` now follows the
+  CE `pwingdi.h` `ContrastCmdInputParm` ABI and
+  `s3c2410x_lcd.cpp::ContrastControlHelper` command semantics, including
+  optional output, 0..15 clamping, the default-command return quirk, and the
+  shared LCDCON3 high-nibble coupling with the backlight bit.
   The CE-sized `DISPPERF_EXTESC_*` payload contract now includes local nonzero
   GPE timing rows for raw `BitBlt`, `StretchBlt`, `PatBlt`, non-copy
   `MaskBlt`, CE `DrvTransparentBlt`-style `TransparentImage`, and explicit
