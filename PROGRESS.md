@@ -4804,3 +4804,25 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   utility DLL failure status for synthetic disks. Real utility DLL lookup and
   execution remains queued with the broader physical block-driver fidelity
   work.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: fsdmgr import traps now cover
+  CE `FSDMGR_AsyncEnterVolume @80` and `FSDMGR_AsyncExitVolume @81` from
+  `fsdmgr.def`/`fsdmgrapi.cpp`. The host-backed model validates registered
+  HVOLs, returns `ERROR_DEVICE_REMOVED` for missing volumes, writes a synthetic
+  HVOL lock token to the caller outputs, rejects bad output/mismatched lock
+  state with `ERROR_INVALID_PARAMETER`, and keeps real CE
+  `MountedVolume_t::Enter/Exit` lifetime accounting queued.
+- Focused validation after the direct fsdmgr async-volume import slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_async_volume_imports_lock_registered_hvol_shape -- --nocapture` and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop patches_supported_fsdmgr_imports_only --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the direct fsdmgr async-volume import slice:
+  `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and Cargo
+  still emits the existing unused-code warnings.

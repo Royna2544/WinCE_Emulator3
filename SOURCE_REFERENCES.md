@@ -2994,7 +2994,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_GetDiskInfo @16`, `FSDMGR_GetDiskName @17`,
     `FSDMGR_GetVolumeHandle @21`, `FSDMGR_GetVolumeName @22`,
     `FSDMGR_RegisterVolume @27`, `FSDMGR_ScanVolume @31`,
-    `FSDMGR_GetMountFlags @37`, and
+    `FSDMGR_GetMountFlags @37`, `FSDMGR_AsyncEnterVolume @80`,
+    `FSDMGR_AsyncExitVolume @81`, and
     `STOREMGR_FsIoControlW @44`; `fsdmgr.h` declares their public HVOL/PDSK
     and cache signatures. `fsdcache.cpp` loads a configured cache DLL when one
     exists and otherwise falls back to the CE null-cache function table.
@@ -3020,6 +3021,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_ScanVolume` call a utility DLL named by the disk's `Util` registry
     value; when that value is absent, `CallUtilApi` returns
     `ERROR_FILE_NOT_FOUND`.
+    `fsdmgrapi.cpp::FSDMGR_AsyncEnterVolume` resolves the `HVOL` with
+    `LockAPIHandle`, returns `ERROR_DEVICE_REMOVED` when the volume cannot be
+    locked, copies the acquired lock handle and mounted-volume pointer to the
+    caller, returns `ERROR_INVALID_PARAMETER` for output faults, then enters the
+    mounted volume. `FSDMGR_AsyncExitVolume` uses the returned mounted-volume
+    pointer to call `Exit`, treats bad lock/pointer state as
+    `ERROR_INVALID_PARAMETER`, unlocks the handle, and otherwise returns
+    success.
     `FSDMGR_CreateFileHandle` and `FSDMGR_CreateSearchHandle` ignore the HVOL
     and originating process handle in this CE 6 source and simply return the
     caller-supplied FSD file/search context pointer reinterpreted as a handle.
@@ -3043,6 +3052,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     direct CE `FSDMGR_DeviceHandleToHDSK` identity mapping,
     `FSDMGR_FormatVolume`/`FSDMGR_ScanVolume` no-utility failure status, direct
     CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path,
+    `FSDMGR_AsyncEnterVolume`/`FSDMGR_AsyncExitVolume` registered-HVOL
+    validation with a synthetic HVOL lock token,
     existing mounted HVOL names, AFS hidden/system/permanent mount flags, and a
     lightweight FSD `PDSK` to HVOL association for registered host-backed mount
     names, the CE context-pointer return behavior for FSD file/search handle
@@ -3058,7 +3069,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
     for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
-    forwarding, external cache DLL/filter behavior, real utility DLL
+    forwarding, external cache DLL/filter behavior, real CE mounted-volume
+    enter/exit lifetime accounting, real utility DLL
     format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume
     behavior, hardware power-state timing, and mounted-FSD `FsIoControl` hook
