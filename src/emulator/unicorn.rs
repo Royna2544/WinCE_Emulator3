@@ -358,7 +358,7 @@ const WM_INITDIALOG: u32 = 0x0110;
 #[cfg(feature = "unicorn")]
 const WNDPROC_CALL_FRAME_BYTES: u32 = 0x20;
 #[cfg(feature = "unicorn")]
-const WNDPROC_NESTED_STACK_GRACE_BYTES: u32 = 0x1100;
+const WNDPROC_NESTED_STACK_GRACE_BYTES: u32 = 0x1800;
 #[cfg(feature = "unicorn")]
 const WOM_DONE: u32 = 0x0000_03bd;
 #[cfg(feature = "unicorn")]
@@ -21954,6 +21954,42 @@ mod wait_scheduler_tests {
                 resume_import: None,
                 clear_focus_after_return: None,
             });
+        let mut init_live_wndproc_regs = super::MipsGuestContext::zero();
+        init_live_wndproc_regs.regs[29] = 0x7ffd_e3c8;
+        init_live_wndproc_regs.regs[31] = 0x004a_4c80;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: 0x004a_3218,
+            regs: init_live_wndproc_regs,
+        });
+        assert!(!scheduler.clear_orphaned_direct_send_callouts(&kernel));
+        assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
+        scheduler.pending_wndproc_returns.clear();
+
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "SendMessageW",
+                hwnd: 0x0002_0004,
+                msg: 0x5237,
+                wparam: 0,
+                lparam: 0,
+                wndproc: 0x6004_f0f4,
+                return_pc,
+                return_sp: 0x7ffd_f578,
+                caller_regs: Some(super::MipsGuestContext::zero()),
+                class_name: None,
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: Some(1),
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: None,
+                clear_focus_after_return: None,
+            });
         let mut live_wndproc_regs = super::MipsGuestContext::zero();
         live_wndproc_regs.regs[29] = 0x7ffd_f578 - super::WNDPROC_CALL_FRAME_BYTES;
         live_wndproc_regs.regs[31] = super::WNDPROC_RETURN_STUB_ADDR;
@@ -22104,7 +22140,7 @@ mod wait_scheduler_tests {
                 clear_focus_after_return: None,
             });
         let mut escaped_regs = super::MipsGuestContext::zero();
-        escaped_regs.regs[29] = 0x7ffd_df58;
+        escaped_regs.regs[29] = 0x7ffd_d558;
         escaped_regs.regs[31] = 0x004b_2bd4;
         scheduler.saved_context = Some(super::SavedCpuContext {
             pc: 0x004b_b428,
