@@ -15,6 +15,12 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/file.rs`, `src/ce/kernel.rs`, and `tests/basic_subsystems.rs`:
+  mount-published device-interface advertisements now track owner roots, so two
+  mounted volumes advertising the same class/name keep one visible advertisement
+  until the final owning mount is removed. The regression proves unmounting one
+  duplicate owner does not emit a detach notification or hide the shared
+  `\StoreMgr\<device>` interface while another mount still owns it.
 - `src/ce/kernel.rs` and `src/emulator/unicorn.rs`: Unicorn now parks
   blocking `ReadMsgQueue` and `WriteMsgQueue` calls on the queue endpoint
   handle when CE would wait, then replays the original coredll import when
@@ -4956,6 +4962,28 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture
   remains ignored, and Cargo still emits the existing unused-code warnings.
+- `src/ce/file.rs`, `src/ce/kernel.rs`, `tests/basic_subsystems.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`:
+  configured mounted-storage `IClass` advertisements now carry an owner token
+  derived from the mount root. The public GUID/name advertisement table remains
+  unique for `EnumDeviceInterfaces`, but duplicate owners keep a shared
+  advertisement alive until the last owner withdraws, so unmounting one mount no
+  longer sends a premature `DEVDETAIL` detach while another matching
+  `\StoreMgr\<device>` advertisement remains active. Real device-manager
+  `fsdev_t` handles plus `IClass` `GUID=name` and `%d`/`%b`/`%l` substitution
+  parsing remain queued.
+- Focused validation after the mounted `IClass` owner-scope slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  mount_iclass_duplicate_advertisements_are_owner_scoped -- --nocapture`
+  passed. Cargo still emits the existing unused-code warnings; one incremental
+  cache directory under `target/` reported an access-denied finalization warning
+  after the test completed.
+- Full validation after the mounted `IClass` owner-scope slice:
+  `cargo fmt --check`, `git diff --check`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop mount_iclass -- --nocapture`, and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored,
+  and Cargo still emits the existing unused-code warnings.
 - `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
   `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: direct
   FSDMGR disk IOCTL handling now persists validated CE `DISK_INFO` payloads

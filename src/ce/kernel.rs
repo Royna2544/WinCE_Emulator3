@@ -5,9 +5,9 @@ use crate::{
         com::ComSystem,
         devices::{DeviceIoControlResult, DeviceNamespace, PURGE_RXCLEAR},
         file::{
-            CREATE_ALWAYS, CREATE_NEW, FILE_ATTRIBUTE_DIRECTORY, FileIoResult, FileIoStats,
-            FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_ALWAYS, OPEN_EXISTING,
-            TRUNCATE_EXISTING,
+            CREATE_ALWAYS, CREATE_NEW, DeviceInterfaceAdvertisementSpec, FILE_ATTRIBUTE_DIRECTORY,
+            FileIoResult, FileIoStats, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem,
+            OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
         },
         framebuffer::{Framebuffer, FramebufferBackingStore, FramebufferInfo, FramebufferRect},
         gwe::{
@@ -107,6 +107,12 @@ pub struct RemoteServerControlDrain {
 pub struct DeviceInterfaceAdvertisement {
     pub class_guid: [u8; 16],
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum DeviceInterfaceAdvertisementOwner {
+    Global,
+    Mount(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +220,8 @@ pub struct CeKernel {
     recent_message_ops: Vec<MessageTraceRecord>,
     recent_device_ops: Vec<DeviceTraceRecord>,
     device_interface_advertisements: BTreeSet<DeviceInterfaceAdvertisement>,
+    device_interface_advertisement_owners:
+        BTreeMap<DeviceInterfaceAdvertisement, BTreeSet<DeviceInterfaceAdvertisementOwner>>,
     message_queues: BTreeMap<u32, MessageQueueState>,
     named_message_queues: BTreeMap<String, u32>,
     next_message_queue_id: u32,
@@ -960,6 +968,7 @@ impl CeKernel {
             recent_message_ops: Vec::new(),
             recent_device_ops: Vec::new(),
             device_interface_advertisements: BTreeSet::new(),
+            device_interface_advertisement_owners: BTreeMap::new(),
             message_queues: BTreeMap::new(),
             named_message_queues: BTreeMap::new(),
             next_message_queue_id: 1,
@@ -988,17 +997,47 @@ impl CeKernel {
     }
 
     pub fn advertise_device_interface(&mut self, class_guid: [u8; 16], name: String, add: bool) {
+        self.advertise_device_interface_with_owner(
+            class_guid,
+            name,
+            DeviceInterfaceAdvertisementOwner::Global,
+            add,
+        );
+    }
+
+    fn advertise_device_interface_with_owner(
+        &mut self,
+        class_guid: [u8; 16],
+        name: String,
+        owner: DeviceInterfaceAdvertisementOwner,
+        add: bool,
+    ) {
         let advertisement = DeviceInterfaceAdvertisement { class_guid, name };
         if add {
-            let inserted = self
-                .device_interface_advertisements
-                .insert(advertisement.clone());
-            if inserted {
+            let owners = self
+                .device_interface_advertisement_owners
+                .entry(advertisement.clone())
+                .or_default();
+            let was_unowned = owners.is_empty();
+            let inserted_owner = owners.insert(owner);
+            if inserted_owner && was_unowned {
+                self.device_interface_advertisements
+                    .insert(advertisement.clone());
                 self.queue_device_interface_notification(&advertisement, true);
             }
         } else {
-            let removed = self.device_interface_advertisements.remove(&advertisement);
-            if removed {
+            let should_remove = self
+                .device_interface_advertisement_owners
+                .get_mut(&advertisement)
+                .is_some_and(|owners| {
+                    owners.remove(&owner);
+                    owners.is_empty()
+                });
+            if should_remove {
+                self.device_interface_advertisement_owners
+                    .remove(&advertisement);
+                let removed = self.device_interface_advertisements.remove(&advertisement);
+                debug_assert!(removed);
                 self.queue_device_interface_notification(&advertisement, false);
             }
         }
@@ -1430,13 +1469,19 @@ impl CeKernel {
 
     fn publish_mount_device_interface_specs(
         &mut self,
-        specs: Vec<(Vec<String>, String)>,
+        specs: Vec<DeviceInterfaceAdvertisementSpec>,
         add: bool,
     ) {
-        for (classes, device_path) in specs {
-            for class in classes {
+        for spec in specs {
+            let owner = DeviceInterfaceAdvertisementOwner::Mount(spec.owner);
+            for class in spec.classes {
                 if let Some(class_guid) = parse_guid_string(&class) {
-                    self.advertise_device_interface(class_guid, device_path.clone(), add);
+                    self.advertise_device_interface_with_owner(
+                        class_guid,
+                        spec.device_path.clone(),
+                        owner.clone(),
+                        add,
+                    );
                 }
             }
         }

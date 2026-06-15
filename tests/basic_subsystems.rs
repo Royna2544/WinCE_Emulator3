@@ -25,7 +25,7 @@ use wince_emulation_v3::{
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
             DeviceInterfaceAdvertisement, FreeLibraryResult, LoadedModuleMetadata,
-            MessagePumpResult,
+            MessagePumpResult, MessageQueueOptions, MessageQueueReadStatus,
         },
         object::{
             EventObject, KernelObject, MAX_CE_PRIORITY_LEVELS, MAX_SUSPEND_COUNT,
@@ -3192,6 +3192,111 @@ fn kernel_boot_publishes_mount_iclass_interfaces_and_unmount_removes_them() -> R
         !kernel
             .advertised_device_interfaces()
             .contains(&advertisement)
+    );
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn mount_iclass_duplicate_advertisements_are_owner_scoped() -> Result<()> {
+    const BLOCK_GUID_TEXT: &str = "{A4E7EDDA-E575-4252-9D6B-4195D48BB865}";
+    const BLOCK_GUID: [u8; 16] = [
+        0xda, 0xed, 0xe7, 0xa4, 0x75, 0xe5, 0x52, 0x42, 0x9d, 0x6b, 0x41, 0x95, 0xd4, 0x8b, 0xb8,
+        0x65,
+    ];
+
+    let root = unique_test_root("mount_iclass_owner_scope");
+    let first_root = root.join("first");
+    let second_root = root.join("second");
+    fs::create_dir_all(&first_root).unwrap();
+    fs::create_dir_all(&second_root).unwrap();
+    let mut config = RuntimeConfig::load_default()?;
+    for (guest_root, host_root) in [
+        ("\\SDMMC Disk", first_root.clone()),
+        ("\\Backup Disk", second_root.clone()),
+    ] {
+        config.storage.mounts.push(MountConfig {
+            name: None,
+            device_name: Some("DSK5:".to_owned()),
+            guest_root: guest_root.to_owned(),
+            host_root: Some(host_root),
+            total_mbytes: 128,
+            free_mbytes: 64,
+            writable: true,
+            removable: true,
+            system: false,
+            hidden: false,
+            interface_classes: vec![BLOCK_GUID_TEXT.to_owned()],
+        });
+    }
+
+    let mut kernel = CeKernel::boot(config);
+    let advertisement = DeviceInterfaceAdvertisement {
+        class_guid: BLOCK_GUID,
+        name: "\\StoreMgr\\DSK5:".to_owned(),
+    };
+
+    assert_eq!(kernel.advertised_device_interfaces().len(), 1);
+    assert!(
+        kernel
+            .advertised_device_interfaces()
+            .contains(&advertisement)
+    );
+
+    let (read_queue, _) = kernel.create_message_queue(
+        None,
+        MessageQueueOptions {
+            flags: 0,
+            max_messages: 4,
+            max_message_bytes: 300,
+            read_access: true,
+        },
+    )?;
+    let _write_queue = kernel.open_message_queue(
+        read_queue,
+        MessageQueueOptions {
+            flags: 0,
+            max_messages: 0,
+            max_message_bytes: 300,
+            read_access: false,
+        },
+    )?;
+    let notification = kernel.request_device_notifications(BLOCK_GUID, read_queue, true)?;
+    assert_ne!(notification, 0);
+    let MessageQueueReadStatus::Message(attached) = kernel.read_message_queue(read_queue, 300)?
+    else {
+        panic!("expected initial attach notification");
+    };
+    assert_eq!(
+        u32::from_le_bytes(attached.bytes[20..24].try_into().unwrap()),
+        1
+    );
+
+    assert!(kernel.unmount_guest_root("\\SDMMC Disk"));
+    assert!(
+        kernel
+            .advertised_device_interfaces()
+            .contains(&advertisement)
+    );
+    assert!(matches!(
+        kernel.read_message_queue(read_queue, 300)?,
+        MessageQueueReadStatus::Empty
+    ));
+
+    assert!(kernel.unmount_guest_root("\\Backup Disk"));
+    assert!(
+        !kernel
+            .advertised_device_interfaces()
+            .contains(&advertisement)
+    );
+    let MessageQueueReadStatus::Message(detached) = kernel.read_message_queue(read_queue, 300)?
+    else {
+        panic!("expected final detach notification");
+    };
+    assert_eq!(
+        u32::from_le_bytes(detached.bytes[20..24].try_into().unwrap()),
+        0
     );
 
     let _ = fs::remove_dir_all(root);

@@ -64,6 +64,13 @@ pub struct FileMount {
     pub interface_classes: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceInterfaceAdvertisementSpec {
+    pub owner: String,
+    pub classes: Vec<String>,
+    pub device_path: String,
+}
+
 #[derive(Debug, Clone)]
 struct GuestVolumePath {
     normalized_path: String,
@@ -473,7 +480,7 @@ impl HostFileSystem {
         );
     }
 
-    pub fn device_interface_advertisement_specs(&self) -> Vec<(Vec<String>, String)> {
+    pub fn device_interface_advertisement_specs(&self) -> Vec<DeviceInterfaceAdvertisementSpec> {
         self.mounts_in_order()
             .filter_map(device_interface_advertisement_spec)
             .collect()
@@ -482,7 +489,7 @@ impl HostFileSystem {
     pub fn device_interface_advertisement_specs_for_guest_root(
         &self,
         guest_root: &str,
-    ) -> Vec<(Vec<String>, String)> {
+    ) -> Vec<DeviceInterfaceAdvertisementSpec> {
         let guest_root = normalize_guest_path(guest_root);
         self.mounts
             .get(&guest_root)
@@ -1533,7 +1540,9 @@ fn volume_name_from_guest_root(guest_root: &str) -> String {
         .to_owned()
 }
 
-fn device_interface_advertisement_spec(mount: &FileMount) -> Option<(Vec<String>, String)> {
+fn device_interface_advertisement_spec(
+    mount: &FileMount,
+) -> Option<DeviceInterfaceAdvertisementSpec> {
     if mount.interface_classes.is_empty() {
         return None;
     }
@@ -1545,10 +1554,11 @@ fn device_interface_advertisement_spec(mount: &FileMount) -> Option<(Vec<String>
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| volume_name_from_guest_root(&mount.guest_root));
-    Some((
-        mount.interface_classes.clone(),
-        format!("\\StoreMgr\\{}", device_name.trim_matches(['\\', '/'])),
-    ))
+    Some(DeviceInterfaceAdvertisementSpec {
+        owner: mount.guest_root.clone(),
+        classes: mount.interface_classes.clone(),
+        device_path: format!("\\StoreMgr\\{}", device_name.trim_matches(['\\', '/'])),
+    })
 }
 
 fn strip_host_prefix(host_path: &Path, host_root: &Path) -> Option<PathBuf> {

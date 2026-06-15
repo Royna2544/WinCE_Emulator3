@@ -3610,3 +3610,26 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     guest-readable direct framebuffer memory behind the returned
     `pFramePointer`, and broader DISPPERF payload execution outside those raw
     draw paths remains unsupported.
+
+## Device Interface Advertisement Ownership
+
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devapi.c`
+  `DmAdvertiseInterface` forwards the caller's device handle as an `fsdev_t *`
+  to `I_AdvertiseDeviceInterface`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devadv.c`
+  `AdvertiseInterfaceInternal` forwards a driver id into the advertisement trap
+  for direct driver tracking.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devpnp.c`
+  `PnpAdvertiseInterfaces` walks a device's `IClass` values and registers each
+  interface against that owning `fsdev_t`; `PnpDeadvertiseInterfaces` then
+  withdraws only the interfaces stored on that same device.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\blockdevice.cpp`
+  `BlockDevice_t::GetDeviceIClass` reads configured `IClass` GUID strings, and
+  `BlockDevice_t::AdvertiseInterface` publishes `\\StoreMgr\\<device>` names
+  through `FSDMGR_AdvertiseInterface`.
+- Rust now mirrors the owner-retained lifetime for configured mounted-storage
+  `IClass` advertisements: duplicate GUID/name entries remain unique for
+  `EnumDeviceInterfaces`, but each mounted root owns its contribution, and the
+  shared advertisement is detached only when the final owner withdraws. Real
+  device-manager `fsdev_t` handles, `GUID=name` interface strings, and
+  `%d`/`%b`/`%l` substitution parsing remain unsupported.
