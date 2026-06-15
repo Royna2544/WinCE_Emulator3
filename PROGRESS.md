@@ -15,6 +15,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/timer.rs`, `src/main.rs`, and `src/remote_server.rs`: live remote
+  diagnostics now publish `/api/v1/debug/timers.txt` with generic pending
+  `SetTimer` state (`HWND`, id, message, callback, due/period, and pending flag)
+  so the iNavi splash-to-map transition can be checked for stuck or undrained
+  timer messages without adding app-specific behavior.
 - Live iNavi drive after the reset-recovery FSDMGR work: the current
   `192.168.0.39:8765` process remains on the real splash framebuffer, but file
   tracing has advanced into map-layer reads (`mapdata\bgdata`,
@@ -24,9 +29,10 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   later hide/demote trace for that popup has been observed.
 - `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
   `FSDMGR_AdvertiseInterface @2` imports now patch through the normal import
-  trap table and fail closed through the existing coredll `AdvertiseInterface`
-  stub (`FALSE`/`ERROR_NOT_SUPPORTED`), matching the CE wrapper path while real
-  device-interface advertisement publication remains open.
+  trap table and share the coredll `AdvertiseInterface` implementation,
+  validating the GUID/name inputs, mapping empty FSDMGR names to the CE root
+  backslash name, and recording add/remove device-interface advertisements in
+  kernel state.
 - `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
   `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
   `FSDMGR_GetRegistryValue @20` imports now patch through the normal import
@@ -4893,14 +4899,14 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
 - `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
   `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: fsdmgr import traps now cover
   CE `FSDMGR_AdvertiseInterface @2` from `fsdmgr.def`/`fsdmgrapi.cpp`. The
-  direct FSDMGR import resolves by name and ordinal and currently matches the
-  emulator's coredll `AdvertiseInterface` fail-closed surface
-  (`FALSE`/`ERROR_NOT_SUPPORTED`), while real device-interface advertisement
-  publication remains queued.
+  direct FSDMGR import resolves by name and ordinal and now records/removes
+  device-interface advertisements through the shared coredll
+  `AdvertiseInterface` path.
 - Validation after the FSDMGR advertise-interface import slice:
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop
-  fsdmgr_advertise_interface_import_matches_coredll_stub -- --nocapture`,
+  fsdmgr_advertise_interface_import_publishes_and_removes_device_interface --
+  --nocapture`,
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop patches_supported_fsdmgr_imports_only --
   --nocapture`, `cargo fmt --check`, `git diff --check`,

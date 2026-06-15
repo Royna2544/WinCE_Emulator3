@@ -119,6 +119,22 @@ mod tests {
         assert_eq!(remaining[0].hwnd, None);
         assert_eq!(remaining[0].id, 7);
     }
+
+    #[test]
+    fn debug_text_lists_pending_timer_state() {
+        let mut timers = TimerSystem::default();
+        timers.set_timer(1, Some(0x20008), Some(42), 1000, 0x0113, Some(0x1234));
+
+        let debug = timers.debug_text();
+
+        assert!(debug.contains("timers: now_ms="));
+        assert!(debug.contains("count=1"));
+        assert!(debug.contains("hwnd=0x00020008"));
+        assert!(debug.contains("id=42"));
+        assert!(debug.contains("msg=0x0113"));
+        assert!(debug.contains("callback=0x00001234"));
+        assert!(debug.contains("pending_message=false"));
+    }
 }
 
 impl Default for TimerSystem {
@@ -235,6 +251,53 @@ impl TimerSystem {
 
     pub fn pending_timers(&self) -> Vec<KernelTimer> {
         self.timers.values().cloned().collect()
+    }
+
+    pub fn debug_text(&self) -> String {
+        use std::fmt::Write as _;
+
+        let now = self.tick_count();
+        let pending = self.pending_timers();
+        let next_due = self.next_due_delay_ms();
+        let mut out = String::new();
+        let _ = writeln!(
+            &mut out,
+            "  timers: now_ms={now} count={} next_due_ms={}",
+            pending.len(),
+            next_due
+                .map(|delay| delay.to_string())
+                .unwrap_or_else(|| "none".to_owned())
+        );
+        if pending.is_empty() {
+            out.push_str("    none\n");
+            return out;
+        }
+        for timer in pending {
+            let delay_ms = timer.due_ms.saturating_sub(now);
+            let _ = writeln!(
+                &mut out,
+                "    tid={} hwnd={} id={} msg=0x{:04x} callback={} due_ms={} delay_ms={} period_ms={} pending_message={}",
+                timer.thread_id,
+                timer
+                    .hwnd
+                    .map(|hwnd| format!("0x{hwnd:08x}"))
+                    .unwrap_or_else(|| "none".to_owned()),
+                timer.id,
+                timer.message,
+                timer
+                    .callback
+                    .map(|callback| format!("0x{callback:08x}"))
+                    .unwrap_or_else(|| "none".to_owned()),
+                timer.due_ms,
+                delay_ms,
+                timer
+                    .period_ms
+                    .map(|period| period.to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+                timer.pending_message
+            );
+        }
+        out
     }
 
     pub fn next_due_delay_ms(&self) -> Option<u32> {

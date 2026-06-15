@@ -3025,9 +3025,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     to backslash for the root file system, waits for the file-system API set,
     loads `coredll.dll`, and forwards to coredll `AdvertiseInterface`, returning
     `FALSE` when that path is unavailable. Rust now exposes the direct FSDMGR
-    import and matches the current coredll fail-closed stub
-    (`FALSE`/`ERROR_NOT_SUPPORTED`); real device-interface publication remains a
-    queued fidelity gap.
+    import through the shared coredll `AdvertiseInterface` implementation,
+    validates GUID/name inputs, applies the FSDMGR empty-name root mapping, and
+    records/removes advertised device interfaces in kernel state.
+    `blockdevice.cpp` reads the block driver's `IClass` MULTI_SZ registry
+    value, builds `\\StoreMgr\\%s` device paths, and advertises each parsed GUID,
+    while `mountedvolume.cpp` uses the same wrapper for mounted-volume add/remove
+    publication; guest-facing `EnumDeviceInterfaces` and block-device `IClass`
+    auto-publication remain queued.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted
@@ -3085,7 +3090,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSCTL_GET_VOLUME_INFO` metadata. FSDMGR import traps now also expose
     direct CE `FSDMGR_DeviceHandleToHDSK` identity mapping,
     `FSDMGR_FormatVolume`/`FSDMGR_ScanVolume` no-utility failure status, direct
-    CE `FSDMGR_AdvertiseInterface` fail-closed coredll-wrapper behavior,
+    CE `FSDMGR_AdvertiseInterface` coredll-backed add/remove behavior,
     CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path, direct
     `IOCTL_DISK_SETINFO` synthetic `DISK_INFO` persistence,
     `FSDMGR_GetRegistryFlag`/`String`/`Value` missing-value status and
@@ -3108,8 +3113,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
-    for FSDMGR cache imports. Physical block-driver backing, real
-    device-interface advertisement publication, remaining disk IOCTL
+    for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
     forwarding, real logical-disk registry-root lookup/cache DLL/filter
     behavior, real CE mounted-volume enter/exit lifetime accounting, broader file-security ACL storage and
     enforcement, real utility DLL

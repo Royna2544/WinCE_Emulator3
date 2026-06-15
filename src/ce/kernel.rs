@@ -102,6 +102,12 @@ pub struct RemoteServerControlDrain {
     pub target_thread_ids: Vec<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DeviceInterfaceAdvertisement {
+    pub class_guid: [u8; 16],
+    pub name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CeKernel {
     pub registry: Registry,
@@ -146,6 +152,7 @@ pub struct CeKernel {
     recent_event_ops: Vec<EventTraceRecord>,
     recent_message_ops: Vec<MessageTraceRecord>,
     recent_device_ops: Vec<DeviceTraceRecord>,
+    device_interface_advertisements: BTreeSet<DeviceInterfaceAdvertisement>,
     fsdmgr_disk_sectors: BTreeMap<(u32, u32), Vec<u8>>,
     fsdmgr_disk_info_overrides: BTreeMap<u32, [u32; 6]>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -831,6 +838,7 @@ impl CeKernel {
             recent_event_ops: Vec::new(),
             recent_message_ops: Vec::new(),
             recent_device_ops: Vec::new(),
+            device_interface_advertisements: BTreeSet::new(),
             fsdmgr_disk_sectors: BTreeMap::new(),
             fsdmgr_disk_info_overrides: BTreeMap::new(),
             modal_dialog_results: BTreeMap::new(),
@@ -851,6 +859,19 @@ impl CeKernel {
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
         self.runtime_loader_stats
+    }
+
+    pub fn advertise_device_interface(&mut self, class_guid: [u8; 16], name: String, add: bool) {
+        let advertisement = DeviceInterfaceAdvertisement { class_guid, name };
+        if add {
+            self.device_interface_advertisements.insert(advertisement);
+        } else {
+            self.device_interface_advertisements.remove(&advertisement);
+        }
+    }
+
+    pub fn advertised_device_interfaces(&self) -> &BTreeSet<DeviceInterfaceAdvertisement> {
+        &self.device_interface_advertisements
     }
 
     pub fn display_gamma_value(&self) -> u32 {

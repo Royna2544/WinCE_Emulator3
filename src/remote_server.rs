@@ -42,6 +42,7 @@
 // - GET /api/v1/debug/files-full.txt returns recent file I/O records.
 // - GET /api/v1/debug/events.txt returns recent event operations.
 // - GET /api/v1/debug/devices.txt returns recent device IOCTL operations.
+// - GET /api/v1/debug/timers.txt returns live SetTimer/KillTimer state.
 // - GET /api/v1/debug/render.txt returns display/controller render traces.
 // - GET /api/v1/debug/controller.txt returns iNavi controller traces.
 // - GET /api/v1/debug/resource.txt returns iNavi resource traces.
@@ -487,6 +488,7 @@ impl RemoteServer {
             ("GET", "/api/v1/debug/files-full.txt") => self.latest_debug_text("files-full").into(),
             ("GET", "/api/v1/debug/events.txt") => self.latest_debug_text("events").into(),
             ("GET", "/api/v1/debug/devices.txt") => self.latest_debug_text("devices").into(),
+            ("GET", "/api/v1/debug/timers.txt") => self.latest_debug_text("timers").into(),
             ("GET", "/api/v1/debug/render.txt") => self.latest_debug_text("render").into(),
             ("GET", "/api/v1/debug/controller.txt") => self.latest_debug_text("controller").into(),
             ("GET", "/api/v1/debug/resource.txt") => self.latest_debug_text("resource").into(),

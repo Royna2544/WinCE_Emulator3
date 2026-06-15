@@ -1491,6 +1491,7 @@ fn publish_remote_endpoint(
         server.publish_debug_text("processes-live", live_kernel_processes_text(kernel));
         server.publish_debug_text("message-boxes", live_kernel_message_boxes_text(kernel));
         server.publish_debug_text("devices", live_kernel_devices_text(kernel));
+        server.publish_debug_text("timers", kernel.timers.debug_text());
         if let Some(cpu) = cpu {
             server.publish_debug_text("active", live_active_process_text(cpu, kernel));
             server.publish_debug_text("pending-wndproc", cpu.pending_wndproc_debug_text());

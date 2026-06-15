@@ -4247,12 +4247,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         // AdvertiseInterface
-        ORD_ADVERTISE_INTERFACE => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_ADVERTISE_INTERFACE => Some(CoredllValue::Bool(advertise_interface_raw(
+            kernel, memory, thread_id, args[0], args[1], args[2],
+        ))),
         // GetCallStackSnapshot
         ORD_GET_CALL_STACK_SNAPSHOT => {
             kernel
@@ -11713,7 +11710,14 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         .and_then(fsdmgr_import_by_ordinal)
         .or_else(|| name.and_then(fsdmgr_import_by_name))?;
     let result = match import {
-        FsdmgrImport::FsdmgrAdvertiseInterface => fsdmgr_advertise_interface_raw(kernel, thread_id),
+        FsdmgrImport::FsdmgrAdvertiseInterface => fsdmgr_advertise_interface_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ),
         FsdmgrImport::FsdmgrAsyncEnterVolume => fsdmgr_async_enter_volume_raw(
             kernel,
             memory,
@@ -12042,11 +12046,70 @@ fn fsdmgr_cache_status_raw(kernel: &mut CeKernel, thread_id: u32, status: u32) -
     status
 }
 
-fn fsdmgr_advertise_interface_raw(kernel: &mut CeKernel, thread_id: u32) -> u32 {
-    kernel
-        .threads
-        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-    0
+fn fsdmgr_advertise_interface_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    guid_ptr: u32,
+    name_ptr: u32,
+    add: u32,
+) -> u32 {
+    let name = if name_ptr == 0 {
+        None
+    } else {
+        read_guest_wide_z(memory, name_ptr, 260).ok().map(|name| {
+            if name.is_empty() {
+                "\\".to_owned()
+            } else {
+                name
+            }
+        })
+    };
+    advertise_interface_impl(kernel, memory, thread_id, guid_ptr, name, add)
+}
+
+fn advertise_interface_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    guid_ptr: u32,
+    name_ptr: u32,
+    add: u32,
+) -> bool {
+    let name = if name_ptr == 0 {
+        None
+    } else {
+        read_guest_wide_z(memory, name_ptr, 260)
+            .ok()
+            .filter(|name| !name.is_empty())
+    };
+    advertise_interface_impl(kernel, memory, thread_id, guid_ptr, name, add) != 0
+}
+
+fn advertise_interface_impl<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    guid_ptr: u32,
+    name: Option<String>,
+    add: u32,
+) -> u32 {
+    let Some(name) = name else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let mut class_guid = [0u8; 16];
+    if guid_ptr == 0 || memory.read_bytes(guid_ptr, &mut class_guid).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.advertise_device_interface(class_guid, name, add != 0);
+    kernel.threads.set_last_error(thread_id, 0);
+    1
 }
 
 fn fsdmgr_volume_util_status_raw(kernel: &mut CeKernel, thread_id: u32, disk_ptr: u32) -> u32 {

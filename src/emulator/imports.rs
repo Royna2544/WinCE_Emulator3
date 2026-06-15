@@ -846,7 +846,10 @@ mod tests {
 
     use crate::pe::ImportThunk;
     use crate::{
-        ce::{coredll::CoredllGuestMemory, kernel::CeKernel},
+        ce::{
+            coredll::CoredllGuestMemory,
+            kernel::{CeKernel, DeviceInterfaceAdvertisement},
+        },
         config::{MountConfig, RuntimeConfig},
     };
 
@@ -1454,9 +1457,7 @@ mod tests {
     }
 
     #[test]
-    fn fsdmgr_advertise_interface_import_matches_coredll_stub() {
-        const ERROR_NOT_SUPPORTED: u32 = 50;
-
+    fn fsdmgr_advertise_interface_import_publishes_and_removes_device_interface() {
         let imports = vec![ImportDescriptor {
             module_name: "fsdmgr.dll".to_owned(),
             original_first_thunk: 0x2000,
@@ -1493,7 +1494,14 @@ mod tests {
         let mut memory = TestMemory::default();
         let guid_ptr = 0x1000_0000;
         let empty_name_ptr = 0x1000_0100;
+        let name_ptr = 0x1000_0200;
+        let class_guid = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+            0xff, 0x10,
+        ];
+        memory.map_bytes(guid_ptr, &class_guid);
         memory.map_wide_z(empty_name_ptr, "");
+        memory.map_wide_z(name_ptr, "\\StoreMgr\\DSK1:");
 
         assert_eq!(
             table.dispatch_trap(
@@ -1503,9 +1511,17 @@ mod tests {
                 IMPORT_TRAP_BASE,
                 [guid_ptr, empty_name_ptr, 1],
             ),
-            Some(0)
+            Some(1)
         );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert!(
+            kernel
+                .advertised_device_interfaces()
+                .contains(&DeviceInterfaceAdvertisement {
+                    class_guid,
+                    name: "\\".to_owned(),
+                })
+        );
 
         assert_eq!(
             table.dispatch_trap(
@@ -1513,11 +1529,39 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
-                [guid_ptr, 0, 0],
+                [guid_ptr, name_ptr, 1],
             ),
-            Some(0)
+            Some(1)
         );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert!(
+            kernel
+                .advertised_device_interfaces()
+                .contains(&DeviceInterfaceAdvertisement {
+                    class_guid,
+                    name: "\\StoreMgr\\DSK1:".to_owned(),
+                })
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [guid_ptr, name_ptr, 0],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert!(
+            !kernel
+                .advertised_device_interfaces()
+                .contains(&DeviceInterfaceAdvertisement {
+                    class_guid,
+                    name: "\\StoreMgr\\DSK1:".to_owned(),
+                })
+        );
     }
 
     #[test]
