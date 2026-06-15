@@ -4092,3 +4092,21 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   suite still ignores the eVC4 MIPSII fixture because that toolchain is not
   configured, and Cargo still emits the existing unused-code warnings plus the
   recurring `target\debug\incremental` finalize access-denied note.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw selected-DIB
+  `Rectangle`, `Ellipse`, and `RoundRect` now apply the DC viewport origin like
+  CE `draw.cpp::ViewPort`, sharing the existing viewport-origin helper with
+  line/polyline/polygon drawing and preserving the zero-rounding `RoundRect`
+  fallback through `Rectangle`.
+- Focused validation after the shape viewport-origin slice:
+  `cargo fmt --check` and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_shapes_apply_viewport_origin_on_selected_dib` passed. Cargo still
+  emits the existing unused-code warnings and the recurring
+  `target\debug\incremental` finalize access-denied note, but the test command
+  returned success.
+- Broader validation after the shape viewport-origin slice:
+  `cargo check --features unicorn,trace,win32-desktop`, `git diff --check`,
+  and full `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
+  The full suite still ignores the eVC4 MIPSII fixture because that toolchain
+  is not configured, and Cargo still emits the existing unused-code warnings
+  plus the recurring `target\debug\incremental` finalize access-denied note.

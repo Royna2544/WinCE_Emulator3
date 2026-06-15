@@ -2547,11 +2547,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FALSE` and set `ERROR_INVALID_HANDLE` for null and bad HDCs. The local CE
     `draw.cpp::ViewPort` path also verifies that `SetViewportOrgEx` returns
     the previous viewport origin through `lpPoint`, that resetting a nonzero
-    origin reports that old point, and that `LineTo`, `Polyline`, and `Polygon`
-    draws move by the viewport origin. Rust now stores the viewport origin in
-    DC state, reports the previous origin, and applies the origin to
-    selected-DIB `LineTo`/`Polyline`/`Polygon` pixels. The local CE export map
-    still exposes only `SetViewportOrgEx` from this origin/ext API family, so
+    origin reports that old point, and that `LineTo`, `Polyline`, `Polygon`,
+    `Rectangle`, `Ellipse`, and `RoundRect` draws move by the viewport origin.
+    Rust now stores the viewport origin in DC state, reports the previous
+    origin, and applies the origin to selected-DIB `LineTo`/`Polyline`/
+    `Polygon` pixels plus selected-DIB `Rectangle`/`Ellipse`/`RoundRect`
+    fill/outline pixels. The local CE export map still exposes only
+    `SetViewportOrgEx` from this origin/ext API family, so
     `GetViewportOrgEx`, `OffsetViewportOrgEx`, `SetWindowOrgEx`,
     `GetWindowOrgEx`, and extent-query parity remain open.
   - `brush.cpp` `passBrushNULL(ESetBrushOrgEx)` expects `SetBrushOrgEx` to
@@ -3287,6 +3289,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     bad HDC handles to fail with `ERROR_INVALID_HANDLE`. Rust now applies the
     same `is_valid_hdc` guard to raw `Rectangle`, `Ellipse`, and `RoundRect`
     before any degenerate/no-op shape path can report success.
+    `draw.cpp::ViewPort(ERectangle/EEllipse/ERoundRect)` also verifies that
+    these shapes move with the DC viewport origin. Rust now offsets normalized
+    selected-DIB shape rectangles by the stored viewport origin before
+    fill/outline/clipping work, with zero-rounding `RoundRect` still routed
+    through the shared `Rectangle` implementation.
 
 - CE GDI miscellaneous draw validation authority:
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`

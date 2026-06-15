@@ -41977,6 +41977,11 @@ fn offset_points(points: &[Point], offset: Point) -> Vec<Point> {
         .collect()
 }
 
+fn offset_rect_for_hdc(kernel: &CeKernel, hdc: u32, rect: Rect) -> Rect {
+    let origin = hdc_viewport_origin(kernel, hdc);
+    rect.offset(origin.x, origin.y)
+}
+
 fn polyline_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -42223,6 +42228,7 @@ fn rectangle_raw<M: CoredllGuestMemory>(
         right: raw_i32_arg(args, 3),
         bottom: raw_i32_arg(args, 4),
     };
+    let rect = offset_rect_for_hdc(kernel, hdc, rect);
     if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
         && !bitmap.bits_writable
     {
@@ -42629,7 +42635,7 @@ fn ellipse_raw<M: CoredllGuestMemory>(
         right: raw_i32_arg(args, 3),
         bottom: raw_i32_arg(args, 4),
     };
-    let rect = normalize_rect(rect);
+    let rect = offset_rect_for_hdc(kernel, hdc, normalize_rect(rect));
     if rect.right <= rect.left || rect.bottom <= rect.top {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
@@ -42872,16 +42878,20 @@ fn round_rect_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    let rect = normalize_rect(Rect {
+    let logical_rect = normalize_rect(Rect {
         left: raw_i32_arg(args, 1),
         top: raw_i32_arg(args, 2),
         right: raw_i32_arg(args, 3),
         bottom: raw_i32_arg(args, 4),
     });
-    let ew = raw_i32_arg(args, 5).max(0).min(rect.right - rect.left);
-    let eh = raw_i32_arg(args, 6).max(0).min(rect.bottom - rect.top);
+    let ew = raw_i32_arg(args, 5)
+        .max(0)
+        .min(logical_rect.right - logical_rect.left);
+    let eh = raw_i32_arg(args, 6)
+        .max(0)
+        .min(logical_rect.bottom - logical_rect.top);
 
-    if rect.right <= rect.left || rect.bottom <= rect.top {
+    if logical_rect.right <= logical_rect.left || logical_rect.bottom <= logical_rect.top {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
@@ -42898,13 +42908,15 @@ fn round_rect_raw<M: CoredllGuestMemory>(
     if ew == 0 || eh == 0 {
         let new_args = [
             hdc,
-            rect.left as u32,
-            rect.top as u32,
-            rect.right as u32,
-            rect.bottom as u32,
+            logical_rect.left as u32,
+            logical_rect.top as u32,
+            logical_rect.right as u32,
+            logical_rect.bottom as u32,
         ];
         return rectangle_raw(kernel, memory, framebuffer, thread_id, &new_args);
     }
+
+    let rect = offset_rect_for_hdc(kernel, hdc, logical_rect);
 
     // Corner ellipse half-dimensions.
     let rx = (ew / 2).max(1);
