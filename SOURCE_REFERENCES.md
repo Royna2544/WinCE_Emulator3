@@ -1038,9 +1038,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `SFGAO_READONLY`; v3 mirrors that shell-attribute output instead of
     returning raw `FILE_ATTRIBUTE_*` values in `SHFILEINFO.dwAttributes`.
     `CESHELL\API\api.cpp` returns a system image-list handle whenever either
-    `SHGFI_ICON` or `SHGFI_SYSICONINDEX` is requested, so raw `SHGetFileInfoW`
-    now returns that list handle for icon-only queries while still populating
-    `SHFILEINFO.hIcon`.
+    `SHGFI_ICON` or `SHGFI_SYSICONINDEX` is requested, choosing the small list
+    only when `SHGFI_SMALLICON` is present. Explorer `taskbar.cpp` obtains and
+    destroys both empty-path large and small system image lists during taskbar
+    cleanup. Raw `SHGetFileInfoW` now returns distinct large/small system-list
+    handles for those queries while still populating `SHFILEINFO.hIcon`.
     File-backed `LoadImageW(..., IMAGE_BITMAP, LR_LOADFROMFILE)` now keeps the
     BMP pixel rows in CE heap-backed bitmap storage. Resource-backed
     `LoadImageW`/`LoadBitmapW` for RT_BITMAP DIB data also copies the resolved

@@ -4363,6 +4363,16 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `cargo test -j 1 --features unicorn,trace,win32-desktop --test
   coredll_raw_kernel sh_get_file_info_system_image_list_supports_icon_queries_and_draw
   -- --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- Broader validation after the escaped visible-message WNDPROC and shell
+  system image-list slices: `cargo fmt`, focused `CARGO_INCREMENTAL=0 cargo
+  test -j 1 --features unicorn,trace,win32-desktop
+  cross_thread_visible_message_requires_mapped_wndproc_before_handoff --
+  --nocapture`, full `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_kernel`, and full
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw kernel binary reported 75
+  passing tests, the eVC4 MIPSII fixture remains ignored because that toolchain
+  is not configured, and Cargo still emits the existing unused-code warnings.
 - `tests/coredll_raw_memory_file.rs`: aligned the older raw serial control
   ordinal fixture with the CE-backed `GetCommModemStatus` behavior so it now
   expects asserted CTS, DSR, and RLSD bits rather than the former zero-status
