@@ -15,6 +15,7 @@ Regenerated on 2026-06-11 from current source and test coverage.
 - Storage now also covers direct CE `FSDMGR_GetDiskInfo @16` and `FSDMGR_GetDiskName @17` imports through the same synthetic disk metadata/name contract used by the disk IOCTL path.
 - Storage now also covers `IOCTL_DISK_SETINFO`/`DISK_IOCTL_SETINFO` validation and synthetic `DISK_INFO` persistence through subsequent GETINFO calls; remaining SETINFO work is real physical block-driver forwarding.
 - Storage now also covers direct CE `IOCTL_DISK_FORMAT_VOLUME` and `IOCTL_DISK_SCAN_VOLUME` through `FSDMGR_DiskIoControl`; synthetic format-volume clears sparse sectors and scan-volume is a no-op, while real FATFS utility execution remains queued.
+- Storage now also names direct CE standby, obsolete delete-cluster, and disk-level CD-ROM controls through `FSDMGR_DiskIoControl` and covers the current synthetic unsupported/no-touch behavior; real behavior needs backing block/CD drivers.
 - Storage now also covers direct CE `FSDMGR_DeviceHandleToHDSK @11` as the source-backed identity cast plus `FSDMGR_FormatVolume @15`/`FSDMGR_ScanVolume @31` no-utility-DLL failure status; remaining format/scan work is real utility DLL lookup/execution from disk registry metadata.
 - Storage now also covers direct CE `FSDMGR_AdvertiseInterface @2` as a fail-closed wrapper over the current coredll `AdvertiseInterface` stub; remaining interface work is real device-interface advertisement publication.
 - Storage now also covers direct CE `FSDMGR_GetRegistryFlag @18`,

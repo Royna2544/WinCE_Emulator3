@@ -2317,8 +2317,13 @@ mod tests {
         const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
         const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
         const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
+        const IOCTL_DISK_SET_STANDBY_TIMER: u32 = 0x0007_1c18;
+        const IOCTL_DISK_STANDBY_NOW: u32 = 0x0007_1c1c;
         const IOCTL_DISK_GETNAME: u32 = 0x0007_1c20;
         const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
+        const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
+        const IOCTL_DISK_READ_CDROM: u32 = 0x0007_1c44;
+        const IOCTL_DISK_WRITE_CDROM: u32 = 0x0007_1c48;
         const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
         const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
         const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
@@ -2903,6 +2908,41 @@ mod tests {
             Some(1)
         );
         assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        for ioctl in [
+            IOCTL_DISK_SET_STANDBY_TIMER,
+            IOCTL_DISK_STANDBY_NOW,
+            IOCTL_DISK_DELETE_CLUSTER,
+            IOCTL_DISK_READ_CDROM,
+            IOCTL_DISK_WRITE_CDROM,
+        ] {
+            memory.map_word(delete_info_ptr, 0xfeed_cafe);
+            memory.map_word(copy_external_out_ptr, 0xfeed_cafe);
+            memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+            assert_eq!(
+                table.dispatch_trap(
+                    &mut kernel,
+                    &mut memory,
+                    11,
+                    IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                    [
+                        disk_ptr,
+                        ioctl,
+                        delete_info_ptr,
+                        4,
+                        copy_external_out_ptr,
+                        4,
+                        bytes_returned_ptr,
+                        0,
+                    ],
+                ),
+                Some(0)
+            );
+            assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+            assert_eq!(memory.word(delete_info_ptr), 0xfeed_cafe);
+            assert_eq!(memory.word(copy_external_out_ptr), 0xfeed_cafe);
+            assert_eq!(memory.word(bytes_returned_ptr), 0);
+        }
 
         memory.map_word(delete_info_ptr, 12);
         memory.map_word(delete_info_ptr + 4, 11);

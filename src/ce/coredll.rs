@@ -116,8 +116,13 @@ const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
 const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
 const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
 const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
+const IOCTL_DISK_SET_STANDBY_TIMER: u32 = 0x0007_1c18;
+const IOCTL_DISK_STANDBY_NOW: u32 = 0x0007_1c1c;
 const IOCTL_DISK_GETNAME: u32 = 0x0007_1c20;
 const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
+const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
+const IOCTL_DISK_READ_CDROM: u32 = 0x0007_1c44;
+const IOCTL_DISK_WRITE_CDROM: u32 = 0x0007_1c48;
 const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
 const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
 const IOCTL_DISK_COPY_EXTERNAL_START: u32 = 0x0007_1c58;
@@ -12549,6 +12554,15 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
             kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes,
         )
         .is_some(),
+        IOCTL_DISK_SET_STANDBY_TIMER
+        | IOCTL_DISK_STANDBY_NOW
+        | IOCTL_DISK_DELETE_CLUSTER
+        | IOCTL_DISK_READ_CDROM
+        | IOCTL_DISK_WRITE_CDROM => {
+            let status = kernel.fsdmgr_disk_io_control_status(disk_ptr, ioctl);
+            kernel.threads.set_last_error(thread_id, status);
+            status == 0
+        }
         0x0007_1c4c => {
             fsdmgr_disk_delete_sectors_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
         }

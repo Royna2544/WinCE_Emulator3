@@ -480,7 +480,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `STORAGEDEVICEINFO` shape used by `IOCTL_DISK_DEVICE_INFO`, and `diskio.h`
     defines the 16-byte `STORAGE_IDENTIFICATION` header used by
     `IOCTL_DISK_GET_STORAGEID` plus the 68-byte `PowerTimings` structure used
-    by `IOCTL_DISK_GETPMTIMINGS`; `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\BLOCK\ATAPI\atapipm.cpp`
+    by `IOCTL_DISK_GETPMTIMINGS`; it also names standby-timer, standby-now,
+    obsolete delete-cluster, and disk-level CD-ROM read/write controls.
+    `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\BLOCK\ATAPI\atapipm.cpp`
     treats that power-timing buffer as an input/output payload whose leading
     `dwSize` must cover the full structure. `diskio.h` also defines
     `IOCTL_DISK_FORMAT_VOLUME` and `IOCTL_DISK_SCAN_VOLUME` as FATFS volume
@@ -509,7 +511,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `SET_SECURE_WIPE_FLAG` without erasing, clears sparse sectors for
     secure-wipe and delete-sector requests, clears the synthetic disk for
     format-media and format-volume requests, treats scan-volume as a validated
-    no-op, and treats initialized and flush-cache as
+    no-op, explicitly rejects standby, obsolete delete-cluster, and disk-level
+    CD-ROM controls without touching caller buffers, and treats initialized and flush-cache as
     successful basic disk IOCTLs. `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`
     defines `FSCTL_COPY_EXTERNAL_START`, `FSCTL_COPY_EXTERNAL_COMPLETE`, and
     the 536-byte `FILE_COPY_EXTERNAL` header; UDF's

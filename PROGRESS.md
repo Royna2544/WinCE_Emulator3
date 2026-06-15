@@ -4937,3 +4937,11 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info --
   --nocapture`, `cargo fmt --check`, and `git diff --check` passed. Cargo still
   emits the existing unused-code warnings.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: direct
+  FSDMGR disk IOCTL handling now names CE `IOCTL_DISK_SET_STANDBY_TIMER`,
+  `IOCTL_DISK_STANDBY_NOW`, obsolete `IOCTL_DISK_DELETE_CLUSTER`, and disk-level
+  `IOCTL_DISK_READ_CDROM`/`IOCTL_DISK_WRITE_CDROM` from `diskio.h`. The
+  synthetic disk reports `ERROR_NOT_SUPPORTED` without touching input/output
+  buffers or sector state; real power, cluster, and CD-ROM driver behavior
+  remains queued.
