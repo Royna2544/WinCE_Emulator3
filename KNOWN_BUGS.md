@@ -83,10 +83,11 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   stays on the animated splash/resource-loading path.
 - Sensor emulation is partially observed by the guest app. The remote endpoints
   queue GPS/IMU data, `serial_devices.json` can now mark a config-selected
-  `remote_gps` serial port, and live `drive29` confirms queued NMEA drains when
-  iNavi opens `COM7:`. Remaining risk: subsequent GPS posts can queue while the
-  guest is sleeping/polling other workers, so the exact serial read/event
-  cadence and parsed-position consumption still need proof.
+  `remote_gps` serial port, live `drive29` confirms queued NMEA drains when
+  iNavi opens `COM7:`, and raw `GetCommModemStatus` now reports asserted
+  CTS/DSR/RLSD for serial handles. Remaining risk: subsequent GPS posts can
+  queue while the guest is sleeping/polling other workers, so the exact serial
+  read/event cadence and parsed-position consumption still need proof.
 
 ## Build And Validation Risks
 

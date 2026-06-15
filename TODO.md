@@ -61,11 +61,11 @@ Regenerated on 2026-06-11 from current source and test coverage.
   duplicate is filtered, but `happyway_win.exe` can still remain parked with
   stale modal/close state while iNavi continues splash/resource loading.
 - Continue sensor-consumption tracing after the config-driven remote GPS target
-  fix: the live iNavi run now opens `COM7:` as the remote GPS target and opens
-  `MFS1:`/`SMB1:` for motion sensors, but repeated location posts can still
-  queue until the guest's next serial read/event path. Capture the concrete
-  `ReadFile`/`WaitCommEvent` cadence and confirm whether map/UI code consumes
-  parsed GPS position after startup.
+  and serial modem-status fixes: the live iNavi run now opens `COM7:` as the
+  remote GPS target and opens `MFS1:`/`SMB1:` for motion sensors, but repeated
+  location posts can still queue until the guest's next serial read/event path.
+  Capture the concrete `ReadFile`/`WaitCommEvent` cadence and confirm whether
+  map/UI code consumes parsed GPS position after startup.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or a
   real caller trace before adding accelerometer commands; do not use the
   unverified `0xb100...` family as SMB380 evidence.

@@ -2914,7 +2914,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_GET_COMM_MODEM_STATUS => Some(CoredllValue::Bool(comm_out_u32_zero_raw(
+        ORD_GET_COMM_MODEM_STATUS => Some(CoredllValue::Bool(get_comm_modem_status_raw(
             kernel,
             memory,
             thread_id,
@@ -11511,20 +11511,25 @@ fn wait_comm_event_raw<M: CoredllGuestMemory>(
     true
 }
 
-fn comm_out_u32_zero_raw<M: CoredllGuestMemory>(
+fn get_comm_modem_status_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,
     handle: u32,
     out_ptr: u32,
 ) -> bool {
-    if out_ptr == 0 || !is_comm_handle(kernel, handle) {
+    const MS_CTS_ON: u32 = 0x0010;
+    const MS_DSR_ON: u32 = 0x0020;
+    const MS_RLSD_ON: u32 = 0x0080;
+
+    if out_ptr == 0 || !kernel.is_serial_device_handle(handle) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    if !write_guest_u32(kernel, memory, thread_id, out_ptr, 0) {
+    let status = MS_CTS_ON | MS_DSR_ON | MS_RLSD_ON;
+    if !write_guest_u32(kernel, memory, thread_id, out_ptr, status) {
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);

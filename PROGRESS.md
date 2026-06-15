@@ -4327,5 +4327,20 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
 - Validation after the GWE topmost z-order slice: `cargo fmt` and focused
   `CARGO_INCREMENTAL=0 cargo test -j 1 --features
   unicorn,trace,win32-desktop --test coredll_raw_gwe
-  coredll_raw_set_window_pos_respects_topmost_z_order_group` passed. Cargo still
-  emits the existing unused-code warnings.
+  coredll_raw_set_window_pos_respects_topmost_z_order_group`, `cargo fmt
+  --check`, `git diff --check`, full `CARGO_INCREMENTAL=0 cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE binary reported 354 passing
+  tests, the eVC4 MIPSII fixture remains ignored because that toolchain is not
+  configured, and Cargo still emits the existing unused-code warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_kernel.rs`: raw
+  `GetCommModemStatus` now reports asserted CTS, DSR, and RLSD modem-status
+  bits for valid serial device handles instead of returning an all-zero status.
+  This keeps the remote GPS serial path generic while matching CE callers that
+  wait for carrier/control-line readiness before trusting `ReadFile` or
+  `WaitCommEvent`.
+- Focused validation after the serial modem-status slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel coredll_raw_comm_state_mask_wait_and_purge_are_stateful
+  -- --nocapture` passed. Cargo still emits the existing unused-code warnings.
