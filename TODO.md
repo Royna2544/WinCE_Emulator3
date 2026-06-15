@@ -54,9 +54,11 @@ Regenerated on 2026-06-11 from current source and test coverage.
   escaped cross-thread visible-message WNDPROC callouts are now cleared when the
   guest reaches their saved return PC. Post-dialog taps reach iNavi, and the app
   opens/reads mapdata, resource, font, and config files.
-  Determine why the animated splash does not transition to the map UI, starting
-  from the repeated `SetFilePointer` (`COREDLL` ordinal 173) path around
-  `iNavi.exe+0x642f8` and the continuing `resi_800x480.bin`/mapdata reads.
+  Determine why the animated splash does not transition to the map UI from the
+  latest post-import-thunk state: traced live-pump runs now pass the early
+  `COREDLL.dll@1047` import-thunk wall stop, clear/recover Happyway WNDPROC
+  state, and reach `iNavi.exe+0x329da8` with later resource/file activity while
+  modal/winsock waits remain in the scheduler.
 - Continue the Happyway hidden-child scheduling investigation: modal dismissal
   and framebuffer restoration are fixed, and the active-process self-park
   duplicate is filtered, but `happyway_win.exe` can still remain parked with

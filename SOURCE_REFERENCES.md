@@ -155,6 +155,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     The implementation parses guest wide strings and writes `endptr` in
     two-byte character units.
 
+- DPA/DSA container exports:
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pcommctr.h` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\core_common.def`
+  - CE exposes `DPA_Grow(HDPA, int cp)` and
+    `DSA_Grow(HDSA, int cNewItemAlloc)` from the COREDLL DSA component. Raw
+    dispatch now treats those calls as real preallocation requests against the
+    guest DPA/DSA header layout used by the local container implementation,
+    rounding requested capacity through the stored grow increment, preserving an
+    already sufficient backing pointer, rejecting negative counts, and failing
+    checked-size overflows instead of reporting success as a no-op.
+
 - Clipboard allocation-copy API:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
   - CE declares `SetClipboardData`, `GetClipboardData`, and

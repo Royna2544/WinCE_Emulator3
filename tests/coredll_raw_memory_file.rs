@@ -16,14 +16,15 @@ use wince_emulation_v3::{
             ORD_COPY_FILE_W, ORD_COS, ORD_COSH, ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W,
             ORD_CREATE_FILE_W, ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W,
             ORD_DEVICE_IO_CONTROL, ORD_DPA_CLONE, ORD_DPA_CREATE, ORD_DPA_DESTROY, ORD_DPA_GET_PTR,
-            ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP,
-            ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE, ORD_DSA_CREATE, ORD_DSA_DESTROY,
-            ORD_DSA_GET_ITEM_PTR, ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE,
-            ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE,
-            ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
-            ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
-            ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W,
-            ORD_FLOOR, ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE,
+            ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL,
+            ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE, ORD_DSA_CREATE,
+            ORD_DSA_DESTROY, ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM,
+            ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION,
+            ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH,
+            ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
+            ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W,
+            ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FLOOR,
+            ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE,
             ORD_FLUSH_VIEW_OF_FILE_MAYBE, ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FPADD, ORD_FPCMP,
             ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP, ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD,
             ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES, ORD_GET_COMM_MODEM_STATUS,
@@ -14409,6 +14410,162 @@ fn coredll_raw_dpa_clone_copies_all_ptrs_to_new_dpa() -> Result<()> {
         thread_id,
         ORD_DPA_DESTROY,
         [hdpa2],
+    );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dpa_dsa_grow_preallocates_guest_backing() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    const DPA_PP_OFFSET: u32 = 4;
+    const DPA_CAPACITY_OFFSET: u32 = 12;
+    const DPA_GROW_OFFSET: u32 = 16;
+    const DSA_PDATA_OFFSET: u32 = 4;
+    const DSA_CAPACITY_OFFSET: u32 = 12;
+
+    let hdpa = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DPA_CREATE,
+        [4],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("DPA_Create failed: {other:?}"),
+    };
+    assert_eq!(memory.read_u32(hdpa + DPA_CAPACITY_OFFSET)?, 0);
+    assert_eq!(memory.read_u32(hdpa + DPA_PP_OFFSET)?, 0);
+    assert_eq!(memory.read_u32(hdpa + DPA_GROW_OFFSET)?, 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_GROW,
+            [hdpa, 5],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(hdpa + DPA_CAPACITY_OFFSET)?,
+        8,
+        "DPA_Grow rounds the requested capacity up by the stored grow increment"
+    );
+    let first_pp = memory.read_u32(hdpa + DPA_PP_OFFSET)?;
+    assert_ne!(first_pp, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_GROW,
+            [hdpa, 3],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(hdpa + DPA_CAPACITY_OFFSET)?,
+        8,
+        "DPA_Grow does not shrink an already sufficient backing array"
+    );
+    assert_eq!(memory.read_u32(hdpa + DPA_PP_OFFSET)?, first_pp);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_GROW,
+            [hdpa, 0xffff_ffff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(hdpa + DPA_CAPACITY_OFFSET)?,
+        8,
+        "negative DPA_Grow counts fail without mutating capacity"
+    );
+
+    let hdsa = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_CREATE,
+        [4, 3],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("DSA_Create failed: {other:?}"),
+    };
+    assert_eq!(memory.read_u32(hdsa + DSA_CAPACITY_OFFSET)?, 0);
+    assert_eq!(memory.read_u32(hdsa + DSA_PDATA_OFFSET)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_GROW,
+            [hdsa, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(hdsa + DSA_CAPACITY_OFFSET)?,
+        6,
+        "DSA_Grow rounds item capacity by its grow increment"
+    );
+    let first_pdata = memory.read_u32(hdsa + DSA_PDATA_OFFSET)?;
+    assert_ne!(first_pdata, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_GROW,
+            [hdsa, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(hdsa + DSA_CAPACITY_OFFSET)?, 6);
+    assert_eq!(memory.read_u32(hdsa + DSA_PDATA_OFFSET)?, first_pdata);
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DPA_DESTROY,
+        [hdpa],
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_DESTROY,
+        [hdsa],
     );
     Ok(())
 }

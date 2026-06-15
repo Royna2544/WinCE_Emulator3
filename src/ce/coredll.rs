@@ -7945,11 +7945,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_DPA_GROW => {
-            // DPA_Grow(hdpa, cpGrow): preallocate capacity; no-op if already sufficient.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(raw_arg(args, 0) != 0))
-        }
+        ORD_DPA_GROW => Some(CoredllValue::Bool(dpa_grow_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_DPA_CLONE => Some(CoredllValue::Handle(dpa_clone_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -8014,10 +8012,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(hdsa != 0))
         }
-        ORD_DSA_GROW => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(raw_arg(args, 0) != 0))
-        }
+        ORD_DSA_GROW => Some(CoredllValue::Bool(dsa_grow_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_DSA_CLONE => Some(CoredllValue::Handle(dsa_clone_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -31755,10 +31752,13 @@ fn dpa_ensure_capacity<M: CoredllGuestMemory>(
         return true;
     }
     let new_capacity = ((needed + cp_grow - 1) / cp_grow) * cp_grow;
+    let Some(byte_count) = new_capacity.checked_mul(4) else {
+        return false;
+    };
     let Ok(pp) = memory.read_u32(hdpa + DPA_OFFSET_PP) else {
         return false;
     };
-    let Some(new_pp) = kernel.memory.heap_alloc(heap, 0, new_capacity * 4) else {
+    let Some(new_pp) = kernel.memory.heap_alloc(heap, 0, byte_count) else {
         return false;
     };
     if pp != 0 {
@@ -31775,6 +31775,29 @@ fn dpa_ensure_capacity<M: CoredllGuestMemory>(
     let _ = memory.write_u32(hdpa + DPA_OFFSET_PP, new_pp);
     let _ = memory.write_u32(hdpa + DPA_OFFSET_CP_CAPACITY, new_capacity);
     true
+}
+
+fn dpa_grow_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdpa = raw_arg(args, 0);
+    let count = raw_i32_arg(args, 1);
+    if hdpa == 0 || count < 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if dpa_ensure_capacity(kernel, memory, hdpa, count as u32) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
+        false
+    }
 }
 
 fn dpa_insert_ptr_raw<M: CoredllGuestMemory>(
@@ -32109,7 +32132,10 @@ fn dsa_ensure_capacity<M: CoredllGuestMemory>(
         return false;
     };
     let new_capacity = ((needed + cp_grow - 1) / cp_grow) * cp_grow;
-    let Some(new_pdata) = kernel.memory.heap_alloc(heap, 0, new_capacity * cb_item) else {
+    let Some(byte_count) = new_capacity.checked_mul(cb_item) else {
+        return false;
+    };
+    let Some(new_pdata) = kernel.memory.heap_alloc(heap, 0, byte_count) else {
         return false;
     };
     let Ok(old_pdata) = memory.read_u32(hdsa + DSA_OFFSET_PDATA) else {
@@ -32127,6 +32153,29 @@ fn dsa_ensure_capacity<M: CoredllGuestMemory>(
     let _ = memory.write_u32(hdsa + DSA_OFFSET_PDATA, new_pdata);
     let _ = memory.write_u32(hdsa + DSA_OFFSET_CP_CAPACITY, new_capacity);
     true
+}
+
+fn dsa_grow_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdsa = raw_arg(args, 0);
+    let count = raw_i32_arg(args, 1);
+    if hdsa == 0 || count < 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if dsa_ensure_capacity(kernel, memory, hdsa, count as u32) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
+        false
+    }
 }
 
 fn dsa_insert_item_raw<M: CoredllGuestMemory>(

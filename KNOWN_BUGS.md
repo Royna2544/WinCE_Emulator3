@@ -71,11 +71,12 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   now preserves live callouts until the saved PC reaches their return PC,
   orphaned WNDPROC return stubs can recover from the last valid return record,
   and escaped cross-thread visible-message WNDPROC callouts are cleared when the
-  guest reaches their saved return PC. The
-  app still remains on the animated splash while loading resources/map data.
-  Current evidence points at repeated file-position/resource loading around
-  `iNavi.exe+0x642f8` (`SetFilePointer`, `COREDLL` ordinal 173) after
-  map/resource files are opened. The guest now reaches `COM7:` plus
+  guest reaches their saved return PC. Host live-pump runs also pass the early
+  MIPS import-thunk wall stop at `iNavi.exe+0x3554` /
+  `COREDLL.dll@1047` (`memset`). The app still remains on the animated splash
+  while loading resources/map data. Current traced evidence reaches
+  `iNavi.exe+0x329da8` with later file/resource activity and lingering
+  modal/winsock scheduler waits. The guest now reaches `COM7:` plus
   `MFS1:`/`SMB1:` device initialization, and detached `drive97` proves
   posted-touch dispatch plus non-black splash rendering through the remote
   server. Normal map UI transition is still not observed.

@@ -11,10 +11,15 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - File-change notifications now canonicalize public watch paths, preserve caller notification filter bits while CE-style known-bit matching decides whether changes signal, honor root and non-root `WatchSubtree` boundaries, map same-parent vs cross-parent move notifications through CE `NotifyMoveFileEx` action semantics, coalesce exact duplicates, transient create/delete pairs, and modified/delete sequences, track CE-style outstanding notification signals across `FindNextChangeNotification`, and gate detailed notification records by the CE `FILE_NOTIFY_CHANGE_CEGETINFO` flag while signal-only watches still wake normally. `CeGetFileNotificationInfo` record sizing now follows CE `NotifyReset`, including the copied trailing NUL WCHAR and DWORD padding while preserving non-NUL `FileNameLength`, and its no-pending path now preserves CE's guarded output-pointer write order while returning `ERROR_NO_MORE_ITEMS`. Mounted file operations now enforce CE volume boundaries and read-only root access checks for mutating calls, with access-denied read-only mutations leaving watchers unsignaled. Mounted change notifications now retain the resolved owning mount root, so non-root watches are scoped to their CE-style volume while recursive root watchers still report mounted-volume-prefixed child paths. Raw `DuplicateHandle` now creates independent local handles for notification/file/find objects and supports the CE `DUPLICATE_CLOSE_SOURCE` ownership-transfer shape used by notification close paths. Public file-change notification handles now track their creating process and reject foreign-process wait/reset/info/duplicate/close attempts, direct `AFS_FindFirstChangeNotificationW` now honors its nonzero `hProc` owner, and raw AFS volume handles now enforce owner-checked unmount/close plus `FSCTL_GET_VOLUME_INFO` metadata while signaling mounted-root removal.
 - GWE message work includes cross-thread send setup, timeout marking, CE-public `SMTO_NORMAL` timeout-send completion, destroyed-window completion, and zero-result writes for destroyed `SendMessageTimeout` targets.
 - Winsock has CE-facing dispatch for core socket operations with isolated NAT addressing, `select` fd-set validation, readiness checks, and scheduler wake candidate integration.
-- Core CE subsystems remain broad and test-backed: handles, waits, events, TLS, critical sections, registry, files, memory, GDI resources, DIBs, windows, menus, clipboard, and scheduler selection.
+- Core CE subsystems remain broad and test-backed: handles, waits, events, TLS, critical sections, registry, files, memory, DPA/DSA containers, GDI resources, DIBs, windows, menus, clipboard, and scheduler selection.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_memory_file.rs`, and
+  `SOURCE_REFERENCES.md`: raw `DPA_Grow` and `DSA_Grow` now preallocate their
+  guest backing arrays through the same heap-backed capacity helpers used by
+  insert/clone paths, including grow-increment rounding, no-shrink behavior,
+  negative-count rejection, and checked allocation-size overflow handling.
 - `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, and
   `SOURCE_REFERENCES.md`: raw `ImageList_ReplaceIcon` now follows the CE
   `imagelist.cpp` bitmap-backed path for real icons by snapshotting rendered
@@ -29,6 +34,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   snapshot carries a trap address. This covers the case where the run stops
   after the thunk branch but before the trap PC is reflected in the saved
   snapshot.
+- Live verification for the import-thunk wall-stop slice: iNavi no longer
+  remains parked at `iNavi.exe+0x3554` before `COREDLL.dll@1047` (`memset`).
+  With progress tracing enabled, a bounded host run advanced through the
+  Happyway/modal path, cleared/recovered stale WNDPROC state, and reached
+  `iNavi.exe+0x329da8` with later file/resource activity.
 - Validation after the ImageList_ReplaceIcon snapshot and wall-clock rotation
   slice: `cargo fmt --check`, `git diff --check`, `CARGO_INCREMENTAL=0 cargo
   check --features unicorn,trace,win32-desktop`, focused `coredll_raw_gwe`,

@@ -9,7 +9,7 @@ Regenerated on 2026-06-11 from the current `src/` and `tests/` implementation st
 - Windowing and GWE: windows, message queues, default window proc behavior, modal menu/message paths, clipboard/caret support, accelerator translation, `SendMessageTimeout` blocking setup, timeout handling, and destroyed-target result writes are implemented to the current raw-test level.
 - File system and storage: rooted host-backed paths, mount roots, directory enumeration, file attributes, change notification handles, `CeGetFileNotificationInfo`, duplicate coalescing, transient create/delete coalescing, and modified/delete coalescing are covered.
 - Winsock and remote IO: CE-facing Winsock dispatch, isolated NAT addressing, TCP/UDP socket creation, bind/listen/connect/accept/send/recv/select paths, `FD_SETSIZE`/fd-set validation, nonblocking state, socket wait candidates, and scheduler wake integration are present.
-- Core subsystems: thread handles, waits, events, semaphores, mutexes, TLS, critical sections, process handles, memory APIs, registry APIs, GDI object management, bitmap/DIB drawing, and scheduler readiness selection are established.
+- Core subsystems: thread handles, waits, events, semaphores, mutexes, TLS, critical sections, process handles, memory APIs, registry APIs, DPA/DSA containers, GDI object management, bitmap/DIB drawing, and scheduler readiness selection are established.
 
 ## Active Roadmap
 
