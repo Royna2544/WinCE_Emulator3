@@ -1192,7 +1192,12 @@ impl Gwe {
             },
         );
         if parent.is_none() {
-            self.apply_z_order(hwnd, parent, HWND_TOP);
+            let insert_after = if ex_style & WS_EX_TOPMOST != 0 {
+                HWND_TOPMOST
+            } else {
+                HWND_TOP
+            };
+            self.apply_z_order(hwnd, parent, insert_after);
         } else {
             self.z_order.push(hwnd);
         }
@@ -3231,6 +3236,13 @@ impl Gwe {
             window.visible = false;
             window.style &= !WS_VISIBLE;
             Self::clear_window_update(window);
+        }
+        if flags & SWP_NOZORDER == 0 {
+            match insert_after {
+                Some(HWND_TOPMOST) => window.ex_style |= WS_EX_TOPMOST,
+                Some(HWND_NOTOPMOST) => window.ex_style &= !WS_EX_TOPMOST,
+                _ => {}
+            }
         }
         if flags & SWP_NOZORDER == 0 {
             self.apply_z_order(hwnd, parent, insert_after.unwrap_or(HWND_TOP));
@@ -5393,14 +5405,48 @@ impl Gwe {
     fn apply_z_order(&mut self, hwnd: u32, parent: Option<u32>, insert_after: u32) {
         self.z_order.retain(|candidate| *candidate != hwnd);
         let siblings = self.sibling_windows(parent);
-        let index = match insert_after {
-            HWND_TOP | HWND_TOPMOST | HWND_NOTOPMOST => siblings
+        let hwnd_is_topmost = self
+            .windows
+            .get(&hwnd)
+            .is_some_and(|window| window.ex_style & WS_EX_TOPMOST != 0);
+        let first_sibling_index = |z_order: &[u32], siblings: &[u32]| {
+            siblings
                 .first()
-                .and_then(|sibling| {
-                    self.z_order
-                        .iter()
-                        .position(|candidate| candidate == sibling)
-                })
+                .and_then(|sibling| z_order.iter().position(|candidate| candidate == sibling))
+        };
+        let first_topmost_sibling: Vec<u32> = siblings
+            .iter()
+            .copied()
+            .filter(|sibling| {
+                self.windows
+                    .get(sibling)
+                    .is_some_and(|window| window.ex_style & WS_EX_TOPMOST != 0)
+            })
+            .collect();
+        let first_normal_sibling: Vec<u32> = siblings
+            .iter()
+            .copied()
+            .filter(|sibling| {
+                self.windows
+                    .get(sibling)
+                    .is_none_or(|window| window.ex_style & WS_EX_TOPMOST == 0)
+            })
+            .collect();
+        let index = match insert_after {
+            HWND_TOPMOST => {
+                first_sibling_index(&self.z_order, &siblings).unwrap_or(self.z_order.len())
+            }
+            HWND_TOP => {
+                if hwnd_is_topmost {
+                    first_sibling_index(&self.z_order, &first_topmost_sibling)
+                        .or_else(|| first_sibling_index(&self.z_order, &siblings))
+                        .unwrap_or(self.z_order.len())
+                } else {
+                    first_sibling_index(&self.z_order, &first_normal_sibling)
+                        .unwrap_or(self.z_order.len())
+                }
+            }
+            HWND_NOTOPMOST => first_sibling_index(&self.z_order, &first_normal_sibling)
                 .unwrap_or(self.z_order.len()),
             HWND_BOTTOM => siblings
                 .last()

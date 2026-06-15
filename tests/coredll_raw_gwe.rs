@@ -115,20 +115,21 @@ use wince_emulation_v3::{
             DEFAULT_KEYBOARD_LAYOUT_HKL, DEFAULT_KEYBOARD_LAYOUT_NAME, DLGC_BUTTON,
             DLGC_DEFPUSHBUTTON, DLGC_HASSETSEL, DLGC_RADIOBUTTON, DLGC_STATIC,
             DLGC_UNDEFPUSHBUTTON, DLGC_WANTARROWS, DLGC_WANTCHARS, DM_GETDEFID, DM_SETDEFID,
-            GCS_COMPSTR, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_STYLE,
-            GWL_USERDATA, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, HTTOPLEFT,
-            HWND_BROADCAST, ICON_BIG, ICON_SMALL, ImeCandidateListState, KEY_SHIFT_ANY_SHIFT_FLAG,
-            KEY_STATE_DOWN_FLAG, KEY_STATE_GET_ASYNC_DOWN_FLAG, KEY_STATE_PREV_DOWN_FLAG,
-            MA_ACTIVATE, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND,
-            Message, PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect,
-            SC_CLOSE, SIPF_ON, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_NOTIFY_MESSAGE,
-            SMF_SENDER_NO_WAIT, SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, VK_CAPITAL, VK_CONTROL, VK_LCONTROL,
-            VK_LSHIFT, VK_MENU, VK_NUMLOCK, VK_SCROLL, VK_SHIFT, WA_ACTIVE, WA_CLICKACTIVE,
-            WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CHARTOITEM,
-            WM_CLOSE, WM_COMMAND, WM_COMPAREITEM, WM_CONTEXTMENU, WM_CREATE, WM_DEADCHAR,
-            WM_DELETEITEM, WM_DESTROY, WM_DISPLAYCHANGE, WM_DRAWITEM, WM_ENABLE, WM_ENTERMENULOOP,
-            WM_ERASEBKGND, WM_EXITMENULOOP, WM_FONTCHANGE, WM_GETDLGCODE, WM_GETFONT, WM_GETICON,
+            GCS_COMPSTR, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE,
+            GWL_STYLE, GWL_USERDATA, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, HTTOPLEFT,
+            HWND_BROADCAST, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, ICON_BIG, ICON_SMALL,
+            ImeCandidateListState, KEY_SHIFT_ANY_SHIFT_FLAG, KEY_STATE_DOWN_FLAG,
+            KEY_STATE_GET_ASYNC_DOWN_FLAG, KEY_STATE_PREV_DOWN_FLAG, MA_ACTIVATE,
+            MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message,
+            PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, SC_CLOSE,
+            SIPF_ON, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT,
+            SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            SWP_SHOWWINDOW, VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_LSHIFT, VK_MENU, VK_NUMLOCK,
+            VK_SCROLL, VK_SHIFT, WA_ACTIVE, WA_CLICKACTIVE, WA_INACTIVE, WM_ACTIVATE,
+            WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CHARTOITEM, WM_CLOSE, WM_COMMAND,
+            WM_COMPAREITEM, WM_CONTEXTMENU, WM_CREATE, WM_DEADCHAR, WM_DELETEITEM, WM_DESTROY,
+            WM_DISPLAYCHANGE, WM_DRAWITEM, WM_ENABLE, WM_ENTERMENULOOP, WM_ERASEBKGND,
+            WM_EXITMENULOOP, WM_FONTCHANGE, WM_GETDLGCODE, WM_GETFONT, WM_GETICON,
             WM_GETMINMAXINFO, WM_GETTEXT, WM_GETTEXTLENGTH, WM_HELP, WM_HSCROLL, WM_IME_CHAR,
             WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_NOTIFY, WM_IME_STARTCOMPOSITION,
             WM_INITMENU, WM_INITMENUPOPUP, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
@@ -139,8 +140,8 @@ use wince_emulation_v3::{
             WM_SETFOCUS, WM_SETFONT, WM_SETICON, WM_SETREDRAW, WM_SETTEXT, WM_SETTINGCHANGE,
             WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
             WM_TIMECHANGE, WM_TIMER, WM_USER, WM_VKEYTOITEM, WM_VSCROLL, WM_WINDOWPOSCHANGED,
-            WNDCLASSW_SIZE, WS_CHILD, WS_DISABLED, WS_EX_NOPARENTNOTIFY, WS_GROUP, WS_POPUP,
-            WS_TABSTOP, WS_VISIBLE,
+            WNDCLASSW_SIZE, WS_CHILD, WS_DISABLED, WS_EX_NOPARENTNOTIFY, WS_EX_TOPMOST, WS_GROUP,
+            WS_POPUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -18561,6 +18562,144 @@ fn coredll_raw_windowposchanged_carries_guest_windowpos_payload() -> Result<()> 
             .heap_size(PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
             .is_none()
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_window_pos_respects_topmost_z_order_group() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 3;
+
+    let base = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "BASE",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 80, 80),
+    );
+    let topmost = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "TOPMOST",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        WS_EX_TOPMOST,
+        Rect::from_origin_size(4, 4, 80, 80),
+    );
+    let later_normal = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "LATER_NORMAL",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(8, 8, 80, 80),
+    );
+    let test_z_order = |kernel: &CeKernel| {
+        kernel
+            .gwe
+            .z_order_snapshot()
+            .into_iter()
+            .filter(|hwnd| [base, topmost, later_normal].contains(hwnd))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(test_z_order(&kernel), vec![topmost, later_normal, base]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_POS,
+            [base, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(test_z_order(&kernel), vec![topmost, base, later_normal]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_POS,
+            [
+                later_normal,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(test_z_order(&kernel), vec![later_normal, topmost, base]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW_LONG_W,
+            [later_normal, GWL_EXSTYLE as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(style),
+            ..
+        } if style & WS_EX_TOPMOST == WS_EX_TOPMOST
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_POS,
+            [
+                later_normal,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(test_z_order(&kernel), vec![topmost, later_normal, base]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW_LONG_W,
+            [later_normal, GWL_EXSTYLE as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(style),
+            ..
+        } if style & WS_EX_TOPMOST == 0
+    ));
 
     Ok(())
 }

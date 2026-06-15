@@ -4317,3 +4317,15 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   unicorn,trace,win32-desktop` passed. The raw GWE binary reported 353 passing
   tests, the eVC4 MIPSII fixture remains ignored because that toolchain is not
   configured, and Cargo still emits the existing unused-code warnings.
+- `src/ce/gwe.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: CE topmost windows now remain in
+  a front z-order group, normal `HWND_TOP` promotion stays below existing
+  topmost siblings, and raw `SetWindowPos(HWND_TOPMOST/HWND_NOTOPMOST)` mutates
+  the stored `WS_EX_TOPMOST` extended style while moving the window between the
+  topmost and normal groups. This supports `MessageBoxW(MB_TOPMOST)` live modal
+  ordering and other CE callers that use topmost status windows or taskbars.
+- Validation after the GWE topmost z-order slice: `cargo fmt` and focused
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_set_window_pos_respects_topmost_z_order_group` passed. Cargo still
+  emits the existing unused-code warnings.

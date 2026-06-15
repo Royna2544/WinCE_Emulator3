@@ -1368,8 +1368,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     text/caption/style plus button IDs, those CE button slots/labels,
     default-button index, icon class, owner enabled-state, transient dialog and
     child-control HWNDs, active-dialog state, `MB_TOPMOST`'s CE
-    `WS_EX_TOPMOST` extended style, and result, and now derives default return
-    codes for both SDK and owner-draw button groups while closing the transient
+    `WS_EX_TOPMOST` extended style, and result. The CE GWE
+    `window.hpp` top-level window state tracks removed topmost transitions and
+    exposes `SetWindowPos_I`; v3 now keeps `WS_EX_TOPMOST` windows in a
+    separate front z-order group and mutates that style through
+    `SetWindowPos(HWND_TOPMOST/HWND_NOTOPMOST)`, so `MB_TOPMOST` dialogs and
+    other CE topmost callers share one ordering model. v3 now derives default
+    return codes for both SDK and owner-draw button groups while closing the transient
     skeleton through `EndDialog`; framebuffer-backed raw calls also paint the
     dialog surface from the same caption, text, icon, and button-layout state.
     v3 also
