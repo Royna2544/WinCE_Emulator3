@@ -403,6 +403,7 @@ pub struct DcState {
     pub selected_palette: u32,
     pub current_pos: crate::ce::gwe::Point,
     pub brush_origin: crate::ce::gwe::Point,
+    pub viewport_origin: crate::ce::gwe::Point,
     pub bk_color: u32,
     pub bk_mode: i32,
     pub text_color: u32,
@@ -428,6 +429,7 @@ impl Default for DcState {
             selected_palette: stock_object_handle(DEFAULT_PALETTE).unwrap_or(0),
             current_pos: crate::ce::gwe::Point { x: 0, y: 0 },
             brush_origin: crate::ce::gwe::Point { x: 0, y: 0 },
+            viewport_origin: crate::ce::gwe::Point { x: 0, y: 0 },
             bk_color: 0x00ff_ffff,
             bk_mode: 2,
             text_color: 0,
@@ -2324,6 +2326,20 @@ impl ResourceSystem {
         let state = self.dc_states.entry(hdc).or_default();
         let previous = state.brush_origin;
         state.brush_origin = point;
+        Some(previous)
+    }
+
+    pub fn set_viewport_origin(
+        &mut self,
+        hdc: u32,
+        point: crate::ce::gwe::Point,
+    ) -> Option<crate::ce::gwe::Point> {
+        if hdc == 0 {
+            return None;
+        }
+        let state = self.dc_states.entry(hdc).or_default();
+        let previous = state.viewport_origin;
+        state.viewport_origin = point;
         Some(previous)
     }
 

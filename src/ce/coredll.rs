@@ -6145,12 +6145,20 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_HANDLE);
                 return Some(CoredllValue::Bool(false));
             }
-            // CE GDI always uses (0,0) viewport origin; accept and ignore the set.
-            // Write back the previous origin (always 0,0) to lpPoint if provided.
+            let point = Point {
+                x: raw_i32_arg(args, 1),
+                y: raw_i32_arg(args, 2),
+            };
+            let Some(previous) = kernel.resources.set_viewport_origin(hdc, point) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return Some(CoredllValue::Bool(false));
+            };
             let point_ptr = raw_arg(args, 3);
-            if point_ptr != 0 {
-                let _ = memory.write_u32(point_ptr, 0);
-                let _ = memory.write_u32(point_ptr + 4, 0);
+            if point_ptr != 0 && !write_guest_point(kernel, memory, thread_id, point_ptr, previous)
+            {
+                return Some(CoredllValue::Bool(false));
             }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
@@ -41945,6 +41953,24 @@ struct PenModel {
     style: u32,
 }
 
+fn hdc_viewport_origin(kernel: &CeKernel, hdc: u32) -> Point {
+    kernel
+        .resources
+        .dc_state(hdc)
+        .map(|state| state.viewport_origin)
+        .unwrap_or(Point { x: 0, y: 0 })
+}
+
+fn offset_points(points: &[Point], offset: Point) -> Vec<Point> {
+    points
+        .iter()
+        .map(|point| Point {
+            x: point.x.saturating_add(offset.x),
+            y: point.y.saturating_add(offset.y),
+        })
+        .collect()
+}
+
 fn polyline_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -41991,10 +42017,11 @@ fn polyline_raw<M: CoredllGuestMemory>(
         return false;
     }
     if let Some(pen) = selected_pen_model(kernel, hdc) {
-        if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &points, pen)
+        let device_points = offset_points(&points, hdc_viewport_origin(kernel, hdc));
+        if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &device_points, pen)
             && let Some(framebuffer) = framebuffer
         {
-            draw_polyline_for_hdc(kernel, framebuffer, hdc, &points, pen);
+            draw_polyline_for_hdc(kernel, framebuffer, hdc, &device_points, pen);
         }
     }
     if let Some(last) = points.last().copied() {
@@ -42095,6 +42122,8 @@ fn polygon_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
+    let viewport_origin = hdc_viewport_origin(kernel, hdc);
+    let device_points = offset_points(&points, viewport_origin);
     if points.len() >= 2 {
         if kernel.resources.is_memory_dc(hdc) {
             if let Some(bitmap) = selected_bitmap_object(kernel, hdc) {
@@ -42124,11 +42153,17 @@ fn polygon_raw<M: CoredllGuestMemory>(
                     for clip in clips {
                         if let Some(paint) = paint.clone() {
                             fill_bitmap_polygon(
-                                memory, &bitmap, &points, clip, paint, origin, fill_mode,
+                                memory,
+                                &bitmap,
+                                &device_points,
+                                clip,
+                                paint,
+                                origin,
+                                fill_mode,
                             );
                         }
                         if let Some(pen) = pen {
-                            draw_closed_bitmap_polyline(memory, &bitmap, &points, clip, pen);
+                            draw_closed_bitmap_polyline(memory, &bitmap, &device_points, clip, pen);
                         }
                     }
                 }
@@ -42144,14 +42179,14 @@ fn polygon_raw<M: CoredllGuestMemory>(
                     kernel,
                     framebuffer,
                     hdc,
-                    &points,
+                    &device_points,
                     color,
                     fill_mode,
                 );
             }
             if let Some(pen) = selected_pen_model(kernel, hdc) {
-                let mut closed = points.clone();
-                if let Some(first) = points.first().copied() {
+                let mut closed = device_points.clone();
+                if let Some(first) = device_points.first().copied() {
                     closed.push(first);
                 }
                 draw_polyline_for_hdc(kernel, framebuffer, hdc, &closed, pen);
@@ -43554,10 +43589,11 @@ fn line_to_raw<M: CoredllGuestMemory>(
     }
     if let Some(pen) = selected_pen_model(kernel, hdc) {
         let points = [start, end];
-        if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &points, pen)
+        let device_points = offset_points(&points, hdc_viewport_origin(kernel, hdc));
+        if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &device_points, pen)
             && let Some(framebuffer) = framebuffer
         {
-            draw_polyline_for_hdc(kernel, framebuffer, hdc, &points, pen);
+            draw_polyline_for_hdc(kernel, framebuffer, hdc, &device_points, pen);
         }
     }
     let _ = kernel.resources.move_to(hdc, end);

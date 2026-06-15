@@ -3714,6 +3714,114 @@ fn coredll_raw_line_to_paints_selected_memory_dib() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_polyline_and_polygon_apply_viewport_origin_on_selected_dib() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 10, 7);
+    let line_points = 0x1_0200;
+    let polygon_points = 0x1_0300;
+    memory.map_bytes(line_points, 16);
+    memory.map_bytes(polygon_points, 32);
+    memory.write_point(line_points, 0, 0);
+    memory.write_point(line_points + 8, 3, 0);
+    for (index, (x, y)) in [(0, 0), (3, 0), (3, 3), (0, 3)].iter().enumerate() {
+        memory.write_point(polygon_points + index as u32 * 8, *x, *y);
+    }
+
+    let pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PEN,
+        [0, 1, 0x0000_00ff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePen did not return a pen: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, pen],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_VIEWPORT_ORG_EX,
+            [mem_dc, 2, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYLINE,
+            [mem_dc, line_points, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 1), 0xf800);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 1), 0xf800);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_VIEWPORT_ORG_EX,
+            [mem_dc, 5, 2, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYGON,
+            [mem_dc, polygon_points, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 1), 0x0000);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 6, 3), 0xffff);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_polyline_honors_ps_dash_on_selected_memory_dib() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -38998,6 +39106,22 @@ fn coredll_raw_gdi_device_attribute_modes_follow_ce_sentinels() -> Result<()> {
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_SET_VIEWPORT_ORG_EX,
+            [dc, 0, 0, point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_i32(point_ptr)?, 0);
+    assert_eq!(memory.read_i32(point_ptr + 4)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_SET_BRUSH_ORG_EX,
             [dc, 11, 13, point_ptr],
         ),
@@ -39074,6 +39198,22 @@ fn coredll_raw_gdi_device_attribute_modes_follow_ce_sentinels() -> Result<()> {
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(memory.read_i32(point_ptr)?, 0);
     assert_eq!(memory.read_i32(point_ptr + 4)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_VIEWPORT_ORG_EX,
+            [dc, 0, 0, point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_i32(point_ptr)?, 11);
+    assert_eq!(memory.read_i32(point_ptr + 4)?, -7);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

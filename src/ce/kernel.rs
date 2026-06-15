@@ -1433,12 +1433,13 @@ impl CeKernel {
         exit_code: u32,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) {
-        let targets = self.process_window_targets(launch.process_id, launch.thread_id);
+        let backing_store_targets =
+            self.process_window_backing_store_targets(launch.process_id, launch.thread_id);
         self.destroy_process_windows(launch.process_id, launch.thread_id);
         if let Some(framebuffer) = framebuffer {
-            let _ = self.restore_window_backing_stores(&targets, framebuffer);
+            let _ = self.restore_window_backing_stores(&backing_store_targets, framebuffer);
         } else {
-            self.discard_window_backing_stores(&targets);
+            self.discard_window_backing_stores(&backing_store_targets);
         }
         if self
             .handles
@@ -1474,6 +1475,18 @@ impl CeKernel {
             .filter(|window| {
                 !window.destroyed
                     && window.hwnd != crate::ce::gwe::DESKTOP_HWND
+                    && (window.process_id == process_id || window.thread_id == thread_id)
+            })
+            .map(|window| window.hwnd)
+            .collect()
+    }
+
+    fn process_window_backing_store_targets(&self, process_id: u32, thread_id: u32) -> Vec<u32> {
+        self.gwe
+            .windows_snapshot()
+            .into_iter()
+            .filter(|window| {
+                window.hwnd != crate::ce::gwe::DESKTOP_HWND
                     && (window.process_id == process_id || window.thread_id == thread_id)
             })
             .map(|window| window.hwnd)
@@ -7271,6 +7284,60 @@ mod tests {
             kernel.restore_window_backing_stores(&targets, &mut framebuffer),
             1
         );
+        assert_eq!(framebuffer.pixels(), original.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn process_exit_restores_backing_store_for_already_destroyed_window() -> Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
+        kernel.set_current_process_id(launch.process_id);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        for (index, byte) in framebuffer.pixels_mut().iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let original = framebuffer.snapshot().pixels;
+        let hwnd = kernel.create_window_ex_w_with_rect(
+            launch.thread_id,
+            "DIALOG",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(1, 1, 4, 4),
+        );
+
+        assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        let info = framebuffer.info();
+        let bytes_per_pixel = info.format.bytes_per_pixel();
+        for y in 1usize..5 {
+            for x in 1usize..5 {
+                let offset = y * info.stride + x * bytes_per_pixel;
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel].fill(0xff);
+            }
+        }
+
+        assert!(kernel.gwe.destroy_window(hwnd, kernel.timers.tick_count()));
+        assert!(
+            !kernel
+                .process_window_targets(launch.process_id, launch.thread_id)
+                .contains(&hwnd)
+        );
+        assert!(
+            kernel
+                .process_window_backing_store_targets(launch.process_id, launch.thread_id)
+                .contains(&hwnd)
+        );
+
+        kernel.mark_process_launch_exited_with_framebuffer(&launch, 0, Some(&mut framebuffer));
+
         assert_eq!(framebuffer.pixels(), original.as_slice());
         Ok(())
     }
