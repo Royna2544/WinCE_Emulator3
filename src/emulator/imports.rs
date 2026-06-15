@@ -799,7 +799,7 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 36
                     | 37
                     | 44
-                    | 68..=75
+                    | 68..=75 | 80 | 81
             )
         }
         ImportBy::Name { name, .. } => crate::ce::coredll::is_fsdmgr_import(name),
@@ -1161,6 +1161,19 @@ mod tests {
                 ImportThunk {
                     thunk_rva: 0x205c,
                     iat_rva: 0x305c,
+                    import: ImportBy::Ordinal(80),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2060,
+                    iat_rva: 0x3060,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_AsyncExitVolume".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2064,
+                    iat_rva: 0x3064,
                     import: ImportBy::Name {
                         hint: 0,
                         name: "FSEXT_UnsupportedStorageApi".to_owned(),
@@ -1178,8 +1191,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(table.len(), 23);
-        for index in 0..23 {
+        assert_eq!(table.len(), 25);
+        for index in 0..25 {
             let iat = 0x3000 + index * 4;
             assert_eq!(
                 u32::from_le_bytes(mapped[iat..iat + 4].try_into().unwrap()),
@@ -1187,7 +1200,7 @@ mod tests {
             );
         }
         assert_eq!(
-            u32::from_le_bytes(mapped[0x305c..0x3060].try_into().unwrap()),
+            u32::from_le_bytes(mapped[0x3064..0x3068].try_into().unwrap()),
             0
         );
         assert_eq!(
@@ -1346,6 +1359,21 @@ mod tests {
                 .unwrap()
                 .ordinal,
             Some(31)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 23)
+                .unwrap()
+                .ordinal,
+            Some(80)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 24)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("FSDMGR_AsyncExitVolume")
         );
     }
 
@@ -2959,6 +2987,129 @@ mod tests {
             Some(ERROR_GEN_FAILURE)
         );
         assert_eq!(kernel.threads.get_last_error(11), ERROR_GEN_FAILURE);
+    }
+
+    #[test]
+    fn fsdmgr_async_volume_imports_lock_registered_hvol_shape() {
+        const ERROR_DEVICE_REMOVED: u32 = 1617;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_RegisterVolume".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(80),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_AsyncExitVolume".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let mount_name_ptr = 0x1000_1000;
+        let lock_ptr = 0x1000_2000;
+        let lock_data_ptr = 0x1000_2004;
+        let disk_ptr = 0x1000_6000;
+        memory.map_wide_z(mount_name_ptr, "\\Async Disk");
+        memory.map_word(lock_ptr, 0xfeed_cafe);
+        memory.map_word(lock_data_ptr, 0xdead_beef);
+
+        let volume_handle = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, mount_name_ptr, 0x0bad_f00d],
+            )
+            .unwrap();
+        assert_ne!(volume_handle, 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [volume_handle, lock_ptr, lock_data_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(lock_ptr), volume_handle);
+        assert_eq!(memory.word(lock_data_ptr), volume_handle);
+
+        let lock_handle = memory.word(lock_ptr);
+        let lock_data = memory.word(lock_data_ptr);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [lock_handle, lock_data],
+            ),
+            Some(0)
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [0x4444_0000, lock_ptr, lock_data_ptr],
+            ),
+            Some(ERROR_DEVICE_REMOVED)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [volume_handle, lock_ptr, 0],
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [volume_handle, 0x4444_0000],
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
     }
 
     #[test]

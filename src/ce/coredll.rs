@@ -127,6 +127,7 @@ const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
 const ERROR_GEN_FAILURE: u32 = 31;
+const ERROR_DEVICE_REMOVED: u32 = 1617;
 const CE_VOLUME_INFO_LEVEL_STANDARD: u32 = 0;
 const CE_VOLUME_INFO_SIZE: u32 = 144;
 const CE_VOLUME_INFO_NAME_CHARS: usize = 32;
@@ -11642,6 +11643,8 @@ fn find_first_change_notification_w_raw<M: CoredllGuestMemory>(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FsdmgrImport {
+    FsdmgrAsyncEnterVolume,
+    FsdmgrAsyncExitVolume,
     FsdmgrCacheIoControl,
     FsdmgrCachedRead,
     FsdmgrCachedWrite,
@@ -11695,6 +11698,16 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         .and_then(fsdmgr_import_by_ordinal)
         .or_else(|| name.and_then(fsdmgr_import_by_name))?;
     let result = match import {
+        FsdmgrImport::FsdmgrAsyncEnterVolume => fsdmgr_async_enter_volume_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ),
+        FsdmgrImport::FsdmgrAsyncExitVolume => {
+            fsdmgr_async_exit_volume_raw(kernel, raw_arg(args, 0), raw_arg(args, 1))
+        }
         FsdmgrImport::FsdmgrCacheIoControl => {
             fsdmgr_cache_io_control_raw(kernel, thread_id, raw_arg(args, 0), raw_arg(args, 1))
         }
@@ -11917,12 +11930,16 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         73 => Some(FsdmgrImport::FsextFindCloseChangeNotification),
         74 => Some(FsdmgrImport::FsintGetFileNotificationInfoW),
         75 => Some(FsdmgrImport::FsextGetFileNotificationInfoW),
+        80 => Some(FsdmgrImport::FsdmgrAsyncEnterVolume),
+        81 => Some(FsdmgrImport::FsdmgrAsyncExitVolume),
         _ => None,
     }
 }
 
 fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
     match normalize_name(name).as_str() {
+        "fsdmgr_asyncentervolume" => Some(FsdmgrImport::FsdmgrAsyncEnterVolume),
+        "fsdmgr_asyncexitvolume" => Some(FsdmgrImport::FsdmgrAsyncExitVolume),
         "fsdmgr_cacheiocontrol" => Some(FsdmgrImport::FsdmgrCacheIoControl),
         "fsdmgr_cachedread" => Some(FsdmgrImport::FsdmgrCachedRead),
         "fsdmgr_cachedwrite" => Some(FsdmgrImport::FsdmgrCachedWrite),
@@ -11979,6 +11996,36 @@ fn fsdmgr_volume_util_status_raw(kernel: &mut CeKernel, thread_id: u32, disk_ptr
     };
     kernel.threads.set_last_error(thread_id, status);
     status
+}
+
+fn fsdmgr_async_enter_volume_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    volume_handle: u32,
+    lock_ptr: u32,
+    lock_data_ptr: u32,
+) -> u32 {
+    if kernel.volume_root_for_handle(volume_handle).is_err() {
+        return ERROR_DEVICE_REMOVED;
+    }
+    if lock_ptr == 0
+        || lock_data_ptr == 0
+        || memory.write_u32(lock_ptr, volume_handle).is_err()
+        || memory.write_u32(lock_data_ptr, volume_handle).is_err()
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    0
+}
+
+fn fsdmgr_async_exit_volume_raw(kernel: &mut CeKernel, lock_handle: u32, lock_data: u32) -> u32 {
+    if lock_handle == 0 || lock_handle != lock_data {
+        return ERROR_INVALID_PARAMETER;
+    }
+    match kernel.volume_root_for_handle(lock_handle) {
+        Ok(_) => 0,
+        Err(_) => ERROR_INVALID_PARAMETER,
+    }
 }
 
 fn fsdmgr_cached_read_raw<M: CoredllGuestMemory>(
