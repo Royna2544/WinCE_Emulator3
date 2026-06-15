@@ -3952,3 +3952,10 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `cargo test -j 1 --features unicorn,trace,win32-desktop --test
   coredll_raw_gwe coredll_raw_alpha_blend_matches_ce_per_pixel_alpha_32bpp_rows`
   passed. Cargo still emits the existing unused-code warnings.
+- Broader validation after the CE per-pixel AlphaBlend table slice:
+  `cargo fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe alpha_blend`, `cargo check --features
+  unicorn,trace,win32-desktop`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The AlphaBlend filter is at 19 passing
+  tests, and the full suite still ignores the eVC4 MIPSII fixture because that
+  toolchain is not configured.
