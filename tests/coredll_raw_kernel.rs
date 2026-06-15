@@ -2570,6 +2570,28 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
             &mut memory,
             thread_id,
             ORD_LOAD_LIBRARY_EX_W,
+            [module_name_ptr, 0, 0x0000_0008],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == module_base
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        kernel
+            .loaded_module_by_handle(module_base)
+            .unwrap()
+            .ref_count,
+        4
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_EX_W,
             [module_name_ptr, 0, 0x0000_0040],
         ),
         CoredllDispatch::Returned {

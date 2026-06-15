@@ -4,7 +4,7 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Current Snapshot
 
-- Runtime loader work has reached dynamic Unicorn DLL mapping with dependency loading, dependency-ref release on unload, current-image cleanup on failed maps, transactional current-image resource/trap/trampoline commit ordering, import patching, forwarders, malformed-forwarder rejection, failed-load and failed-attach rollback for load-attempt refs, trampoline tracking, datafile/no-resolve flags, datafile export suppression, CE-style process/thread lifecycle calls, process-detach refcount draining, and CE `DisableThreadLibraryCalls` filtering.
+- Runtime loader work has reached dynamic Unicorn DLL mapping with dependency loading, dependency-ref release on unload, current-image cleanup on failed maps, transactional current-image resource/trap/trampoline commit ordering, import patching, forwarders, malformed-forwarder rejection, failed-load and failed-attach rollback for load-attempt refs, trampoline tracking, datafile/no-resolve flags, raw `LOAD_WITH_ALTERED_SEARCH_PATH` loaded-module reuse, datafile export suppression, CE-style process/thread lifecycle calls, process-detach refcount draining, and CE `DisableThreadLibraryCalls` filtering.
 - Shell icon work now includes `ExtractIconExW`, real PE resource icon extraction, PE group-icon count reporting for `nIconIndex == -1`, raw `KernExtractIcons` integer group-resource extraction, shell fallback icons, `CreateIconIndirect`, `DrawIconEx`, image lists, CE-valid image-list creation/copy flag validation, CE-style image-list bitmap copy/lifetime handling, bitmap-backed image-list drawing, `xBitmap` offsets, `rgbBk` fill handling, CE color-image vs mask-only `rgbFg == CLR_NONE` blend behavior, and exact CE `IMAGELISTDRAWPARAMS` size plus normalized-field write-back validation.
 - `Shell_NotifyIcon` now tracks add/modify/delete state, rejects duplicate `(hwnd,uID)` adds, honors member `NIF_*` flags on add, requires the fixed CE `NOTIFYICONDATAW` footprint and readable 64-WCHAR `szTip` buffer, keeps the existing icon on `NIM_MODIFY | NIF_ICON` with null `hIcon` per the CE taskbar path, posts callback messages, records destroy-icon cleanup, tracks registered taskbar HWND state, posts CE `WM_HANDLESHELLNOTIFYICON` taskbar messages with copied `NOTIFYICONDATAW` payloads, releases those copied payloads after dispatch, and treats stale registered taskbar windows as a non-posting shell-state update success.
 - `SHNotificationUpdateI` now covers CE update-mask behavior for null icon preservation, non-null icon replacement cleanup, stale incoming `hwndSink` values while keeping the original registered sink, inform/iconic priority-list movement, and overlong taskbar-title clearing through the CE `CCHMAXTBLABEL` storage rule; iconic notification expiration, explicit remove, and sink cleanup now record copied icon destruction like the CE taskbar cleanup paths, notification remove and sink cleanup now purge pending callback records for removed notifications, and `SHNotificationGetDataI` accepts the CE fixed-title-buffer path when `cbTitle == 0`.
@@ -15,6 +15,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`, and
+  `SOURCE_REFERENCES.md`: raw `LoadLibraryExW` now accepts CE's documented
+  `LOAD_WITH_ALTERED_SEARCH_PATH` low-word flag for already registered modules,
+  retaining the loaded module and preserving the unsupported-flag failure for
+  non-CE flag bits.
 - `src/ce/coredll.rs`, `tests/coredll_raw_memory_file.rs`, and
   `SOURCE_REFERENCES.md`: raw `DPA_Grow` and `DSA_Grow` now preallocate their
   guest backing arrays through the same heap-backed capacity helpers used by

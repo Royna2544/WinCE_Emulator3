@@ -73,7 +73,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     v3 now mirrors that loaded-module promotion for raw and runtime reuse paths.
     CE `int_LoadLibraryExW` rejects non-null `hFile` with
     `ERROR_INVALID_PARAMETER`, which v3 now applies in raw and runtime
-    `LoadLibraryExW` dispatch.
+    `LoadLibraryExW` dispatch. CE `winbase.h` documents
+    `LOAD_WITH_ALTERED_SEARCH_PATH`, and `CORE\DLL\loader.cpp` forwards
+    `dwFlags` into `DoLoadLibrary` instead of rejecting that low-word flag; raw
+    `LoadLibraryExW` now accepts it for already registered loaded modules while
+    continuing to reject unsupported flag bits.
     CE `CORE\DLL\loader.cpp` also implements `DisableThreadLibraryCalls` by
     setting `MF_NO_THREAD_CALLS` on the resolved module, and its
     `ThreadNotifyDLLs` loop calls loaded DLL entrypoints for

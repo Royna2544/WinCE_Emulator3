@@ -18088,6 +18088,7 @@ fn get_command_line_w_raw<M: CoredllGuestMemory>(
 const COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
 const LOAD_LIBRARY_AS_DATAFILE: u32 = 0x0000_0002;
 const DONT_RESOLVE_DLL_REFERENCES: u32 = 0x0000_0001;
+const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x0000_0008;
 
 fn get_module_handle_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -18159,7 +18160,8 @@ fn load_library_ex_w_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let flags = raw_arg(args, 2);
-    let supported_flags = DONT_RESOLVE_DLL_REFERENCES | LOAD_LIBRARY_AS_DATAFILE;
+    let supported_flags =
+        DONT_RESOLVE_DLL_REFERENCES | LOAD_LIBRARY_AS_DATAFILE | LOAD_WITH_ALTERED_SEARCH_PATH;
     if flags & !supported_flags != 0 {
         kernel
             .threads
