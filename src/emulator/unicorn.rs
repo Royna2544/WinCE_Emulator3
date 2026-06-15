@@ -5541,12 +5541,6 @@ impl UnicornMips {
             if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL == 0 {
                 scheduler_timeslice_pending_hook.set(true);
             }
-            if live_pump
-                && host_wall_clock_limit
-                    .is_some_and(|limit| host_wall_clock_started.elapsed() >= limit)
-            {
-                scheduler_timeslice_pending_hook.set(true);
-            }
             if !scheduler_timeslice_pending_hook.get() {
                 let active_thread_id = *current_thread_id_timeslice_hook.borrow();
                 let kernel_ref = unsafe { &*kernel_ptr };
@@ -5575,6 +5569,34 @@ impl UnicornMips {
                 &trampoline_jumps_timeslice_hook,
                 |addr| read_unicorn_u32(uc, addr),
             );
+            if live_pump
+                && host_wall_clock_limit
+                    .is_some_and(|limit| host_wall_clock_started.elapsed() >= limit)
+                && pending_wndproc_returns_timeslice_hook.borrow().is_empty()
+                && pending_qsort_returns_timeslice_hook.borrow().is_empty()
+                && pending_dll_lifecycle_returns_timeslice_hook
+                    .borrow()
+                    .is_empty()
+                && let Some(stop_pc) = live_wall_clock_block_stop_pc(
+                    pc,
+                    previous_pc,
+                    &trampoline_ranges_timeslice_hook,
+                    &trampoline_jumps_timeslice_hook,
+                    |addr| read_unicorn_u32(uc, addr),
+                )
+            {
+                *host_wall_clock_stop_timeslice_hook.borrow_mut() =
+                    Some(UnicornHostWallClockStop {
+                        pc: stop_pc,
+                        ra: read_mips_reg(uc, RegisterMIPS::RA),
+                        sp: read_mips_reg(uc, RegisterMIPS::SP),
+                        instruction: read_unicorn_u32(uc, stop_pc),
+                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                    });
+                let _ = uc.reg_write(RegisterMIPS::PC, u64::from(stop_pc));
+                let _ = uc.emu_stop();
+                return;
+            }
             if let Some(context_pc) = context_pc {
                 let mut pending_wndproc_returns =
                     pending_wndproc_returns_timeslice_hook.borrow_mut();
@@ -5618,22 +5640,6 @@ impl UnicornMips {
             let Some(context_pc) = context_pc else {
                 return;
             };
-            if live_pump
-                && host_wall_clock_limit
-                    .is_some_and(|limit| host_wall_clock_started.elapsed() >= limit)
-            {
-                *host_wall_clock_stop_timeslice_hook.borrow_mut() =
-                    Some(UnicornHostWallClockStop {
-                        pc: context_pc,
-                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                        instruction: read_unicorn_u32(uc, context_pc),
-                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
-                    });
-                let _ = uc.reg_write(RegisterMIPS::PC, u64::from(context_pc));
-                let _ = uc.emu_stop();
-                return;
-            }
             let active_thread_id = *current_thread_id_timeslice_hook.borrow();
             clear_orphaned_live_blocked_get_message(&blocked_get_message_timeslice_hook, unsafe {
                 &*kernel_ptr
@@ -13400,6 +13406,31 @@ fn scheduler_timeslice_context_pc(
         return None;
     }
     if is_control_transfer_target(previous_pc, pc)
+        || is_mips_delay_slot_pc(read_word, previous_pc, pc)
+    {
+        return None;
+    }
+    Some(pc)
+}
+
+#[cfg(feature = "unicorn")]
+fn live_wall_clock_block_stop_pc(
+    pc: u32,
+    previous_pc: Option<u32>,
+    trampoline_ranges: &[(u32, u32)],
+    trampoline_jumps: &[MipsTrampolineJump],
+    read_word: impl Fn(u32) -> Option<u32>,
+) -> Option<u32> {
+    if pc >= IMPORT_TRAP_BASE {
+        return None;
+    }
+    if let Some(restart_pc) =
+        wall_clock_restart_pc_for_mips_trampoline(pc, trampoline_jumps, &read_word)
+    {
+        return Some(restart_pc);
+    }
+    if target_in_ranges(pc, trampoline_ranges)
+        || is_control_transfer_target(previous_pc, pc)
         || is_mips_delay_slot_pc(read_word, previous_pc, pc)
     {
         return None;

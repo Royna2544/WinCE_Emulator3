@@ -163,12 +163,18 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pcommctr.h` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\core_common.def`
   - CE exposes `DPA_Grow(HDPA, int cp)` and
-    `DSA_Grow(HDSA, int cNewItemAlloc)` from the COREDLL DSA component. Raw
-    dispatch now treats those calls as real preallocation requests against the
-    guest DPA/DSA header layout used by the local container implementation,
-    rounding requested capacity through the stored grow increment, preserving an
-    already sufficient backing pointer, rejecting negative counts, and failing
-    checked-size overflows instead of reporting success as a no-op.
+    `DSA_Grow(HDSA, int cNewItemAlloc)` from the COREDLL DSA component, and
+    declares `DPA_EnumCallback`/`DPA_DestroyCallback` plus the DSA equivalents
+    as void callback-walking helpers. Raw dispatch now treats grow calls as real
+    preallocation requests against the guest DPA/DSA header layout used by the
+    local container implementation, rounding requested capacity through the
+    stored grow increment, preserving an already sufficient backing pointer,
+    rejecting negative counts, and failing checked-size overflows instead of
+    reporting success as a no-op. Raw callback dispatch now also handles the
+    no-callback edge without entering Unicorn: null enum callbacks are no-ops,
+    null destroy callbacks free the DPA/DSA backing through the same destroy
+    helpers, and non-null callbacks continue to fail with `ERROR_NOT_SUPPORTED`
+    until the Unicorn guest-callout path can run them.
 
 - Clipboard allocation-copy API:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`

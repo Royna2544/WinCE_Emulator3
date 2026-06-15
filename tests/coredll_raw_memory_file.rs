@@ -15,13 +15,14 @@ use wince_emulation_v3::{
             ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE,
             ORD_COPY_FILE_W, ORD_COS, ORD_COSH, ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W,
             ORD_CREATE_FILE_W, ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W,
-            ORD_DEVICE_IO_CONTROL, ORD_DPA_CLONE, ORD_DPA_CREATE, ORD_DPA_DESTROY, ORD_DPA_GET_PTR,
-            ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL,
-            ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE, ORD_DSA_CREATE,
-            ORD_DSA_DESTROY, ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM,
-            ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION,
-            ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH,
-            ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
+            ORD_DEVICE_IO_CONTROL, ORD_DPA_CLONE, ORD_DPA_CREATE, ORD_DPA_DESTROY,
+            ORD_DPA_DESTROY_CALLBACK, ORD_DPA_ENUM_CALLBACK, ORD_DPA_GET_PTR, ORD_DPA_GROW,
+            ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP,
+            ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE, ORD_DSA_CREATE, ORD_DSA_DESTROY,
+            ORD_DSA_DESTROY_CALLBACK, ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW,
+            ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS,
+            ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE, ORD_FEOF,
+            ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
             ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W,
             ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FLOOR,
             ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE,
@@ -14567,6 +14568,181 @@ fn coredll_raw_dpa_dsa_grow_preallocates_guest_backing() -> Result<()> {
         ORD_DSA_DESTROY,
         [hdsa],
     );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dpa_dsa_null_callbacks_do_not_need_unicorn_callouts() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    let hdpa = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DPA_CREATE,
+        [4],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("DPA_Create failed: {other:?}"),
+    };
+    assert_ne!(hdpa, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_INSERT_PTR,
+            [hdpa, 0xffff_ffff, 0x1234_5678],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_ENUM_CALLBACK,
+            [hdpa, 0x1000_0000, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_ENUM_CALLBACK,
+            [hdpa, 0, 0xfeed_cafe],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(kernel.memory.allocation(hdpa).is_some());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_DESTROY_CALLBACK,
+            [hdpa, 0, 0xfeed_cafe],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(
+        kernel.memory.allocation(hdpa).is_none(),
+        "null DPA_DestroyCallback should still destroy the DPA"
+    );
+
+    let hdsa = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_CREATE,
+        [4, 4],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("DSA_Create failed: {other:?}"),
+    };
+    assert_ne!(hdsa, 0);
+    let item_ptr = 0x3_0000_u32;
+    memory.write_bytes(item_ptr, &0x0bad_f00d_u32.to_le_bytes());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_INSERT_ITEM,
+            [hdsa, 0xffff_ffff, item_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_ENUM_CALLBACK,
+            [hdsa, 0x1000_0000, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_ENUM_CALLBACK,
+            [hdsa, 0, 0xfeed_cafe],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(kernel.memory.allocation(hdsa).is_some());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_DESTROY_CALLBACK,
+            [hdsa, 0, 0xfeed_cafe],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(
+        kernel.memory.allocation(hdsa).is_none(),
+        "null DSA_DestroyCallback should still destroy the DSA"
+    );
+
     Ok(())
 }
 

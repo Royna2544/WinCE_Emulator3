@@ -7966,13 +7966,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::U32(0xffff_ffff)) // -1 (not found)
         }
-        ORD_DPA_DESTROY_CALLBACK | ORD_DPA_ENUM_CALLBACK => {
-            // Handled by Unicorn try_enter_dpa_enum_callout; stub as fail for non-Unicorn path.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_DPA_DESTROY_CALLBACK => Some(CoredllValue::U32(dpa_callback_raw(
+            kernel, memory, thread_id, args, true,
+        ))),
+        ORD_DPA_ENUM_CALLBACK => Some(CoredllValue::U32(dpa_callback_raw(
+            kernel, memory, thread_id, args, false,
+        ))),
         ORD_DSA_CREATE => Some(CoredllValue::Handle(dsa_create_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -8022,13 +8021,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_DSA_SET_RANGE => Some(CoredllValue::Bool(dsa_set_range_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_DSA_ENUM_CALLBACK | ORD_DSA_DESTROY_CALLBACK => {
-            // Handled by Unicorn try_enter_dsa_enum_callout; stub as fail for non-Unicorn path.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_DSA_DESTROY_CALLBACK => Some(CoredllValue::U32(dsa_callback_raw(
+            kernel, memory, thread_id, args, true,
+        ))),
+        ORD_DSA_ENUM_CALLBACK => Some(CoredllValue::U32(dsa_callback_raw(
+            kernel, memory, thread_id, args, false,
+        ))),
         ORD_DSA_SORT => {
             // DSA_Sort handled by Unicorn try_enter_dsa_sort_callout; stub in raw path.
             kernel
@@ -31736,6 +31734,30 @@ fn dpa_destroy_raw<M: CoredllGuestMemory>(
     true
 }
 
+fn dpa_callback_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+    destroy: bool,
+) -> u32 {
+    let hdpa = raw_arg(args, 0);
+    let callback = raw_arg(args, 1);
+    if callback != 0 {
+        // Guest callbacks require the Unicorn callout path.
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return 0;
+    }
+    if destroy {
+        let _ = dpa_destroy_raw(kernel, memory, thread_id, hdpa);
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    0
+}
+
 fn dpa_ensure_capacity<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -32111,6 +32133,30 @@ fn dsa_destroy_raw<M: CoredllGuestMemory>(
     let _ = kernel.memory.heap_free(heap, 0, hdsa);
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn dsa_callback_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+    destroy: bool,
+) -> u32 {
+    let hdsa = raw_arg(args, 0);
+    let callback = raw_arg(args, 1);
+    if callback != 0 {
+        // Guest callbacks require the Unicorn callout path.
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return 0;
+    }
+    if destroy {
+        let _ = dsa_destroy_raw(kernel, memory, thread_id, hdsa);
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    0
 }
 
 fn dsa_ensure_capacity<M: CoredllGuestMemory>(

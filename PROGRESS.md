@@ -15,6 +15,12 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_memory_file.rs`, and
+  `SOURCE_REFERENCES.md`: raw `DPA_EnumCallback`/`DSA_EnumCallback` now treat a
+  null callback as a successful no-op instead of a raw unsupported callback
+  failure, while raw `DPA_DestroyCallback`/`DSA_DestroyCallback` with a null
+  callback now frees the container through the existing destroy helpers.
+  Non-null callbacks remain routed to the Unicorn callout frontier.
 - `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`, and
   `SOURCE_REFERENCES.md`: raw `LoadLibraryExW` now accepts CE's documented
   `LOAD_WITH_ALTERED_SEARCH_PATH` low-word flag for already registered modules,
