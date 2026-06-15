@@ -4110,3 +4110,30 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   The full suite still ignores the eVC4 MIPSII fixture because that toolchain
   is not configured, and Cargo still emits the existing unused-code warnings
   plus the recurring `target\debug\incremental` finalize access-denied note.
+- `src/ce/coredll_ordinals.rs`, `src/ce/resource.rs`, `src/ce/coredll.rs`,
+  and `tests/coredll_raw_gwe.rs`: CE origin/ext ordinals from
+  `core_common.def`/`coredll.def` are now exported for `SetWindowOrgEx @1984`,
+  `GetWindowOrgEx @1985`, `GetWindowExtEx @1986`,
+  `OffsetViewportOrgEx @1987`, `GetViewportOrgEx @1988`, and
+  `GetViewportExtEx @1989`. Raw DC state now stores window origin separately,
+  `OffsetViewportOrgEx` reports the previous viewport origin, `Get*ExtEx`
+  reports selected-DIB extents, and selected-DIB drawing applies the combined
+  viewport plus CE window-origin translation.
+- Focused validation after the origin/ext ordinal slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_origin_apis_follow_ce_viewport_contract` passed.
+  Cargo still emits the existing unused-code warnings and the recurring
+  `target\debug\incremental` finalize access-denied note.
+- Broader validation after the origin/ext ordinal slice:
+  `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_dispatch`, `cargo check --features unicorn,trace,win32-desktop`,
+  `git diff --check`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The full suite still ignores the eVC4
+  MIPSII fixture because that toolchain is not configured, and Cargo still
+  emits the existing unused-code warnings plus the recurring
+  `target\debug\incremental` finalize access-denied note.
+- `src/emulator/unicorn.rs`: an overlapping WNDPROC guard now declines
+  `CallWindowProcW` guest callouts that would re-enter through an orphaned
+  WNDPROC return stub without an enclosing pending frame, with focused
+  validation from `cargo test -j 1 --features unicorn,trace,win32-desktop
+  call_window_proc_declines_orphaned_wndproc_return_stub`.

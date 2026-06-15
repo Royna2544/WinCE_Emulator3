@@ -2550,12 +2550,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     origin reports that old point, and that `LineTo`, `Polyline`, `Polygon`,
     `Rectangle`, `Ellipse`, and `RoundRect` draws move by the viewport origin.
     Rust now stores the viewport origin in DC state, reports the previous
-    origin, and applies the origin to selected-DIB `LineTo`/`Polyline`/
-    `Polygon` pixels plus selected-DIB `Rectangle`/`Ellipse`/`RoundRect`
-    fill/outline pixels. The local CE export map still exposes only
-    `SetViewportOrgEx` from this origin/ext API family, so
-    `GetViewportOrgEx`, `OffsetViewportOrgEx`, `SetWindowOrgEx`,
-    `GetWindowOrgEx`, and extent-query parity remain open.
+    origin, and applies the combined viewport/window origin to selected-DIB
+    `LineTo`/`Polyline`/`Polygon` pixels plus selected-DIB `Rectangle`/
+    `Ellipse`/`RoundRect` fill/outline pixels. CE `core_common.def` and the
+    public `coredll.def` maps expose `SetWindowOrgEx @1984`,
+    `GetWindowOrgEx @1985`, `GetWindowExtEx @1986`,
+    `OffsetViewportOrgEx @1987`, `GetViewportOrgEx @1988`, and
+    `GetViewportExtEx @1989`; Rust now exports and dispatches those ordinals
+    with CE invalid-HDC handling, previous-origin output, selected-DIB extent
+    queries, and the CE-tested `SetWindowOrgEx(hdc, -x, -y)` positive
+    `GetWindowOrgEx`/drawing translation behavior.
   - `brush.cpp` `passBrushNULL(ESetBrushOrgEx)` expects `SetBrushOrgEx` to
     return `FALSE` with `ERROR_INVALID_HANDLE` for null and bad HDCs, and
     `SimpleSetBrushOrgExTest` expects valid calls to return the previous brush
@@ -3290,10 +3294,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     same `is_valid_hdc` guard to raw `Rectangle`, `Ellipse`, and `RoundRect`
     before any degenerate/no-op shape path can report success.
     `draw.cpp::ViewPort(ERectangle/EEllipse/ERoundRect)` also verifies that
-    these shapes move with the DC viewport origin. Rust now offsets normalized
-    selected-DIB shape rectangles by the stored viewport origin before
-    fill/outline/clipping work, with zero-rounding `RoundRect` still routed
-    through the shared `Rectangle` implementation.
+    these shapes move with the DC viewport/window origin. Rust now offsets
+    normalized selected-DIB shape rectangles by the stored viewport plus window
+    origin before fill/outline/clipping work, with zero-rounding `RoundRect`
+    still routed through the shared `Rectangle` implementation.
 
 - CE GDI miscellaneous draw validation authority:
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
