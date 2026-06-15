@@ -2989,8 +2989,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_CachedWrite @5`, `FSDMGR_CreateCache @6`,
     `FSDMGR_DeleteCache @9`, `FSDMGR_FlushCache @14`,
     `FSDMGR_InvalidateCache @24`, `FSDMGR_ResizeCache @30`, and
-    `FSDMGR_SyncCache @32`, plus `FSDMGR_CreateFileHandle @7`,
-    `FSDMGR_CreateSearchHandle @8`, `FSDMGR_DeregisterVolume @10`,
+    `FSDMGR_SyncCache @32`, plus `FSDMGR_AdvertiseInterface @2`,
+    `FSDMGR_CreateFileHandle @7`, `FSDMGR_CreateSearchHandle @8`,
+    `FSDMGR_DeregisterVolume @10`,
     `FSDMGR_DeviceHandleToHDSK @11`, `FSDMGR_FormatVolume @15`,
     `FSDMGR_GetDiskInfo @16`, `FSDMGR_GetDiskName @17`,
     `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`,
@@ -3010,6 +3011,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     disabled-success behavior. `diskio.h` defines
     `IOCTL_DISK_DELETE_SECTORS` as `0x00071c4c` and
     `IOCTL_DISK_FLUSH_CACHE` as `0x00071c54`.
+    `fsdmgrapi.cpp::FSDMGR_AdvertiseInterface` maps an empty advertised name
+    to backslash for the root file system, waits for the file-system API set,
+    loads `coredll.dll`, and forwards to coredll `AdvertiseInterface`, returning
+    `FALSE` when that path is unavailable. Rust now exposes the direct FSDMGR
+    import and matches the current coredll fail-closed stub
+    (`FALSE`/`ERROR_NOT_SUPPORTED`); real device-interface publication remains a
+    queued fidelity gap.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted
@@ -3067,6 +3075,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSCTL_GET_VOLUME_INFO` metadata. FSDMGR import traps now also expose
     direct CE `FSDMGR_DeviceHandleToHDSK` identity mapping,
     `FSDMGR_FormatVolume`/`FSDMGR_ScanVolume` no-utility failure status, direct
+    CE `FSDMGR_AdvertiseInterface` fail-closed coredll-wrapper behavior,
     CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path,
     `FSDMGR_GetRegistryFlag`/`String`/`Value` missing-value status and
     output-clearing behavior,
@@ -3088,9 +3097,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
-    for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
-    forwarding, real logical-disk registry-root lookup/cache DLL/filter behavior, real CE mounted-volume
-    enter/exit lifetime accounting, broader file-security ACL storage and
+    for FSDMGR cache imports. Physical block-driver backing, real
+    device-interface advertisement publication, remaining disk IOCTL
+    forwarding, real logical-disk registry-root lookup/cache DLL/filter
+    behavior, real CE mounted-volume enter/exit lifetime accounting, broader file-security ACL storage and
     enforcement, real utility DLL
     format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume

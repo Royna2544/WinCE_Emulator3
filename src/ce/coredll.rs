@@ -11646,6 +11646,7 @@ fn find_first_change_notification_w_raw<M: CoredllGuestMemory>(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FsdmgrImport {
+    FsdmgrAdvertiseInterface,
     FsdmgrAsyncEnterVolume,
     FsdmgrAsyncExitVolume,
     FsdmgrCacheIoControl,
@@ -11705,6 +11706,7 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         .and_then(fsdmgr_import_by_ordinal)
         .or_else(|| name.and_then(fsdmgr_import_by_name))?;
     let result = match import {
+        FsdmgrImport::FsdmgrAdvertiseInterface => fsdmgr_advertise_interface_raw(kernel, thread_id),
         FsdmgrImport::FsdmgrAsyncEnterVolume => fsdmgr_async_enter_volume_raw(
             kernel,
             memory,
@@ -11930,6 +11932,7 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
 
 fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
     match ordinal {
+        2 => Some(FsdmgrImport::FsdmgrAdvertiseInterface),
         3 => Some(FsdmgrImport::FsdmgrCacheIoControl),
         4 => Some(FsdmgrImport::FsdmgrCachedRead),
         5 => Some(FsdmgrImport::FsdmgrCachedWrite),
@@ -11977,6 +11980,7 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
 
 fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
     match normalize_name(name).as_str() {
+        "fsdmgr_advertiseinterface" => Some(FsdmgrImport::FsdmgrAdvertiseInterface),
         "fsdmgr_asyncentervolume" => Some(FsdmgrImport::FsdmgrAsyncEnterVolume),
         "fsdmgr_asyncexitvolume" => Some(FsdmgrImport::FsdmgrAsyncExitVolume),
         "fsdmgr_cacheiocontrol" => Some(FsdmgrImport::FsdmgrCacheIoControl),
@@ -12029,6 +12033,13 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
 fn fsdmgr_cache_status_raw(kernel: &mut CeKernel, thread_id: u32, status: u32) -> u32 {
     kernel.threads.set_last_error(thread_id, status);
     status
+}
+
+fn fsdmgr_advertise_interface_raw(kernel: &mut CeKernel, thread_id: u32) -> u32 {
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    0
 }
 
 fn fsdmgr_volume_util_status_raw(kernel: &mut CeKernel, thread_id: u32, disk_ptr: u32) -> u32 {

@@ -773,7 +773,8 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
         ImportBy::Ordinal(ordinal) => {
             matches!(
                 u32::from(*ordinal),
-                3 | 4
+                2 | 3
+                    | 4
                     | 5
                     | 6
                     | 7
@@ -1207,6 +1208,11 @@ mod tests {
                 ImportThunk {
                     thunk_rva: 0x2074,
                     iat_rva: 0x3074,
+                    import: ImportBy::Ordinal(2),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2078,
+                    iat_rva: 0x3078,
                     import: ImportBy::Name {
                         hint: 0,
                         name: "FSEXT_UnsupportedStorageApi".to_owned(),
@@ -1224,8 +1230,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(table.len(), 29);
-        for index in 0..29 {
+        assert_eq!(table.len(), 30);
+        for index in 0..30 {
             let iat = 0x3000 + index * 4;
             assert_eq!(
                 u32::from_le_bytes(mapped[iat..iat + 4].try_into().unwrap()),
@@ -1233,7 +1239,7 @@ mod tests {
             );
         }
         assert_eq!(
-            u32::from_le_bytes(mapped[0x3074..0x3078].try_into().unwrap()),
+            u32::from_le_bytes(mapped[0x3078..0x307c].try_into().unwrap()),
             0
         );
         assert_eq!(
@@ -1438,6 +1444,80 @@ mod tests {
                 .as_deref(),
             Some("FSDMGR_ParseSecurityDescriptor")
         );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 29)
+                .unwrap()
+                .ordinal,
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn fsdmgr_advertise_interface_import_matches_coredll_stub() {
+        const ERROR_NOT_SUPPORTED: u32 = 50;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_AdvertiseInterface".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(2),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let guid_ptr = 0x1000_0000;
+        let empty_name_ptr = 0x1000_0100;
+        memory.map_wide_z(empty_name_ptr, "");
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [guid_ptr, empty_name_ptr, 1],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [guid_ptr, 0, 0],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
     }
 
     #[test]

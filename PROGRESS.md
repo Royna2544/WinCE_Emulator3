@@ -23,6 +23,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   subwindows, while the top owned `0x20008` splash popup remains visible and no
   later hide/demote trace for that popup has been observed.
 - `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
+  `FSDMGR_AdvertiseInterface @2` imports now patch through the normal import
+  trap table and fail closed through the existing coredll `AdvertiseInterface`
+  stub (`FALSE`/`ERROR_NOT_SUPPORTED`), matching the CE wrapper path while real
+  device-interface advertisement publication remains open.
+- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
   `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
   `FSDMGR_GetRegistryValue @20` imports now patch through the normal import
   trap table and fail closed with CE-style missing-registry output clearing
@@ -4885,3 +4890,10 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored,
   and Cargo still emits the existing unused-code warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: fsdmgr import traps now cover
+  CE `FSDMGR_AdvertiseInterface @2` from `fsdmgr.def`/`fsdmgrapi.cpp`. The
+  direct FSDMGR import resolves by name and ordinal and currently matches the
+  emulator's coredll `AdvertiseInterface` fail-closed surface
+  (`FALSE`/`ERROR_NOT_SUPPORTED`), while real device-interface advertisement
+  publication remains queued.
