@@ -26568,6 +26568,7 @@ fn clone_bitmap_for_icon<M: CoredllGuestMemory>(
     );
     if let Some(clone_bitmap) = kernel.resources.bitmap_mut(clone) {
         clone_bitmap.color_table = source.color_table;
+        clone_bitmap.alpha_mask = source.alpha_mask;
     }
     Some((clone, true))
 }
@@ -27837,6 +27838,7 @@ fn clone_bitmap_for_image_list<M: CoredllGuestMemory>(
     );
     if let Some(clone_bitmap) = kernel.resources.bitmap_mut(clone) {
         clone_bitmap.color_table = source.color_table;
+        clone_bitmap.alpha_mask = source.alpha_mask;
     }
     Some(clone)
 }
@@ -30226,6 +30228,14 @@ fn create_bitmap_from_dib_bytes_with_color_usage<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
+    let Some(alpha_mask) =
+        dib_alpha_mask_from_bytes(bytes, header_size, compression, header.bits_pixel)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
     let color_table = read_dib_color_table_from_bytes(
         bytes,
         header_size,
@@ -30294,6 +30304,9 @@ fn create_bitmap_from_dib_bytes_with_color_usage<M: CoredllGuestMemory>(
         && let Some(object) = kernel.resources.bitmap_mut(bitmap)
     {
         object.color_table = color_table;
+    }
+    if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
+        object.alpha_mask = alpha_mask;
     }
     bitmap
 }
@@ -30492,6 +30505,24 @@ fn dib_rgb_masks_from_bytes(
     }
 }
 
+fn dib_alpha_mask_from_bytes(
+    bytes: &[u8],
+    header_size: u32,
+    compression: u32,
+    bits_pixel: u16,
+) -> Option<Option<u32>> {
+    if compression != BI_ALPHABITFIELDS || !matches!(bits_pixel, 16 | 32) {
+        return Some(None);
+    }
+    let mask_offset = if header_size >= 56 {
+        40usize
+    } else {
+        header_size as usize
+    };
+    let mask_bytes = bytes.get(mask_offset..mask_offset.checked_add(16)?)?;
+    Some(Some(read_le_u32(mask_bytes, 12)?))
+}
+
 fn read_dib_color_table_from_bytes(
     bytes: &[u8],
     header_size: u32,
@@ -30604,6 +30635,32 @@ fn dib_rgb_masks<M: CoredllGuestMemory>(
         }
         _ => None,
     }
+}
+
+fn dib_alpha_mask<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    info_ptr: u32,
+    header_size: u32,
+    compression: u32,
+    bits_pixel: u16,
+) -> Option<Option<u32>> {
+    if compression != BI_ALPHABITFIELDS || !matches!(bits_pixel, 16 | 32) {
+        return Some(None);
+    }
+    let mask_bytes = if header_size >= 56 {
+        read_guest_bytes(kernel, memory, thread_id, info_ptr.wrapping_add(40), 16)?
+    } else {
+        read_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add(header_size),
+            16,
+        )?
+    };
+    Some(Some(read_le_u32(&mask_bytes, 12)?))
 }
 
 fn read_dib_color_table<M: CoredllGuestMemory>(
@@ -30775,7 +30832,13 @@ fn get_object_w_raw<M: CoredllGuestMemory>(
                 b.extend_from_slice(&dib_height.to_le_bytes());
                 b.extend_from_slice(&bmp.planes.to_le_bytes());
                 b.extend_from_slice(&bmp.bits_pixel.to_le_bytes());
-                let compression = if bmp.rgb_masks.is_some() { 3u32 } else { 0u32 };
+                let compression = if bmp.alpha_mask.is_some() {
+                    BI_ALPHABITFIELDS
+                } else if bmp.rgb_masks.is_some() {
+                    BI_BITFIELDS
+                } else {
+                    BI_RGB
+                };
                 b.extend_from_slice(&compression.to_le_bytes());
                 let size_image = (bmp.width_bytes.max(0) as u32).saturating_mul(bmp.height as u32);
                 b.extend_from_slice(&size_image.to_le_bytes());
@@ -36235,6 +36298,23 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
             return 0;
         }
     };
+    let alpha_mask = match dib_alpha_mask(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+    ) {
+        Some(mask) => mask,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+    };
     let color_table = read_dib_color_table(
         memory,
         info_ptr,
@@ -36356,6 +36436,7 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
         object.dib_section = true;
         object.section_handle = section;
         object.section_offset = offset;
+        object.alpha_mask = alpha_mask;
     }
     bitmap
 }
@@ -39417,8 +39498,16 @@ fn alpha_from_src_bitmap(
     let x = x as usize;
     let row_start = row.checked_mul(bitmap.width_bytes as usize)?;
     let offset = row_start.checked_add(x.checked_mul(4)?)?;
-    // 32-bit CE bitmap layout: [B, G, R, A] or just [B,G,R,0xff]
-    bytes.get(offset + 3).copied()
+    let pixel = bytes.get(offset..offset + 4)?;
+    if let Some(alpha_mask) = bitmap.alpha_mask {
+        component_from_mask(
+            u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]),
+            alpha_mask,
+        )
+    } else {
+        // 32-bit CE bitmap layout: [B, G, R, A] or just [B,G,R,0xff]
+        Some(pixel[3])
+    }
 }
 
 fn mask_blt_raw<M: CoredllGuestMemory>(
@@ -40196,6 +40285,7 @@ fn read_dib_source<M: CoredllGuestMemory>(
                 planes: header.planes,
                 bits_pixel: header.bits_pixel,
                 rgb_masks: None,
+                alpha_mask: None,
                 color_table,
                 bits_ptr,
                 bits_owned: false,
@@ -40216,6 +40306,15 @@ fn read_dib_source<M: CoredllGuestMemory>(
         compression,
         header.bits_pixel,
     )?;
+    let alpha_mask = dib_alpha_mask(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+    )?;
     let bytes = read_guest_bytes(kernel, memory, thread_id, bits_ptr, byte_count)?;
     Some((
         crate::ce::resource::BitmapObject {
@@ -40227,6 +40326,7 @@ fn read_dib_source<M: CoredllGuestMemory>(
             planes: header.planes,
             bits_pixel: header.bits_pixel,
             rgb_masks,
+            alpha_mask,
             color_table,
             bits_ptr,
             bits_owned: false,
@@ -40941,6 +41041,11 @@ fn write_bitmap_pixel_rgba<M: CoredllGuestMemory>(
                 else {
                     return Ok(());
                 };
+                let raw = if let Some(alpha_mask) = bitmap.alpha_mask {
+                    raw | component_to_mask(alpha, alpha_mask).unwrap_or(0)
+                } else {
+                    raw
+                };
                 memory.write_bytes(addr, &raw.to_le_bytes())
             } else {
                 memory.write_bytes(addr, &[blue, green, red, alpha])
@@ -41185,9 +41290,15 @@ fn bitmap_pixel_alpha_from_memory<M: CoredllGuestMemory>(
     let addr = bitmap
         .bits_ptr
         .wrapping_add(row.saturating_mul(bitmap.width_bytes as u32))
-        .wrapping_add(x as u32 * 4)
-        .wrapping_add(3);
-    memory.read_u8(addr).ok()
+        .wrapping_add(x as u32 * 4);
+    if let Some(alpha_mask) = bitmap.alpha_mask {
+        let mut bytes = [0u8; 4];
+        memory.read_bytes(addr, &mut bytes).ok()?;
+        let raw = u32::from_le_bytes(bytes);
+        component_from_mask(raw, alpha_mask)
+    } else {
+        memory.read_u8(addr.wrapping_add(3)).ok()
+    }
 }
 
 fn bitmap_pattern_bytes<M: CoredllGuestMemory>(

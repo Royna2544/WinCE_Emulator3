@@ -15,6 +15,12 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `src/ce/resource.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw `CreateDIBSection` now stores the fourth `BI_ALPHABITFIELDS` mask on
+  bitmap objects, preserves it across icon/image-list bitmap clones, reports
+  `BI_ALPHABITFIELDS` in `GetObjectW(DIBSECTION)`, and uses the stored mask for
+  32 bpp selected-DIB/framebuffer `AlphaBlend(AC_SRC_ALPHA)` source alpha
+  instead of assuming byte-three alpha.
 - `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
   `CreateDIBSection` now accepts the CE alpha stress module's 16 bpp
   `BI_ALPHABITFIELDS` 4-4-4-4 layout, skips the fourth alpha mask before pixel

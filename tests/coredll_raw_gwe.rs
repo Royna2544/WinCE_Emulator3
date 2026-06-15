@@ -10303,6 +10303,116 @@ fn coredll_raw_alpha_blend_accepts_alpha_bitfields_dib_section_source() -> Resul
 }
 
 #[test]
+fn coredll_raw_alpha_blend_uses_alpha_bitfields_alpha_mask() -> Result<()> {
+    fn blend_function(source_alpha: u8) -> u32 {
+        (1u32 << 24) | (u32::from(source_alpha) << 16)
+    }
+
+    const BI_ALPHABITFIELDS: u32 = 6;
+    const DIB_RGB_COLORS: u32 = 0;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 1, 1);
+
+    let src_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+    let info = 0x2_8000;
+    let bits_out = 0x2_8100;
+    memory.map_bytes(info, 56);
+    memory.map_words(bits_out, 1);
+    let mut header = [0u8; 56];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&1i32.to_le_bytes());
+    header[8..12].copy_from_slice(&(-1i32).to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&32u16.to_le_bytes());
+    header[16..20].copy_from_slice(&BI_ALPHABITFIELDS.to_le_bytes());
+    header[32..36].copy_from_slice(&4u32.to_le_bytes());
+    header[40..44].copy_from_slice(&0x0000_ff00u32.to_le_bytes());
+    header[44..48].copy_from_slice(&0x00ff_0000u32.to_le_bytes());
+    header[48..52].copy_from_slice(&0xff00_0000u32.to_le_bytes());
+    header[52..56].copy_from_slice(&0x0000_00ffu32.to_le_bytes());
+    memory.write_bytes(info, &header);
+    memory.write_word(info, 40);
+    memory.write_word(info + 16, BI_ALPHABITFIELDS);
+    memory.write_word(info + 32, 4);
+
+    let src_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_DIBSECTION,
+        [src_dc, info, DIB_RGB_COLORS, bits_out, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => {
+            panic!("CreateDIBSection(BI_ALPHABITFIELDS low-alpha) returned unexpected: {other:?}")
+        }
+    };
+    assert_ne!(src_bitmap, 0);
+    let object = kernel.resources.bitmap(src_bitmap).expect("bitmap object");
+    assert_eq!(
+        object.rgb_masks,
+        Some([0x0000_ff00, 0x00ff_0000, 0xff00_0000])
+    );
+    assert_eq!(object.alpha_mask, Some(0x0000_00ff));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [src_dc, src_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    let src_bits = memory.read_u32(bits_out)?;
+    memory.write_bytes(src_bits, &[0x80, 0x00, 0x80, 0x00]); // alpha low byte, premultiplied green
+    write_rgb565(&mut memory, dst_bits, dst_stride, 0, 0, 0xf800); // red
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ALPHA_BLEND,
+            [dst_dc, 0, 0, 1, 1, src_dc, 0, 0, 1, 1, blend_function(0xff)],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0x7c00);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_alpha_blend_matches_ce_per_pixel_alpha_32bpp_rows() -> Result<()> {
     fn blend_function(source_alpha: u8) -> u32 {
         (1u32 << 24) | (u32::from(source_alpha) << 16)

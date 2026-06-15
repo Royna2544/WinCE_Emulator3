@@ -2411,11 +2411,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     allocating backing storage or writing the output bits pointer.
   - CE `STRESS\MODULES\ALPHA\alpha.cpp::CreateAlphaDIBSection` creates
     `BI_ALPHABITFIELDS` DIB sections with four masks for alpha blending and
-    stress BitBlt coverage. Raw `CreateDIBSection` now accepts the 16 bpp
-    4-4-4-4 and 32 bpp 8-8-8-8 variants, reads the RGB masks, skips the fourth
-    alpha mask before pixel storage, renders the 16 bpp source through ordinary
-    `BitBlt`, and preserves the high-byte alpha for
-    `AlphaBlend(AC_SRC_ALPHA)` selected-DIB sources.
+    stress BitBlt coverage. CE `verify.cpp` and GDIPRINT `global.cpp` also
+    enumerate RGB/BGR alpha-bitfield masks, and CE SDK `wingdi.h` defines
+    `BI_ALPHABITFIELDS` as the four-mask bitmap-compression value. Raw
+    `CreateDIBSection` now accepts the 16 bpp 4-4-4-4 and 32 bpp 8-8-8-8
+    variants, reads the RGB masks, preserves the fourth alpha mask, skips the
+    mask table before pixel storage, renders the 16 bpp source through ordinary
+    `BitBlt`, reports `BI_ALPHABITFIELDS` through `GetObjectW(DIBSECTION)`,
+    and lets selected-DIB/framebuffer `AlphaBlend(AC_SRC_ALPHA)` read 32 bpp
+    per-pixel alpha from the stored alpha mask instead of assuming high-byte
+    alpha.
   - The same CE-supported DIB bit-depth set is now shared by raw direct-DIB
     `StretchDIBits`/`SetDIBitsToDevice` source parsing, so unsupported caller
     DIB depths fail before rendering into selected DIBs or framebuffers.
