@@ -482,7 +482,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `IOCTL_DISK_GET_STORAGEID` plus the 68-byte `PowerTimings` structure used
     by `IOCTL_DISK_GETPMTIMINGS`; `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\BLOCK\ATAPI\atapipm.cpp`
     treats that power-timing buffer as an input/output payload whose leading
-    `dwSize` must cover the full structure. `diskio.h` also defines the
+    `dwSize` must cover the full structure. `diskio.h` also defines
+    `IOCTL_DISK_FORMAT_VOLUME` and `IOCTL_DISK_SCAN_VOLUME` as FATFS volume
+    controls, and `common.reg` ties `FormatTfat`/`FormatExfat` to auto-format
+    and `IOCTL_DISK_FORMAT_VOLUME`. `diskio.h` also defines the
     552-byte `DISK_COPY_EXTERNAL` header and trailing `SECTOR_LIST_ENTRY`
     array used by `IOCTL_DISK_COPY_EXTERNAL_START` and
     `IOCTL_DISK_COPY_EXTERNAL_COMPLETE`; DOSPART `part.cpp`
@@ -505,7 +508,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `GETPMTIMINGS`, validates the exact `DELETE_SECTOR_INFO` payload size for
     `SET_SECURE_WIPE_FLAG` without erasing, clears sparse sectors for
     secure-wipe and delete-sector requests, clears the synthetic disk for
-    format-media requests, and treats initialized and flush-cache as
+    format-media and format-volume requests, treats scan-volume as a validated
+    no-op, and treats initialized and flush-cache as
     successful basic disk IOCTLs. `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`
     defines `FSCTL_COPY_EXTERNAL_START`, `FSCTL_COPY_EXTERNAL_COMPLETE`, and
     the 536-byte `FILE_COPY_EXTERNAL` header; UDF's
@@ -529,9 +533,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for
     refresh/flush no-ops and host-backed unsupported-FSCTL no-touch failure.
     Remaining storage fidelity is physical block-driver backing, external
-    cache/filter DLL behavior, remaining specialized disk IOCTLs, real static
-    sector address mapping, real external-copy accelerator behavior, hardware
-    flash secure-wipe resume behavior, hardware power-state timing, and
+    cache/filter DLL behavior, remaining specialized disk IOCTLs, real FATFS
+    volume format/scan execution, real static sector address mapping, real
+    external-copy accelerator behavior, hardware flash secure-wipe resume
+    behavior, hardware power-state timing, and
     mounted-FSD `FsIoControl` hook forwarding beyond the host-backed
     unsupported stub.
 

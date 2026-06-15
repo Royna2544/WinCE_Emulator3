@@ -110,6 +110,8 @@ const DISK_IOCTL_SETINFO: u32 = 5;
 const DISK_IOCTL_INITIALIZED: u32 = 4;
 const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
 const DISK_IOCTL_GETNAME: u32 = 9;
+const IOCTL_DISK_FORMAT_VOLUME: u32 = 0x0007_0220;
+const IOCTL_DISK_SCAN_VOLUME: u32 = 0x0007_0224;
 const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
 const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
 const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
@@ -12491,6 +12493,16 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
         }
         DISK_IOCTL_FORMAT_MEDIA | IOCTL_DISK_FORMAT_MEDIA => {
             let status = kernel.fsdmgr_format_disk(disk_ptr);
+            kernel.threads.set_last_error(thread_id, status);
+            status == 0
+        }
+        IOCTL_DISK_FORMAT_VOLUME => {
+            let status = kernel.fsdmgr_format_disk(disk_ptr);
+            kernel.threads.set_last_error(thread_id, status);
+            status == 0
+        }
+        IOCTL_DISK_SCAN_VOLUME => {
+            let status = kernel.fsdmgr_disk_io_control_status(disk_ptr, ioctl);
             kernel.threads.set_last_error(thread_id, status);
             status == 0
         }

@@ -2312,6 +2312,8 @@ mod tests {
     fn fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info() {
         const DISK_IOCTL_GETINFO: u32 = 1;
         const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
+        const IOCTL_DISK_FORMAT_VOLUME: u32 = 0x0007_0220;
+        const IOCTL_DISK_SCAN_VOLUME: u32 = 0x0007_0224;
         const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
         const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
         const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
@@ -2965,6 +2967,88 @@ mod tests {
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
                 [disk_ptr, 11, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert!(read_back.iter().all(|byte| *byte == 0));
+
+        sector_bytes[..17].copy_from_slice(b"scan-volume-keeps");
+        memory.map_bytes(write_sector_ptr, &sector_bytes);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, 14, 1, write_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_SCAN_VOLUME,
+                    0,
+                    0,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 14, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert_eq!(&read_back[..17], b"scan-volume-keeps");
+
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_FORMAT_VOLUME,
+                    0,
+                    0,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 14, 1, read_sector_ptr, 512],
             ),
             Some(0)
         );

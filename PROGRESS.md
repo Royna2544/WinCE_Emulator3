@@ -4925,3 +4925,9 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored,
   and Cargo still emits the existing unused-code warnings.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: direct
+  FSDMGR disk IOCTL handling now recognizes CE `IOCTL_DISK_FORMAT_VOLUME` and
+  `IOCTL_DISK_SCAN_VOLUME` from `diskio.h`. Synthetic format-volume clears
+  sparse sectors like the existing format-media path, scan-volume succeeds as a
+  no-op, and real FATFS utility execution remains queued.
