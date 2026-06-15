@@ -4177,3 +4177,14 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   MIPSII fixture because that toolchain is not configured, and Cargo still
   emits the existing unused-code warnings plus the recurring
   `target\debug\incremental` finalize access-denied note.
+- `tests/coredll_raw_gwe.rs`: selected-DIB `Rectangle` and `RoundRect` now
+  have CE `draw.cpp::ShapeColorTest`-style `R2_XORPEN` outline coverage with a
+  `NULL_BRUSH`, proving outline pixels combine the selected pen with existing
+  destination pixels while interiors remain untouched.
+- Focused validation after the selected-DIB `Rectangle`/`RoundRect` ROP2 slice:
+  `cargo fmt --check` and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  coredll_raw_rectangle_and_roundrect_apply_rop2_xorpen_on_selected_memory_dib`
+  passed. Cargo still emits the existing unused-code warnings and recurring
+  `target\debug\incremental` finalize access-denied note, but the test command
+  returned success.

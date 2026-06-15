@@ -3311,6 +3311,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     normalized selected-DIB shape rectangles by the stored viewport plus window
     origin before fill/outline/clipping work, with zero-rounding `RoundRect`
     still routed through the shared `Rectangle` implementation.
+  - `draw.cpp::ShapeColorTest(ERectangle/ERoundRect)` verifies selected pens
+    obey `SetROP2`; Rust now covers selected-DIB `Rectangle`/`RoundRect` outline
+    pixels with `R2_XORPEN` over a nonzero destination while `NULL_BRUSH` keeps
+    interiors untouched.
 
 - CE GDI miscellaneous draw validation authority:
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
