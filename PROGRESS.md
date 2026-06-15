@@ -4266,3 +4266,20 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored
   because that toolchain is not configured, and Cargo still emits the existing
   unused-code warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `GetPixel` now reads
+  selected memory-DIB and framebuffer pixels instead of returning unconditional
+  black, and the CE `draw.cpp::DrawEdgeTest2/3` regression verifies
+  `BF_MIDDLE | BF_RECT` fills the center with `COLOR_BTNFACE` while
+  `BF_FLAT | BF_RECT` preserves a white center.
+- Focused validation after the `DrawEdgeTest2/3` and `GetPixel` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_draw_edge_matches_ce_middle_and_flat_center_pixels`
+  passed. Cargo still emits the existing unused-code warnings.
+- Broader validation after the `DrawEdgeTest2/3` source-reference refresh:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`,
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured, and Cargo still emits the existing
+  unused-code warnings.
