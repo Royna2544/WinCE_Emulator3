@@ -4716,3 +4716,26 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored because that toolchain is not configured, and Cargo
   still emits the existing unused-code warnings.
+- `src/ce/coredll.rs`, `src/ce/kernel.rs`, `tests/coredll_raw_gwe.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`:
+  raw `ExtEscape` now covers the DeviceEmulator display
+  `SETBACKLIGHT`/`GETBACKLIGHT` escapes from CE `display_escapes.h` and
+  `s3c2410x_lcd.cpp`, with local BOOL state, fixed four-byte input/output
+  buffer validation, and invalid-size no-touch coverage.
+- Focused validation after the DeviceEmulator backlight `ExtEscape` slice:
+  `cargo fmt --check` and `$env:CARGO_INCREMENTAL='0'; cargo test -j 1
+  --features unicorn,trace,win32-desktop
+  coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- `src/emulator/types.rs` and `src/emulator/unicorn.rs`: preserved the sender
+  thread id on archived `UnicornWndProcReturn` records so orphaned
+  SendMessage-owned WNDPROC returns can keep their send-depth owner protected
+  during cleanup, and fixed the newly required initializers/predicate parsing
+  so the full feature build stays green.
+- Full validation after the DeviceEmulator backlight `ExtEscape` slice and
+  overlapping WNDPROC send-depth fix: `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and Cargo
+  still emits the existing unused-code warnings.

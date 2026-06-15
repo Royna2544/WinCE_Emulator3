@@ -2150,11 +2150,18 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn clear_orphaned_send_depths(&mut self, kernel: &mut CeKernel) -> bool {
-        let protected_threads = self
+        let mut protected_threads = self
             .pending_wndproc_returns
             .iter()
             .filter_map(|pending| pending.send_thread_id)
             .collect::<Vec<_>>();
+        protected_threads.extend(self.orphaned_wndproc_returns.iter().filter_map(|record| {
+            matches!(record.source, "SendMessageW" | "SendMessageTimeout")
+                .then_some(record.send_thread_id)
+                .flatten()
+        }));
+        protected_threads.sort_unstable();
+        protected_threads.dedup();
         let cleared = kernel
             .gwe
             .clear_orphaned_send_depths_excluding(&protected_threads);
@@ -5945,6 +5952,7 @@ impl UnicornMips {
                             result,
                             live_fp: Some(live_fp),
                             caller_fp,
+                            send_thread_id: callout.send_thread_id,
                             class_name: callout.class_name.clone(),
                         },
                     );
@@ -27443,6 +27451,7 @@ fn archive_removed_wndproc_callouts(
             result: callout.api_result.unwrap_or(0),
             live_fp: None,
             caller_fp,
+            send_thread_id: callout.send_thread_id,
             class_name: callout.class_name.clone(),
         });
     }
@@ -34064,6 +34073,7 @@ fn handle_create_window_return_stub<D>(
                     result,
                     live_fp: None,
                     caller_fp: None,
+                    send_thread_id: None,
                     class_name: callout.class_name.clone(),
                 },
             );
@@ -34113,6 +34123,7 @@ fn handle_create_window_return_stub<D>(
                     result,
                     live_fp: None,
                     caller_fp: None,
+                    send_thread_id: None,
                     class_name: callout.class_name.clone(),
                 },
             );
@@ -34166,42 +34177,53 @@ fn recover_orphaned_wndproc_return_stub<D>(
     use unicorn_engine::RegisterMIPS;
 
     let current_fp = read_mips_reg(uc, RegisterMIPS::FP);
-    let returns = last_wndproc_returns.borrow();
-    let record = returns
+    let mut returns = last_wndproc_returns.borrow_mut();
+    let record_index = returns
         .iter()
+        .enumerate()
         .rev()
-        .find(|record| {
-            record.return_pc != 0
+        .find_map(|(index, record)| {
+            let matches_frame = record.return_pc != 0
                 && record.return_pc != WNDPROC_RETURN_STUB_ADDR
-                && wndproc_return_frame_matches(record, current_fp)
-        })
-        .cloned();
-    let record =
-        if let Some(record) = record {
-            record
-        } else {
-            let Some(newest_valid) = returns.iter().rev().find(|record| {
-                record.return_pc != 0 && record.return_pc != WNDPROC_RETURN_STUB_ADDR
-            }) else {
-                return false;
-            };
-            if orphaned_call_window_proc_return_can_recover_without_frame(uc, newest_valid) {
-                newest_valid.clone()
-            } else {
-                tracing::warn!(
-                    target: "ce.gwe",
-                    source = newest_valid.source,
-                    hwnd = format_args!("0x{:08x}", newest_valid.hwnd),
-                    msg = format_args!("0x{:08x}", newest_valid.msg),
-                    return_pc = format_args!("0x{:08x}", newest_valid.return_pc),
-                    current_fp = format_args!("0x{current_fp:08x}"),
-                    live_fp = ?newest_valid.live_fp.map(|fp| format!("0x{fp:08x}")),
-                    caller_fp = ?newest_valid.caller_fp.map(|fp| format!("0x{fp:08x}")),
-                    "refusing orphaned WNDPROC return recovery for mismatched frame"
-                );
-                return false;
-            }
+                && wndproc_return_frame_matches(record, current_fp);
+            matches_frame.then_some(index)
+        });
+    let record = if let Some(index) = record_index {
+        returns.remove(index)
+    } else {
+        let Some(newest_valid_index) =
+            returns
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, record)| {
+                    (record.return_pc != 0 && record.return_pc != WNDPROC_RETURN_STUB_ADDR)
+                        .then_some(index)
+                })
+        else {
+            return false;
         };
+        if orphaned_call_window_proc_return_can_recover_without_frame(
+            uc,
+            &returns[newest_valid_index],
+        ) {
+            returns.remove(newest_valid_index)
+        } else {
+            let newest_valid = &returns[newest_valid_index];
+            tracing::warn!(
+                target: "ce.gwe",
+                source = newest_valid.source,
+                hwnd = format_args!("0x{:08x}", newest_valid.hwnd),
+                msg = format_args!("0x{:08x}", newest_valid.msg),
+                return_pc = format_args!("0x{:08x}", newest_valid.return_pc),
+                current_fp = format_args!("0x{current_fp:08x}"),
+                live_fp = ?newest_valid.live_fp.map(|fp| format!("0x{fp:08x}")),
+                caller_fp = ?newest_valid.caller_fp.map(|fp| format!("0x{fp:08x}")),
+                "refusing orphaned WNDPROC return recovery for mismatched frame"
+            );
+            return false;
+        }
+    };
     drop(returns);
     let return_pc = import_callout_return_pc(record.return_pc, trampoline_jumps);
     let result = read_mips_reg(uc, RegisterMIPS::V0);
@@ -37504,6 +37526,7 @@ mod unicorn_tests {
             result: 0,
             live_fp: Some(frame),
             caller_fp: Some(frame),
+            send_thread_id: None,
             class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
         }]));
         uc.reg_write(RegisterMIPS::FP, u64::from(frame)).unwrap();
@@ -37541,6 +37564,7 @@ mod unicorn_tests {
             result: 0,
             live_fp: Some(archived_frame),
             caller_fp: Some(archived_frame),
+            send_thread_id: None,
             class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
         }]));
         uc.reg_write(RegisterMIPS::FP, u64::from(current_frame))
@@ -37583,6 +37607,7 @@ mod unicorn_tests {
             result: 0,
             live_fp: Some(0x3000_3800),
             caller_fp: None,
+            send_thread_id: None,
             class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
         }]));
         uc.reg_write(RegisterMIPS::FP, 0x7ffb_f8e0).unwrap();
@@ -37679,6 +37704,7 @@ mod unicorn_tests {
             result: 0,
             live_fp: Some(0x3004_a988),
             caller_fp: Some(0x3004_a988),
+            send_thread_id: None,
             class_name: None,
         }]));
         uc.reg_write(RegisterMIPS::FP, 0x3004_a988).unwrap();
@@ -37711,6 +37737,7 @@ mod unicorn_tests {
             result: 0,
             live_fp: Some(0x3004_a0a8),
             caller_fp: Some(0x3004_a0a8),
+            send_thread_id: None,
             class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
         }]));
         uc.reg_write(RegisterMIPS::FP, 0x3004_a988).unwrap();
@@ -38642,6 +38669,7 @@ mod unicorn_tests {
                 result: 0,
                 live_fp: None,
                 caller_fp: None,
+                send_thread_id: None,
                 class_name: None,
             },
             super::UnicornWndProcReturn {
@@ -38656,6 +38684,7 @@ mod unicorn_tests {
                 result: 0,
                 live_fp: None,
                 caller_fp: None,
+                send_thread_id: None,
                 class_name: None,
             },
         ];

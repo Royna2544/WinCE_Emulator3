@@ -491,6 +491,8 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     const DRVESC_SAVEVIDEOMEM: u32 = 6501;
     const DRVESC_RESTOREVIDEOMEM: u32 = 6502;
     const DRVESC_GETRAWFRAMEBUFFER: u32 = 0x0002_0001;
+    const SETBACKLIGHT: u32 = 100_000;
+    const GETBACKLIGHT: u32 = 100_001;
     const DMDO_0: u32 = 0;
     const DMDO_90: u32 = 1;
     const DMDO_180: u32 = 2;
@@ -515,11 +517,15 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     let gamma_update_ptr = 0x3000_3000;
     let gamma_out = 0x3000_3010;
     let rotation_out = 0x3000_3020;
+    let backlight_ptr = 0x3000_3030;
+    let backlight_out = 0x3000_3040;
     memory.map_words(query_ptr, 1);
     memory.map_words(dispperf_out, DISPPERF_TIMING_TABLE_SIZE / 4);
     memory.map_words(gamma_update_ptr, 1);
     memory.map_words(gamma_out, 1);
     memory.map_words(rotation_out, 1);
+    memory.map_words(backlight_ptr, 1);
+    memory.map_words(backlight_out, 1);
 
     let hdc = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -610,6 +616,135 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     ));
     assert_eq!(memory.read_u32(gamma_out)?, 2500);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(backlight_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, GETBACKLIGHT, 0, 0, 4, backlight_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(backlight_out)?,
+        1,
+        "DeviceEmulator display starts with backlight enabled"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(backlight_ptr, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, SETBACKLIGHT, 4, backlight_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(backlight_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, GETBACKLIGHT, 0, 0, 4, backlight_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(backlight_out)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(backlight_ptr, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, SETBACKLIGHT, 4, backlight_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(backlight_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, GETBACKLIGHT, 0, 0, 4, backlight_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(backlight_out)?, 1);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(backlight_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, GETBACKLIGHT, 0, 0, 2, backlight_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        memory.read_u32(backlight_out)?,
+        0xfeed_beef,
+        "GETBACKLIGHT invalid output size should not mutate caller storage"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, SETBACKLIGHT, 2, backlight_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

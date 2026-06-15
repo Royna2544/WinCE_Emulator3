@@ -36150,6 +36150,8 @@ const DRVESC_SETVIDEOPROTECTION: u32 = 6401;
 const DRVESC_GETVIDEOPROTECTION: u32 = 6402;
 const DRVESC_SAVEVIDEOMEM: u32 = 6501;
 const DRVESC_RESTOREVIDEOMEM: u32 = 6502;
+const SETBACKLIGHT: u32 = 100_000;
+const GETBACKLIGHT: u32 = 100_001;
 const DMDO_0: u32 = 0;
 const DMDO_90: u32 = 1;
 const DMDO_180: u32 = 2;
@@ -36213,6 +36215,10 @@ fn ext_escape_raw<M: CoredllGuestMemory>(
         drvesc_get_screen_rotation_raw(kernel, memory, thread_id, output_len, output_ptr)
     } else if escape == DRVESC_SETSCREENROTATION {
         drvesc_set_screen_rotation_raw(kernel, memory, thread_id, input_len, input_ptr)
+    } else if escape == SETBACKLIGHT {
+        set_backlight_raw(kernel, memory, thread_id, input_len, input_ptr)
+    } else if escape == GETBACKLIGHT {
+        get_backlight_raw(kernel, memory, thread_id, output_len, output_ptr)
     } else if is_privileged_display_escape(escape) {
         kernel
             .threads
@@ -36225,6 +36231,53 @@ fn ext_escape_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
         EXTESC_NOTSUPPORTED
     }
+}
+
+fn set_backlight_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    input_len: u32,
+    input_ptr: u32,
+) -> u32 {
+    if input_len != 4 || input_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return EXTESC_ERROR;
+    }
+    let Some(enabled) = read_guest_u32(kernel, memory, thread_id, input_ptr) else {
+        return EXTESC_ERROR;
+    };
+    kernel.set_display_backlight_enabled(enabled != 0);
+    kernel.threads.set_last_error(thread_id, 0);
+    EXTESC_SUPPORTED
+}
+
+fn get_backlight_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    output_len: u32,
+    output_ptr: u32,
+) -> u32 {
+    if output_len != 4 || output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return EXTESC_ERROR;
+    }
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        output_ptr,
+        u32::from(kernel.display_backlight_enabled()),
+    ) {
+        return EXTESC_ERROR;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    EXTESC_SUPPORTED
 }
 
 fn drvesc_get_gamma_value_raw<M: CoredllGuestMemory>(

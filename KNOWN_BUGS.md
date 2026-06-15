@@ -29,6 +29,9 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   the CE GPE `ddi_if.cpp` `cjIn`/`pvIn` ABI and `aablt.cpp` default/clamp
   range, and direct get/set screen-rotation payloads now use the CE
   VGAFLAT/SMI3DR packed supported-mask/current-mode ABI and `cjIn` mode value.
+  DeviceEmulator `SETBACKLIGHT`/`GETBACKLIGHT` payloads now round-trip local
+  BOOL state with the fixed four-byte buffer contract from `display_escapes.h`
+  and `s3c2410x_lcd.cpp`.
   The CE-sized `DISPPERF_EXTESC_*` payload contract now includes local nonzero
   GPE timing rows for raw `BitBlt`, `StretchBlt`, `PatBlt`, non-copy
   `MaskBlt`, CE `DrvTransparentBlt`-style `TransparentImage`, and explicit

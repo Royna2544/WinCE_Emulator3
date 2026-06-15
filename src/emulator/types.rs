@@ -565,6 +565,7 @@ pub struct UnicornWndProcReturn {
     pub result: u32,
     pub live_fp: Option<u32>,
     pub caller_fp: Option<u32>,
+    pub send_thread_id: Option<u32>,
     pub class_name: Option<String>,
 }
 

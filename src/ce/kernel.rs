@@ -149,6 +149,7 @@ pub struct CeKernel {
     fsdmgr_caches: Vec<Option<FsdmgrCacheEntry>>,
     display_gamma_value: u32,
     display_rotation: u32,
+    display_backlight_enabled: bool,
     display_perf_timings: Vec<DisplayPerfTiming>,
     display_perf_unhandled: u32,
     window_backing_stores: BTreeMap<u32, FramebufferBackingStore>,
@@ -832,6 +833,7 @@ impl CeKernel {
             fsdmgr_caches: Vec::new(),
             display_gamma_value: 2330,
             display_rotation: 0,
+            display_backlight_enabled: true,
             display_perf_timings: Vec::new(),
             display_perf_unhandled: 0,
             window_backing_stores: BTreeMap::new(),
@@ -856,6 +858,14 @@ impl CeKernel {
 
     pub fn set_display_rotation(&mut self, value: u32) {
         self.display_rotation = value;
+    }
+
+    pub fn display_backlight_enabled(&self) -> bool {
+        self.display_backlight_enabled
+    }
+
+    pub fn set_display_backlight_enabled(&mut self, enabled: bool) {
+        self.display_backlight_enabled = enabled;
     }
 
     pub fn clear_display_perf_timings(&mut self) {

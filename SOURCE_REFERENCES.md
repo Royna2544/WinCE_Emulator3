@@ -3445,6 +3445,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwingdi.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\dispperf.h`,
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`,
+  `C:\WINCE600\PLATFORM\DEVICEEMULATOR\SRC\INC\display_escapes.h`,
+  `C:\WINCE600\PLATFORM\DEVICEEMULATOR\SRC\DRIVERS\DISPLAY\LCD\s3c2410x_lcd.cpp`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\GPE\ddi_if.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\VGAFLAT\gpeflat.cpp`
   - `pwingdi.h` defines `EXTESC_NOTSUPPORTED`, `EXTESC_SUPPORTED`,
@@ -3461,7 +3463,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     payloads with `ddi_if.cpp`'s `cjIn` gamma value and `pvIn` BOOL-buffer ABI,
     the `aablt.cpp` 2330 default and 1000..3000 clamp range, CE VGAFLAT/SMI3DR
     direct get/set screen-rotation payloads with the packed supported-mask plus
-    current-mode output and `cjIn` mode input, and the CE-sized
+    current-mode output and `cjIn` mode input, DeviceEmulator
+    `SETBACKLIGHT`/`GETBACKLIGHT` payloads from `display_escapes.h` and
+    `s3c2410x_lcd.cpp` with fixed four-byte BOOL input/output buffers, and the
+    CE-sized
     `DISPPERF_EXTESC_GETSIZE`/`GETTIMING`/`CLEARTIMING`/`GETUNHANDLED` payload
     contract for raw `ExtEscape`, including local nonzero GPE timing rows for
     raw `BitBlt`, `StretchBlt`, `PatBlt`, non-copy `MaskBlt`,
