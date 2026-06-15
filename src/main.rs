@@ -353,6 +353,10 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
+        if cpu.clear_escaped_visible_message_callouts() {
+            reported_blocked_message_wait = false;
+            continue;
+        }
         if cpu.clear_orphaned_send_depths(kernel) {
             reported_blocked_message_wait = false;
             continue;
