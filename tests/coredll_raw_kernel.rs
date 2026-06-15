@@ -7145,6 +7145,44 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
         selected_dib_overlay, selected_dib_body,
         "system pseudo-icon selected-DIB overlay should be visibly distinct from the body"
     );
+    for handle in [
+        SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE,
+        SHELL_SYSTEM_IMAGE_LIST_HANDLE,
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_IMAGE_LIST_DESTROY,
+                [handle],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            0,
+            "destroying an SHGetFileInfo system image list should be a successful shell teardown"
+        );
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_ICON_SIZE,
+            [SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE, size_ptr, size_ptr + 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(size_ptr)?, 32);
+    assert_eq!(memory.read_i32(size_ptr + 4)?, 32);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     Ok(())
 }

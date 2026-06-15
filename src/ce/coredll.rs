@@ -27372,8 +27372,15 @@ fn image_list_create_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) ->
 }
 
 fn image_list_destroy_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    if is_shell_system_image_list_handle(handle) {
+        // CE shell code tears down shared SHGetFileInfo system HIMAGELISTs during shutdown.
+        // The emulator's fixed synthetic handles stay reusable, but the release succeeds.
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+
     let owned_bitmaps = image_list_owned_bitmap_handles(kernel, handle);
-    if !is_shell_system_image_list_handle(handle) && kernel.resources.destroy_image_list(handle) {
+    if kernel.resources.destroy_image_list(handle) {
         for bitmap in owned_bitmaps {
             delete_owned_bitmap(kernel, bitmap);
         }

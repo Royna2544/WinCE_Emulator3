@@ -1042,7 +1042,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     only when `SHGFI_SMALLICON` is present. Explorer `taskbar.cpp` obtains and
     destroys both empty-path large and small system image lists during taskbar
     cleanup. Raw `SHGetFileInfoW` now returns distinct large/small system-list
-    handles for those queries while still populating `SHFILEINFO.hIcon`.
+    handles for those queries while still populating `SHFILEINFO.hIcon`, and
+    raw `ImageList_Destroy` accepts the synthetic system handles as a
+    successful release while preserving the shared emulator fallback.
     File-backed `LoadImageW(..., IMAGE_BITMAP, LR_LOADFROMFILE)` now keeps the
     BMP pixel rows in CE heap-backed bitmap storage. Resource-backed
     `LoadImageW`/`LoadBitmapW` for RT_BITMAP DIB data also copies the resolved

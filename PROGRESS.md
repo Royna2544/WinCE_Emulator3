@@ -15,6 +15,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs` and `tests/coredll_raw_kernel.rs`: synthetic shell
+  system image-list handles returned from `SHGetFileInfoW` now accept
+  `ImageList_Destroy` as a successful CE shell teardown path for both large and
+  small lists, while preserving the fixed shared fallback handles for later
+  icon-size/query use.
 - `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `GetPixel` now
   reads selected memory-DIB and framebuffer pixels instead of returning
   unconditional black for valid HDCs. Raw `DrawEdge` coverage now verifies CE
