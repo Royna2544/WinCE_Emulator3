@@ -3825,6 +3825,205 @@ fn coredll_raw_polyline_and_polygon_apply_viewport_origin_on_selected_dib() -> R
 }
 
 #[test]
+fn coredll_raw_polygon_and_polyline_respect_selected_clip_region_on_memory_dib() -> Result<()> {
+    const SIMPLEREGION: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let (poly_dc, poly_bits, poly_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 12, 8);
+    let polygon_points = 0x1_0200;
+    memory.map_bytes(polygon_points, 32);
+    for (index, (x, y)) in [(0, 0), (11, 0), (11, 7), (0, 7)].iter().enumerate() {
+        memory.write_point(polygon_points + index as u32 * 8, *x, *y);
+    }
+
+    let poly_clip = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [4, 2, 8, 6],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(polygon clip) did not return a region: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_CLIP_RGN,
+            [poly_dc, poly_clip],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SIMPLEREGION),
+            ..
+        }
+    ));
+
+    let red_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x0000_00ff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    let null_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [8],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(NULL_PEN) did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [poly_dc, red_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [poly_dc, null_pen],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYGON,
+            [poly_dc, polygon_points, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, poly_bits, poly_stride, 4, 2), 0xf800);
+    assert_eq!(rgb565_at(&memory, poly_bits, poly_stride, 7, 5), 0xf800);
+    assert_eq!(rgb565_at(&memory, poly_bits, poly_stride, 3, 3), 0x0000);
+    assert_eq!(rgb565_at(&memory, poly_bits, poly_stride, 8, 3), 0x0000);
+    assert_eq!(rgb565_at(&memory, poly_bits, poly_stride, 5, 1), 0x0000);
+    assert_eq!(rgb565_at(&memory, poly_bits, poly_stride, 5, 6), 0x0000);
+
+    let (line_dc, line_bits, line_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 12, 8);
+    let line_points = 0x1_0300;
+    memory.map_bytes(line_points, 16);
+    memory.write_point(line_points, 0, 3);
+    memory.write_point(line_points + 8, 11, 3);
+    let line_clip = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [4, 2, 8, 6],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(polyline clip) did not return a region: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_CLIP_RGN,
+            [line_dc, line_clip],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SIMPLEREGION),
+            ..
+        }
+    ));
+
+    let red_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PEN,
+        [0, 1, 0x0000_00ff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePen did not return a pen: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [line_dc, red_pen],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYLINE,
+            [line_dc, line_points, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, line_bits, line_stride, 4, 3), 0xf800);
+    assert_eq!(rgb565_at(&memory, line_bits, line_stride, 7, 3), 0xf800);
+    assert_eq!(rgb565_at(&memory, line_bits, line_stride, 3, 3), 0x0000);
+    assert_eq!(rgb565_at(&memory, line_bits, line_stride, 8, 3), 0x0000);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_shapes_apply_viewport_origin_on_selected_dib() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

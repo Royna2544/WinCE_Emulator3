@@ -4137,3 +4137,20 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   WNDPROC return stub without an enclosing pending frame, with focused
   validation from `cargo test -j 1 --features unicorn,trace,win32-desktop
   call_window_proc_declines_orphaned_wndproc_return_stub`.
+- `tests/coredll_raw_gwe.rs`: selected-DIB `Polygon` and `Polyline` now have
+  CE `draw.cpp::SimpleClipRgnTest0`-style clip-region containment coverage:
+  drawing spans outside a selected rectangular clip, and pixels immediately
+  outside the clip remain unchanged while in-clip pixels render.
+- Focused validation after the selected-DIB polygon/polyline clip-region slice:
+  `cargo fmt --check` and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  coredll_raw_polygon_and_polyline_respect_selected_clip_region_on_memory_dib`
+  passed. Cargo still emits the existing unused-code warnings and recurring
+  `target\debug\incremental` finalize access-denied note, but the test command
+  returned success.
+- Broader validation after the selected-DIB polygon/polyline clip-region slice:
+  `cargo check --features unicorn,trace,win32-desktop`, `git diff --check`,
+  and full `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
+  The full suite still ignores the eVC4 MIPSII fixture because that toolchain
+  is not configured, and Cargo still emits the existing unused-code warnings
+  plus the recurring `target\debug\incremental` finalize access-denied note.

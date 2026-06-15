@@ -3286,6 +3286,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     viewport-origin change and compares screen halves; Rust now applies
     `SetViewportOrgEx` origin translation to selected-DIB `Polygon`, `Polyline`,
     and `LineTo` pixels while keeping the logical current position unchanged.
+    `draw.cpp::SimpleClipRgnTest0(EPolygon/EPolyline)` selects a rectangular
+    clip region, draws long point lists that cross one pixel outside that clip,
+    and checks that polygon/polyline output remains contained by the clip box.
+    Rust now covers selected-DIB `Polygon` and `Polyline` rendering through a
+    selected clip region so pixels just outside the clip remain untouched.
 
 - CE GDI shape-HDC validation authority:
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
