@@ -4679,3 +4679,19 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored because that toolchain is not configured, and Cargo
   still emits the existing unused-code warnings.
+- `src/emulator/unicorn.rs`: direct same-thread `SendMessageW` WNDPROC cleanup
+  now keeps bounded nested callouts even when the saved frame has dispatched
+  from MFC into a helper DLL. The live iNavi trace matched this shape with
+  pending `0x5237` callouts and a stack delta inside
+  `WNDPROC_NESTED_STACK_GRACE_BYTES`, but the previous module check archived the
+  callout and forced orphaned return-stub recovery.
+- Validation after the direct-send WNDPROC cleanup slice: `cargo fmt`, focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop
+  direct_send_wndproc_cleanup_keeps_live_callout_until_return_pc --
+  --nocapture`, `cargo test -j 1 --features unicorn,trace,win32-desktop
+  fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info --
+  --nocapture`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  coredll_raw_msgwait_bad_handle_pointer_records_failed_msgwait --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings and
+  the intermittent Windows incremental-cache cleanup note.

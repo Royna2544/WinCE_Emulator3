@@ -117,6 +117,7 @@ const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
 const IOCTL_DISK_GETNAME: u32 = 0x0007_1c20;
 const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
 const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
+const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
 const IOCTL_DISK_COPY_EXTERNAL_START: u32 = 0x0007_1c58;
 const IOCTL_DISK_COPY_EXTERNAL_COMPLETE: u32 = 0x0007_1c5c;
 const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
@@ -12254,7 +12255,7 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
         0x0007_1c4c => {
             fsdmgr_disk_delete_sectors_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
         }
-        0x0007_1c54 => {
+        IOCTL_DISK_FLUSH_CACHE => {
             let status = kernel.fsdmgr_disk_io_control_status(disk_ptr, ioctl);
             kernel.threads.set_last_error(thread_id, status);
             status == 0

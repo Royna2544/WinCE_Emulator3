@@ -2293,7 +2293,9 @@ impl UnicornMips {
                             && sp <= pending_call_sp
                             && pending_call_sp < pending.return_sp
                             && pending_call_sp.wrapping_sub(sp) <= WNDPROC_NESTED_STACK_GRACE_BYTES
-                            && same_wndproc_module)
+                            && (same_wndproc_module
+                                || (pending.source == "SendMessageW"
+                                    && pending.send_restore.is_none())))
                 });
             if !keep {
                 removed_callouts.push(pending.clone());
@@ -22310,6 +22312,39 @@ mod wait_scheduler_tests {
         let mut cross_module_deep_regs = super::MipsGuestContext::zero();
         cross_module_deep_regs.regs[29] = 0x7ffd_dee8;
         cross_module_deep_regs.regs[31] = 0x6029_d828;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: 0x6029_d470,
+            regs: cross_module_deep_regs.clone(),
+        });
+        assert!(!scheduler.clear_orphaned_direct_send_callouts(&kernel));
+        assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
+        scheduler.pending_wndproc_returns.clear();
+
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "SendMessageTimeout",
+                hwnd: 0x0002_0004,
+                msg: 0x5237,
+                wparam: 0,
+                lparam: 0,
+                wndproc: 0x6004_f0f4,
+                return_pc,
+                return_sp: 0x7ffd_f578,
+                caller_regs: Some(super::MipsGuestContext::zero()),
+                class_name: None,
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: Some(1),
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: None,
+                clear_focus_after_return: None,
+            });
         scheduler.saved_context = Some(super::SavedCpuContext {
             pc: 0x6029_d470,
             regs: cross_module_deep_regs,

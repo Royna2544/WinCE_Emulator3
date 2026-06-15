@@ -2074,6 +2074,7 @@ mod tests {
         const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
         const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
         const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
+        const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
         const IOCTL_DISK_COPY_EXTERNAL_START: u32 = 0x0007_1c58;
         const IOCTL_DISK_COPY_EXTERNAL_COMPLETE: u32 = 0x0007_1c5c;
         const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
@@ -2304,6 +2305,29 @@ mod tests {
         assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
         assert_eq!(memory.word(sector_addr_ptr), 0xfeed_cafe);
         assert_eq!(memory.word(sector_addr_ptr + 4), 0xfeed_cafe);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_FLUSH_CACHE,
+                    0,
+                    0,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
         assert_eq!(memory.word(bytes_returned_ptr), 0);
 
         memory.map_word(copy_external_ptr, DISK_COPY_EXTERNAL_SIZE);
