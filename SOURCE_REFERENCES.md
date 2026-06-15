@@ -477,7 +477,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     treats that power-timing buffer as an input/output payload whose leading
     `dwSize` must cover the full structure. `diskio.h` also defines the
     552-byte `DISK_COPY_EXTERNAL` header and trailing `SECTOR_LIST_ENTRY`
-    array used by `IOCTL_DISK_COPY_EXTERNAL_START`; DOSPART `part.cpp`
+    array used by `IOCTL_DISK_COPY_EXTERNAL_START` and
+    `IOCTL_DISK_COPY_EXTERNAL_COMPLETE`; DOSPART `part.cpp`
     validates the fixed header, rewrites each sector-list start sector from
     partition-relative to disk-relative form, and forwards the payload to the
     block driver. DOSPART `part.cpp` wraps secure
@@ -489,7 +490,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     device info, and storage-id metadata, fills Ex result sector counts, handles
     direct disk SG read/write, validates `GET_SECTOR_ADDR` caller buffers before
     returning no-XIP `ERROR_NOT_SUPPORTED` without writing synthetic addresses,
-    validates `COPY_EXTERNAL_START` `DISK_COPY_EXTERNAL` headers and sector-list
+    validates `COPY_EXTERNAL_START`/`COMPLETE` `DISK_COPY_EXTERNAL` headers and sector-list
     entries before returning unsupported without touching caller buffers,
     returns a CE `PowerTimings`-sized zero timing snapshot for
     `GETPMTIMINGS`, validates the `DELETE_SECTOR_INFO` payload for
@@ -3023,7 +3024,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     no-touch failure behavior, `GET_SECTOR_ADDR` validation with
     no-XIP unsupported failure, `GETPMTIMINGS` zero timing snapshots,
     secure-wipe sparse-sector clearing, set-secure-wipe-flag validation/no-op
-    behavior, copy-external-start `DISK_COPY_EXTERNAL` validation/unsupported
+    behavior, copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
     for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL

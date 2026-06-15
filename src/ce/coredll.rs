@@ -118,6 +118,7 @@ const IOCTL_DISK_GETNAME: u32 = 0x0007_1c20;
 const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
 const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
 const IOCTL_DISK_COPY_EXTERNAL_START: u32 = 0x0007_1c58;
+const IOCTL_DISK_COPY_EXTERNAL_COMPLETE: u32 = 0x0007_1c5c;
 const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
 const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
 const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
@@ -12239,9 +12240,9 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
         IOCTL_DISK_GET_SECTOR_ADDR => fsdmgr_disk_get_sector_addr_raw(
             kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, out_ptr, out_bytes,
         ),
-        IOCTL_DISK_COPY_EXTERNAL_START => fsdmgr_disk_copy_external_start_raw(
-            kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes,
-        ),
+        IOCTL_DISK_COPY_EXTERNAL_START | IOCTL_DISK_COPY_EXTERNAL_COMPLETE => {
+            fsdmgr_disk_copy_external_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
+        }
         IOCTL_DISK_GETPMTIMINGS => {
             fsdmgr_disk_get_power_timings_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
         }
@@ -12370,7 +12371,7 @@ fn fsdmgr_disk_get_sector_addr_raw<M: CoredllGuestMemory>(
     false
 }
 
-fn fsdmgr_disk_copy_external_start_raw<M: CoredllGuestMemory>(
+fn fsdmgr_disk_copy_external_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     thread_id: u32,

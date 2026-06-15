@@ -5534,10 +5534,17 @@ impl UnicornMips {
         let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
         let trampoline_jumps_timeslice_hook = trampoline_jumps.clone();
+        let host_wall_clock_stop_timeslice_hook = Rc::clone(&host_wall_clock_stop);
         uc.add_block_hook(1, 0, move |uc, address, _size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
             scheduler_timeslice_counter_hook.set(counter);
             if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL == 0 {
+                scheduler_timeslice_pending_hook.set(true);
+            }
+            if live_pump
+                && host_wall_clock_limit
+                    .is_some_and(|limit| host_wall_clock_started.elapsed() >= limit)
+            {
                 scheduler_timeslice_pending_hook.set(true);
             }
             if !scheduler_timeslice_pending_hook.get() {
@@ -5611,6 +5618,22 @@ impl UnicornMips {
             let Some(context_pc) = context_pc else {
                 return;
             };
+            if live_pump
+                && host_wall_clock_limit
+                    .is_some_and(|limit| host_wall_clock_started.elapsed() >= limit)
+            {
+                *host_wall_clock_stop_timeslice_hook.borrow_mut() =
+                    Some(UnicornHostWallClockStop {
+                        pc: context_pc,
+                        ra: read_mips_reg(uc, RegisterMIPS::RA),
+                        sp: read_mips_reg(uc, RegisterMIPS::SP),
+                        instruction: read_unicorn_u32(uc, context_pc),
+                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                    });
+                let _ = uc.reg_write(RegisterMIPS::PC, u64::from(context_pc));
+                let _ = uc.emu_stop();
+                return;
+            }
             let active_thread_id = *current_thread_id_timeslice_hook.borrow();
             clear_orphaned_live_blocked_get_message(&blocked_get_message_timeslice_hook, unsafe {
                 &*kernel_ptr

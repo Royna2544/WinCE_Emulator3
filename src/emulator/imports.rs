@@ -2075,6 +2075,7 @@ mod tests {
         const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
         const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
         const IOCTL_DISK_COPY_EXTERNAL_START: u32 = 0x0007_1c58;
+        const IOCTL_DISK_COPY_EXTERNAL_COMPLETE: u32 = 0x0007_1c5c;
         const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
         const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
         const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
@@ -2313,55 +2314,66 @@ mod tests {
         memory.map_word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE + 12, 3);
         memory.map_word(copy_external_out_ptr, 0xfeed_cafe);
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
-        assert_eq!(
-            table.dispatch_trap(
-                &mut kernel,
-                &mut memory,
-                11,
-                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
-                [
-                    disk_ptr,
-                    IOCTL_DISK_COPY_EXTERNAL_START,
-                    copy_external_ptr,
-                    DISK_COPY_EXTERNAL_SIZE + 16,
-                    copy_external_out_ptr,
-                    4,
-                    bytes_returned_ptr,
-                    0,
-                ],
-            ),
-            Some(0)
-        );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
-        assert_eq!(memory.word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE), 31);
-        assert_eq!(
-            memory.word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE + 8),
-            41
-        );
-        assert_eq!(memory.word(copy_external_out_ptr), 0xfeed_cafe);
-        assert_eq!(memory.word(bytes_returned_ptr), 0);
+        for ioctl in [
+            IOCTL_DISK_COPY_EXTERNAL_START,
+            IOCTL_DISK_COPY_EXTERNAL_COMPLETE,
+        ] {
+            memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+            assert_eq!(
+                table.dispatch_trap(
+                    &mut kernel,
+                    &mut memory,
+                    11,
+                    IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                    [
+                        disk_ptr,
+                        ioctl,
+                        copy_external_ptr,
+                        DISK_COPY_EXTERNAL_SIZE + 16,
+                        copy_external_out_ptr,
+                        4,
+                        bytes_returned_ptr,
+                        0,
+                    ],
+                ),
+                Some(0)
+            );
+            assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+            assert_eq!(memory.word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE), 31);
+            assert_eq!(
+                memory.word(copy_external_ptr + DISK_COPY_EXTERNAL_SIZE + 8),
+                41
+            );
+            assert_eq!(memory.word(copy_external_out_ptr), 0xfeed_cafe);
+            assert_eq!(memory.word(bytes_returned_ptr), 0);
+        }
 
         memory.map_word(copy_external_ptr + 548, 12);
-        assert_eq!(
-            table.dispatch_trap(
-                &mut kernel,
-                &mut memory,
-                11,
-                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
-                [
-                    disk_ptr,
-                    IOCTL_DISK_COPY_EXTERNAL_START,
-                    copy_external_ptr,
-                    DISK_COPY_EXTERNAL_SIZE + 12,
-                    copy_external_out_ptr,
-                    4,
-                    bytes_returned_ptr,
-                    0,
-                ],
-            ),
-            Some(0)
-        );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        for ioctl in [
+            IOCTL_DISK_COPY_EXTERNAL_START,
+            IOCTL_DISK_COPY_EXTERNAL_COMPLETE,
+        ] {
+            assert_eq!(
+                table.dispatch_trap(
+                    &mut kernel,
+                    &mut memory,
+                    11,
+                    IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                    [
+                        disk_ptr,
+                        ioctl,
+                        copy_external_ptr,
+                        DISK_COPY_EXTERNAL_SIZE + 12,
+                        copy_external_out_ptr,
+                        4,
+                        bytes_returned_ptr,
+                        0,
+                    ],
+                ),
+                Some(0)
+            );
+            assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        }
 
         for offset in (0..DISK_POWER_TIMINGS_SIZE).step_by(4) {
             memory.map_word(power_timings_ptr + offset, 0xfeed_cafe);

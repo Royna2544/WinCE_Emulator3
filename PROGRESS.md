@@ -2565,6 +2565,14 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers -- --nocapture`
   passed after the volume-handle `AFS_FsIoControlW(FSCTL_GET_VOLUME_INFO)`
   update.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`,
+  `PROGRESS.md`, and `SOURCE_REFERENCES.md`: `FSDMGR_DiskIoControl @12`
+  now handles CE `IOCTL_DISK_COPY_EXTERNAL_COMPLETE` with the same
+  `DISK_COPY_EXTERNAL` fixed-header and trailing `SECTOR_LIST_ENTRY`
+  validation as `IOCTL_DISK_COPY_EXTERNAL_START`, then returns
+  `ERROR_NOT_SUPPORTED` without mutating caller buffers for the host-backed
+  synthetic disk. Real external-copy accelerator/filter behavior remains
+  queued with the physical block-driver backing gaps.
 - `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
   `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: FSDMGR imports now recognize
   CE `STOREMGR_FsIoControlW @44` by ordinal/name and dispatch its
