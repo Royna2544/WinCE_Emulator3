@@ -2420,7 +2420,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `BitBlt`, reports `BI_ALPHABITFIELDS` through `GetObjectW(DIBSECTION)`,
     and lets selected-DIB/framebuffer `AlphaBlend(AC_SRC_ALPHA)` read 32 bpp
     per-pixel alpha from the stored alpha mask instead of assuming high-byte
-    alpha.
+    alpha. Raw direct-DIB `StretchDIBits`/`SetDIBitsToDevice` coverage now also
+    follows the GDIPRINT `StretchDIBits_T`/`SetDIBitsToDevice_T` matrix for
+    four-mask 16 bpp BGR4444 and 32 bpp BGR8888 `BI_ALPHABITFIELDS` caller
+    DIBs.
   - The same CE-supported DIB bit-depth set is now shared by raw direct-DIB
     `StretchDIBits`/`SetDIBitsToDevice` source parsing, so unsupported caller
     DIB depths fail before rendering into selected DIBs or framebuffers.

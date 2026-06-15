@@ -12472,6 +12472,150 @@ fn coredll_raw_direct_2bpp_dib_uses_bitmapinfo_color_table() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_direct_dib_calls_decode_alpha_bitfields_masks() -> Result<()> {
+    const BI_ALPHABITFIELDS: u32 = 6;
+    const DIB_RGB_COLORS: u32 = 0;
+    const SRCCOPY: u32 = 0x00cc_0020;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 1);
+
+    let info16 = 0x2_3800;
+    let bits16 = 0x2_3900;
+    memory.map_words(info16, 14);
+    memory.map_bytes(info16, 56);
+    memory.map_bytes(bits16, 4);
+    let mut header16 = [0u8; 56];
+    header16[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header16[4..8].copy_from_slice(&2i32.to_le_bytes());
+    header16[8..12].copy_from_slice(&(-1i32).to_le_bytes());
+    header16[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header16[14..16].copy_from_slice(&16u16.to_le_bytes());
+    header16[16..20].copy_from_slice(&BI_ALPHABITFIELDS.to_le_bytes());
+    header16[20..24].copy_from_slice(&4u32.to_le_bytes());
+    header16[40..44].copy_from_slice(&0x0000_000fu32.to_le_bytes());
+    header16[44..48].copy_from_slice(&0x0000_00f0u32.to_le_bytes());
+    header16[48..52].copy_from_slice(&0x0000_0f00u32.to_le_bytes());
+    header16[52..56].copy_from_slice(&0x0000_f000u32.to_le_bytes());
+    memory.write_bytes(info16, &header16);
+    memory.write_word(info16, 40);
+    memory.write_word(info16 + 16, BI_ALPHABITFIELDS);
+    memory.write_word(info16 + 20, 4);
+    memory.write_bytes(
+        bits16,
+        &[
+            0x0f, 0xa0, // CE GDIPRINT BGR4444 red, alpha nibble ignored by SRCCOPY
+            0xf0, 0xb0, // green
+        ],
+    );
+
+    let stretch_result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_STRETCH_DIBITS,
+        [
+            dst_dc,
+            0,
+            0,
+            2,
+            1,
+            0,
+            0,
+            2,
+            1,
+            bits16,
+            info16,
+            DIB_RGB_COLORS,
+            SRCCOPY,
+        ],
+    );
+    assert!(
+        matches!(
+            stretch_result,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
+        ),
+        "unexpected StretchDIBits alpha-bitfields result: {stretch_result:?}; last_error={}",
+        kernel.threads.get_last_error(thread_id)
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0xf800);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0x07e0);
+
+    let info32 = 0x2_3a00;
+    let bits32 = 0x2_3b00;
+    memory.map_words(info32, 14);
+    memory.map_bytes(info32, 56);
+    memory.map_bytes(bits32, 8);
+    let mut header32 = [0u8; 56];
+    header32[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header32[4..8].copy_from_slice(&2i32.to_le_bytes());
+    header32[8..12].copy_from_slice(&(-1i32).to_le_bytes());
+    header32[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header32[14..16].copy_from_slice(&32u16.to_le_bytes());
+    header32[16..20].copy_from_slice(&BI_ALPHABITFIELDS.to_le_bytes());
+    header32[20..24].copy_from_slice(&8u32.to_le_bytes());
+    header32[40..44].copy_from_slice(&0x0000_00ffu32.to_le_bytes());
+    header32[44..48].copy_from_slice(&0x0000_ff00u32.to_le_bytes());
+    header32[48..52].copy_from_slice(&0x00ff_0000u32.to_le_bytes());
+    header32[52..56].copy_from_slice(&0xff00_0000u32.to_le_bytes());
+    memory.write_bytes(info32, &header32);
+    memory.write_word(info32, 40);
+    memory.write_word(info32 + 16, BI_ALPHABITFIELDS);
+    memory.write_word(info32 + 20, 8);
+    memory.write_bytes(
+        bits32,
+        &[
+            0xff, 0x00, 0x00, 0x7f, // CE GDIPRINT BGR8888 red
+            0x00, 0xff, 0x00, 0x80, // green
+        ],
+    );
+
+    let set_result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SET_DIBITS_TO_DEVICE,
+        [
+            dst_dc,
+            2,
+            0,
+            2,
+            1,
+            0,
+            0,
+            0,
+            1,
+            bits32,
+            info32,
+            DIB_RGB_COLORS,
+        ],
+    );
+    assert!(
+        matches!(
+            set_result,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
+        ),
+        "unexpected SetDIBitsToDevice alpha-bitfields result: {set_result:?}; last_error={}",
+        kernel.threads.get_last_error(thread_id)
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 2, 0), 0xf800);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 3, 0), 0x07e0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_direct_8bpp_dib_uses_bitmapinfo_color_table() -> Result<()> {
     const DIB_RGB_COLORS: u32 = 0;
     const SRCCOPY: u32 = 0x00cc_0020;

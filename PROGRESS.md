@@ -15,6 +15,10 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `tests/coredll_raw_gwe.rs`: direct caller-DIB coverage now exercises CE
+  GDIPRINT-style `BI_ALPHABITFIELDS` rows for `StretchDIBits` and
+  `SetDIBitsToDevice`, including 16 bpp BGR4444 and 32 bpp BGR8888 four-mask
+  DIBs rendered into selected RGB565 memory DIBs.
 - `src/ce/coredll.rs`, `src/ce/resource.rs`, and `tests/coredll_raw_gwe.rs`:
   raw `CreateDIBSection` now stores the fourth `BI_ALPHABITFIELDS` mask on
   bitmap objects, preserves it across icon/image-list bitmap clones, reports
