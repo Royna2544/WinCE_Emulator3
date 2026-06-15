@@ -3047,8 +3047,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     message payload, and `private/winceos/coreos/storage/storemgr/storemain.cpp`
     registers block/storage PnP classes against its message queue. Rust now
     records and closes typed coredll `RequestDeviceNotifications @1504` /
-    `StopDeviceNotifications @1505` subscription handles; full CE `fsdev_t`
-    per-device scoping and message-queue `DEVDETAIL` delivery remain queued.
+    `StopDeviceNotifications @1505` subscription handles, implements the CE
+    message-queue ordinals used by that PnP thread, and enqueues CE-shaped
+    `DEVDETAIL` attach/detach records for matching advertised interfaces; full
+    CE `fsdev_t` per-device scoping and deeper queue blocking/access semantics
+    remain queued.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted
