@@ -418,6 +418,10 @@ fn blit_framebuffer(
             "blit Win32 desktop framebuffer failed".to_owned(),
         ));
     }
+    unsafe {
+        let _ = InvalidateRect(hwnd, None, false);
+        let _ = UpdateWindow(hwnd);
+    }
     Ok(())
 }
 
