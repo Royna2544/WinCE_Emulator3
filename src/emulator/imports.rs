@@ -3296,7 +3296,7 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE,
-                [attributes_ptr, descriptor_out_ptr, descriptor_size_out_ptr,],
+                [attributes_ptr, descriptor_out_ptr, descriptor_size_out_ptr],
             ),
             Some(0)
         );
@@ -3310,7 +3310,7 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE,
-                [attributes_ptr, descriptor_out_ptr, descriptor_size_out_ptr,],
+                [attributes_ptr, descriptor_out_ptr, descriptor_size_out_ptr],
             ),
             Some(ERROR_INVALID_SECURITY_DESCR)
         );
