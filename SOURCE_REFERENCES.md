@@ -1443,7 +1443,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     after `DispatchMessageW` handles `WM_HANDLESHELLNOTIFYICON`, and still
     reports success after mutating shell state when the registered taskbar
     HWND has gone stale and no private taskbar post can be queued, matching
-    the sample callback's state-copy-before-taskbar-processing shape. The
+    the sample callback's state-copy-before-taskbar-processing shape. Existing
+    `NIM_DELETE` records may also be removed after their owner `hWnd` is stale,
+    so teardown can still consume the copied key and record `HHTBF_DESTROYICON`
+    cleanup; stale-owner `NIM_ADD` and `NIM_MODIFY` remain rejected. The
     dispatch release guard now also checks the stored private payload type, so
     a spoofed taskbar private message cannot free an unrelated window-pos or
     shell-notification allocation.

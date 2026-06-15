@@ -22138,7 +22138,9 @@ fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(
     let Some(icon) = read_guest_u32(kernel, memory, thread_id, data_ptr + 20) else {
         return false;
     };
-    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+    let stale_existing_delete =
+        op == NotifyIconOp::Delete && hwnd != 0 && kernel.shell.notify_icon(hwnd, id).is_some();
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) && !stale_existing_delete {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);

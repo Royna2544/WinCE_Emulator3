@@ -11614,6 +11614,119 @@ fn shell_notify_icon_tracks_add_modify_delete_and_posts_callback() -> Result<()>
 }
 
 #[test]
+fn shell_notify_icon_deletes_existing_record_after_owner_window_is_stale() -> Result<()> {
+    const NIM_ADD: u32 = 0;
+    const NIM_MODIFY: u32 = 1;
+    const NIM_DELETE: u32 = 2;
+    const NIF_ICON: u32 = 0x0000_0002;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const HHTBF_DESTROYICON: u32 = 0x1000_0000;
+    const NID_SIZE: u32 = 160;
+    const NID_TIP_OFFSET: u32 = 24;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHELL_NOTIFY_STALE", "", None, 0, 0, 0);
+    let data = 0x2_f000;
+    memory.map_words(data, NID_SIZE / 4);
+    memory.map_halfwords(data + NID_TIP_OFFSET, 64);
+    memory.write_word(data, NID_SIZE);
+    memory.write_word(data + 4, hwnd);
+    memory.write_word(data + 8, 91);
+    memory.write_word(data + 12, NIF_ICON | NIF_TIP | HHTBF_DESTROYICON);
+    memory.write_word(data + 20, 0x000c_9001);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Stale delete");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.shell.notify_icon(hwnd, 91).is_some());
+    assert!(kernel.gwe.destroy_window(hwnd, kernel.timers.tick_count()));
+
+    memory.write_word(data + 12, NIF_TIP);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Dead modify");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_MODIFY, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
+    let icon = kernel
+        .shell
+        .notify_icon(hwnd, 91)
+        .expect("stale-owner notify icon remains after failed modify");
+    assert_eq!(icon.tip, "Stale delete");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_DELETE, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(kernel.shell.notify_icon(hwnd, 91).is_none());
+    assert_eq!(
+        kernel
+            .shell
+            .destroyed_notify_icons()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![0x000c_9001]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_DELETE, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
+
+    Ok(())
+}
+
+#[test]
 fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Result<()> {
     const NIM_ADD: u32 = 0;
     const NIM_MODIFY: u32 = 1;
