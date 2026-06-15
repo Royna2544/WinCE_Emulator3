@@ -4463,7 +4463,7 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture
   remains ignored because that toolchain is not configured, and Cargo still
   emits the existing unused-code warnings.
-- `tests/coredll_raw_gwe.rs`, `PLAN.MD`, and `SOURCE_REFERENCES.md`: extended
+- `tests/coredll_raw_gwe.rs` and `SOURCE_REFERENCES.md`: extended
   the CE `draw.cpp::NegativeSize(EMaskBlt)`/`swblt.cpp` signed-extent coverage
   with a framebuffer HDC regression that uses a 1 bpp mask, a negative
   destination width, and verifies mirrored RGB565 pixels plus the resulting
@@ -4479,3 +4479,20 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   because that toolchain is not configured, and Cargo still emits the existing
   unused-code warnings plus the intermittent incremental cleanup access-denied
   note under `target/debug/incremental`.
+- `tests/coredll_raw_gwe.rs`, `PLAN.MD`, and `SOURCE_REFERENCES.md`: extended
+  CE `draw.cpp::ClipBitBlt(EMaskBlt)` coverage with off-left clipping
+  regressions for selected-memory-DIB and framebuffer HDC destinations. Both
+  use a non-copy ROP4 plus a 1 bpp mask to prove clipped-away destination pixels
+  still advance the source and mask coordinates before the visible pixels are
+  rendered.
+- Focused validation after the `MaskBlt` clip-alignment slice: `cargo fmt
+  --check` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_mask_blt_clips_off_left` passed. Cargo still
+  emits the existing unused-code warnings.
+- Full validation after the `MaskBlt` clip-alignment slice: `git diff
+  --check`, `cargo fmt --check`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and `cargo test -j 1
+  --features unicorn,trace,win32-desktop` passed. The raw GWE binary reported
+  364 passing tests, the eVC4 MIPSII fixture remains ignored because that
+  toolchain is not configured, and Cargo still emits the existing unused-code
+  warnings.

@@ -2521,6 +2521,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `TestAllRops(EMaskBlt)` iterates foreground/background ROP3 bytes with a
     two-pixel mask. CE `draw.cpp::NegativeSize(EMaskBlt)` also calls
     `MaskBlt` with a null mask, `SRCCOPY`, and signed destination extents.
+    `ClipBitBlt(EMaskBlt)` also clips destinations against the primary or
+    memory surface while keeping source and mask coordinates aligned with the
+    clipped-away destination pixels.
     CE `swblt.cpp` normalizes improperly ordered destination rectangles from
     signed blt extents, flips the destination iterator, and keeps source/mask
     iteration aligned through `xPositive`/`yPositive`. Raw `MaskBlt` now
@@ -2528,7 +2531,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     copies for that CE source-backed ROP4 shape, generic ROP4
     foreground/background byte evaluation, selected-DIB/framebuffer negative
     destination extent mirroring for masked draws, including a framebuffer HDC
-    negative destination-width regression, and the null-mask source-copy
+    negative destination-width regression, off-left selected-DIB/framebuffer
+    clip regressions that preserve source/mask alignment, and the null-mask source-copy
     shortcut through the same signed destination helper as direct `BitBlt`.
   - CE `core\dll\apis.c::SystemParametersInfoW` routes
     `SPI_GETOEMINFO` and related device-info actions through
