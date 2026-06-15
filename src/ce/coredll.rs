@@ -12809,16 +12809,19 @@ fn fsdmgr_disk_set_info_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
+    let mut info = [0; 6];
     for index in 0..6 {
-        if memory.read_u32(info_ptr.wrapping_add(index * 4)).is_err() {
+        let Ok(value) = memory.read_u32(info_ptr.wrapping_add(index * 4)) else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return false;
-        }
+        };
+        info[index as usize] = value;
     }
-    kernel.threads.set_last_error(thread_id, 0);
-    true
+    let status = kernel.fsdmgr_set_disk_info(disk_ptr, info);
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
 }
 
 fn fsdmgr_disk_get_name_raw<M: CoredllGuestMemory>(

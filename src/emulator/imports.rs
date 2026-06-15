@@ -2313,6 +2313,7 @@ mod tests {
         const DISK_IOCTL_GETINFO: u32 = 1;
         const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
         const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
+        const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
         const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
         const IOCTL_DISK_GETNAME: u32 = 0x0007_1c20;
         const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
@@ -2435,6 +2436,67 @@ mod tests {
         );
         assert_eq!(kernel.threads.get_last_error(11), 0);
         assert_eq!(memory.word(disk_info_ptr + 4), 512);
+        assert_eq!(memory.word(bytes_returned_ptr), 24);
+
+        for (index, value) in [0x4444, 1024, 4, 8, 16, 0x0000_0008]
+            .into_iter()
+            .enumerate()
+        {
+            memory.map_word(disk_info_ptr + (index as u32 * 4), value);
+        }
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_SETINFO,
+                    disk_info_ptr,
+                    24,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        for offset in (0..24).step_by(4) {
+            memory.map_word(disk_info_ptr + offset, 0xfeed_cafe);
+        }
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    DISK_IOCTL_GETINFO,
+                    disk_info_ptr,
+                    24,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(disk_info_ptr), 0x4444);
+        assert_eq!(memory.word(disk_info_ptr + 4), 1024);
+        assert_eq!(memory.word(disk_info_ptr + 8), 4);
+        assert_eq!(memory.word(disk_info_ptr + 12), 8);
+        assert_eq!(memory.word(disk_info_ptr + 16), 16);
+        assert_eq!(memory.word(disk_info_ptr + 20), 0x0000_0008);
         assert_eq!(memory.word(bytes_returned_ptr), 24);
 
         memory.map_wide_buffer(disk_name_ptr, 32);

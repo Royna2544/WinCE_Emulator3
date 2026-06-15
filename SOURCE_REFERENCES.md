@@ -470,8 +470,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     disk IOCTL path. `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsdmgr.h` defines the
     eight-DWORD `FSD_SCATTER_GATHER_INFO` layout and two-DWORD
     `FSD_SCATTER_GATHER_RESULTS` layout; `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h` defines
-    the legacy `DISK_IOCTL_GETINFO`/`READ`/`WRITE` values, the
-    `IOCTL_DISK_*` equivalents, the six-DWORD `DISK_INFO` layout, and
+    the legacy `DISK_IOCTL_GETINFO`/`SETINFO`/`READ`/`WRITE` values, the
+    `IOCTL_DISK_*` equivalents, the six-DWORD `DISK_INFO` layout shared by
+    GETINFO and SETINFO, and
     `SG_REQ`/`SG_BUF` scatter/gather buffers with start sector, sector count,
     status, callback, guest buffer pointer, and byte length fields, and the
     12-byte `DELETE_SECTOR_INFO { cbSize, startsector, numsectors }` payload
@@ -493,7 +494,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     accepting delete-sector, secure-wipe, or set-secure-wipe-flag requests.
     v3 now traps the direct ordinals, persists
     direct/cache/Ex writes in sparse synthetic 512-byte sectors, reads unwritten
-    sectors as zero-filled data, writes synthetic `DISK_INFO`, disk name,
+    sectors as zero-filled data, writes synthetic `DISK_INFO`, persists
+    validated SETINFO metadata for later GETINFO calls, writes disk name,
     device info, and storage-id metadata, fills Ex result sector counts, handles
     direct disk SG read/write, validates `GET_SECTOR_ADDR` caller buffers before
     returning no-XIP `ERROR_NOT_SUPPORTED` without writing synthetic addresses,
@@ -3076,7 +3078,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     direct CE `FSDMGR_DeviceHandleToHDSK` identity mapping,
     `FSDMGR_FormatVolume`/`FSDMGR_ScanVolume` no-utility failure status, direct
     CE `FSDMGR_AdvertiseInterface` fail-closed coredll-wrapper behavior,
-    CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path,
+    CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path, direct
+    `IOCTL_DISK_SETINFO` synthetic `DISK_INFO` persistence,
     `FSDMGR_GetRegistryFlag`/`String`/`Value` missing-value status and
     output-clearing behavior,
     `FSDMGR_AsyncEnterVolume`/`FSDMGR_AsyncExitVolume` registered-HVOL

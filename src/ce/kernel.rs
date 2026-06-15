@@ -140,6 +140,7 @@ pub struct CeKernel {
     recent_message_ops: Vec<MessageTraceRecord>,
     recent_device_ops: Vec<DeviceTraceRecord>,
     fsdmgr_disk_sectors: BTreeMap<(u32, u32), Vec<u8>>,
+    fsdmgr_disk_info_overrides: BTreeMap<u32, [u32; 6]>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
     live_pump_timeout_stop_tick: Option<u32>,
     runtime_loader_stats: RuntimeLoaderStats,
@@ -824,6 +825,7 @@ impl CeKernel {
             recent_message_ops: Vec::new(),
             recent_device_ops: Vec::new(),
             fsdmgr_disk_sectors: BTreeMap::new(),
+            fsdmgr_disk_info_overrides: BTreeMap::new(),
             modal_dialog_results: BTreeMap::new(),
             live_pump_timeout_stop_tick: None,
             runtime_loader_stats: RuntimeLoaderStats::default(),
@@ -2019,6 +2021,9 @@ impl CeKernel {
         if disk_ptr == 0 {
             return None;
         }
+        if let Some(info) = self.fsdmgr_disk_info_overrides.get(&disk_ptr) {
+            return Some(*info);
+        }
         let total_sectors = 0x0002_0000;
         Some([
             total_sectors.max(1),
@@ -2028,6 +2033,14 @@ impl CeKernel {
             total_sectors.max(1),
             0,
         ])
+    }
+
+    pub fn fsdmgr_set_disk_info(&mut self, disk_ptr: u32, info: [u32; 6]) -> u32 {
+        if disk_ptr == 0 {
+            return ERROR_INVALID_PARAMETER;
+        }
+        self.fsdmgr_disk_info_overrides.insert(disk_ptr, info);
+        ERROR_SUCCESS
     }
 
     pub fn fsdmgr_disk_io_control_status(&mut self, disk_ptr: u32, ioctl: u32) -> u32 {
