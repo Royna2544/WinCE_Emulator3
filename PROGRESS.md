@@ -15,6 +15,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `TransparentImage` now accepts CE `draw.cpp::NegativeSize` and
+  `StretchBltFlipMirrorTest` nonzero signed destination/source extents for
+  selected-DIB copies, normalizing the destination clip rectangle and using the
+  shared signed source-coordinate mapping while still honoring the transparent
+  color key.
+- Validation after the signed-extent `TransparentImage` slice: `cargo fmt
+  --check`, `git diff --check`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_transparent_image_mirrors_negative_extents_between_selected_dibs`,
+  and full `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
+  Cargo still emits the existing unused-code warnings plus Windows
+  profile/incremental-cache cleanup noise, and the eVC4 MIPSII fixture remains
+  ignored because that toolchain is not configured.
 - `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
   raw `PatBlt` display-performance timing now mirrors CE
   `dispperf.h::DispPerfParam` for display-target `PARAM_DESTINVIDMEM` plus
@@ -3872,7 +3886,7 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   warnings plus Windows profile/incremental-cache cleanup noise.
 - `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
   `TransparentImage` now rejects read-only selected bitmap destinations after
-  CE HDC and positive-extent validation and before source snapshotting or
+  CE HDC and nonzero-extent validation and before source snapshotting or
   color-key rendering, preserving backing bytes for CE
   `draw.cpp::WritableBitmapTest(ETransparentImage)`-style loaded bitmap
   targets.

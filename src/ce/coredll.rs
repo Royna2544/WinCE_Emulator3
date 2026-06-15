@@ -41723,7 +41723,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    if dst_width <= 0 || dst_height <= 0 || src_width <= 0 || src_height <= 0 {
+    if dst_width == 0 || dst_height == 0 || src_width == 0 || src_height == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -41752,12 +41752,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                 && let Some(dst_bitmap_handle) = kernel.resources.selected_bitmap(dst)
                 && let Some(dst_bitmap) = kernel.resources.bitmap(dst_bitmap_handle).cloned()
             {
-                let dst_rect = Rect {
-                    left: dst_x,
-                    top: dst_y,
-                    right: dst_x.saturating_add(dst_width),
-                    bottom: dst_y.saturating_add(dst_height),
-                };
+                let dst_rect = blt_destination_rect(dst_x, dst_y, dst_width, dst_height);
                 for clip in
                     hdc_clip_rects(kernel, dst, dst_rect, dst_bitmap.width, dst_bitmap.height)
                 {

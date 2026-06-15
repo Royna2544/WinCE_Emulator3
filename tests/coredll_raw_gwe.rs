@@ -11925,6 +11925,73 @@ fn coredll_raw_transparent_image_composites_between_memory_dcs() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_transparent_image_mirrors_negative_extents_between_selected_dibs() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    memory.write_bytes(
+        src_bits,
+        &[
+            0x00, 0x00, 0xff, 0xff, // red
+            0x00, 0xff, 0x00, 0xff, // green
+            0xff, 0x00, 0x00, 0xff, // blue
+            0xff, 0x00, 0xff, 0xff, // transparent magenta
+        ],
+    );
+    memory.write_bytes(dst_bits, &[0xff; 16]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            None,
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                dst_dc,
+                2,
+                2,
+                (-2i32) as u32,
+                (-2i32) as u32,
+                src_dc,
+                2,
+                2,
+                (-2i32) as u32,
+                (-2i32) as u32,
+                MAGENTA_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        memory.read_bytes(dst_bits, (dst_stride * 2) as usize),
+        vec![
+            0x00, 0x00, 0xff, 0xff, // red
+            0x00, 0xff, 0x00, 0xff, // green
+            0xff, 0x00, 0x00, 0xff, // blue
+            0xff, 0xff, 0xff, 0xff, // skipped transparent magenta
+        ]
+    );
+    assert_eq!(src_stride, 8);
+    assert_eq!(dst_stride, 8);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_direct_dib_calls_paint_attached_framebuffer() -> Result<()> {
     const DIB_RGB_COLORS: u32 = 0;
     const SRCCOPY: u32 = 0x00cc_0020;

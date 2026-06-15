@@ -2504,6 +2504,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     seeding with `SetPixel`. Raw `TransparentImage` now mirrors those
     same-framebuffer HDC copies with a source framebuffer snapshot, preserving
     CE color-key behavior even when source and destination are the same HDC.
+    CE `draw.cpp::NegativeSize(ETransparentImage)` and
+    `StretchBltFlipMirrorTest(ETransparentImage)` also expect signed
+    destination and source extents to succeed with the CE bottom/right +1
+    mirror convention. Raw `TransparentImage` now accepts nonzero signed
+    extents, normalizes the destination clip rectangle, and routes selected-DIB
+    copies through the same signed source-coordinate helper as the other blit
+    paths.
   - CE `draw.cpp::passNull2Draw(EMaskBlt)` expects `MaskBlt` to fail null/bad
     destination DCs with `ERROR_INVALID_HANDLE`, fail null/bad source DCs with
     `ERROR_INVALID_HANDLE`, reject bad mask handles with `ERROR_INVALID_HANDLE`,
