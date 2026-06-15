@@ -10243,6 +10243,16 @@ fn coredll_raw_alpha_blend_uses_ce_gpe_stretch_sampling_between_selected_dibs() 
     assert_eq!(u32::from_le_bytes(timing[4..8].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(timing[8..12].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(timing[12..16].try_into().unwrap()), 0);
+    assert_eq!(
+        u32::from_le_bytes(timing[40..44].try_into().unwrap()),
+        0,
+        "PARAM_SRCINVIDMEM should not count memory-DC alpha sources"
+    );
+    assert_eq!(
+        u32::from_le_bytes(timing[44..48].try_into().unwrap()),
+        0,
+        "PARAM_DESTINVIDMEM should not count memory-DC alpha destinations"
+    );
     assert_eq!(u32::from_le_bytes(timing[56..60].try_into().unwrap()), 1);
 
     Ok(())
@@ -11015,6 +11025,101 @@ fn coredll_raw_alpha_blend_uses_ce_gpe_stretch_sampling_to_framebuffer() -> Resu
     assert_eq!(u32::from_le_bytes(timing[4..8].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(timing[8..12].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(timing[12..16].try_into().unwrap()), 0);
+    assert_eq!(
+        u32::from_le_bytes(timing[40..44].try_into().unwrap()),
+        0,
+        "PARAM_SRCINVIDMEM should not count memory-DC alpha sources"
+    );
+    assert_eq!(
+        u32::from_le_bytes(timing[44..48].try_into().unwrap()),
+        1,
+        "PARAM_DESTINVIDMEM should count framebuffer alpha destinations"
+    );
+    assert_eq!(u32::from_le_bytes(timing[56..60].try_into().unwrap()), 1);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_alpha_blend_counts_framebuffer_destination_perf_param() -> Result<()> {
+    const DISPPERF_ROP_ALPHA_BLEND: u32 = 0x0000_cccc;
+
+    fn blend_function(source_alpha: u8) -> u32 {
+        u32::from(source_alpha) << 16
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let mut framebuffer = VirtualFramebuffer::new(3, 1, PixelFormat::Rgb565)?;
+    let _ = framebuffer.take_dirty_rects();
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 0, 0x07e0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_ALPHA_BLEND,
+            [
+                screen_dc,
+                0,
+                0,
+                3,
+                1,
+                src_dc,
+                0,
+                0,
+                2,
+                1,
+                blend_function(0xff)
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), 0xf800);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 0), 0x07e0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 0), 0x07e0);
+    let timing = kernel.display_perf_timing_bytes();
+    assert_eq!(
+        u32::from_le_bytes(timing[0..4].try_into().unwrap()),
+        DISPPERF_ROP_ALPHA_BLEND
+    );
+    assert_eq!(u32::from_le_bytes(timing[4..8].try_into().unwrap()), 1);
+    assert_eq!(
+        u32::from_le_bytes(timing[40..44].try_into().unwrap()),
+        0,
+        "PARAM_SRCINVIDMEM should not count memory-DC alpha sources"
+    );
+    assert_eq!(
+        u32::from_le_bytes(timing[44..48].try_into().unwrap()),
+        1,
+        "PARAM_DESTINVIDMEM should count framebuffer alpha destinations"
+    );
     assert_eq!(u32::from_le_bytes(timing[56..60].try_into().unwrap()), 1);
 
     Ok(())

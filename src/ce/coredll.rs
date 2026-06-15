@@ -39167,10 +39167,14 @@ fn alpha_blend_raw<M: CoredllGuestMemory>(
         return false;
     }
     if routed_through_blt {
-        kernel.record_display_perf_gpe(
+        kernel.record_display_perf_gpe_with_params(
             DISPPERF_ROP_ALPHA_BLEND,
-            dst_width != src_width || dst_height != src_height,
-            false,
+            crate::ce::kernel::DisplayPerfBltParams {
+                src_in_video_mem: !kernel.resources.is_memory_dc(src_hdc),
+                dest_in_video_mem: !kernel.resources.is_memory_dc(dst_hdc),
+                stretch: dst_width != src_width || dst_height != src_height,
+                ..crate::ce::kernel::DisplayPerfBltParams::default()
+            },
         );
     }
     kernel.threads.set_last_error(thread_id, 0);
