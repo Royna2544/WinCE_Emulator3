@@ -1231,6 +1231,22 @@ impl CeKernel {
         Ok(MessageQueueReadStatus::Message(message))
     }
 
+    pub fn message_queue_read_would_block(&self, handle: u32) -> Result<bool> {
+        let KernelObject::MessageQueue(endpoint) = self.handles.get(handle)?.clone() else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        if !endpoint.read_access {
+            return Err(Error::InvalidHandle(handle));
+        }
+        let Some(queue) = self.message_queues.get(&endpoint.queue_id) else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        if queue.writers == 0 && queue.flags & Self::MSGQUEUE_ALLOW_BROKEN == 0 {
+            return Ok(false);
+        }
+        Ok(queue.alert.is_none() && queue.messages.is_empty())
+    }
+
     pub fn write_message_queue(
         &mut self,
         handle: u32,
@@ -1244,6 +1260,33 @@ impl CeKernel {
             return Err(Error::InvalidHandle(handle));
         }
         self.write_message_queue_by_id(endpoint.queue_id, bytes, flags)
+    }
+
+    pub fn message_queue_write_would_block(
+        &self,
+        handle: u32,
+        bytes_len: u32,
+        flags: u32,
+    ) -> Result<bool> {
+        let KernelObject::MessageQueue(endpoint) = self.handles.get(handle)?.clone() else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        if endpoint.read_access {
+            return Err(Error::InvalidHandle(handle));
+        }
+        let Some(queue) = self.message_queues.get(&endpoint.queue_id) else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        if bytes_len as usize > queue.max_message_bytes as usize {
+            return Ok(false);
+        }
+        if queue.readers == 0 && queue.flags & Self::MSGQUEUE_ALLOW_BROKEN == 0 {
+            return Ok(false);
+        }
+        if flags & Self::MSGQUEUE_MSGALERT != 0 && queue.alert.is_none() {
+            return Ok(false);
+        }
+        Ok(queue.messages.len() >= queue.max_messages as usize)
     }
 
     fn write_message_queue_by_id(

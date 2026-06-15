@@ -15,6 +15,13 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/kernel.rs` and `src/emulator/unicorn.rs`: Unicorn now parks
+  blocking `ReadMsgQueue` and `WriteMsgQueue` calls on the queue endpoint
+  handle when CE would wait, then replays the original coredll import when
+  the queue becomes read/write-ready or the timeout expires. Read waits resume
+  with the posted message data and flags, write waits resume after a reader
+  frees normal queue capacity, and current-thread finite read timeouts replay
+  to `FALSE` with `ERROR_TIMEOUT` instead of returning a wait code.
 - `src/ce/coredll.rs`, `src/ce/coredll_ordinals.rs`,
   `src/ce/kernel.rs`, and `tests/coredll_raw_kernel.rs`: coredll now exports
   CE `EnumDeviceInterfaces @1874` and enumerates the kernel's tracked
@@ -39,8 +46,8 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   advertisement changes enqueue CE-shaped `DEVDETAIL` attach/detach records
   that the storage-manager-style `ReadMsgQueue` path can consume, and
   `MSGQUEUE_MSGALERT` messages use CE's priority alert slot without increasing
-  normal queue depth. Full CE `fsdev_t` per-device interface scoping plus
-  blocking `ReadMsgQueue`/`WriteMsgQueue` timeout parking remain queued.
+  normal queue depth. Full CE `fsdev_t` per-device interface scoping remains
+  queued.
 - `src/config.rs`, `src/ce/file.rs`, `src/ce/kernel.rs`, `mounts.toml`, and
   `tests/basic_subsystems.rs`: mounted storage config now carries optional
   CE-style block `device_name` plus `interface_classes` GUID strings. Kernel
