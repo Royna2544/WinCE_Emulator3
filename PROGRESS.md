@@ -4776,3 +4776,23 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   coredll_raw_gwe -- --nocapture`, and `cargo build --release --features
   unicorn,win32-desktop` passed. Cargo still emits the existing unused-code
   warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: fsdmgr import traps now cover
+  the CE `FSDMGR_GetDiskInfo @16` and `FSDMGR_GetDiskName @17` exports from
+  `fsdmgr.def`/`fsdmgrapi.cpp`, routing them through the synthetic disk
+  metadata/name contract already used by `FSDMGR_DiskIoControl` while keeping
+  the broader physical block-driver forwarding gap open.
+- Focused validation after the direct fsdmgr disk metadata/name import slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_direct_disk_info_and_name_imports_use_ce_metadata_contract --
+  --nocapture` and `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop patches_supported_fsdmgr_imports_only --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the direct fsdmgr disk metadata/name import slice:
+  `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and Cargo
+  still emits the existing unused-code warnings.
