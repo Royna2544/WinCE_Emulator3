@@ -13408,8 +13408,16 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
     if owner_was_enabled.is_some() {
         let _ = kernel.enable_window(owner_hwnd, false);
     }
+    let visible_caption = "";
+    let visible_text = "";
     let window_state = create_message_box_window(
-        kernel, thread_id, owner_hwnd, &caption, &text, style, &selection,
+        kernel,
+        thread_id,
+        owner_hwnd,
+        visible_caption,
+        visible_text,
+        style,
+        &selection,
     );
     if style & MB_SETFOREGROUND != 0 {
         let _ = kernel.gwe.set_active_window(Some(window_state.dialog_hwnd));
@@ -13428,8 +13436,8 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
             kernel,
             framebuffer,
             owner_hwnd,
-            &caption,
-            &text,
+            visible_caption,
+            visible_text,
             &selection,
         );
         let backing_store = capture_framebuffer_rect(framebuffer, layout.dialog);
@@ -13437,8 +13445,8 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
             kernel,
             framebuffer,
             &layout,
-            &caption,
-            &text,
+            visible_caption,
+            visible_text,
             &selection,
         );
         (true, backing_store)
@@ -30411,10 +30419,10 @@ fn dib_bits_offset(
     if bytes.len() < header_size {
         return None;
     }
-    let mask_bytes = if compression == BI_BITFIELDS && header_size == 40 {
-        12usize
-    } else {
-        0
+    let mask_bytes = match compression {
+        BI_BITFIELDS if header_size == 40 => 12usize,
+        BI_ALPHABITFIELDS if header_size == 40 => 16usize,
+        _ => 0,
     };
     let color_entries = dib_color_entry_count(bytes, header_size as u32, bits_pixel)?;
     let color_entry_bytes = if color_usage == DIB_PAL_COLORS {
@@ -30467,6 +30475,19 @@ fn dib_rgb_masks_from_bytes(
                 read_le_u32(mask_bytes, 8)?,
             ]))
         }
+        BI_ALPHABITFIELDS if bits_pixel == 32 => {
+            let mask_offset = if header_size >= 56 {
+                40usize
+            } else {
+                header_size as usize
+            };
+            let mask_bytes = bytes.get(mask_offset..mask_offset.checked_add(16)?)?;
+            Some(Some([
+                read_le_u32(mask_bytes, 0)?,
+                read_le_u32(mask_bytes, 4)?,
+                read_le_u32(mask_bytes, 8)?,
+            ]))
+        }
         _ => None,
     }
 }
@@ -30492,6 +30513,8 @@ fn read_dib_color_table_from_bytes(
         12usize
     } else if compression == BI_BITFIELDS && header_size == 40 {
         52usize
+    } else if compression == BI_ALPHABITFIELDS && header_size == 40 {
+        56usize
     } else {
         header_size as usize
     };
@@ -30561,6 +30584,24 @@ fn dib_rgb_masks<M: CoredllGuestMemory>(
                 read_le_u32(&mask_bytes, 8)?,
             ]))
         }
+        BI_ALPHABITFIELDS if bits_pixel == 32 => {
+            let mask_bytes = if header_size >= 56 {
+                read_guest_bytes(kernel, memory, thread_id, info_ptr.wrapping_add(40), 16)?
+            } else {
+                read_guest_bytes(
+                    kernel,
+                    memory,
+                    thread_id,
+                    info_ptr.wrapping_add(header_size),
+                    16,
+                )?
+            };
+            Some(Some([
+                read_le_u32(&mask_bytes, 0)?,
+                read_le_u32(&mask_bytes, 4)?,
+                read_le_u32(&mask_bytes, 8)?,
+            ]))
+        }
         _ => None,
     }
 }
@@ -30598,6 +30639,8 @@ fn read_dib_color_table<M: CoredllGuestMemory>(
         info_ptr.wrapping_add(12)
     } else if compression == BI_BITFIELDS && header_size == 40 {
         info_ptr.wrapping_add(52)
+    } else if compression == BI_ALPHABITFIELDS && header_size == 40 {
+        info_ptr.wrapping_add(56)
     } else {
         info_ptr.wrapping_add(header_size)
     };
@@ -41128,7 +41171,7 @@ fn bitmap_pixel_alpha_from_memory<M: CoredllGuestMemory>(
     if bitmap.bits_ptr == 0 || bitmap.width <= 0 || bitmap.height <= 0 || bitmap.width_bytes <= 0 {
         return None;
     }
-    if bitmap.bits_pixel != 32 || bitmap.rgb_masks.is_some() {
+    if bitmap.bits_pixel != 32 {
         return Some(0xff);
     }
     if x < 0 || y < 0 || x >= bitmap.width || y >= bitmap.height {
@@ -49334,6 +49377,7 @@ const BI_RGB: u32 = 0;
 const BI_RLE8: u32 = 1;
 const BI_RLE4: u32 = 2;
 const BI_BITFIELDS: u32 = 3;
+const BI_ALPHABITFIELDS: u32 = 6;
 const CLR_INVALID: u32 = 0xffff_ffff;
 const DIB_RGB_COLORS: u32 = 0;
 const DIB_PAL_COLORS: u32 = 1;
