@@ -3054,9 +3054,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     direction, explicit queue-capacity limits, zero/oversized write failures,
     full-queue timeout status, truncated-read success with
     `ERROR_INSUFFICIENT_BUFFER`, `MSGQUEUE_ALLOW_BROKEN` vs default
-    `ERROR_PIPE_NOT_CONNECTED` counterpart-closure behavior, and
-    `MSGQUEUE_MSGALERT` priority/single-slot behavior; full CE `fsdev_t`
-    per-device scoping plus blocking-wait queue semantics remain queued.
+    `ERROR_PIPE_NOT_CONNECTED` counterpart-closure behavior, reader/writer
+    wait-event readiness and wake signaling, and `MSGQUEUE_MSGALERT`
+    priority/single-slot behavior; full CE `fsdev_t` per-device scoping plus
+    blocking `ReadMsgQueue`/`WriteMsgQueue` timeout parking remain queued.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted

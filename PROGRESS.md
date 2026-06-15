@@ -33,12 +33,14 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   oversized writes with `ERROR_INSUFFICIENT_BUFFER`, consume truncated reads
   with CE's success-plus-error surface, report non-`MSGQUEUE_ALLOW_BROKEN`
   counterpart closure as `ERROR_PIPE_NOT_CONNECTED`, preserve allow-broken
-  drain/write behavior, wake waits when messages arrive, and device
+  drain/write behavior, make read endpoints wait-ready for data or broken
+  writers, make write endpoints wait-ready for normal queue room or broken
+  readers, wake counterpart waiters as queue state changes, and device
   advertisement changes enqueue CE-shaped `DEVDETAIL` attach/detach records
   that the storage-manager-style `ReadMsgQueue` path can consume, and
   `MSGQUEUE_MSGALERT` messages use CE's priority alert slot without increasing
   normal queue depth. Full CE `fsdev_t` per-device interface scoping plus
-  message-queue blocking-wait edge cases remain queued.
+  blocking `ReadMsgQueue`/`WriteMsgQueue` timeout parking remain queued.
 - `src/config.rs`, `src/ce/file.rs`, `src/ce/kernel.rs`, `mounts.toml`, and
   `tests/basic_subsystems.rs`: mounted storage config now carries optional
   CE-style block `device_name` plus `interface_classes` GUID strings. Kernel
