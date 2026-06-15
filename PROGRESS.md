@@ -22,9 +22,13 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   required UTF-16 byte counts for names, returns `ERROR_INSUFFICIENT_BUFFER`
   for undersized buffers, supports class-only enumeration, reports
   `ERROR_NO_MORE_ITEMS` at the end, and rejects invalid class pointers,
-  name-buffer/size-pointer combinations, and unknown nonzero handles. Full
-  CE `fsdev_t` per-device interface scoping and notification delivery remain
-  queued.
+  name-buffer/size-pointer combinations, and unknown nonzero handles. Coredll
+  `RequestDeviceNotifications @1504` now records typed notification
+  subscriptions with the requested class GUID, message-queue handle, and
+  all-devices flag, while `StopDeviceNotifications @1505` closes only those
+  handles and rejects stale/wrong handles with `ERROR_INVALID_HANDLE`. Full CE
+  `fsdev_t` per-device interface scoping and message-queue `DEVDETAIL`
+  delivery remain queued.
 - `src/config.rs`, `src/ce/file.rs`, `src/ce/kernel.rs`, `mounts.toml`, and
   `tests/basic_subsystems.rs`: mounted storage config now carries optional
   CE-style block `device_name` plus `interface_classes` GUID strings. Kernel

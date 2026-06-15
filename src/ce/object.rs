@@ -23,6 +23,7 @@ pub enum KernelObject {
     FindFile(FindFileObject),
     Volume(VolumeObject),
     FileChangeNotification(FileChangeNotificationObject),
+    DeviceNotification(DeviceNotificationObject),
     Device(DeviceSession),
     Window(u32),
     WaveOut(u32),
@@ -90,6 +91,13 @@ pub struct FileChangeNotificationObject {
 pub struct FileChangeRecord {
     pub action: u32,
     pub path: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeviceNotificationObject {
+    pub class_guid: [u8; 16],
+    pub message_queue: u32,
+    pub all: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +278,10 @@ impl HandleTable {
                 notification.recursive,
                 notification.notify_filter,
                 notification.signaled
+            ),
+            Ok(KernelObject::DeviceNotification(notification)) => format!(
+                "device_notification(queue=0x{:08x},all={},class={:02x?})",
+                notification.message_queue, notification.all, notification.class_guid
             ),
             Ok(KernelObject::Device(_)) => "device".to_owned(),
             Ok(KernelObject::Window(hwnd)) => format!("window(hwnd=0x{hwnd:08x})"),
@@ -783,6 +795,7 @@ impl HandleTable {
             | KernelObject::FindFile(_)
             | KernelObject::Volume(_)
             | KernelObject::Device(_)
+            | KernelObject::DeviceNotification(_)
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
             | KernelObject::FileMapping(_)
@@ -832,6 +845,7 @@ impl HandleTable {
             | KernelObject::FindFile(_)
             | KernelObject::Volume(_)
             | KernelObject::Device(_)
+            | KernelObject::DeviceNotification(_)
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
             | KernelObject::FileMapping(_)

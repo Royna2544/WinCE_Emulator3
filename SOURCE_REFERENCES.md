@@ -3041,8 +3041,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the required name byte count, returns `ERROR_INSUFFICIENT_BUFFER` for small
     buffers, and returns `ERROR_NO_MORE_ITEMS` at list end. Rust now exposes
     coredll `EnumDeviceInterfaces @1874` over the tracked advertisement table
-    with that GUID/name/size/error surface; full CE `fsdev_t` per-device
-    scoping and device-notification delivery remain queued.
+    with that GUID/name/size/error surface. `public/common/sdk/inc/mwinbase.h`
+    routes `RequestDeviceNotifications` and `StopDeviceNotifications` through
+    filesys traps 92/93, `public/common/oak/inc/pnp.h` defines the `DEVDETAIL`
+    message payload, and `private/winceos/coreos/storage/storemgr/storemain.cpp`
+    registers block/storage PnP classes against its message queue. Rust now
+    records and closes typed coredll `RequestDeviceNotifications @1504` /
+    `StopDeviceNotifications @1505` subscription handles; full CE `fsdev_t`
+    per-device scoping and message-queue `DEVDETAIL` delivery remain queued.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted

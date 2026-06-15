@@ -21,10 +21,11 @@ use crate::{
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{
-            CE_THREAD_PRIORITY_NORMAL, FileChangeNotificationObject, FileChangeRecord, FileObject,
-            FindFileObject, HandleTable, KernelObject, MAX_SUSPEND_COUNT, ThreadResumeResult,
-            ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
-            ce_thread_priority_to_win32, win32_thread_priority_to_ce,
+            CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject, FileChangeNotificationObject,
+            FileChangeRecord, FileObject, FindFileObject, HandleTable, KernelObject,
+            MAX_SUSPEND_COUNT, ThreadResumeResult, ThreadSuspendResult, VolumeObject,
+            WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
+            win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
@@ -920,6 +921,29 @@ impl CeKernel {
             .iter()
             .nth(index as usize)
             .cloned()
+    }
+
+    pub fn request_device_notifications(
+        &mut self,
+        class_guid: [u8; 16],
+        message_queue: u32,
+        all: bool,
+    ) -> u32 {
+        self.handles
+            .insert(KernelObject::DeviceNotification(DeviceNotificationObject {
+                class_guid,
+                message_queue,
+                all,
+            }))
+    }
+
+    pub fn stop_device_notifications(&mut self, handle: u32) -> Result<DeviceNotificationObject> {
+        let KernelObject::DeviceNotification(notification) = self.handles.get(handle)?.clone()
+        else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.handles.close(handle)?;
+        Ok(notification)
     }
 
     fn publish_configured_mount_device_interfaces(&mut self, add: bool) {

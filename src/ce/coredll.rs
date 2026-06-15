@@ -4054,12 +4054,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_REQUEST_DEVICE_NOTIFICATIONS | ORD_STOP_DEVICE_NOTIFICATIONS => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
+        ORD_REQUEST_DEVICE_NOTIFICATIONS => {
+            Some(CoredllValue::Handle(request_device_notifications_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+            )))
         }
+        ORD_STOP_DEVICE_NOTIFICATIONS => Some(CoredllValue::Bool(stop_device_notifications_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_REGISTER_DESKTOP => {
             kernel
                 .threads
@@ -12190,6 +12199,48 @@ fn enum_device_interfaces_raw<M: CoredllGuestMemory>(
                 }
             }
         }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn request_device_notifications_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    class_ptr: u32,
+    message_queue: u32,
+    all: u32,
+) -> u32 {
+    let mut class_guid = [0u8; 16];
+    if class_ptr == 0
+        || message_queue == 0
+        || memory.read_bytes(class_ptr, &mut class_guid).is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let handle = kernel.request_device_notifications(class_guid, message_queue, all != 0);
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn stop_device_notifications_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    notification_handle: u32,
+) -> bool {
+    if notification_handle == 0
+        || kernel
+            .stop_device_notifications(notification_handle)
+            .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
