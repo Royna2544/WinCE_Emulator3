@@ -15,6 +15,13 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- Live iNavi drive after the reset-recovery FSDMGR work: the current
+  `192.168.0.39:8765` process remains on the real splash framebuffer, but file
+  tracing has advanced into map-layer reads (`mapdata\bgdata`,
+  `mapdata\landuse`, `mapdata\point`, `displayreshigh.bin`, and `soap.bin`).
+  The visible tree now contains the main `0x20004` map child plus hidden map
+  subwindows, while the top owned `0x20008` splash popup remains visible and no
+  later hide/demote trace for that popup has been observed.
 - `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
   `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
   `FSDMGR_GetRegistryValue @20` imports now patch through the normal import

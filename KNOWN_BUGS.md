@@ -112,11 +112,11 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   queue GPS/IMU data, `serial_devices.json` can now mark a config-selected
   `remote_gps` serial port, live `drive29` confirms queued NMEA drains when
   iNavi opens `COM7:`, and raw `GetCommModemStatus` now reports asserted
-  CTS/DSR/RLSD for serial handles. Remaining risk: subsequent GPS posts can
-  queue while the guest is sleeping/polling other workers, and the latest
-  trace-mode splash/resource-loading run did not open `COM7:`, `MFS1:`, or
-  `SMB1:` at all, so the exact serial read/event cadence and parsed-position
-  consumption still need proof.
+  CTS/DSR/RLSD for serial handles. Current live evidence shows `COM7:` remains
+  open as the remote GPS target, but new REST GPS posts can sit queued while the
+  guest is loading map data and not issuing further serial reads; the exact
+  `ReadFile`/`WaitCommEvent` cadence and parsed-position consumption still need
+  proof.
 
 ## Build And Validation Risks
 
