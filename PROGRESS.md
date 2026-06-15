@@ -15,6 +15,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now accepts the CE alpha stress module's 32 bpp
+  `BI_ALPHABITFIELDS` layout with four masks, skips the alpha mask before pixel
+  storage, and preserves high-byte per-pixel alpha for selected-DIB
+  `AlphaBlend(AC_SRC_ALPHA)`.
 - `src/ce/coredll.rs` and `tests/coredll_raw_kernel.rs`: synthetic shell
   system image-list handles returned from `SHGetFileInfoW` now accept
   `ImageList_Destroy` as a successful CE shell teardown path for both large and
