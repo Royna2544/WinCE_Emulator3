@@ -15,6 +15,15 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `tests/coredll_raw_gwe.rs`:
+  raw `PatBlt` display-performance timing now mirrors CE
+  `dispperf.h::DispPerfParam` for `PARAM_COLORBLACK` and `PARAM_COLORWHITE`,
+  so black and white solid-brush `PATCOPY` rows report the expected blit
+  parameter counters through `ExtEscape(DISPPERF_EXTESC_GETTIMING)`.
+- `src/winsock.rs` and `src/emulator/unicorn.rs`: blocking guest TCP
+  `connect` waits now use `SO_SNDTIMEO` when present, falling back to the local
+  30-second default, so scheduler wait timeouts and the host
+  `TcpStream::connect_timeout` path agree.
 - `tests/coredll_raw_gwe.rs`: direct caller-DIB coverage now exercises CE
   GDIPRINT-style `BI_ALPHABITFIELDS` rows for `StretchDIBits` and
   `SetDIBitsToDevice`, including 16 bpp BGR4444 and 32 bpp BGR8888 four-mask

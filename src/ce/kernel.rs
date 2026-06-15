@@ -881,7 +881,19 @@ impl CeKernel {
     }
 
     pub fn record_display_perf_gpe(&mut self, rop_code: u32, stretch: bool, transparent: bool) {
+        self.record_display_perf_gpe_with_solid_color(rop_code, stretch, transparent, None);
+    }
+
+    pub fn record_display_perf_gpe_with_solid_color(
+        &mut self,
+        rop_code: u32,
+        stretch: bool,
+        transparent: bool,
+        solid_rgb: Option<[u8; 3]>,
+    ) {
         const DISPPERF_TIMING_ROWS: usize = 32;
+        const PARAM_COLORBLACK: usize = 4;
+        const PARAM_COLORWHITE: usize = 5;
         const PARAM_STRETCH: usize = 6;
         const PARAM_TRANSPARENT: usize = 7;
         let Some(index) = self
@@ -908,6 +920,17 @@ impl CeKernel {
         if transparent {
             timing.blt_params[PARAM_TRANSPARENT] =
                 timing.blt_params[PARAM_TRANSPARENT].saturating_add(1);
+        }
+        match solid_rgb {
+            Some([0, 0, 0]) => {
+                timing.blt_params[PARAM_COLORBLACK] =
+                    timing.blt_params[PARAM_COLORBLACK].saturating_add(1);
+            }
+            Some([0xff, 0xff, 0xff]) => {
+                timing.blt_params[PARAM_COLORWHITE] =
+                    timing.blt_params[PARAM_COLORWHITE].saturating_add(1);
+            }
+            _ => {}
         }
     }
 

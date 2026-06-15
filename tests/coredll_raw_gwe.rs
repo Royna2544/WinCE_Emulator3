@@ -911,6 +911,138 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
         0
     );
 
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, DISPPERF_EXTESC_CLEARTIMING, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    let black_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x0000_0000],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0 => handle,
+        other => panic!("CreateSolidBrush(black) did not return a brush: {other:?}"),
+    };
+    let white_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x00ff_ffff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0 => handle,
+        other => panic!("CreateSolidBrush(white) did not return a brush: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [hdc, black_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAT_BLT,
+            [hdc, 0, 0, 1, 1, PATCOPY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [hdc, white_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAT_BLT,
+            [hdc, 1, 0, 1, 1, PATCOPY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [
+                hdc,
+                DISPPERF_EXTESC_GETTIMING,
+                0,
+                0,
+                DISPPERF_TIMING_TABLE_SIZE,
+                dispperf_out
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let patcopy_timing = memory.read_bytes(dispperf_out, 64);
+    assert_eq!(
+        u32::from_le_bytes(patcopy_timing[0..4].try_into().unwrap()),
+        PATCOPY
+    );
+    assert_eq!(
+        u32::from_le_bytes(patcopy_timing[4..8].try_into().unwrap()),
+        2
+    );
+    assert_eq!(
+        u32::from_le_bytes(patcopy_timing[48..52].try_into().unwrap()),
+        1,
+        "PARAM_COLORBLACK should count the black solid brush blit"
+    );
+    assert_eq!(
+        u32::from_le_bytes(patcopy_timing[52..56].try_into().unwrap()),
+        1,
+        "PARAM_COLORWHITE should count the white solid brush blit"
+    );
+
     memory.write_word(dispperf_out, 0xfeed_beef);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

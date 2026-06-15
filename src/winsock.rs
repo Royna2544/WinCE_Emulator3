@@ -32,6 +32,7 @@ const MSG_OOB: u32 = 0x0001;
 const FD_SETSIZE: u32 = 64;
 const SOCKET_HANDLE_BASE: u32 = 0x7100_0000;
 const MAX_GUEST_IO: usize = 1024 * 1024;
+const DEFAULT_TCP_CONNECT_TIMEOUT_MS: u32 = 30_000;
 const CE_GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
 const CE_GUEST_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 2);
 const HOST_LOOPBACK_IP: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
@@ -416,6 +417,10 @@ pub fn socket_begin_tcp_connect(socket: u32, name_bytes: &[u8]) -> bool {
         Err(_) => return false,
     };
     let options = state.options.get(&socket).copied().unwrap_or_default();
+    let timeout = socket_timeout_duration(
+        options.send_timeout_ms,
+        Duration::from_millis(u64::from(DEFAULT_TCP_CONNECT_TIMEOUT_MS)),
+    );
     match state.sockets.get(&socket) {
         Some(HostSocket::Pending {
             family: AF_INET,
@@ -430,7 +435,7 @@ pub fn socket_begin_tcp_connect(socket: u32, name_bytes: &[u8]) -> bool {
     *state.sockets.get_mut(&socket).unwrap() = HostSocket::TcpConnecting(result.clone());
     drop(state);
     std::thread::spawn(move || {
-        let r = TcpStream::connect_timeout(&host_addr, Duration::from_secs(30))
+        let r = TcpStream::connect_timeout(&host_addr, timeout)
             .map(|stream| {
                 configure_stream(&stream, options);
                 stream
@@ -478,6 +483,18 @@ pub fn socket_recv_timeout_ms(socket: u32) -> Option<u32> {
         .ok()
         .and_then(|state| state.options.get(&socket).copied())
         .and_then(|options| (options.recv_timeout_ms != 0).then_some(options.recv_timeout_ms))
+}
+
+pub fn socket_send_timeout_ms(socket: u32) -> Option<u32> {
+    state()
+        .lock()
+        .ok()
+        .and_then(|state| state.options.get(&socket).copied())
+        .and_then(|options| (options.send_timeout_ms != 0).then_some(options.send_timeout_ms))
+}
+
+pub fn default_tcp_connect_timeout_ms() -> u32 {
+    DEFAULT_TCP_CONNECT_TIMEOUT_MS
 }
 
 pub fn socket_nonblocking(socket: u32) -> bool {

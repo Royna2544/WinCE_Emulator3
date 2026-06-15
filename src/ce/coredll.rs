@@ -41596,7 +41596,10 @@ fn pat_blt_raw<M: CoredllGuestMemory>(
     {
         pat_blt_to_framebuffer_for_hdc(kernel, memory, framebuffer, dst, rect, rop);
     }
-    kernel.record_display_perf_gpe(rop, false, false);
+    let solid_rgb = rop3_depends_on_input(rop3_byte(rop), 0b100)
+        .then(|| selected_brush_pixel_source(kernel, memory, dst).and_then(|source| source.solid))
+        .flatten();
+    kernel.record_display_perf_gpe_with_solid_color(rop, false, false, solid_rgb);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }

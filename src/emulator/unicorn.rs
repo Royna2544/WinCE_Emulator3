@@ -15816,10 +15816,12 @@ fn winsock_read_wait_plan<D>(
         if !crate::winsock::socket_begin_tcp_connect(socket, &bytes) {
             return None;
         }
+        let timeout_ms = crate::winsock::socket_send_timeout_ms(socket)
+            .unwrap_or_else(crate::winsock::default_tcp_connect_timeout_ms);
         Some((
             socket,
             vec![socket],
-            crate::ce::timer::INFINITE,
+            timeout_ms,
             WinsockReadyKind::Write,
             0,
             1,
@@ -19383,6 +19385,111 @@ mod wait_scheduler_tests {
             );
         }
         drop(listener);
+    }
+
+    #[test]
+    fn winsock_blocking_connect_wait_uses_send_timeout() {
+        const SOL_SOCKET: u32 = 0xffff;
+        const SO_SNDTIMEO: u32 = 0x1005;
+
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3018_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let timeout_ptr = base + 0x1100;
+        let thread_id = 18u32;
+        let thread_handle = 0x1818u32;
+        let return_pc = 0x0041_8000u32;
+
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            memory.write_u8(sockaddr + 2, 0xff).unwrap();
+            memory.write_u8(sockaddr + 3, 0xff).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::UNSPECIFIED.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            memory.write_u32(timeout_ptr, 15).unwrap();
+
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                thread_id,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("setsockopt"),
+                    &mut memory,
+                    &[socket, SOL_SOCKET, SO_SNDTIMEO, timeout_ptr, 4],
+                ),
+                0
+            );
+            socket
+        };
+
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("connect"),
+            &[socket, sockaddr, 16],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.timeout_ms, 15);
+        assert_eq!(
+            kernel
+                .blocked_waiter(blocked.wait_id)
+                .map(|wait| wait.timeout_ms),
+            Some(15)
+        );
+
+        kernel.timers.sleep_ms(15);
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            crate::winsock::SOCKET_ERROR
+        );
+        assert_ne!(kernel.threads.get_last_error(thread_id), 0);
     }
 
     #[test]
