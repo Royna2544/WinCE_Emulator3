@@ -3422,6 +3422,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `ROP_LINE` timing rows for raw `LineTo`/`Polyline`, and raw `PatBlt`
     now mirrors `dispperf.h::DispPerfParam` for display-target
     `PARAM_DESTINVIDMEM` plus `PARAM_COLORBLACK` and `PARAM_COLORWHITE` on
-    black/white solid-brush `PATCOPY` rows. Real video-protection,
+    black/white solid-brush `PATCOPY` rows. Same-framebuffer raw
+    `TransparentImage` also records the CE `PARAM_SRCINVIDMEM`,
+    `PARAM_DESTINVIDMEM`, and `PARAM_TRANSPARENT` counters for the
+    `DrvTransparentBlt`/`AnyBlt` path. Real video-protection,
     framebuffer-access, and broader DISPPERF payload execution outside those
     raw draw paths remains unsupported.

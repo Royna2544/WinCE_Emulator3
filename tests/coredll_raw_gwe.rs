@@ -11542,6 +11542,7 @@ fn coredll_raw_transparent_image_copies_between_framebuffer_hdc_with_color_key()
     const WHITE_COLORREF: u32 = 0x00ff_ffff;
     const BLACKNESS: u32 = 0x0000_0042;
     const WHITENESS: u32 = 0x00ff_0062;
+    const DISPPERF_ROP_TRANSPARENT_BLT: u32 = 0x0000_cccc;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -11615,6 +11616,33 @@ fn coredll_raw_transparent_image_copies_between_framebuffer_hdc_with_color_key()
         ));
         assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 1), expected);
     }
+
+    let timing = kernel.display_perf_timing_bytes();
+    let transparent_timing = timing
+        .chunks_exact(64)
+        .find(|row| {
+            u32::from_le_bytes(row[0..4].try_into().unwrap()) == DISPPERF_ROP_TRANSPARENT_BLT
+        })
+        .expect("transparent blit timing row should be recorded");
+    assert_eq!(
+        u32::from_le_bytes(transparent_timing[4..8].try_into().unwrap()),
+        4
+    );
+    assert_eq!(
+        u32::from_le_bytes(transparent_timing[40..44].try_into().unwrap()),
+        4,
+        "PARAM_SRCINVIDMEM should count same-framebuffer TransparentImage sources"
+    );
+    assert_eq!(
+        u32::from_le_bytes(transparent_timing[44..48].try_into().unwrap()),
+        4,
+        "PARAM_DESTINVIDMEM should count same-framebuffer TransparentImage destinations"
+    );
+    assert_eq!(
+        u32::from_le_bytes(transparent_timing[60..64].try_into().unwrap()),
+        4,
+        "PARAM_TRANSPARENT should count TransparentImage rows"
+    );
 
     Ok(())
 }

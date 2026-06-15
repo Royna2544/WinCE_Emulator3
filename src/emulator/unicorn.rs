@@ -904,6 +904,10 @@ type SuspendedGuestThreadQueue =
     std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<SuspendedGuestThread>>>;
 
 const HEAP_SPILLOVER_BLOB_NAME: &str = "ram:heap-spillover";
+#[cfg(feature = "unicorn")]
+fn heap_spillover_perms() -> MemoryPerms {
+    MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC
+}
 
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone)]
@@ -8141,7 +8145,7 @@ fn map_persisted_ram_blob_pages<D>(
         uc.mem_map(
             u64::from(span_base),
             u64::from(span_size),
-            unicorn_perms(MemoryPerms::READ | MemoryPerms::WRITE),
+            unicorn_perms(heap_spillover_perms()),
         )
         .map_err(|err| {
             Error::Backend(format!(
@@ -9656,7 +9660,7 @@ fn map_heap_spillover<D>(
         mapped,
         base,
         size,
-        MemoryPerms::READ | MemoryPerms::WRITE,
+        heap_spillover_perms(),
         "heap spillover",
         true,
     )?;
@@ -24002,6 +24006,37 @@ mod guest_thread_stack_tests {
         assert!(!mapped_ranges.contains(&(0x3100_0000, 0x1000)));
         assert!(!mapped_ranges.contains(&(0x3100_3000, 0x1000)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_heap_spillover_remaps_as_executable() -> Result<()> {
+        use unicorn_engine::{
+            Unicorn,
+            unicorn_const::{Arch, Mode},
+        };
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("{err:?}")))?;
+        let mut mapped_ranges = Vec::new();
+        let blob = MappedBlob {
+            name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
+            base: 0x3100_0000,
+            bytes: vec![0; 0x1000],
+        };
+
+        map_persisted_ram_blob_pages(&mut uc, &mut mapped_ranges, &blob)?;
+        uc.mem_write(0x3100_0000, &0x03e0_0008u32.to_le_bytes())
+            .map_err(|err| Error::Backend(format!("write jr ra: {err:?}")))?;
+        uc.mem_write(0x3100_0004, &0u32.to_le_bytes())
+            .map_err(|err| Error::Backend(format!("write nop: {err:?}")))?;
+        uc.reg_write(RegisterMIPS::RA, 0x3100_0008)
+            .map_err(|err| Error::Backend(format!("write ra: {err:?}")))?;
+
+        uc.emu_start(0x3100_0000, 0, 0, 2)
+            .map_err(|err| Error::Backend(format!("execute heap spillover: {err:?}")))?;
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x3100_0008);
         Ok(())
     }
 

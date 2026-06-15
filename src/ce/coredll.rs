@@ -41820,7 +41820,15 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
         );
     }
     if routed_through_blt {
-        kernel.record_display_perf_gpe(DISPPERF_ROP_TRANSPARENT_BLT, false, false);
+        kernel.record_display_perf_gpe_with_params(
+            DISPPERF_ROP_TRANSPARENT_BLT,
+            crate::ce::kernel::DisplayPerfBltParams {
+                src_in_video_mem: !kernel.resources.is_memory_dc(src),
+                dest_in_video_mem: !kernel.resources.is_memory_dc(dst),
+                transparent: true,
+                ..crate::ce::kernel::DisplayPerfBltParams::default()
+            },
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     true

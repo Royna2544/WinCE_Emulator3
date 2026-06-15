@@ -20,7 +20,9 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `dispperf.h::DispPerfParam` for display-target `PARAM_DESTINVIDMEM` plus
   `PARAM_COLORBLACK` and `PARAM_COLORWHITE`, so black and white solid-brush
   `PATCOPY` rows report the expected blit parameter counters through
-  `ExtEscape(DISPPERF_EXTESC_GETTIMING)`.
+  `ExtEscape(DISPPERF_EXTESC_GETTIMING)`. Same-framebuffer raw
+  `TransparentImage` rows now also report source-video-memory,
+  destination-video-memory, and transparent blit counters.
 - `src/winsock.rs` and `src/emulator/unicorn.rs`: blocking guest TCP
   `connect` waits now use `SO_SNDTIMEO` when present, falling back to the local
   30-second default, so scheduler wait timeouts and the host
