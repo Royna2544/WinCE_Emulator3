@@ -491,6 +491,9 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     const DRVESC_SAVEVIDEOMEM: u32 = 6501;
     const DRVESC_RESTOREVIDEOMEM: u32 = 6502;
     const DRVESC_GETRAWFRAMEBUFFER: u32 = 0x0002_0001;
+    const RAW_FRAMEBUFFER_INFO_SIZE: u32 = 28;
+    const FORMAT_565: u16 = 1;
+    const DEVICEEMULATOR_FRAMEBUFFER_UA_BASE: u32 = 0xa3f0_0000;
     const CONTRASTCOMMAND: u32 = 6149;
     const CONTRAST_CMD_GET: u32 = 0;
     const CONTRAST_CMD_SET: u32 = 1;
@@ -528,6 +531,7 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     let backlight_out = 0x3000_3040;
     let contrast_in = 0x3000_3050;
     let contrast_out = 0x3000_3060;
+    let raw_framebuffer_out = 0x3000_3070;
     memory.map_words(query_ptr, 1);
     memory.map_words(dispperf_out, DISPPERF_TIMING_TABLE_SIZE / 4);
     memory.map_words(gamma_update_ptr, 1);
@@ -537,6 +541,7 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     memory.map_words(backlight_out, 1);
     memory.map_words(contrast_in, 2);
     memory.map_words(contrast_out, 1);
+    memory.map_bytes(raw_framebuffer_out, RAW_FRAMEBUFFER_INFO_SIZE);
 
     let hdc = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -1565,13 +1570,111 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
             [hdc, QUERYESCSUPPORT, 4, query_ptr, 0, 0],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(0),
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_bytes(
+        raw_framebuffer_out,
+        &[0xee; RAW_FRAMEBUFFER_INFO_SIZE as usize],
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [
+                hdc,
+                DRVESC_GETRAWFRAMEBUFFER,
+                0,
+                0,
+                RAW_FRAMEBUFFER_INFO_SIZE,
+                raw_framebuffer_out
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let raw_framebuffer_info =
+        memory.read_bytes(raw_framebuffer_out, RAW_FRAMEBUFFER_INFO_SIZE as usize);
+    let info_u16 = |offset: usize| {
+        u16::from_le_bytes(raw_framebuffer_info[offset..offset + 2].try_into().unwrap())
+    };
+    let info_u32 = |offset: usize| {
+        u32::from_le_bytes(raw_framebuffer_info[offset..offset + 4].try_into().unwrap())
+    };
+    let info_i32 = |offset: usize| info_u32(offset) as i32;
+    assert_eq!(info_u16(0), FORMAT_565);
+    assert_eq!(info_u16(2), 16);
+    assert_eq!(info_u32(4), DEVICEEMULATOR_FRAMEBUFFER_UA_BASE);
+    assert_eq!(info_i32(8), 2);
+    assert_eq!(info_i32(12), 480);
+    assert_eq!(info_i32(16), 240);
+    assert_eq!(info_i32(20), 320);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_bytes(
+        raw_framebuffer_out,
+        &[0xee; RAW_FRAMEBUFFER_INFO_SIZE as usize],
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [
+                hdc,
+                DRVESC_GETRAWFRAMEBUFFER,
+                0,
+                0,
+                RAW_FRAMEBUFFER_INFO_SIZE - 1,
+                raw_framebuffer_out
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
             ..
         }
     ));
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
-        ERROR_NOT_SUPPORTED
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        memory.read_bytes(raw_framebuffer_out, RAW_FRAMEBUFFER_INFO_SIZE as usize),
+        vec![0xee; RAW_FRAMEBUFFER_INFO_SIZE as usize],
+        "GETRAWFRAMEBUFFER invalid output size should not mutate caller storage"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [
+                hdc,
+                DRVESC_GETRAWFRAMEBUFFER,
+                0,
+                0,
+                RAW_FRAMEBUFFER_INFO_SIZE,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
     );
 
     for escape in [

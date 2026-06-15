@@ -17,7 +17,7 @@ use crate::{
             CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
             FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FindData, GENERIC_WRITE, VolumeInfo,
         },
-        framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
+        framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, PixelFormat},
         gwe::{
             BS_DEFPUSHBUTTON, BS_PUSHBUTTON, GWL_STYLE, Message, MessagePointerPayload, PeekFlags,
             Point, Rect, WM_FILECHANGEINFO, WNDCLASSW_SIZE, WS_CHILD, WS_EX_TOPMOST, WS_POPUP,
@@ -1619,7 +1619,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0xffff_ffff))
         }
         ORD_EXT_ESCAPE => Some(CoredllValue::U32(ext_escape_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_GET_FILE_VERSION_INFO_SIZE_W => {
             // GetFileVersionInfoSizeW(lptstrFilename, lpdwHandle) — returns 0 (no version info).
@@ -36150,6 +36154,7 @@ const DRVESC_SETVIDEOPROTECTION: u32 = 6401;
 const DRVESC_GETVIDEOPROTECTION: u32 = 6402;
 const DRVESC_SAVEVIDEOMEM: u32 = 6501;
 const DRVESC_RESTOREVIDEOMEM: u32 = 6502;
+const DRVESC_GETRAWFRAMEBUFFER: u32 = 0x0002_0001;
 const CONTRASTCOMMAND: u32 = 6149;
 const CONTRAST_CMD_GET: u32 = 0;
 const CONTRAST_CMD_SET: u32 = 1;
@@ -36174,10 +36179,18 @@ const DISPPERF_TIMING_TABLE_SIZE: u32 = DISPPERF_TIMING_SIZE * DISPPERF_NUM_ROP_
 const DISPPERF_ROP_LINE: u32 = 0xfefefff1;
 const DISPPERF_ROP_TRANSPARENT_BLT: u32 = 0x0000_cccc;
 const DISPPERF_ROP_ALPHA_BLEND: u32 = 0x0000_cccc;
+const RAW_FRAMEBUFFER_INFO_SIZE: u32 = 28;
+const RAW_FRAMEBUFFER_FORMAT_565: u16 = 1;
+const RAW_FRAMEBUFFER_FORMAT_OTHER: u16 = 3;
+const DEVICEEMULATOR_FRAMEBUFFER_UA_BASE: u32 = 0xa3f0_0000;
+const DEVICEEMULATOR_FRAMEBUFFER_WIDTH: u32 = 240;
+const DEVICEEMULATOR_FRAMEBUFFER_HEIGHT: u32 = 320;
+const DEVICEEMULATOR_FRAMEBUFFER_STRIDE: usize = 480;
 
 fn ext_escape_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
@@ -36225,6 +36238,15 @@ fn ext_escape_raw<M: CoredllGuestMemory>(
     } else if escape == CONTRASTCOMMAND {
         contrast_command_raw(
             kernel, memory, thread_id, input_len, input_ptr, output_len, output_ptr,
+        )
+    } else if escape == DRVESC_GETRAWFRAMEBUFFER {
+        get_raw_framebuffer_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            output_len,
+            output_ptr,
         )
     } else if escape == SETBACKLIGHT {
         set_backlight_raw(kernel, memory, thread_id, input_len, input_ptr)
@@ -36282,6 +36304,50 @@ fn contrast_command_raw<M: CoredllGuestMemory>(
     };
 
     if output_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, output_ptr, out_value) {
+        return EXTESC_ERROR;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    EXTESC_SUPPORTED
+}
+
+fn get_raw_framebuffer_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    output_len: u32,
+    output_ptr: u32,
+) -> u32 {
+    if output_len < RAW_FRAMEBUFFER_INFO_SIZE || output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return EXTESC_ERROR;
+    }
+
+    let info = framebuffer
+        .as_deref()
+        .map(Framebuffer::info)
+        .unwrap_or(FramebufferInfo {
+            width: DEVICEEMULATOR_FRAMEBUFFER_WIDTH,
+            height: DEVICEEMULATOR_FRAMEBUFFER_HEIGHT,
+            stride: DEVICEEMULATOR_FRAMEBUFFER_STRIDE,
+            format: PixelFormat::Rgb565,
+        });
+    let format = match info.format {
+        PixelFormat::Rgb565 => RAW_FRAMEBUFFER_FORMAT_565,
+        _ => RAW_FRAMEBUFFER_FORMAT_OTHER,
+    };
+    let mut bytes = Vec::with_capacity(RAW_FRAMEBUFFER_INFO_SIZE as usize);
+    bytes.extend_from_slice(&format.to_le_bytes());
+    bytes.extend_from_slice(&(info.format.bits_per_pixel() as u16).to_le_bytes());
+    bytes.extend_from_slice(&DEVICEEMULATOR_FRAMEBUFFER_UA_BASE.to_le_bytes());
+    bytes.extend_from_slice(&(info.format.bytes_per_pixel() as i32).to_le_bytes());
+    bytes.extend_from_slice(&(info.stride as i32).to_le_bytes());
+    bytes.extend_from_slice(&(info.width as i32).to_le_bytes());
+    bytes.extend_from_slice(&(info.height as i32).to_le_bytes());
+
+    if !write_guest_bytes(kernel, memory, thread_id, output_ptr, &bytes) {
         return EXTESC_ERROR;
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -36513,6 +36579,7 @@ fn is_queryable_display_escape(escape: u32) -> bool {
             | DRVESC_SETSCREENROTATION
             | DRVESC_GETSCREENROTATION
             | CONTRASTCOMMAND
+            | DRVESC_GETRAWFRAMEBUFFER
             | DISPPERF_EXTESC_GETSIZE
             | DISPPERF_EXTESC_GETTIMING
             | DISPPERF_EXTESC_CLEARTIMING
