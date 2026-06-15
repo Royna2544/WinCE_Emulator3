@@ -4064,3 +4064,31 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   suite still ignores the eVC4 MIPSII fixture because that toolchain is not
   configured, and Cargo still emits the existing unused-code warnings plus the
   recurring `target\debug\incremental` finalize access-denied note.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `src/emulator/unicorn.rs`:
+  window destruction now uses a shared framebuffer-aware helper that snapshots
+  the target subtree before `WM_DESTROY`/destroy cleanup and then either
+  restores captured backing-store pixels to the live framebuffer or discards
+  the saved stores when no framebuffer is available. Raw `DestroyWindow`,
+  Unicorn `DestroyWindow`, `DefWindowProcW(WM_CLOSE)`, default
+  `CallWindowProcW(WM_CLOSE)`, and pending destroy finalization now share that
+  path instead of duplicating or skipping backing-store cleanup.
+- Focused validation after the framebuffer-aware destroy slice:
+  `cargo fmt --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop
+  destroyed_window_restores_captured_framebuffer_backing_store`, `cargo test
+  -j 1 --features unicorn,trace,win32-desktop
+  destroy_window_with_framebuffer_restores_captured_backing_store`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_send_message_timeout_writes_zero_result_when_target_destroyed`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_destroy_parent_invalidates_children_and_purges_messages`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_gwe_wm_parentnotify_on_create_and_destroy`
+  passed.
+- Broader validation after the framebuffer-aware destroy slice:
+  `cargo check --features unicorn,trace,win32-desktop` and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The full
+  suite still ignores the eVC4 MIPSII fixture because that toolchain is not
+  configured, and Cargo still emits the existing unused-code warnings plus the
+  recurring `target\debug\incremental` finalize access-denied note.
