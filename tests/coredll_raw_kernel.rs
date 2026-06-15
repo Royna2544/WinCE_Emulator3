@@ -436,6 +436,33 @@ fn coredll_raw_msg_queues_deliver_device_notification_devdetails() -> Result<()>
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [read_queue, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [write_queue, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_WRITE_MSG_QUEUE,
             [write_queue, input_ptr, 4, 0, 0x20],
         ),
@@ -754,6 +781,34 @@ fn coredll_raw_msg_queues_follow_ce_access_and_capacity_edges() -> Result<()> {
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(kernel.is_wait_ready(read_queue, thread_id), Some(true));
+    assert_eq!(kernel.is_wait_ready(write_queue, thread_id), Some(false));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [read_queue, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [write_queue, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -791,6 +846,7 @@ fn coredll_raw_msg_queues_follow_ce_access_and_capacity_edges() -> Result<()> {
     assert_eq!(memory.read_u32(flags_ptr)?, 0x42);
     assert_eq!(memory.read_bytes(output_ptr, 2), vec![1, 2]);
     assert_eq!(kernel.is_wait_ready(read_queue, thread_id), Some(false));
+    assert_eq!(kernel.is_wait_ready(write_queue, thread_id), Some(true));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -817,6 +873,20 @@ fn coredll_raw_msg_queues_follow_ce_access_and_capacity_edges() -> Result<()> {
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [read_queue, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
             ..
         }
     ));

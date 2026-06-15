@@ -1165,6 +1165,7 @@ impl CeKernel {
             }
             self.message_queues.remove(&queue_id);
         }
+        self.queue_message_queue_wake_candidates(queue_id);
     }
 
     pub fn message_queue_info(&self, handle: u32) -> Result<MessageQueueInfo> {
@@ -1210,20 +1211,24 @@ impl CeKernel {
                 .or_else(|| queue.messages.pop_front())
                 .expect("readable message exists");
             message.bytes.truncate(buffer_bytes as usize);
-            return Ok(MessageQueueReadStatus::BufferTooSmall(MessageQueueRead {
+            let message = MessageQueueRead {
                 bytes: message.bytes,
                 flags: message.flags,
-            }));
+            };
+            self.queue_message_queue_wake_candidates(endpoint.queue_id);
+            return Ok(MessageQueueReadStatus::BufferTooSmall(message));
         }
         let message = queue
             .alert
             .take()
             .or_else(|| queue.messages.pop_front())
             .expect("readable message exists");
-        Ok(MessageQueueReadStatus::Message(MessageQueueRead {
+        let message = MessageQueueRead {
             bytes: message.bytes,
             flags: message.flags,
-        }))
+        };
+        self.queue_message_queue_wake_candidates(endpoint.queue_id);
+        Ok(MessageQueueReadStatus::Message(message))
     }
 
     pub fn write_message_queue(
@@ -1258,19 +1263,7 @@ impl CeKernel {
         }
         if flags & Self::MSGQUEUE_MSGALERT != 0 && queue.alert.is_none() {
             queue.alert = Some(MessageQueueMessage { bytes, flags });
-            let handles: Vec<_> = self
-                .handles
-                .iter()
-                .filter_map(|(handle, object)| match object {
-                    KernelObject::MessageQueue(endpoint) if endpoint.queue_id == queue_id => {
-                        Some(handle)
-                    }
-                    _ => None,
-                })
-                .collect();
-            for handle in handles {
-                self.queue_object_wake_candidates(handle);
-            }
+            self.queue_message_queue_wake_candidates(queue_id);
             return Ok(MessageQueueWriteStatus::Written);
         }
         if queue.messages.len() >= queue.max_messages as usize {
@@ -1280,6 +1273,11 @@ impl CeKernel {
             .messages
             .push_back(MessageQueueMessage { bytes, flags });
         queue.max_queue_messages = queue.max_queue_messages.max(queue.messages.len() as u32);
+        self.queue_message_queue_wake_candidates(queue_id);
+        Ok(MessageQueueWriteStatus::Written)
+    }
+
+    fn queue_message_queue_wake_candidates(&mut self, queue_id: u32) {
         let handles: Vec<_> = self
             .handles
             .iter()
@@ -1293,7 +1291,6 @@ impl CeKernel {
         for handle in handles {
             self.queue_object_wake_candidates(handle);
         }
-        Ok(MessageQueueWriteStatus::Written)
     }
 
     fn message_queue_id(&self, handle: u32) -> Result<u32> {
@@ -1301,6 +1298,21 @@ impl CeKernel {
             return Err(Error::InvalidHandle(handle));
         };
         Ok(endpoint.queue_id)
+    }
+
+    fn message_queue_wait_ready(&self, endpoint: &MessageQueueHandleObject) -> Option<bool> {
+        let queue = self.message_queues.get(&endpoint.queue_id)?;
+        if endpoint.read_access {
+            if queue.writers == 0 && queue.flags & Self::MSGQUEUE_ALLOW_BROKEN == 0 {
+                Some(true)
+            } else {
+                Some(queue.alert.is_some() || !queue.messages.is_empty())
+            }
+        } else if queue.readers == 0 && queue.flags & Self::MSGQUEUE_ALLOW_BROKEN == 0 {
+            Some(true)
+        } else {
+            Some(queue.messages.len() < queue.max_messages as usize)
+        }
     }
 
     pub fn request_device_notifications(
@@ -4608,11 +4620,7 @@ impl CeKernel {
             return WaitResult::Failed;
         }
         if let Ok(KernelObject::MessageQueue(endpoint)) = self.handles.get(handle) {
-            return if self
-                .message_queues
-                .get(&endpoint.queue_id)
-                .is_some_and(|queue| queue.alert.is_some() || !queue.messages.is_empty())
-            {
+            return if self.message_queue_wait_ready(endpoint).unwrap_or(false) {
                 WaitResult::Object0
             } else {
                 WaitResult::Timeout
@@ -4969,10 +4977,7 @@ impl CeKernel {
             return None;
         }
         if let Ok(KernelObject::MessageQueue(endpoint)) = self.handles.get(handle) {
-            return self
-                .message_queues
-                .get(&endpoint.queue_id)
-                .map(|queue| queue.alert.is_some() || !queue.messages.is_empty());
+            return self.message_queue_wait_ready(endpoint);
         }
         self.handles.is_wait_ready(handle, thread_id)
     }
