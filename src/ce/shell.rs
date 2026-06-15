@@ -802,7 +802,7 @@ fn defaulted_notification_duration(priority: u32, duration_cs: u32) -> u32 {
 }
 
 fn notification_expires_at_ms(now_ms: u32, duration_cs: u32) -> Option<u32> {
-    (duration_cs != u32::MAX).then(|| now_ms.saturating_add(duration_cs.saturating_mul(10)))
+    (duration_cs != u32::MAX).then(|| now_ms.saturating_add(duration_cs.saturating_mul(1000)))
 }
 
 pub const SHNP_INFORM: u32 = 0x0000_01b1;

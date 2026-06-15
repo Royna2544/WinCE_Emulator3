@@ -3183,6 +3183,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     where add defaults zero duration but update stores `pndNew->csDuration`
     literally, and leaves add-time `grfFlags`, `hwndSink`, and `lParam`
     unchanged because `UpdateBubble` only assigns the masked bubble fields.
+    `SetNotificationIconUpdateTimer` and `UpdateTimedNotificationIcons`
+    compare `TaskbarBubble::m_csDuration * 1000` against `GetTickCount`, so
+    Rust now treats notification duration values as seconds rather than
+    centiseconds when computing expiration.
     Rust also marshals optional `SHNN_LINKSEL` link strings into the receiver
     `NMSHN` allocation, carries `SHNN_DISMISS` `fTimeout`, and prunes
     window-bound notify icon, notification, and change-notification records

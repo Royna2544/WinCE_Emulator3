@@ -4310,10 +4310,10 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
         shell.update_notification(SHNUM_ICON | SHNUM_TITLE, update, 0),
         NotificationResult::Success
     );
-    // expire_notifications: duration 100 cs = 1000 ms; expires at ms = 0 + 1000 = 1000.
-    let expired = shell.expire_notifications(999);
+    // expire_notifications: CE taskbar durations are seconds.
+    let expired = shell.expire_notifications(99_999);
     assert_eq!(expired.len(), 0); // not yet expired
-    let expired = shell.expire_notifications(1000);
+    let expired = shell.expire_notifications(100_000);
     assert_eq!(expired.len(), 1); // now expired
     assert!(shell.notification(clsid, 7).is_none());
     // remove_notification on missing returns InvalidData.
@@ -9618,14 +9618,14 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
     assert_eq!(kernel.shell.notification_callbacks().count(), before2 + 1);
 
     // --- expire_shell_notifications ---
-    // Add a notification with duration_cs=1 → expires_at = now + 10 ms.
+    // Add a notification with duration_cs=1 → expires_at = now + 1000 ms.
     let clsid2 = [9u8; 16];
     let now_ms2 = kernel.timers.tick_count();
     kernel.shell.add_notification(
         ShellNotificationData {
             id: 7,
             priority: SHNP_ICONIC,
-            duration_cs: 1, // → expires_at = now_ms2 + 10 ms
+            duration_cs: 1, // → expires_at = now_ms2 + 1000 ms
             icon: 0,
             flags: 0,
             clsid: clsid2,
@@ -9639,8 +9639,8 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
     );
     // Before advancing time: notification still present.
     assert!(kernel.shell.notification(clsid2, 7).is_some());
-    // Advance virtual time by 20 ms so tick_count > expires_at.
-    kernel.timers.sleep_ms(20);
+    // Advance virtual time by 1000 ms so tick_count reaches expires_at.
+    kernel.timers.sleep_ms(1000);
     let expired_count = kernel.expire_shell_notifications();
     // expire returns the number of dismiss callbacks posted (0 here: no window sink, no COM).
     let _ = expired_count;
