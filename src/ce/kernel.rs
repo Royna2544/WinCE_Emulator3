@@ -791,14 +791,50 @@ fn seed_testime_sample_candidates(
     }
 }
 
+fn parse_guid_string(value: &str) -> Option<[u8; 16]> {
+    let trimmed = value.trim();
+    let trimmed = trimmed
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+        .unwrap_or(trimmed);
+    let mut parts = trimmed.split('-');
+    let data1 = u32::from_str_radix(parts.next()?, 16).ok()?;
+    let data2 = u16::from_str_radix(parts.next()?, 16).ok()?;
+    let data3 = u16::from_str_radix(parts.next()?, 16).ok()?;
+    let data4_high = parts.next()?;
+    let data4_low = parts.next()?;
+    if parts.next().is_some() || data4_high.len() != 4 || data4_low.len() != 12 {
+        return None;
+    }
+    let mut guid = [0u8; 16];
+    guid[0..4].copy_from_slice(&data1.to_le_bytes());
+    guid[4..6].copy_from_slice(&data2.to_le_bytes());
+    guid[6..8].copy_from_slice(&data3.to_le_bytes());
+    parse_guid_bytes(data4_high, &mut guid[8..10])?;
+    parse_guid_bytes(data4_low, &mut guid[10..16])?;
+    Some(guid)
+}
+
+fn parse_guid_bytes(text: &str, out: &mut [u8]) -> Option<()> {
+    if text.len() != out.len() * 2 {
+        return None;
+    }
+    for (index, chunk) in text.as_bytes().chunks_exact(2).enumerate() {
+        let chunk = std::str::from_utf8(chunk).ok()?;
+        out[index] = u8::from_str_radix(chunk, 16).ok()?;
+    }
+    Some(())
+}
+
 impl CeKernel {
     pub fn boot(config: RuntimeConfig) -> Self {
         let mut registry = Registry::from_dump(config.registry);
         seed_testime_sample_dictionary(&mut registry);
-        Self {
+        let files = HostFileSystem::from_storage(config.storage);
+        let mut kernel = Self {
             registry,
             devices: DeviceNamespace::from_config(config.devices),
-            files: HostFileSystem::from_storage(config.storage),
+            files,
             handles: HandleTable::default(),
             gwe: Gwe::default(),
             audio: AudioSystem::default(),
@@ -854,7 +890,9 @@ impl CeKernel {
             display_perf_timings: Vec::new(),
             display_perf_unhandled: 0,
             window_backing_stores: BTreeMap::new(),
-        }
+        };
+        kernel.publish_configured_mount_device_interfaces(true);
+        kernel
     }
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
@@ -872,6 +910,25 @@ impl CeKernel {
 
     pub fn advertised_device_interfaces(&self) -> &BTreeSet<DeviceInterfaceAdvertisement> {
         &self.device_interface_advertisements
+    }
+
+    fn publish_configured_mount_device_interfaces(&mut self, add: bool) {
+        let specs = self.files.device_interface_advertisement_specs();
+        self.publish_mount_device_interface_specs(specs, add);
+    }
+
+    fn publish_mount_device_interface_specs(
+        &mut self,
+        specs: Vec<(Vec<String>, String)>,
+        add: bool,
+    ) {
+        for (classes, device_path) in specs {
+            for class in classes {
+                if let Some(class_guid) = parse_guid_string(&class) {
+                    self.advertise_device_interface(class_guid, device_path.clone(), add);
+                }
+            }
+        }
     }
 
     pub fn display_gamma_value(&self) -> u32 {
@@ -1743,7 +1800,11 @@ impl CeKernel {
     }
 
     pub fn unmount_guest_root(&mut self, guest_root: &str) -> bool {
+        let advertised_interfaces = self
+            .files
+            .device_interface_advertisement_specs_for_guest_root(guest_root);
         if self.files.unmount_guest_root(guest_root).is_some() {
+            self.publish_mount_device_interface_specs(advertised_interfaces, false);
             self.post_shell_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
             self.signal_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
             // Signal all change notification handles watching any path under the removed volume

@@ -15,6 +15,15 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/config.rs`, `src/ce/file.rs`, `src/ce/kernel.rs`, `mounts.toml`, and
+  `tests/basic_subsystems.rs`: mounted storage config now carries optional
+  CE-style block `device_name` plus `interface_classes` GUID strings. Kernel
+  boot parses those `IClass` strings into Windows GUID memory layout, publishes
+  `\StoreMgr\<device>` advertisements through the existing device-interface
+  table, ignores malformed GUID strings, and removes the configured
+  advertisements when a removable mounted root is unmounted. The default SDMMC
+  mount now advertises the block-driver and power-manageable block-device
+  classes visible in the local registry/CE platform sources.
 - `src/ce/timer.rs`, `src/main.rs`, and `src/remote_server.rs`: live remote
   diagnostics now publish `/api/v1/debug/timers.txt` with generic pending
   `SetTimer` state (`HWND`, id, message, callback, due/period, and pending flag)

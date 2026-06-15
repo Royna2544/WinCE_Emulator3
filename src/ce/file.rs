@@ -52,6 +52,7 @@ pub struct HostFileSystem {
 #[derive(Debug, Clone)]
 pub struct FileMount {
     pub name: Option<String>,
+    pub device_name: Option<String>,
     pub guest_root: String,
     pub host_root: Option<PathBuf>,
     pub total_bytes: u64,
@@ -60,6 +61,7 @@ pub struct FileMount {
     pub removable: bool,
     pub system: bool,
     pub hidden: bool,
+    pub interface_classes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -369,6 +371,7 @@ impl HostFileSystem {
     pub fn mount_guest_root(&mut self, guest_root: &str, host_root: impl Into<PathBuf>) {
         self.mount(MountConfig {
             name: None,
+            device_name: None,
             guest_root: guest_root.to_owned(),
             host_root: Some(host_root.into()),
             total_mbytes: 8192,
@@ -377,6 +380,7 @@ impl HostFileSystem {
             removable: true,
             system: false,
             hidden: false,
+            interface_classes: Vec::new(),
         });
     }
 
@@ -408,6 +412,7 @@ impl HostFileSystem {
             let guest_root = format!("\\{}", candidate.replace('/', "\\"));
             self.mount(MountConfig {
                 name: None,
+                device_name: None,
                 guest_root: guest_root.clone(),
                 host_root: None,
                 total_mbytes: 8192,
@@ -416,6 +421,7 @@ impl HostFileSystem {
                 removable: true,
                 system: false,
                 hidden: false,
+                interface_classes: Vec::new(),
             });
             return Some((guest_root, true));
         }
@@ -453,6 +459,7 @@ impl HostFileSystem {
             guest_root.clone(),
             FileMount {
                 name: mount.name,
+                device_name: mount.device_name,
                 guest_root,
                 host_root,
                 total_bytes,
@@ -461,8 +468,27 @@ impl HostFileSystem {
                 removable: mount.removable,
                 system: mount.system,
                 hidden: mount.hidden,
+                interface_classes: mount.interface_classes,
             },
         );
+    }
+
+    pub fn device_interface_advertisement_specs(&self) -> Vec<(Vec<String>, String)> {
+        self.mounts_in_order()
+            .filter_map(device_interface_advertisement_spec)
+            .collect()
+    }
+
+    pub fn device_interface_advertisement_specs_for_guest_root(
+        &self,
+        guest_root: &str,
+    ) -> Vec<(Vec<String>, String)> {
+        let guest_root = normalize_guest_path(guest_root);
+        self.mounts
+            .get(&guest_root)
+            .and_then(device_interface_advertisement_spec)
+            .into_iter()
+            .collect()
     }
 
     pub fn object_store(&self) -> ObjectStore {
@@ -1507,6 +1533,24 @@ fn volume_name_from_guest_root(guest_root: &str) -> String {
         .to_owned()
 }
 
+fn device_interface_advertisement_spec(mount: &FileMount) -> Option<(Vec<String>, String)> {
+    if mount.interface_classes.is_empty() {
+        return None;
+    }
+    let device_name = mount
+        .device_name
+        .as_deref()
+        .or(mount.name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| volume_name_from_guest_root(&mount.guest_root));
+    Some((
+        mount.interface_classes.clone(),
+        format!("\\StoreMgr\\{}", device_name.trim_matches(['\\', '/'])),
+    ))
+}
+
 fn strip_host_prefix(host_path: &Path, host_root: &Path) -> Option<PathBuf> {
     if let Ok(relative) = host_path.strip_prefix(host_root) {
         return Some(relative.to_path_buf());
@@ -1829,6 +1873,7 @@ mod tests {
         let mut fs = HostFileSystem::new(&root);
         fs.mount(MountConfig {
             name: Some("sdmmc".to_owned()),
+            device_name: None,
             guest_root: "\\SDMMC Disk".to_owned(),
             host_root: None,
             total_mbytes: 8192,
@@ -1837,9 +1882,11 @@ mod tests {
             removable: true,
             system: false,
             hidden: false,
+            interface_classes: Vec::new(),
         });
         fs.mount(MountConfig {
             name: Some("resident_flash".to_owned()),
+            device_name: None,
             guest_root: "\\ResidentFlash".to_owned(),
             host_root: None,
             total_mbytes: 2048,
@@ -1848,6 +1895,7 @@ mod tests {
             removable: false,
             system: false,
             hidden: false,
+            interface_classes: Vec::new(),
         });
         let (_id, data) = fs.find_first_file_w("\\").unwrap();
         assert_eq!(
@@ -2133,6 +2181,7 @@ mod tests {
         let mut fs = HostFileSystem::new(&root);
         fs.mount(MountConfig {
             name: Some("windows".to_owned()),
+            device_name: None,
             guest_root: "\\Windows".to_owned(),
             host_root: None,
             total_mbytes: 2048,
@@ -2141,6 +2190,7 @@ mod tests {
             removable: false,
             system: true,
             hidden: false,
+            interface_classes: Vec::new(),
         });
 
         let (_id, data) = fs.find_first_file_w("\\Windows").unwrap();
@@ -2183,6 +2233,7 @@ mod tests {
         let mut fs = HostFileSystem::new(&root);
         fs.mount(MountConfig {
             name: Some("sdmmc".to_owned()),
+            device_name: None,
             guest_root: "\\SDMMC Disk".to_owned(),
             host_root: Some(override_root.clone()),
             total_mbytes: 8192,
@@ -2191,6 +2242,7 @@ mod tests {
             removable: true,
             system: false,
             hidden: false,
+            interface_classes: Vec::new(),
         });
         let id = fs
             .create_file_w("\\SDMMC Disk\\which.txt", GENERIC_READ, OPEN_EXISTING)

@@ -24,7 +24,8 @@ use wince_emulation_v3::{
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
-            FreeLibraryResult, LoadedModuleMetadata, MessagePumpResult,
+            DeviceInterfaceAdvertisement, FreeLibraryResult, LoadedModuleMetadata,
+            MessagePumpResult,
         },
         object::{
             EventObject, KernelObject, MAX_CE_PRIORITY_LEVELS, MAX_SUSPEND_COUNT,
@@ -3133,6 +3134,7 @@ fn object_store_config_and_mount_config_total_and_free_bytes_convert_mbytes() {
 
     let mount = MountConfig {
         name: None,
+        device_name: None,
         guest_root: "/Storage Card".to_owned(),
         host_root: None,
         total_mbytes: 1,
@@ -3141,9 +3143,59 @@ fn object_store_config_and_mount_config_total_and_free_bytes_convert_mbytes() {
         removable: false,
         system: false,
         hidden: false,
+        interface_classes: Vec::new(),
     };
     assert_eq!(mount.total_bytes(), 1024 * 1024);
     assert_eq!(mount.free_bytes(), 0);
+}
+
+#[test]
+fn kernel_boot_publishes_mount_iclass_interfaces_and_unmount_removes_them() -> Result<()> {
+    let root = unique_test_root("mount_iclass_advertise");
+    fs::create_dir_all(&root).unwrap();
+    let mut config = RuntimeConfig::load_default()?;
+    config.storage.mounts.push(MountConfig {
+        name: Some("sdmmc".to_owned()),
+        device_name: Some("DSK5:".to_owned()),
+        guest_root: "\\SDMMC Disk".to_owned(),
+        host_root: Some(root.clone()),
+        total_mbytes: 128,
+        free_mbytes: 64,
+        writable: true,
+        removable: true,
+        system: false,
+        hidden: false,
+        interface_classes: vec![
+            "{A4E7EDDA-E575-4252-9D6B-4195D48BB865}".to_owned(),
+            "not-a-guid".to_owned(),
+        ],
+    });
+
+    let mut kernel = CeKernel::boot(config);
+    let advertisement = DeviceInterfaceAdvertisement {
+        class_guid: [
+            0xda, 0xed, 0xe7, 0xa4, 0x75, 0xe5, 0x52, 0x42, 0x9d, 0x6b, 0x41, 0x95, 0xd4, 0x8b,
+            0xb8, 0x65,
+        ],
+        name: "\\StoreMgr\\DSK5:".to_owned(),
+    };
+
+    assert_eq!(kernel.advertised_device_interfaces().len(), 1);
+    assert!(
+        kernel
+            .advertised_device_interfaces()
+            .contains(&advertisement)
+    );
+
+    assert!(kernel.unmount_guest_root("\\SDMMC Disk"));
+    assert!(
+        !kernel
+            .advertised_device_interfaces()
+            .contains(&advertisement)
+    );
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
 }
 
 #[test]

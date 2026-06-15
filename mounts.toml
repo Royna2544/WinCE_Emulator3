@@ -7,6 +7,7 @@ host_root = "D:\\INAVI_Emulator\\EmulatorRoot"
 
 [[mounts]]
 name = "sdmmc"
+device_name = "DSK5:"
 guest_root = "\\SDMMC Disk"
 host_root = "D:\\INAVI_Emulator\\INAVI"
 total_mbytes = 8192
@@ -15,6 +16,11 @@ writable = true
 removable = true
 system = false
 hidden = false
+interface_classes = [
+    "{A4E7EDDA-E575-4252-9D6B-4195D48BB865}",
+    "{A32942B7-920C-486b-B0E6-92A702A99B35}",
+    "{8DD679CE-8AB4-43c8-A14A-EA4963FAA715}",
+]
 
 [[mounts]]
 name = "resident_flash"

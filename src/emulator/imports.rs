@@ -1901,6 +1901,7 @@ mod tests {
         let _ = fs::create_dir_all(&root);
         kernel.files.mount(MountConfig {
             name: Some("Resident Flash Store".to_owned()),
+            device_name: None,
             guest_root: r"\ResidentFlash".to_owned(),
             host_root: Some(root.clone()),
             total_mbytes: 128,
@@ -1909,6 +1910,7 @@ mod tests {
             removable: false,
             system: true,
             hidden: true,
+            interface_classes: Vec::new(),
         });
         let volume = kernel
             .create_volume_handle_for_guest_root(r"\ResidentFlash")

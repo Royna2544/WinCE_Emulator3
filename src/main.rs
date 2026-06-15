@@ -3699,6 +3699,7 @@ mod tests {
             .mounts
             .push(wince_emulation_v3::config::MountConfig {
                 name: Some("sdmmc".to_owned()),
+                device_name: None,
                 guest_root: "\\SDMMC Disk".to_owned(),
                 host_root: Some(PathBuf::from(r"D:\INAVI_Emulator\INAVI")),
                 total_mbytes: 8192,
@@ -3707,6 +3708,7 @@ mod tests {
                 removable: true,
                 system: false,
                 hidden: false,
+                interface_classes: Vec::new(),
             });
         let kernel = CeKernel::boot(config);
         let path = ce_module_path_for_image(&kernel, r"D:\INAVI_Emulator\INAVI\INavi\INavi.exe");

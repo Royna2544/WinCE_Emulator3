@@ -14,7 +14,7 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
 - Direct synthetic-disk `IOCTL_DISK_FORMAT_VOLUME`/`IOCTL_DISK_SCAN_VOLUME` is covered for sparse-sector clearing and no-op scan success; real FATFS format/scan utility execution remains open.
 - Direct synthetic-disk standby, obsolete delete-cluster, and disk-level CD-ROM IOCTLs are covered as unsupported/no-touch; real standby power management, cluster deletion, and CD-ROM media behavior remain open behind physical drivers.
 - Direct `FSDMGR_DeviceHandleToHDSK @11` and `FSDMGR_FormatVolume @15`/`FSDMGR_ScanVolume @31` imports are covered for the CE identity/no-utility-DLL paths; real format/scan utility DLL loading and disk-registry metadata remain open.
-- Direct `FSDMGR_AdvertiseInterface @2` is covered for the shared coredll wrapper path, including GUID/name validation, FSDMGR empty-name root mapping, and advertisement add/remove storage; guest-facing `EnumDeviceInterfaces` and block-device `IClass` auto-publication remain open.
+- Direct `FSDMGR_AdvertiseInterface @2` is covered for the shared coredll wrapper path, including GUID/name validation, FSDMGR empty-name root mapping, advertisement add/remove storage, and configured block-device `IClass` publication/removal for `\StoreMgr\<device>` names; guest-facing `EnumDeviceInterfaces` remains open.
 - Direct CE `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
   `FSDMGR_GetRegistryValue @20` imports are covered for the missing-registry
   fail-closed path and output clearing; real logical-disk registry-root lookup

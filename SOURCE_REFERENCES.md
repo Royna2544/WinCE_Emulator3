@@ -3031,8 +3031,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `blockdevice.cpp` reads the block driver's `IClass` MULTI_SZ registry
     value, builds `\\StoreMgr\\%s` device paths, and advertises each parsed GUID,
     while `mountedvolume.cpp` uses the same wrapper for mounted-volume add/remove
-    publication; guest-facing `EnumDeviceInterfaces` and block-device `IClass`
-    auto-publication remain queued.
+    publication. `storemgr.h`, `cedrv_guid.h`, and `pm.h` define the block-driver
+    and power-manageable block-device class strings used by the platform
+    registries. Rust mount configuration now carries optional `device_name` and
+    `interface_classes` metadata, parses CE text GUIDs into in-memory GUID
+    layout, publishes configured `\StoreMgr\<device>` advertisements at boot,
+    and removes them on unmount; guest-facing `EnumDeviceInterfaces` remains
+    queued.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted

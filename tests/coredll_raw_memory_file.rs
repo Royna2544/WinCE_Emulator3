@@ -3677,6 +3677,7 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
     kernel.set_file_root(&object_root);
     kernel.files.mount(MountConfig {
         name: Some("ResidentFlash".to_owned()),
+        device_name: None,
         guest_root: "\\ResidentFlash".to_owned(),
         host_root: Some(system_root.clone()),
         total_mbytes: 64,
@@ -3685,9 +3686,11 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
         removable: false,
         system: true,
         hidden: false,
+        interface_classes: Vec::new(),
     });
     kernel.files.mount(MountConfig {
         name: Some("HiddenStore".to_owned()),
+        device_name: None,
         guest_root: "\\HiddenStore".to_owned(),
         host_root: Some(hidden_root.clone()),
         total_mbytes: 16,
@@ -3696,6 +3699,7 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
         removable: false,
         system: false,
         hidden: true,
+        interface_classes: Vec::new(),
     });
 
     let mut memory = TestGuestMemory::default();
@@ -3900,6 +3904,7 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
 
     kernel.files.mount(MountConfig {
         name: Some("ReadOnlyCard".to_owned()),
+        device_name: None,
         guest_root: "\\ReadOnlyCard".to_owned(),
         host_root: Some(readonly_root.clone()),
         total_mbytes: 32,
@@ -3908,6 +3913,7 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
         removable: true,
         system: false,
         hidden: false,
+        interface_classes: Vec::new(),
     });
 
     memory.write_wide_z(path_ptr, r"\ReadOnlyCard");
@@ -4714,6 +4720,7 @@ fn coredll_raw_cross_volume_move_from_readonly_source_copies_without_delete() ->
     kernel.files.mount_guest_root("\\ResidentFlash", &resident);
     kernel.files.mount(MountConfig {
         name: None,
+        device_name: None,
         guest_root: "\\ReadOnly".to_owned(),
         host_root: Some(readonly.clone()),
         total_mbytes: 8,
@@ -4722,6 +4729,7 @@ fn coredll_raw_cross_volume_move_from_readonly_source_copies_without_delete() ->
         removable: true,
         system: false,
         hidden: false,
+        interface_classes: Vec::new(),
     });
 
     let mut memory = TestGuestMemory::default();
@@ -4937,6 +4945,7 @@ fn coredll_raw_readonly_mount_reports_access_denied_for_mutations() -> Result<()
         .mount_guest_root("\\ResidentFlash", &writable_root);
     kernel.files.mount(MountConfig {
         name: None,
+        device_name: None,
         guest_root: "\\ReadOnly".to_owned(),
         host_root: Some(readonly_root.clone()),
         total_mbytes: 8,
@@ -4945,6 +4954,7 @@ fn coredll_raw_readonly_mount_reports_access_denied_for_mutations() -> Result<()
         removable: true,
         system: false,
         hidden: false,
+        interface_classes: Vec::new(),
     });
 
     let mut memory = TestGuestMemory::default();

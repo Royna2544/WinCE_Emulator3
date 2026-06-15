@@ -43,6 +43,7 @@ pub struct ObjectStoreConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MountConfig {
     pub name: Option<String>,
+    pub device_name: Option<String>,
     pub guest_root: String,
     pub host_root: Option<PathBuf>,
     pub total_mbytes: u64,
@@ -51,6 +52,7 @@ pub struct MountConfig {
     pub removable: bool,
     pub system: bool,
     pub hidden: bool,
+    pub interface_classes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -69,6 +71,7 @@ struct RootToml {
 #[derive(Debug, Clone, Deserialize)]
 struct MountToml {
     name: Option<String>,
+    device_name: Option<String>,
     guest_root: Option<String>,
     host_root: Option<PathBuf>,
     total_mbytes: Option<u64>,
@@ -77,6 +80,8 @@ struct MountToml {
     removable: Option<bool>,
     system: Option<bool>,
     hidden: Option<bool>,
+    #[serde(default)]
+    interface_classes: Vec<String>,
 }
 
 impl RuntimeConfig {
@@ -181,6 +186,7 @@ impl MountConfig {
     fn from_toml(raw: MountToml) -> Option<Self> {
         Some(Self {
             name: Some(raw.name?),
+            device_name: raw.device_name,
             guest_root: raw.guest_root?,
             host_root: raw.host_root,
             total_mbytes: raw.total_mbytes?,
@@ -189,6 +195,7 @@ impl MountConfig {
             removable: raw.removable.unwrap_or(false),
             system: raw.system.unwrap_or(false),
             hidden: raw.hidden.unwrap_or(false),
+            interface_classes: raw.interface_classes,
         })
     }
 
@@ -279,6 +286,7 @@ free_mbytes = 32
 
 [[mounts]]
 name = "sdmmc"
+device_name = "DSK1:"
 guest_root = "\\SDMMC Disk"
 host_root = "D:\\INAVI\\SDMMC"
 total_mbytes = 8192
@@ -287,6 +295,7 @@ writable = true
 removable = true
 system = false
 hidden = false
+interface_classes = ["{A32942B7-920C-486b-B0E6-92A702A99B35}"]
 
 [[mounts]]
 name = "windows"
@@ -316,6 +325,11 @@ writable = true
         assert_eq!(storage.mounts.len(), 1);
         assert_eq!(storage.mounts[0].total_mbytes, 8192);
         assert_eq!(storage.mounts[0].free_mbytes, 4096);
+        assert_eq!(storage.mounts[0].device_name.as_deref(), Some("DSK1:"));
+        assert_eq!(
+            storage.mounts[0].interface_classes,
+            vec!["{A32942B7-920C-486b-B0E6-92A702A99B35}".to_owned()]
+        );
         assert!(storage.mounts[0].writable);
         assert!(storage.mounts[0].removable);
         assert!(!storage.mounts[0].system);
