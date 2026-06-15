@@ -4945,3 +4945,12 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   synthetic disk reports `ERROR_NOT_SUPPORTED` without touching input/output
   buffers or sector state; real power, cluster, and CD-ROM driver behavior
   remains queued.
+- Validation after the FSDMGR unsupported specialized disk IOCTL slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info --
+  --nocapture`, `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture
+  remains ignored, and Cargo still emits the existing unused-code warnings.
