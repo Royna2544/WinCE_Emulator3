@@ -4290,3 +4290,13 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   borders. The regression verifies `BF_TOP | BF_BOTTOM | BF_ADJUST` mutates
   only the rectangle's top and bottom while leaving an unrequested left-side
   pixel untouched.
+- Validation after the partial-edge `BF_ADJUST` refresh: `cargo fmt`,
+  `cargo fmt --check`, `git diff --check`, focused `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_draw_edge_adjusts_only_requested_edges -- --nocapture`,
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE binary reported 352 passing
+  tests, the eVC4 MIPSII fixture remains ignored because that toolchain is not
+  configured, and Cargo still emits the existing unused-code warnings.
