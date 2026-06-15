@@ -3425,6 +3425,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     black/white solid-brush `PATCOPY` rows. Same-framebuffer raw
     `TransparentImage` also records the CE `PARAM_SRCINVIDMEM`,
     `PARAM_DESTINVIDMEM`, and `PARAM_TRANSPARENT` counters for the
-    `DrvTransparentBlt`/`AnyBlt` path. Real video-protection,
+    `DrvTransparentBlt`/`AnyBlt` path. Framebuffer-destination
+    `AlphaBlend` records `PARAM_DESTINVIDMEM` while preserving the
+    `BLT_STRETCH` counter from `DrvAlphaBlend`/`AnyBlt`. Real video-protection,
     framebuffer-access, and broader DISPPERF payload execution outside those
     raw draw paths remains unsupported.

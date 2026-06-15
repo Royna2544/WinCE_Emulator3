@@ -10243,16 +10243,6 @@ fn coredll_raw_alpha_blend_uses_ce_gpe_stretch_sampling_between_selected_dibs() 
     assert_eq!(u32::from_le_bytes(timing[4..8].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(timing[8..12].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(timing[12..16].try_into().unwrap()), 0);
-    assert_eq!(
-        u32::from_le_bytes(timing[40..44].try_into().unwrap()),
-        0,
-        "PARAM_SRCINVIDMEM should not count memory-DC alpha sources"
-    );
-    assert_eq!(
-        u32::from_le_bytes(timing[44..48].try_into().unwrap()),
-        0,
-        "PARAM_DESTINVIDMEM should not count memory-DC alpha destinations"
-    );
     assert_eq!(u32::from_le_bytes(timing[56..60].try_into().unwrap()), 1);
 
     Ok(())

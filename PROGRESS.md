@@ -22,7 +22,9 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `PATCOPY` rows report the expected blit parameter counters through
   `ExtEscape(DISPPERF_EXTESC_GETTIMING)`. Same-framebuffer raw
   `TransparentImage` rows now also report source-video-memory,
-  destination-video-memory, and transparent blit counters.
+  destination-video-memory, and transparent blit counters. Framebuffer
+  destination `AlphaBlend` rows now report the CE destination-video-memory
+  blit counter while preserving stretch accounting.
 - `src/winsock.rs` and `src/emulator/unicorn.rs`: blocking guest TCP
   `connect` waits now use `SO_SNDTIMEO` when present, falling back to the local
   30-second default, so scheduler wait timeouts and the host
