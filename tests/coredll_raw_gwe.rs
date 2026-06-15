@@ -32274,6 +32274,50 @@ fn coredll_raw_msgwait_handle_probe_records_only_msgwait_stats() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_msgwait_bad_handle_pointer_records_failed_msgwait() -> Result<()> {
+    const WAIT_FAILED: u32 = 0xffff_ffff;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 87;
+    let unmapped_handles_ptr = 0xa240;
+    let stats_before = kernel.scheduler.stats();
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [1, unmapped_handles_ptr, 500, QS_SENDMESSAGE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_FAILED),
+            ..
+        }
+    ));
+
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    let stats_after = kernel.scheduler.stats();
+    assert_eq!(stats_after.msg_wait_count, stats_before.msg_wait_count + 1);
+    assert_eq!(
+        stats_after.wait_multiple_count,
+        stats_before.wait_multiple_count
+    );
+    assert_eq!(
+        stats_after.wait_failed_count,
+        stats_before.wait_failed_count + 1
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_msgwait_qs_allinput_covers_post_paint_and_timer() -> Result<()> {
     const QS_ALLINPUT_CE: u32 = 0x007f;
     const MWMO_INPUTAVAILABLE: u32 = 0x0004;

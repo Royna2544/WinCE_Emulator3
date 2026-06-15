@@ -2078,7 +2078,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     unsupported/ignored message-wait metadata rather than converting raw
     `MsgWaitForMultipleObjectsEx` into kernel wait-all failure, and preserves
     CE's message-wake result index after the supplied handle count when the
-    handle probe finds no signaled object.
+    handle probe finds no signaled object. The NETUI kernel thunk in
+    `PUBLIC\COMMON\OAK\INC\netui_kernel.h` copies exactly `nCount` handles
+    before the `MsgWaitForMultipleObjectsEx` call and the NETUI wrapper in
+    `PUBLIC\COMMON\OAK\DRIVERS\NETUI\gwes_wrapper.cpp` forwards the return
+    code plus `GetLastError`; raw v3 now keeps unreadable caller handle arrays
+    on the message-wait failure accounting path while preserving
+    `ERROR_INVALID_PARAMETER`.
   - `cmsgque.h` defines `smfSenderNoWait`,
     `smfSenderNoWaitIfDifferentThread`, and `smfNotifyMessage` for no-wait
     notification sends. Rust raw `SendNotifyMessageW` now preserves that CE

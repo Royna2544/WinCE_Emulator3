@@ -4660,3 +4660,22 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   test -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored because that toolchain is not configured, and Cargo
   still emits the existing unused-code warnings.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw
+  `MsgWaitForMultipleObjectsEx` now records unreadable handle-array failures
+  as message-wait failures after `read_guest_u32` sets
+  `ERROR_INVALID_PARAMETER`, preserving the CE NETUI thunk/wrapper shape where
+  caller handle arrays are copied and the forwarded return code/last-error pair
+  remains visible.
+- Focused validation after the message-wait bad handle-array diagnostics slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_msgwait_bad_handle_pointer_records_failed_msgwait -- --nocapture`
+  passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the message-wait bad handle-array diagnostics slice:
+  `git diff --check`, `cargo fmt --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and Cargo
+  still emits the existing unused-code warnings.

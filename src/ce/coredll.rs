@@ -19010,6 +19010,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
             thread_id,
             handles_ptr.wrapping_add(index * 4),
         ) else {
+            kernel.record_msg_wait_result(count, timeout_ms, crate::ce::timer::WAIT_FAILED);
             return crate::ce::timer::WAIT_FAILED;
         };
         handles.push(handle);
