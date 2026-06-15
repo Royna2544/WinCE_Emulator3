@@ -23,7 +23,10 @@ use crate::{
             Point, Rect, WM_FILECHANGEINFO, WNDCLASSW_SIZE, WS_CHILD, WS_EX_TOPMOST, WS_POPUP,
             WS_TABSTOP, WS_VISIBLE, WindowPos,
         },
-        kernel::{CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult},
+        kernel::{
+            CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
+            MessageQueueOptions, MessageQueueReadStatus,
+        },
         memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
         object::{
             CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
@@ -4108,12 +4111,33 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(true))
         }
         // Message queues
-        ORD_READ_MSG_QUEUE | ORD_WRITE_MSG_QUEUE | ORD_OPEN_MSG_QUEUE => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_OPEN_MSG_QUEUE => Some(CoredllValue::Handle(open_msg_queue_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_READ_MSG_QUEUE => Some(CoredllValue::Bool(read_msg_queue_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+            raw_arg(args, 4),
+            raw_arg(args, 5),
+        ))),
+        ORD_WRITE_MSG_QUEUE => Some(CoredllValue::Bool(write_msg_queue_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 4),
+        ))),
         // Password status
         ORD_SET_PASSWORD_STATUS => {
             kernel.threads.set_last_error(thread_id, 0);
@@ -4606,27 +4630,25 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_CREATE_MSG_QUEUE => {
-            // CreateMsgQueue(lpName, lpMsgQueueOptions) — CE IPC; not supported.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
-        ORD_CLOSE_MSG_QUEUE => {
-            // CloseMsgQueue(hMsgQueue) — CE IPC; not supported.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
-        ORD_GET_MSG_QUEUE_INFO => {
-            // GetMsgQueueInfo(hMsgQueue, lpInfo) — CE IPC; not supported.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_CREATE_MSG_QUEUE => Some(CoredllValue::Handle(create_msg_queue_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_CLOSE_MSG_QUEUE => Some(CoredllValue::Bool(close_msg_queue_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_MSG_QUEUE_INFO => Some(CoredllValue::Bool(get_msg_queue_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_STRING_COMPRESS => Some(CoredllValue::U32(string_compress_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -12204,6 +12226,275 @@ fn enum_device_interfaces_raw<M: CoredllGuestMemory>(
     true
 }
 
+fn read_msg_queue_options<M: CoredllGuestMemory>(
+    memory: &M,
+    options_ptr: u32,
+) -> Option<MessageQueueOptions> {
+    if options_ptr == 0 {
+        return None;
+    }
+    let size = memory.read_u32(options_ptr).ok()?;
+    if size < 20 {
+        return None;
+    }
+    Some(MessageQueueOptions {
+        flags: memory.read_u32(options_ptr.wrapping_add(4)).ok()?,
+        max_messages: memory.read_u32(options_ptr.wrapping_add(8)).ok()?,
+        max_message_bytes: memory.read_u32(options_ptr.wrapping_add(12)).ok()?,
+        read_access: memory.read_u32(options_ptr.wrapping_add(16)).ok()? != 0,
+    })
+}
+
+fn create_msg_queue_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    name_ptr: u32,
+    options_ptr: u32,
+) -> u32 {
+    let Some(options) = read_msg_queue_options(memory, options_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let name = if name_ptr == 0 {
+        None
+    } else {
+        match read_guest_wide_z(memory, name_ptr, 260) {
+            Ok(name) => Some(name),
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            }
+        }
+    };
+    match kernel.create_message_queue(name, options) {
+        Ok((handle, existed)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, if existed { ERROR_ALREADY_EXISTS } else { 0 });
+            handle
+        }
+        Err(Error::InvalidArgument(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn open_msg_queue_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    queue_handle: u32,
+    options_ptr: u32,
+) -> u32 {
+    let Some(options) = read_msg_queue_options(memory, options_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    match kernel.open_message_queue(queue_handle, options) {
+        Ok(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            handle
+        }
+        Err(Error::InvalidArgument(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn read_msg_queue_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    queue_handle: u32,
+    buffer_ptr: u32,
+    buffer_bytes: u32,
+    bytes_read_ptr: u32,
+    _timeout_ms: u32,
+    flags_ptr: u32,
+) -> bool {
+    if buffer_ptr == 0 || bytes_read_ptr == 0 || flags_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let message = match kernel.read_message_queue(queue_handle, buffer_bytes) {
+        Ok(MessageQueueReadStatus::Message(message)) => message,
+        Ok(MessageQueueReadStatus::Empty) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
+            return false;
+        }
+        Ok(MessageQueueReadStatus::BufferTooSmall { required }) => {
+            let _ = memory.write_u32(bytes_read_ptr, required);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+            return false;
+        }
+        Err(Error::AccessDenied(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            return false;
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
+    };
+    if memory.write_bytes(buffer_ptr, &message.bytes).is_err()
+        || memory
+            .write_u32(bytes_read_ptr, message.bytes.len() as u32)
+            .is_err()
+        || memory.write_u32(flags_ptr, message.flags).is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn write_msg_queue_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    queue_handle: u32,
+    buffer_ptr: u32,
+    buffer_bytes: u32,
+    flags: u32,
+) -> bool {
+    if buffer_ptr == 0 && buffer_bytes != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let mut bytes = vec![0u8; buffer_bytes as usize];
+    if buffer_bytes != 0 && memory.read_bytes(buffer_ptr, &mut bytes).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    match kernel.write_message_queue(queue_handle, bytes, flags) {
+        Ok(()) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Err(Error::InvalidArgument(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        Err(Error::AccessDenied(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            false
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn close_msg_queue_raw(kernel: &mut CeKernel, thread_id: u32, queue_handle: u32) -> bool {
+    match kernel.close_message_queue(queue_handle) {
+        Ok(()) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn get_msg_queue_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    queue_handle: u32,
+    info_ptr: u32,
+) -> bool {
+    if info_ptr == 0 || memory.read_u32(info_ptr).unwrap_or(0) < 28 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let info = match kernel.message_queue_info(queue_handle) {
+        Ok(info) => info,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
+    };
+    let writes = [
+        memory.write_u32(info_ptr.wrapping_add(4), info.flags),
+        memory.write_u32(info_ptr.wrapping_add(8), info.max_messages),
+        memory.write_u32(info_ptr.wrapping_add(12), info.max_message_bytes),
+        memory.write_u32(info_ptr.wrapping_add(16), info.current_messages),
+        memory.write_u32(info_ptr.wrapping_add(20), info.max_queue_messages),
+    ];
+    if writes.into_iter().any(|write| write.is_err())
+        || memory
+            .write_u16(info_ptr.wrapping_add(24), info.readers)
+            .is_err()
+        || memory
+            .write_u16(info_ptr.wrapping_add(26), info.writers)
+            .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn request_device_notifications_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -12222,9 +12513,18 @@ fn request_device_notifications_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let handle = kernel.request_device_notifications(class_guid, message_queue, all != 0);
-    kernel.threads.set_last_error(thread_id, 0);
-    handle
+    match kernel.request_device_notifications(class_guid, message_queue, all != 0) {
+        Ok(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            handle
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
 }
 
 fn stop_device_notifications_raw(

@@ -23,8 +23,8 @@ use crate::{
         object::{
             CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject, FileChangeNotificationObject,
             FileChangeRecord, FileObject, FindFileObject, HandleTable, KernelObject,
-            MAX_SUSPEND_COUNT, ThreadResumeResult, ThreadSuspendResult, VolumeObject,
-            WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
+            MAX_SUSPEND_COUNT, MessageQueueHandleObject, ThreadResumeResult, ThreadSuspendResult,
+            VolumeObject, WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
             win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
@@ -47,7 +47,7 @@ use crate::{
 };
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Write as _,
     path::PathBuf,
 };
@@ -109,6 +109,56 @@ pub struct DeviceInterfaceAdvertisement {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageQueueOptions {
+    pub flags: u32,
+    pub max_messages: u32,
+    pub max_message_bytes: u32,
+    pub read_access: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageQueueInfo {
+    pub flags: u32,
+    pub max_messages: u32,
+    pub max_message_bytes: u32,
+    pub current_messages: u32,
+    pub max_queue_messages: u32,
+    pub readers: u16,
+    pub writers: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageQueueRead {
+    pub bytes: Vec<u8>,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageQueueReadStatus {
+    Message(MessageQueueRead),
+    Empty,
+    BufferTooSmall { required: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageQueueMessage {
+    bytes: Vec<u8>,
+    flags: u32,
+}
+
+#[derive(Debug, Clone)]
+struct MessageQueueState {
+    name: Option<String>,
+    flags: u32,
+    max_messages: u32,
+    max_message_bytes: u32,
+    messages: VecDeque<MessageQueueMessage>,
+    max_queue_messages: u32,
+    readers: u16,
+    writers: u16,
+}
+
 #[derive(Debug, Clone)]
 pub struct CeKernel {
     pub registry: Registry,
@@ -154,6 +204,9 @@ pub struct CeKernel {
     recent_message_ops: Vec<MessageTraceRecord>,
     recent_device_ops: Vec<DeviceTraceRecord>,
     device_interface_advertisements: BTreeSet<DeviceInterfaceAdvertisement>,
+    message_queues: BTreeMap<u32, MessageQueueState>,
+    named_message_queues: BTreeMap<String, u32>,
+    next_message_queue_id: u32,
     fsdmgr_disk_sectors: BTreeMap<(u32, u32), Vec<u8>>,
     fsdmgr_disk_info_overrides: BTreeMap<u32, [u32; 6]>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -827,6 +880,20 @@ fn parse_guid_bytes(text: &str, out: &mut [u8]) -> Option<()> {
     Some(())
 }
 
+fn encode_devdetail_payload(class_guid: [u8; 16], name: &str, attached: bool) -> Vec<u8> {
+    let name_units: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let name_bytes = (name_units.len() * 2) as u32;
+    let mut payload = Vec::with_capacity(28 + name_units.len() * 2);
+    payload.extend_from_slice(&class_guid);
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&u32::from(attached).to_le_bytes());
+    payload.extend_from_slice(&name_bytes.to_le_bytes());
+    for unit in name_units {
+        payload.extend_from_slice(&unit.to_le_bytes());
+    }
+    payload
+}
+
 impl CeKernel {
     pub fn boot(config: RuntimeConfig) -> Self {
         let mut registry = Registry::from_dump(config.registry);
@@ -876,6 +943,9 @@ impl CeKernel {
             recent_message_ops: Vec::new(),
             recent_device_ops: Vec::new(),
             device_interface_advertisements: BTreeSet::new(),
+            message_queues: BTreeMap::new(),
+            named_message_queues: BTreeMap::new(),
+            next_message_queue_id: 1,
             fsdmgr_disk_sectors: BTreeMap::new(),
             fsdmgr_disk_info_overrides: BTreeMap::new(),
             modal_dialog_results: BTreeMap::new(),
@@ -903,9 +973,17 @@ impl CeKernel {
     pub fn advertise_device_interface(&mut self, class_guid: [u8; 16], name: String, add: bool) {
         let advertisement = DeviceInterfaceAdvertisement { class_guid, name };
         if add {
-            self.device_interface_advertisements.insert(advertisement);
+            let inserted = self
+                .device_interface_advertisements
+                .insert(advertisement.clone());
+            if inserted {
+                self.queue_device_interface_notification(&advertisement, true);
+            }
         } else {
-            self.device_interface_advertisements.remove(&advertisement);
+            let removed = self.device_interface_advertisements.remove(&advertisement);
+            if removed {
+                self.queue_device_interface_notification(&advertisement, false);
+            }
         }
     }
 
@@ -923,18 +1001,261 @@ impl CeKernel {
             .cloned()
     }
 
+    pub fn create_message_queue(
+        &mut self,
+        name: Option<String>,
+        options: MessageQueueOptions,
+    ) -> Result<(u32, bool)> {
+        if options.max_message_bytes == 0 {
+            return Err(Error::InvalidArgument(
+                "message queue max message size is zero".to_owned(),
+            ));
+        }
+        let normalized_name = name.filter(|name| !name.is_empty());
+        let queue_id = if let Some(name) = normalized_name.as_ref() {
+            if let Some(queue_id) = self.named_message_queues.get(name).copied() {
+                queue_id
+            } else {
+                let queue_id = self.allocate_message_queue(normalized_name.clone(), options);
+                self.named_message_queues.insert(name.clone(), queue_id);
+                queue_id
+            }
+        } else {
+            self.allocate_message_queue(None, options)
+        };
+        let existed = self
+            .message_queues
+            .get(&queue_id)
+            .and_then(|queue| queue.name.as_ref())
+            .is_some_and(|queue_name| {
+                normalized_name
+                    .as_ref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(queue_name))
+            })
+            && normalized_name
+                .as_ref()
+                .and_then(|name| self.named_message_queues.get(name))
+                .copied()
+                == Some(queue_id)
+            && self
+                .message_queues
+                .get(&queue_id)
+                .is_some_and(|queue| queue.readers != 0 || queue.writers != 0);
+        let handle = self.open_message_queue_endpoint(queue_id, options.read_access)?;
+        Ok((handle, existed && normalized_name.is_some()))
+    }
+
+    fn allocate_message_queue(
+        &mut self,
+        name: Option<String>,
+        options: MessageQueueOptions,
+    ) -> u32 {
+        let queue_id = self.next_message_queue_id;
+        self.next_message_queue_id = self.next_message_queue_id.wrapping_add(1).max(1);
+        self.message_queues.insert(
+            queue_id,
+            MessageQueueState {
+                name,
+                flags: options.flags,
+                max_messages: options.max_messages.max(16),
+                max_message_bytes: options.max_message_bytes,
+                messages: VecDeque::new(),
+                max_queue_messages: 0,
+                readers: 0,
+                writers: 0,
+            },
+        );
+        queue_id
+    }
+
+    pub fn open_message_queue(
+        &mut self,
+        source_queue_handle: u32,
+        options: MessageQueueOptions,
+    ) -> Result<u32> {
+        let queue_id = self.message_queue_id(source_queue_handle)?;
+        if options.max_message_bytes != 0 {
+            let Some(queue) = self.message_queues.get(&queue_id) else {
+                return Err(Error::InvalidHandle(source_queue_handle));
+            };
+            if options.max_message_bytes < queue.max_message_bytes {
+                return Err(Error::InvalidArgument(
+                    "message queue open max message size is too small".to_owned(),
+                ));
+            }
+        }
+        self.open_message_queue_endpoint(queue_id, options.read_access)
+    }
+
+    fn open_message_queue_endpoint(&mut self, queue_id: u32, read_access: bool) -> Result<u32> {
+        let Some(queue) = self.message_queues.get_mut(&queue_id) else {
+            return Err(Error::InvalidHandle(queue_id));
+        };
+        if read_access {
+            queue.readers = queue.readers.saturating_add(1);
+        } else {
+            queue.writers = queue.writers.saturating_add(1);
+        }
+        Ok(self
+            .handles
+            .insert(KernelObject::MessageQueue(MessageQueueHandleObject {
+                queue_id,
+                read_access,
+            })))
+    }
+
+    pub fn close_message_queue(&mut self, handle: u32) -> Result<()> {
+        let KernelObject::MessageQueue(endpoint) = self.handles.get(handle)?.clone() else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.handles.close(handle)?;
+        self.close_message_queue_endpoint(endpoint.queue_id, endpoint.read_access);
+        Ok(())
+    }
+
+    fn close_message_queue_endpoint(&mut self, queue_id: u32, read_access: bool) {
+        let Some(queue) = self.message_queues.get_mut(&queue_id) else {
+            return;
+        };
+        if read_access {
+            queue.readers = queue.readers.saturating_sub(1);
+        } else {
+            queue.writers = queue.writers.saturating_sub(1);
+        }
+        if queue.readers == 0 && queue.writers == 0 {
+            if let Some(name) = queue.name.clone() {
+                self.named_message_queues.remove(&name);
+            }
+            self.message_queues.remove(&queue_id);
+        }
+    }
+
+    pub fn message_queue_info(&self, handle: u32) -> Result<MessageQueueInfo> {
+        let queue_id = self.message_queue_id(handle)?;
+        let Some(queue) = self.message_queues.get(&queue_id) else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        Ok(MessageQueueInfo {
+            flags: queue.flags,
+            max_messages: queue.max_messages,
+            max_message_bytes: queue.max_message_bytes,
+            current_messages: queue.messages.len() as u32,
+            max_queue_messages: queue.max_queue_messages,
+            readers: queue.readers,
+            writers: queue.writers,
+        })
+    }
+
+    pub fn read_message_queue(
+        &mut self,
+        handle: u32,
+        buffer_bytes: u32,
+    ) -> Result<MessageQueueReadStatus> {
+        let KernelObject::MessageQueue(endpoint) = self.handles.get(handle)?.clone() else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        if !endpoint.read_access {
+            return Err(Error::AccessDenied(
+                "message queue is write-only".to_owned(),
+            ));
+        }
+        let Some(queue) = self.message_queues.get_mut(&endpoint.queue_id) else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        let Some(message) = queue.messages.front() else {
+            return Ok(MessageQueueReadStatus::Empty);
+        };
+        if buffer_bytes < message.bytes.len() as u32 {
+            return Ok(MessageQueueReadStatus::BufferTooSmall {
+                required: message.bytes.len() as u32,
+            });
+        }
+        let message = queue.messages.pop_front().expect("front message exists");
+        Ok(MessageQueueReadStatus::Message(MessageQueueRead {
+            bytes: message.bytes,
+            flags: message.flags,
+        }))
+    }
+
+    pub fn write_message_queue(&mut self, handle: u32, bytes: Vec<u8>, flags: u32) -> Result<()> {
+        let queue_id = self.message_queue_id(handle)?;
+        self.write_message_queue_by_id(queue_id, bytes, flags)
+    }
+
+    fn write_message_queue_by_id(
+        &mut self,
+        queue_id: u32,
+        bytes: Vec<u8>,
+        flags: u32,
+    ) -> Result<()> {
+        let Some(queue) = self.message_queues.get_mut(&queue_id) else {
+            return Err(Error::InvalidHandle(queue_id));
+        };
+        if bytes.len() > queue.max_message_bytes as usize {
+            return Err(Error::InvalidArgument(format!(
+                "message length {} exceeds queue maximum {}",
+                bytes.len(),
+                queue.max_message_bytes
+            )));
+        }
+        if queue.messages.len() >= queue.max_messages as usize {
+            return Err(Error::AccessDenied("message queue is full".to_owned()));
+        }
+        queue
+            .messages
+            .push_back(MessageQueueMessage { bytes, flags });
+        queue.max_queue_messages = queue.max_queue_messages.max(queue.messages.len() as u32);
+        let handles: Vec<_> = self
+            .handles
+            .iter()
+            .filter_map(|(handle, object)| match object {
+                KernelObject::MessageQueue(endpoint) if endpoint.queue_id == queue_id => {
+                    Some(handle)
+                }
+                _ => None,
+            })
+            .collect();
+        for handle in handles {
+            self.queue_object_wake_candidates(handle);
+        }
+        Ok(())
+    }
+
+    fn message_queue_id(&self, handle: u32) -> Result<u32> {
+        let KernelObject::MessageQueue(endpoint) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        Ok(endpoint.queue_id)
+    }
+
     pub fn request_device_notifications(
         &mut self,
         class_guid: [u8; 16],
         message_queue: u32,
         all: bool,
-    ) -> u32 {
-        self.handles
-            .insert(KernelObject::DeviceNotification(DeviceNotificationObject {
-                class_guid,
-                message_queue,
-                all,
-            }))
+    ) -> Result<u32> {
+        let queue_id = self.message_queue_id(message_queue)?;
+        let handle =
+            self.handles
+                .insert(KernelObject::DeviceNotification(DeviceNotificationObject {
+                    class_guid,
+                    message_queue,
+                    all,
+                }));
+        if all {
+            let advertisements: Vec<_> = self
+                .device_interface_advertisements
+                .iter()
+                .filter(|advertisement| advertisement.class_guid == class_guid)
+                .cloned()
+                .collect();
+            for advertisement in advertisements {
+                let payload =
+                    encode_devdetail_payload(advertisement.class_guid, &advertisement.name, true);
+                let _ = self.write_message_queue_by_id(queue_id, payload, 0);
+            }
+        }
+        Ok(handle)
     }
 
     pub fn stop_device_notifications(&mut self, handle: u32) -> Result<DeviceNotificationObject> {
@@ -944,6 +1265,30 @@ impl CeKernel {
         };
         self.handles.close(handle)?;
         Ok(notification)
+    }
+
+    fn queue_device_interface_notification(
+        &mut self,
+        advertisement: &DeviceInterfaceAdvertisement,
+        attached: bool,
+    ) {
+        let subscriptions: Vec<_> = self
+            .handles
+            .iter()
+            .filter_map(|(_, object)| match object {
+                KernelObject::DeviceNotification(notification)
+                    if notification.class_guid == advertisement.class_guid =>
+                {
+                    Some(notification.message_queue)
+                }
+                _ => None,
+            })
+            .collect();
+        let payload =
+            encode_devdetail_payload(advertisement.class_guid, &advertisement.name, attached);
+        for queue_handle in subscriptions {
+            let _ = self.write_message_queue(queue_handle, payload.clone(), 0);
+        }
     }
 
     fn publish_configured_mount_device_interfaces(&mut self, add: bool) {
@@ -3618,6 +3963,11 @@ impl CeKernel {
             KernelObject::FileChangeNotification(notification) => {
                 self.ensure_file_change_notification_owner(&notification, handle)?;
             }
+            KernelObject::MessageQueue(endpoint) => {
+                self.handles.close(handle)?;
+                self.close_message_queue_endpoint(endpoint.queue_id, endpoint.read_access);
+                return Ok(true);
+            }
             KernelObject::Event(event) if event.name.is_some() => {
                 self.record_event_trace(EventTraceRecord {
                     op: "CloseHandle",
@@ -4180,6 +4530,17 @@ impl CeKernel {
         {
             return WaitResult::Failed;
         }
+        if let Ok(KernelObject::MessageQueue(endpoint)) = self.handles.get(handle) {
+            return if self
+                .message_queues
+                .get(&endpoint.queue_id)
+                .is_some_and(|queue| !queue.messages.is_empty())
+            {
+                WaitResult::Object0
+            } else {
+                WaitResult::Timeout
+            };
+        }
         self.handles
             .wait_for_single_object(handle, timeout_ms, thread_id)
     }
@@ -4529,6 +4890,12 @@ impl CeKernel {
                 .is_err()
         {
             return None;
+        }
+        if let Ok(KernelObject::MessageQueue(endpoint)) = self.handles.get(handle) {
+            return self
+                .message_queues
+                .get(&endpoint.queue_id)
+                .map(|queue| !queue.messages.is_empty());
         }
         self.handles.is_wait_ready(handle, thread_id)
     }

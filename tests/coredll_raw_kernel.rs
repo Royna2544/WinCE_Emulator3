@@ -6,10 +6,11 @@ use wince_emulation_v3::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLEAR_COMM_ERROR,
-            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_COUNT_CLIPBOARD_FORMATS,
-            ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
-            ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W,
-            ORD_CREATE_THREAD, ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DESTROY_ICON,
+            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
+            ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
+            ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE,
+            ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
+            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DESTROY_ICON,
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
             ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
             ORD_ENUM_DEVICE_INTERFACES, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W,
@@ -18,7 +19,7 @@ use wince_emulation_v3::{
             ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
             ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
             ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
@@ -42,23 +43,24 @@ use wince_emulation_v3::{
             ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_IMAGE_W,
             ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
             ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS,
-            ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
-            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD,
-            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
-            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
-            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
-            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
-            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
-            ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS,
-            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
-            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE, ORD_PEEK_MESSAGE_W,
+            ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER,
+            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE, ORD_REGISTER_CLIPBOARD_FORMAT_W,
+            ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
+            ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD, ORD_SELECT_OBJECT,
+            ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS,
+            ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS,
+            ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
+            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
+            ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
+            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
+            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
+            ORD_SLEEP_TILL_TICK, ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS,
+            ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
+            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_MSG_QUEUE,
         },
         devices::{
             CommDcb, DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind,
@@ -73,7 +75,7 @@ use wince_emulation_v3::{
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
-            LoadedModuleMetadata,
+            LoadedModuleMetadata, MessageQueueOptions,
         },
         memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
@@ -251,7 +253,16 @@ fn coredll_raw_device_notifications_track_request_handles() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
     let guid_ptr = 0x2400;
-    let message_queue = 0x4444;
+    let (message_queue, existed) = kernel.create_message_queue(
+        None,
+        MessageQueueOptions {
+            flags: 0,
+            max_messages: 8,
+            max_message_bytes: 256,
+            read_access: true,
+        },
+    )?;
+    assert!(!existed);
     memory.map_bytes(guid_ptr, 16);
     memory.write_bytes(guid_ptr, &STORAGE_MEDIA_GUID);
 
@@ -272,7 +283,7 @@ fn coredll_raw_device_notifications_track_request_handles() -> Result<()> {
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
     let description = kernel.handles.describe_handle(notification_handle);
     assert!(description.contains("device_notification"));
-    assert!(description.contains("queue=0x00004444"));
+    assert!(description.contains(&format!("queue=0x{message_queue:08x}")));
     assert!(description.contains("all=true"));
 
     assert!(matches!(
@@ -343,6 +354,253 @@ fn coredll_raw_device_notifications_track_request_handles() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_msg_queues_deliver_device_notification_devdetails() -> Result<()> {
+    const ERROR_TIMEOUT: u32 = 1460;
+    const STORAGE_MEDIA_GUID: [u8; 16] = [
+        0x63, 0x40, 0xa2, 0x8c, 0xa3, 0xd9, 0x52, 0x42, 0x8a, 0x30, 0xd0, 0x3c, 0x52, 0x28, 0x80,
+        0x59,
+    ];
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let read_options_ptr = 0x2500;
+    let write_options_ptr = 0x2600;
+    let info_ptr = 0x2700;
+    let input_ptr = 0x2800;
+    let output_ptr = 0x2900;
+    let bytes_read_ptr = 0x2a00;
+    let flags_ptr = 0x2b00;
+    let guid_ptr = 0x2c00;
+    memory.map_words(read_options_ptr, 5);
+    memory.write_word(read_options_ptr, 20);
+    memory.write_word(read_options_ptr + 8, 0);
+    memory.write_word(read_options_ptr + 12, 300);
+    memory.write_word(read_options_ptr + 16, 1);
+    memory.map_words(write_options_ptr, 5);
+    memory.write_word(write_options_ptr, 20);
+    memory.write_word(write_options_ptr + 8, 0);
+    memory.write_word(write_options_ptr + 12, 300);
+    memory.write_word(write_options_ptr + 16, 0);
+    memory.map_words(info_ptr, 6);
+    memory.map_halfwords(info_ptr + 24, 2);
+    memory.write_word(info_ptr, 28);
+    memory.map_bytes(input_ptr, 8);
+    memory.write_bytes(input_ptr, &[0xaa, 0xbb, 0xcc, 0xdd]);
+    memory.map_bytes(output_ptr, 300);
+    memory.map_words(bytes_read_ptr, 1);
+    memory.map_words(flags_ptr, 1);
+    memory.map_bytes(guid_ptr, 16);
+    memory.write_bytes(guid_ptr, &STORAGE_MEDIA_GUID);
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(read_queue),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_MSG_QUEUE,
+        [0, read_options_ptr],
+    )
+    else {
+        panic!("CreateMsgQueue did not return a handle");
+    };
+    assert_ne!(read_queue, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(write_queue),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_OPEN_MSG_QUEUE,
+        [0, read_queue, write_options_ptr],
+    )
+    else {
+        panic!("OpenMsgQueue did not return a handle");
+    };
+    assert_ne!(write_queue, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_MSG_QUEUE,
+            [write_queue, input_ptr, 4, 0, 0x20],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.is_wait_ready(read_queue, thread_id), Some(true));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MSG_QUEUE_INFO,
+            [read_queue, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info_ptr + 8)?, 16);
+    assert_eq!(memory.read_u32(info_ptr + 12)?, 300);
+    assert_eq!(memory.read_u32(info_ptr + 16)?, 1);
+    assert_eq!(memory.read_u32(info_ptr + 20)?, 1);
+    assert_eq!(memory.read_u16(info_ptr + 24)?, 1);
+    assert_eq!(memory.read_u16(info_ptr + 26)?, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_MSG_QUEUE,
+            [read_queue, output_ptr, 300, bytes_read_ptr, 0, flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(bytes_read_ptr)?, 4);
+    assert_eq!(memory.read_u32(flags_ptr)?, 0x20);
+    assert_eq!(
+        memory.read_bytes(output_ptr, 4),
+        vec![0xaa, 0xbb, 0xcc, 0xdd]
+    );
+    assert_eq!(kernel.is_wait_ready(read_queue, thread_id), Some(false));
+
+    kernel.advertise_device_interface(STORAGE_MEDIA_GUID, r"\StoreMgr\DSK9:".to_owned(), true);
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(notification_handle),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REQUEST_DEVICE_NOTIFICATIONS,
+        [guid_ptr, read_queue, 1],
+    )
+    else {
+        panic!("RequestDeviceNotifications did not return a handle");
+    };
+    assert_ne!(notification_handle, 0);
+    assert_eq!(kernel.is_wait_ready(read_queue, thread_id), Some(true));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_MSG_QUEUE,
+            [read_queue, output_ptr, 300, bytes_read_ptr, 0, flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let attached = memory.read_bytes(output_ptr, memory.read_u32(bytes_read_ptr)? as usize);
+    assert_eq!(&attached[0..16], &STORAGE_MEDIA_GUID);
+    assert_eq!(u32::from_le_bytes(attached[20..24].try_into().unwrap()), 1);
+    let name_bytes = u32::from_le_bytes(attached[24..28].try_into().unwrap()) as usize;
+    let name_units: Vec<u16> = attached[28..28 + name_bytes]
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .take_while(|unit| *unit != 0)
+        .collect();
+    assert_eq!(String::from_utf16_lossy(&name_units), r"\StoreMgr\DSK9:");
+
+    kernel.advertise_device_interface(STORAGE_MEDIA_GUID, r"\StoreMgr\DSK9:".to_owned(), false);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_MSG_QUEUE,
+            [read_queue, output_ptr, 300, bytes_read_ptr, 0, flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let detached = memory.read_bytes(output_ptr, memory.read_u32(bytes_read_ptr)? as usize);
+    assert_eq!(&detached[0..16], &STORAGE_MEDIA_GUID);
+    assert_eq!(u32::from_le_bytes(detached[20..24].try_into().unwrap()), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STOP_DEVICE_NOTIFICATIONS,
+            [notification_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    kernel.advertise_device_interface(STORAGE_MEDIA_GUID, r"\StoreMgr\DSK9:".to_owned(), true);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_MSG_QUEUE,
+            [read_queue, output_ptr, 300, bytes_read_ptr, 0, flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_TIMEOUT);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_MSG_QUEUE,
+            [write_queue],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_MSG_QUEUE,
+            [read_queue],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
 
     Ok(())
 }
