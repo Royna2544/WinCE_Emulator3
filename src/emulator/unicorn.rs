@@ -33496,6 +33496,22 @@ fn recover_orphaned_wndproc_return_stub<D>(
         return false;
     }
     let current_fp = read_mips_reg(uc, RegisterMIPS::FP);
+    let matches_record_frame =
+        record.live_fp == Some(current_fp) || record.caller_fp == Some(current_fp);
+    if !matches_record_frame {
+        tracing::warn!(
+            target: "ce.gwe",
+            source = record.source,
+            hwnd = format_args!("0x{:08x}", record.hwnd),
+            msg = format_args!("0x{:08x}", record.msg),
+            return_pc = format_args!("0x{:08x}", record.return_pc),
+            current_fp = format_args!("0x{current_fp:08x}"),
+            live_fp = ?record.live_fp.map(|fp| format!("0x{fp:08x}")),
+            caller_fp = ?record.caller_fp.map(|fp| format!("0x{fp:08x}")),
+            "refusing orphaned WNDPROC return recovery for mismatched frame"
+        );
+        return false;
+    }
     let result = read_mips_reg(uc, RegisterMIPS::V0);
     let writes = [
         uc.reg_write(RegisterMIPS::V0, u64::from(result)),
@@ -36780,6 +36796,36 @@ mod unicorn_tests {
             live_fp: Some(0x3004_a988),
             caller_fp: Some(0x3004_a988),
             class_name: None,
+        }]));
+        uc.reg_write(RegisterMIPS::FP, 0x3004_a988).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+
+        assert!(!super::recover_orphaned_wndproc_return_stub(
+            &mut uc, &returns
+        ));
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
+            super::WNDPROC_RETURN_STUB_ADDR
+        );
+    }
+
+    #[test]
+    fn orphaned_wndproc_return_stub_rejects_mismatched_frame() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let returns = Rc::new(RefCell::new(vec![super::UnicornWndProcReturn {
+            source: "SendMessageW",
+            hwnd: 0x0002_0004,
+            msg: 0x534c,
+            wparam: 5,
+            lparam: 0,
+            wndproc: 0x6004_f2b8,
+            return_pc: 0x0005_a1d8,
+            return_pc_trampoline_origin: None,
+            result: 0,
+            live_fp: Some(0x3004_a0a8),
+            caller_fp: Some(0x3004_a0a8),
+            class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
         }]));
         uc.reg_write(RegisterMIPS::FP, 0x3004_a988).unwrap();
         uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
