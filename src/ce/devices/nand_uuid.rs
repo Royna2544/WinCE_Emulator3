@@ -15,7 +15,7 @@
 //! - Do not model NAND flash timing, physical ID probing, or PIC/I2C side
 //!   effects beyond accepting the same control contracts.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs};
 
 use crate::ce::devices::DeviceIoControlResult;
 
@@ -35,6 +35,7 @@ const DEFAULT_UUID: u32 = 20_111_201;
 #[derive(Debug, Clone)]
 pub struct NandUuid {
     uuid: u32,
+    seed_bytes: Vec<u8>,
     sector_uuids: BTreeMap<u32, [u8; 16]>,
     cpu_load_control: u32,
     touchpad_locked: bool,
@@ -46,12 +47,34 @@ impl NandUuid {
     pub fn new() -> Self {
         Self {
             uuid: DEFAULT_UUID,
+            seed_bytes: Vec::new(),
             sector_uuids: BTreeMap::new(),
             cpu_load_control: 0,
             touchpad_locked: false,
             micom_locked: false,
             micom_reset_count: 0,
         }
+    }
+
+    pub fn new_from_host(host: Option<&str>) -> Self {
+        let Some(host) = host else {
+            return Self::new();
+        };
+        let Ok(text) = fs::read_to_string(host) else {
+            return Self::new();
+        };
+        Self::from_seed(text.trim().as_bytes())
+    }
+
+    pub fn from_seed(seed: &[u8]) -> Self {
+        let mut device = Self::new();
+        let trimmed = trim_ascii(seed);
+        if trimmed.is_empty() {
+            return device;
+        }
+        device.uuid = decimal_prefix_uuid(trimmed).unwrap_or(DEFAULT_UUID);
+        device.seed_bytes = trimmed.to_vec();
+        device
     }
 
     pub fn device_io_control(
@@ -134,6 +157,9 @@ impl NandUuid {
     }
 
     fn sector_default_uuid_bytes(&self, sector: u32) -> [u8; 16] {
+        if !self.seed_bytes.is_empty() {
+            return self.seed_sector_bytes(sector);
+        }
         let first_word = self
             .uuid
             .wrapping_add(sector.rotate_left(5))
@@ -156,6 +182,45 @@ impl NandUuid {
         );
         bytes
     }
+
+    fn seed_sector_bytes(&self, sector: u32) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        let copy_len = self.seed_bytes.len().min(bytes.len());
+        bytes[..copy_len].copy_from_slice(&self.seed_bytes[..copy_len]);
+        let sector_bytes = sector.to_le_bytes();
+        for (index, byte) in bytes.iter_mut().enumerate().skip(copy_len) {
+            *byte = sector_bytes[index % sector_bytes.len()]
+                .wrapping_add((index as u8).wrapping_mul(17))
+                .wrapping_add(self.seed_bytes[index % self.seed_bytes.len()]);
+        }
+        bytes
+    }
+}
+
+fn trim_ascii(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map(|index| index + 1)
+        .unwrap_or(start);
+    &bytes[start..end]
+}
+
+fn decimal_prefix_uuid(bytes: &[u8]) -> Option<u32> {
+    let digits: Vec<u8> = bytes
+        .iter()
+        .copied()
+        .filter(|byte| byte.is_ascii_digit())
+        .take(10)
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    std::str::from_utf8(&digits).ok()?.parse::<u32>().ok()
 }
 
 fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {

@@ -272,7 +272,9 @@ impl DeviceRuntime {
             DeviceBackend::I2cBus => Self::I2cBus(i2c_bus::I2cBus::new_for_guest(&config.guest)),
             DeviceBackend::LightSensor => Self::LightSensor(light_sensor::LightSensor::new()),
             DeviceBackend::Magnetometer => Self::Magnetometer(magnetometer::Magnetometer::new()),
-            DeviceBackend::NandUuid => Self::NandUuid(nand_uuid::NandUuid::new()),
+            DeviceBackend::NandUuid => {
+                Self::NandUuid(nand_uuid::NandUuid::new_from_host(config.host.as_deref()))
+            }
             DeviceBackend::PicController => {
                 Self::PicController(pic_controller::PicController::new())
             }
@@ -1085,6 +1087,16 @@ mod tests {
                 .success
         );
         assert!(!uid.device_io_control(0xdead_beef, &[], 4).success);
+
+        let mut seeded = nand_uuid::NandUuid::from_seed(b"022794806836GN\r\n");
+        let seeded_uuid = seeded.device_io_control(nand_uuid::IOCTL_NAND_UPD_READ_UUID, &[], 4);
+        assert_eq!(seeded_uuid.output, 227_948_068u32.to_le_bytes());
+        let seeded_sector = seeded.device_io_control(
+            nand_uuid::IOCTL_NAND_UPD_READ_UUID_BY_SECTORNUM,
+            &0x15u32.to_le_bytes(),
+            16,
+        );
+        assert_eq!(&seeded_sector.output[..14], b"022794806836GN");
     }
 
     #[test]

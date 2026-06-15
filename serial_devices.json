@@ -32,6 +32,7 @@
       "guest": "UID1:",
       "type": "ioctl_device",
       "backend": "nand_uuid",
+      "host": "D:\\INAVI_Emulator\\INAVI\\Device.uid",
       "enabled": true,
       "note": "Drivers\\BuiltIn\\NANDUUID, NANDUUID.dll, decoded UID_IOControl UUID/MICOM/touchpad contracts"
     },
