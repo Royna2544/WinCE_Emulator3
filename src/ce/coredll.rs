@@ -6043,8 +6043,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_GET_PIXEL => Some(CoredllValue::U32(get_pixel_raw(
             kernel,
+            memory,
+            framebuffer,
             thread_id,
-            raw_arg(args, 0),
+            args,
         ))),
         ORD_MASK_BLT => Some(CoredllValue::Bool(mask_blt_raw(
             kernel,
@@ -41963,11 +41965,58 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
     copy_count
 }
 
-fn get_pixel_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
+fn get_pixel_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hdc = raw_arg(args, 0);
+    let x = raw_i32_arg(args, 1);
+    let y = raw_i32_arg(args, 2);
     if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return CLR_INVALID;
+    }
+    if kernel.resources.is_memory_dc(hdc) {
+        let Some(bitmap) = selected_bitmap_object(kernel, hdc) else {
+            kernel.threads.set_last_error(thread_id, 0);
+            return 0;
+        };
+        let Some(rgb) = bitmap_pixel_rgb_from_memory(memory, &bitmap, x, y) else {
+            kernel.threads.set_last_error(thread_id, 0);
+            return CLR_INVALID;
+        };
+        kernel.threads.set_last_error(thread_id, 0);
+        return colorref_from_rgb(rgb);
+    }
+    if let Some(framebuffer) = framebuffer {
+        let rect = Rect {
+            left: x,
+            top: y,
+            right: x.saturating_add(1),
+            bottom: y.saturating_add(1),
+        };
+        if let Some((origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, rect)
+            && clips.iter().any(|clip| point_in_rect(*clip, x, y))
+        {
+            let info = framebuffer.info();
+            let screen_x = origin.x.saturating_add(x);
+            let screen_y = origin.y.saturating_add(y);
+            if (0..info.width as i32).contains(&screen_x)
+                && (0..info.height as i32).contains(&screen_y)
+            {
+                let bpp = info.format.bytes_per_pixel();
+                let offset = screen_y as usize * info.stride + screen_x as usize * bpp;
+                let pixel = &framebuffer.pixels()[offset..offset + bpp];
+                kernel.threads.set_last_error(thread_id, 0);
+                return colorref_from_rgb(framebuffer_pixel_rgb(info.format, pixel));
+            }
+        }
+        kernel.threads.set_last_error(thread_id, 0);
         return CLR_INVALID;
     }
     kernel.threads.set_last_error(thread_id, 0);

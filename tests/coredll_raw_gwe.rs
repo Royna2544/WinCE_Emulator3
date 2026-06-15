@@ -38641,6 +38641,128 @@ fn coredll_raw_draw_edge_rejects_readonly_selected_bitmap() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_draw_edge_matches_ce_middle_and_flat_center_pixels() -> Result<()> {
+    const EDGE_RAISED: u32 = 0x0005;
+    const BF_RECT: u32 = 0x000f;
+    const BF_MIDDLE: u32 = 0x0800;
+    const BF_FLAT: u32 = 0x4000;
+    const COLOR_BTNFACE: u32 = 0x00c8_d0d4;
+    const WHITE: u32 = 0x00ff_ffff;
+    const BLACK: u32 = 0;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 153_u32;
+
+    let (dc, _bitmap, _bits_ptr, _stride) = create_selected_32bpp_dib_with_bitmap(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        128,
+        128,
+    );
+
+    let rect_ptr = 0x1_3800;
+    memory.map_words(rect_ptr, 4);
+
+    memory.write_word(rect_ptr, 50);
+    memory.write_word(rect_ptr + 4, 50);
+    memory.write_word(rect_ptr + 8, 125);
+    memory.write_word(rect_ptr + 12, 125);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_PIXEL,
+            [dc, 75, 75, BLACK],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(BLACK),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_EDGE,
+            [dc, rect_ptr, EDGE_RAISED, BF_MIDDLE | BF_RECT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let middle_color = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_PIXEL,
+        [dc, 75, 75],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(color),
+            ..
+        } => color,
+        other => panic!("GetPixel after BF_MIDDLE returned {other:?}"),
+    };
+    assert_eq!(middle_color, COLOR_BTNFACE);
+
+    memory.write_word(rect_ptr, 50);
+    memory.write_word(rect_ptr + 4, 50);
+    memory.write_word(rect_ptr + 8, 100);
+    memory.write_word(rect_ptr + 12, 100);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_PIXEL,
+            [dc, 75, 75, WHITE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WHITE),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_EDGE,
+            [dc, rect_ptr, EDGE_RAISED, BF_FLAT | BF_RECT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let flat_color = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_PIXEL,
+        [dc, 75, 75],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(color),
+            ..
+        } => color,
+        other => panic!("GetPixel after BF_FLAT returned {other:?}"),
+    };
+    assert_eq!(flat_color, WHITE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_bit_blt_rejects_readonly_selected_bitmap() -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
 
