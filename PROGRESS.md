@@ -4300,3 +4300,20 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   unicorn,trace,win32-desktop` passed. The raw GWE binary reported 352 passing
   tests, the eVC4 MIPSII fixture remains ignored because that toolchain is not
   configured, and Cargo still emits the existing unused-code warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `DrawEdge`
+  `BF_DIAGONAL_END*` flags now paint a clipped diagonal line instead of
+  returning success as a no-op. The slice is backed by CE `draw.cpp`
+  `IterateDrawEdge` bounded-draw coverage and public tab/trackbar callers that
+  use diagonal endpoint flags for visible slanted edges. The regression verifies
+  `BF_DIAGONAL | BF_TOP | BF_RIGHT` changes an in-rect endpoint pixel while an
+  adjacent outside-rect pixel remains untouched.
+- Validation after the `BF_DIAGONAL_END*` DrawEdge slice: `cargo fmt`,
+  focused `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_draw_edge_diagonal_paints_within_requested_rect
+  -- --nocapture`, `cargo fmt --check`, `git diff --check`,
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The raw GWE binary reported 353 passing
+  tests, the eVC4 MIPSII fixture remains ignored because that toolchain is not
+  configured, and Cargo still emits the existing unused-code warnings.

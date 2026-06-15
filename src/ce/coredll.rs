@@ -37298,10 +37298,6 @@ fn draw_edge_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    if flags & BF_DIAGONAL != 0 {
-        kernel.threads.set_last_error(thread_id, 0);
-        return true;
-    }
     let (light, shadow, dark_shadow) = if flags & BF_MONO != 0 {
         (rgb(0xff, 0xff, 0xff), rgb(0, 0, 0), rgb(0, 0, 0))
     } else if flags & BF_FLAT != 0 {
@@ -37355,128 +37351,141 @@ fn draw_edge_raw<M: CoredllGuestMemory>(
     let bf_bottom = flags & BF_BOTTOM != 0;
     let bf_right = flags & BF_RIGHT != 0;
     let mut rects: Vec<(Rect, u32)> = Vec::new();
-    // Outer border
-    if bf_top && outer_tl != 0 {
-        rects.push((
-            Rect {
-                left: l,
-                top: t,
-                right: r,
-                bottom: t + 1,
-            },
-            outer_tl,
-        ));
-    }
-    if bf_left && outer_tl != 0 {
-        rects.push((
-            Rect {
-                left: l,
-                top: t,
-                right: l + 1,
-                bottom: b,
-            },
-            outer_tl,
-        ));
-    }
-    if bf_bottom && outer_br != 0 {
-        rects.push((
-            Rect {
-                left: l,
-                top: b - 1,
-                right: r,
-                bottom: b,
-            },
-            outer_br,
-        ));
-    }
-    if bf_right && outer_br != 0 {
-        rects.push((
-            Rect {
-                left: r - 1,
-                top: t,
-                right: r,
-                bottom: b,
-            },
-            outer_br,
-        ));
-    }
-    // Inner border
-    let (il, it, ir, ib) = (l + 1, t + 1, r - 1, b - 1);
-    if ir > il && ib > it {
-        if bf_top && inner_tl != 0 {
+    if flags & BF_DIAGONAL != 0 {
+        let diagonal_color = if outer_tl != 0 { outer_tl } else { outer_br };
+        draw_edge_diagonal_for_hdc(
+            kernel,
+            memory,
+            framebuffer,
+            hdc,
+            rect,
+            flags,
+            diagonal_color,
+        );
+    } else {
+        // Outer border
+        if bf_top && outer_tl != 0 {
             rects.push((
                 Rect {
-                    left: il,
-                    top: it,
-                    right: ir,
-                    bottom: it + 1,
+                    left: l,
+                    top: t,
+                    right: r,
+                    bottom: t + 1,
                 },
-                inner_tl,
+                outer_tl,
             ));
         }
-        if bf_left && inner_tl != 0 {
+        if bf_left && outer_tl != 0 {
             rects.push((
                 Rect {
-                    left: il,
-                    top: it,
-                    right: il + 1,
-                    bottom: ib,
+                    left: l,
+                    top: t,
+                    right: l + 1,
+                    bottom: b,
                 },
-                inner_tl,
+                outer_tl,
             ));
         }
-        if bf_bottom && inner_br != 0 {
+        if bf_bottom && outer_br != 0 {
             rects.push((
                 Rect {
-                    left: il,
-                    top: ib - 1,
-                    right: ir,
-                    bottom: ib,
+                    left: l,
+                    top: b - 1,
+                    right: r,
+                    bottom: b,
                 },
-                inner_br,
+                outer_br,
             ));
         }
-        if bf_right && inner_br != 0 {
+        if bf_right && outer_br != 0 {
             rects.push((
                 Rect {
-                    left: ir - 1,
-                    top: it,
-                    right: ir,
-                    bottom: ib,
+                    left: r - 1,
+                    top: t,
+                    right: r,
+                    bottom: b,
                 },
-                inner_br,
+                outer_br,
             ));
         }
-    }
-    // Middle fill
-    if flags & BF_MIDDLE != 0 {
-        let (ml, mt, mr, mb) = (l + 2, t + 2, r - 2, b - 2);
-        if mr > ml && mb > mt {
-            let face = if flags & BF_MONO != 0 {
-                rgb(0, 0, 0)
-            } else {
-                rgb(0xd4, 0xd0, 0xc8)
-            };
-            rects.push((
-                Rect {
-                    left: ml,
-                    top: mt,
-                    right: mr,
-                    bottom: mb,
-                },
-                face,
-            ));
+        // Inner border
+        let (il, it, ir, ib) = (l + 1, t + 1, r - 1, b - 1);
+        if ir > il && ib > it {
+            if bf_top && inner_tl != 0 {
+                rects.push((
+                    Rect {
+                        left: il,
+                        top: it,
+                        right: ir,
+                        bottom: it + 1,
+                    },
+                    inner_tl,
+                ));
+            }
+            if bf_left && inner_tl != 0 {
+                rects.push((
+                    Rect {
+                        left: il,
+                        top: it,
+                        right: il + 1,
+                        bottom: ib,
+                    },
+                    inner_tl,
+                ));
+            }
+            if bf_bottom && inner_br != 0 {
+                rects.push((
+                    Rect {
+                        left: il,
+                        top: ib - 1,
+                        right: ir,
+                        bottom: ib,
+                    },
+                    inner_br,
+                ));
+            }
+            if bf_right && inner_br != 0 {
+                rects.push((
+                    Rect {
+                        left: ir - 1,
+                        top: it,
+                        right: ir,
+                        bottom: ib,
+                    },
+                    inner_br,
+                ));
+            }
         }
-    }
-    // Draw all collected rects — bitmap DC only, no framebuffer needed.
-    let is_memdc = kernel.resources.is_memory_dc(hdc);
-    if is_memdc {
-        for (dr, color) in rects {
-            fill_bitmap_rect_for_hdc(kernel, memory, hdc, dr, BrushPaint::Solid(color));
+        // Middle fill
+        if flags & BF_MIDDLE != 0 {
+            let (ml, mt, mr, mb) = (l + 2, t + 2, r - 2, b - 2);
+            if mr > ml && mb > mt {
+                let face = if flags & BF_MONO != 0 {
+                    rgb(0, 0, 0)
+                } else {
+                    rgb(0xd4, 0xd0, 0xc8)
+                };
+                rects.push((
+                    Rect {
+                        left: ml,
+                        top: mt,
+                        right: mr,
+                        bottom: mb,
+                    },
+                    face,
+                ));
+            }
         }
-    } else if let Some(fb) = framebuffer {
-        for (dr, color) in rects {
-            fill_framebuffer_rect_for_hdc(kernel, fb, hdc, dr, color);
+        // Draw all collected rects.
+        let is_memdc = kernel.resources.is_memory_dc(hdc);
+        if is_memdc {
+            for (dr, color) in rects {
+                fill_bitmap_rect_for_hdc(kernel, memory, hdc, dr, BrushPaint::Solid(color));
+            }
+        } else if let Some(fb) = framebuffer {
+            for (dr, color) in rects {
+                fill_framebuffer_rect_for_hdc(kernel, fb, hdc, dr, color);
+            }
         }
     }
     // Update rect if BF_ADJUST.
@@ -37495,6 +37504,83 @@ fn draw_edge_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn draw_edge_diagonal_for_hdc<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    hdc: u32,
+    rect: Rect,
+    flags: u32,
+    colorref: u32,
+) {
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        return;
+    }
+    let descends = (flags & BF_TOP != 0 && flags & BF_LEFT != 0)
+        || (flags & BF_BOTTOM != 0 && flags & BF_RIGHT != 0);
+    let (start, end) = if descends {
+        (
+            Point {
+                x: rect.left,
+                y: rect.top,
+            },
+            Point {
+                x: rect.right - 1,
+                y: rect.bottom - 1,
+            },
+        )
+    } else {
+        (
+            Point {
+                x: rect.left,
+                y: rect.bottom - 1,
+            },
+            Point {
+                x: rect.right - 1,
+                y: rect.top,
+            },
+        )
+    };
+    let pen = PenModel {
+        colorref,
+        width: 1,
+        rop2: R2_COPYPEN,
+        style: PS_SOLID,
+    };
+    if kernel.resources.is_memory_dc(hdc) {
+        let Some(bitmap) = selected_bitmap_object(kernel, hdc) else {
+            return;
+        };
+        let clips = hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height);
+        let mut style_state = 0usize;
+        for clip in clips {
+            draw_bitmap_line(memory, &bitmap, start, end, clip, pen, &mut style_state);
+        }
+    } else if let Some(framebuffer) = framebuffer
+        && let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, rect)
+    {
+        let start = Point {
+            x: start.x + client_origin.x,
+            y: start.y + client_origin.y,
+        };
+        let end = Point {
+            x: end.x + client_origin.x,
+            y: end.y + client_origin.y,
+        };
+        let mut style_state = 0usize;
+        for clip in clips {
+            draw_framebuffer_line(
+                framebuffer,
+                start,
+                end,
+                clip.offset(client_origin.x, client_origin.y),
+                pen,
+                &mut style_state,
+            );
+        }
+    }
 }
 
 fn draw_focus_rect_raw<M: CoredllGuestMemory>(

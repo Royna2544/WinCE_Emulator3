@@ -38825,6 +38825,78 @@ fn coredll_raw_draw_edge_adjusts_only_requested_edges() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_draw_edge_diagonal_paints_within_requested_rect() -> Result<()> {
+    const EDGE_RAISED: u32 = 0x0005;
+    const BF_TOP: u32 = 0x0002;
+    const BF_RIGHT: u32 = 0x0004;
+    const BF_DIAGONAL: u32 = 0x0010;
+    const BLACK: u32 = 0;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 155_u32;
+
+    let (dc, _bitmap, _bits_ptr, _stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 40, 40);
+
+    let rect_ptr = 0x1_3a00;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 8);
+    memory.write_word(rect_ptr + 4, 8);
+    memory.write_word(rect_ptr + 8, 24);
+    memory.write_word(rect_ptr + 12, 24);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_EDGE,
+            [dc, rect_ptr, EDGE_RAISED, BF_DIAGONAL | BF_TOP | BF_RIGHT,],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let diagonal_color = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_PIXEL,
+        [dc, 8, 23],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(color),
+            ..
+        } => color,
+        other => panic!("GetPixel on DrawEdge diagonal returned {other:?}"),
+    };
+    assert_ne!(diagonal_color, BLACK);
+
+    let outside_color = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_PIXEL,
+        [dc, 7, 23],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(color),
+            ..
+        } => color,
+        other => panic!("GetPixel outside DrawEdge diagonal returned {other:?}"),
+    };
+    assert_eq!(outside_color, BLACK);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_bit_blt_rejects_readonly_selected_bitmap() -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
 
