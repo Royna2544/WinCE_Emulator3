@@ -4283,3 +4283,10 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored
   because that toolchain is not configured, and Cargo still emits the existing
   unused-code warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `DrawEdge`
+  `BF_ADJUST` now shrinks only the sides requested by the edge mask, matching
+  CE public callers such as `updownview.cpp::SetSunkenBorder` and
+  `atlctrlx.h::DrawPaneTitle` that use top/bottom or three-sided adjusted
+  borders. The regression verifies `BF_TOP | BF_BOTTOM | BF_ADJUST` mutates
+  only the rectangle's top and bottom while leaving an unrequested left-side
+  pixel untouched.
