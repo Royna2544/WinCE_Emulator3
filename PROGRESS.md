@@ -15,12 +15,32 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `tests/coredll_raw_gwe.rs`: raw framebuffer-HDC `TransparentImage` now has
+  CE `draw.cpp::StretchBltFlipMirrorTest(ETransparentImage)` coverage for
+  negative source and destination extents through the transparent color key,
+  proving the screen-HDC path uses the same bottom/right +1 mirror convention
+  as selected-DIB copies.
+- `src/emulator/unicorn.rs`: orphaned `CallWindowProcW` `WM_PAINT` return-stub
+  recovery now accepts the live iNavi shape where the archived return has no
+  caller frame but the guest `PC`/`RA` are both still parked at the WNDPROC
+  return stub, while preserving mismatched-frame rejection for other cases.
+- Validation after the framebuffer signed-extent `TransparentImage` and
+  `CallWindowProcW` return-stub recovery slice: `cargo fmt --check`, `git diff
+  --check`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_transparent_image_mirrors_negative_extents_on_framebuffer_hdc`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop
+  orphaned_call_window_proc_paint_return_stub_recovers_without_caller_frame`,
+  and full `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
+  Cargo still emits the existing unused-code warnings plus Windows
+  profile/incremental-cache cleanup noise, and the eVC4 MIPSII fixture remains
+  ignored because that toolchain is not configured.
 - `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
   `TransparentImage` now accepts CE `draw.cpp::NegativeSize` and
   `StretchBltFlipMirrorTest` nonzero signed destination/source extents for
-  selected-DIB copies, normalizing the destination clip rectangle and using the
-  shared signed source-coordinate mapping while still honoring the transparent
-  color key.
+  selected-DIB and framebuffer HDC copies, normalizing the destination clip
+  rectangle and using the shared signed source-coordinate mapping while still
+  honoring the transparent color key.
 - Validation after the signed-extent `TransparentImage` slice: `cargo fmt
   --check`, `git diff --check`, `cargo test -j 1 --features
   unicorn,trace,win32-desktop --test coredll_raw_gwe

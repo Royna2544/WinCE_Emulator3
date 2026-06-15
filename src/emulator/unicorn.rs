@@ -33879,6 +33879,20 @@ fn wndproc_return_frame_matches(record: &UnicornWndProcReturn, current_fp: u32) 
 }
 
 #[cfg(feature = "unicorn")]
+fn orphaned_call_window_proc_return_can_recover_without_frame<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    record: &UnicornWndProcReturn,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    record.source == "CallWindowProcW"
+        && record.msg == crate::ce::gwe::WM_PAINT
+        && record.caller_fp.is_none()
+        && read_mips_reg(uc, RegisterMIPS::PC) == WNDPROC_RETURN_STUB_ADDR
+        && read_mips_reg(uc, RegisterMIPS::RA) == WNDPROC_RETURN_STUB_ADDR
+}
+
+#[cfg(feature = "unicorn")]
 fn recover_orphaned_wndproc_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     last_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<UnicornWndProcReturn>>>,
@@ -33896,26 +33910,32 @@ fn recover_orphaned_wndproc_return_stub<D>(
                 && wndproc_return_frame_matches(record, current_fp)
         })
         .cloned();
-    let Some(record) = record else {
-        let newest_valid = returns
-            .iter()
-            .rev()
-            .find(|record| record.return_pc != 0 && record.return_pc != WNDPROC_RETURN_STUB_ADDR);
-        if let Some(record) = newest_valid {
-            tracing::warn!(
-                target: "ce.gwe",
-                source = record.source,
-                hwnd = format_args!("0x{:08x}", record.hwnd),
-                msg = format_args!("0x{:08x}", record.msg),
-                return_pc = format_args!("0x{:08x}", record.return_pc),
-                current_fp = format_args!("0x{current_fp:08x}"),
-                live_fp = ?record.live_fp.map(|fp| format!("0x{fp:08x}")),
-                caller_fp = ?record.caller_fp.map(|fp| format!("0x{fp:08x}")),
-                "refusing orphaned WNDPROC return recovery for mismatched frame"
-            );
-        }
-        return false;
-    };
+    let record =
+        if let Some(record) = record {
+            record
+        } else {
+            let Some(newest_valid) = returns.iter().rev().find(|record| {
+                record.return_pc != 0 && record.return_pc != WNDPROC_RETURN_STUB_ADDR
+            }) else {
+                return false;
+            };
+            if orphaned_call_window_proc_return_can_recover_without_frame(uc, newest_valid) {
+                newest_valid.clone()
+            } else {
+                tracing::warn!(
+                    target: "ce.gwe",
+                    source = newest_valid.source,
+                    hwnd = format_args!("0x{:08x}", newest_valid.hwnd),
+                    msg = format_args!("0x{:08x}", newest_valid.msg),
+                    return_pc = format_args!("0x{:08x}", newest_valid.return_pc),
+                    current_fp = format_args!("0x{current_fp:08x}"),
+                    live_fp = ?newest_valid.live_fp.map(|fp| format!("0x{fp:08x}")),
+                    caller_fp = ?newest_valid.caller_fp.map(|fp| format!("0x{fp:08x}")),
+                    "refusing orphaned WNDPROC return recovery for mismatched frame"
+                );
+                return false;
+            }
+        };
     drop(returns);
     let result = read_mips_reg(uc, RegisterMIPS::V0);
     let writes = [
@@ -37263,6 +37283,39 @@ mod unicorn_tests {
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+    }
+
+    #[test]
+    fn orphaned_call_window_proc_paint_return_stub_recovers_without_caller_frame() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let return_pc = 0x7002_940c;
+        let returns = Rc::new(RefCell::new(vec![super::UnicornWndProcReturn {
+            source: "CallWindowProcW",
+            hwnd: 0x0002_0000,
+            msg: crate::ce::gwe::WM_PAINT,
+            wparam: 0,
+            lparam: 0,
+            wndproc: 0x6004_f2b8,
+            return_pc,
+            return_pc_trampoline_origin: None,
+            result: 0,
+            live_fp: Some(0x3000_3800),
+            caller_fp: None,
+            class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
+        }]));
+        uc.reg_write(RegisterMIPS::FP, 0x7ffb_f8e0).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+
+        assert!(super::recover_orphaned_wndproc_return_stub(
+            &mut uc, &returns
+        ));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
     }
 
     #[test]
