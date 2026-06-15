@@ -128,9 +128,12 @@ const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
 const ERROR_GEN_FAILURE: u32 = 31;
 const ERROR_DEVICE_REMOVED: u32 = 1617;
+const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
 const CE_VOLUME_INFO_LEVEL_STANDARD: u32 = 0;
 const CE_VOLUME_INFO_SIZE: u32 = 144;
 const CE_VOLUME_INFO_NAME_CHARS: usize = 32;
+const SECURITY_ATTRIBUTES_SIZE: u32 = 12;
+const CE_KERNEL_MODE_BASE: u32 = 0x8000_0000;
 const EVENT_ALL_ACCESS: u32 = 0x001f_0003;
 const DUPLICATE_CLOSE_SOURCE: u32 = 0x0000_0001;
 const DUPLICATE_SAME_ACCESS: u32 = 0x0000_0002;
@@ -11663,6 +11666,7 @@ enum FsdmgrImport {
     FsdmgrGetVolumeName,
     FsdmgrGetMountFlags,
     FsdmgrInvalidateCache,
+    FsdmgrParseSecurityDescriptor,
     FsdmgrReadDisk,
     FsdmgrReadDiskEx,
     FsdmgrRegisterVolume,
@@ -11798,6 +11802,12 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             let status = kernel.fsdmgr_invalidate_cache(raw_arg(args, 0));
             fsdmgr_cache_status_raw(kernel, thread_id, status)
         }
+        FsdmgrImport::FsdmgrParseSecurityDescriptor => fsdmgr_parse_security_descriptor_raw(
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ),
         FsdmgrImport::FsdmgrReadDisk => fsdmgr_read_disk_raw(
             kernel,
             memory,
@@ -11932,6 +11942,7 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         75 => Some(FsdmgrImport::FsextGetFileNotificationInfoW),
         80 => Some(FsdmgrImport::FsdmgrAsyncEnterVolume),
         81 => Some(FsdmgrImport::FsdmgrAsyncExitVolume),
+        82 => Some(FsdmgrImport::FsdmgrParseSecurityDescriptor),
         _ => None,
     }
 }
@@ -11958,6 +11969,7 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsdmgr_getvolumename" => Some(FsdmgrImport::FsdmgrGetVolumeName),
         "fsdmgr_getmountflags" => Some(FsdmgrImport::FsdmgrGetMountFlags),
         "fsdmgr_invalidatecache" => Some(FsdmgrImport::FsdmgrInvalidateCache),
+        "fsdmgr_parsesecuritydescriptor" => Some(FsdmgrImport::FsdmgrParseSecurityDescriptor),
         "fsdmgr_readdisk" => Some(FsdmgrImport::FsdmgrReadDisk),
         "fsdmgr_readdiskex" => Some(FsdmgrImport::FsdmgrReadDiskEx),
         "fsdmgr_registervolume" => Some(FsdmgrImport::FsdmgrRegisterVolume),
@@ -12026,6 +12038,61 @@ fn fsdmgr_async_exit_volume_raw(kernel: &mut CeKernel, lock_handle: u32, lock_da
         Ok(_) => 0,
         Err(_) => ERROR_INVALID_PARAMETER,
     }
+}
+
+fn fsdmgr_parse_security_descriptor_raw<M: CoredllGuestMemory>(
+    memory: &mut M,
+    security_attributes_ptr: u32,
+    security_descriptor_out_ptr: u32,
+    security_descriptor_size_out_ptr: u32,
+) -> u32 {
+    if security_descriptor_out_ptr == 0 || security_descriptor_size_out_ptr == 0 {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    if security_attributes_ptr == 0 {
+        if memory.write_u32(security_descriptor_out_ptr, 0).is_err()
+            || memory
+                .write_u32(security_descriptor_size_out_ptr, 0)
+                .is_err()
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+        return 0;
+    }
+
+    let Ok(length) = memory.read_u32(security_attributes_ptr) else {
+        return ERROR_INVALID_SECURITY_DESCR;
+    };
+    let Ok(security_descriptor_ptr) = memory.read_u32(security_attributes_ptr + 4) else {
+        return ERROR_INVALID_SECURITY_DESCR;
+    };
+    let Ok(inherit_handle) = memory.read_u32(security_attributes_ptr + 8) else {
+        return ERROR_INVALID_SECURITY_DESCR;
+    };
+    if length != SECURITY_ATTRIBUTES_SIZE
+        || inherit_handle != 0
+        || security_descriptor_ptr < CE_KERNEL_MODE_BASE
+    {
+        return ERROR_INVALID_SECURITY_DESCR;
+    }
+
+    let Ok(security_descriptor_size) = memory.read_u16(security_descriptor_ptr + 2) else {
+        return ERROR_INVALID_SECURITY_DESCR;
+    };
+    if memory
+        .write_u32(security_descriptor_out_ptr, security_descriptor_ptr)
+        .is_err()
+        || memory
+            .write_u32(
+                security_descriptor_size_out_ptr,
+                u32::from(security_descriptor_size),
+            )
+            .is_err()
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    0
 }
 
 fn fsdmgr_cached_read_raw<M: CoredllGuestMemory>(

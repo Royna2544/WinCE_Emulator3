@@ -799,7 +799,7 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 36
                     | 37
                     | 44
-                    | 68..=75 | 80 | 81
+                    | 68..=75 | 80..=82
             )
         }
         ImportBy::Name { name, .. } => crate::ce::coredll::is_fsdmgr_import(name),
@@ -874,6 +874,10 @@ mod tests {
 
         fn map_word(&mut self, addr: u32, value: u32) {
             self.words.insert(addr, value);
+        }
+
+        fn map_halfword(&mut self, addr: u32, value: u16) {
+            self.halfwords.insert(addr, value);
         }
 
         fn word(&self, addr: u32) -> u32 {
@@ -1176,6 +1180,14 @@ mod tests {
                     iat_rva: 0x3064,
                     import: ImportBy::Name {
                         hint: 0,
+                        name: "FSDMGR_ParseSecurityDescriptor".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2068,
+                    iat_rva: 0x3068,
+                    import: ImportBy::Name {
+                        hint: 0,
                         name: "FSEXT_UnsupportedStorageApi".to_owned(),
                     },
                 },
@@ -1191,8 +1203,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(table.len(), 25);
-        for index in 0..25 {
+        assert_eq!(table.len(), 26);
+        for index in 0..26 {
             let iat = 0x3000 + index * 4;
             assert_eq!(
                 u32::from_le_bytes(mapped[iat..iat + 4].try_into().unwrap()),
@@ -1200,7 +1212,7 @@ mod tests {
             );
         }
         assert_eq!(
-            u32::from_le_bytes(mapped[0x3064..0x3068].try_into().unwrap()),
+            u32::from_le_bytes(mapped[0x3068..0x306c].try_into().unwrap()),
             0
         );
         assert_eq!(
@@ -1374,6 +1386,14 @@ mod tests {
                 .name
                 .as_deref(),
             Some("FSDMGR_AsyncExitVolume")
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 25)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("FSDMGR_ParseSecurityDescriptor")
         );
     }
 
@@ -3109,6 +3129,190 @@ mod tests {
                 [volume_handle, 0x4444_0000],
             ),
             Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+    }
+
+    #[test]
+    fn fsdmgr_parse_security_descriptor_import_uses_ce_secdeschdr_size() {
+        const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
+        const SECURITY_ATTRIBUTES_SIZE: u32 = 12;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![ImportThunk {
+                thunk_rva: 0x2000,
+                iat_rva: 0x3000,
+                import: ImportBy::Ordinal(82),
+            }],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let security_attributes_ptr = 0x1000_1000;
+        let security_descriptor_ptr = 0x8000_3000;
+        let descriptor_out_ptr = 0x1000_2000;
+        let size_out_ptr = 0x1000_2004;
+        memory.map_word(security_attributes_ptr, SECURITY_ATTRIBUTES_SIZE);
+        memory.map_word(security_attributes_ptr + 4, security_descriptor_ptr);
+        memory.map_word(security_attributes_ptr + 8, 0);
+        memory.map_halfword(security_descriptor_ptr + 2, 0x003c);
+        memory.map_word(descriptor_out_ptr, 0xfeed_cafe);
+        memory.map_word(size_out_ptr, 0xdead_beef);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [0, descriptor_out_ptr, size_out_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(descriptor_out_ptr), 0);
+        assert_eq!(memory.word(size_out_ptr), 0);
+
+        memory.map_word(descriptor_out_ptr, 0xfeed_cafe);
+        memory.map_word(size_out_ptr, 0xdead_beef);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [security_attributes_ptr, descriptor_out_ptr, size_out_ptr,],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(descriptor_out_ptr), security_descriptor_ptr);
+        assert_eq!(memory.word(size_out_ptr), 0x003c);
+
+        memory.map_word(security_attributes_ptr + 8, 1);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [security_attributes_ptr, descriptor_out_ptr, size_out_ptr,],
+            ),
+            Some(ERROR_INVALID_SECURITY_DESCR)
+        );
+        memory.map_word(security_attributes_ptr + 8, 0);
+        memory.map_word(security_attributes_ptr + 4, 0x1000_3000);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [security_attributes_ptr, descriptor_out_ptr, size_out_ptr,],
+            ),
+            Some(ERROR_INVALID_SECURITY_DESCR)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [security_attributes_ptr, 0, size_out_ptr],
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+    }
+
+    #[test]
+    fn fsdmgr_parse_security_descriptor_import_matches_ce_shape() {
+        const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![ImportThunk {
+                thunk_rva: 0x2000,
+                iat_rva: 0x3000,
+                import: ImportBy::Name {
+                    hint: 0,
+                    name: "FSDMGR_ParseSecurityDescriptor".to_owned(),
+                },
+            }],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let attributes_ptr = 0x1000_1000;
+        let descriptor_ptr = 0x8000_2000;
+        let descriptor_out_ptr = 0x1000_3000;
+        let descriptor_size_out_ptr = 0x1000_3004;
+        memory.map_word(attributes_ptr, 12);
+        memory.map_word(attributes_ptr + 4, descriptor_ptr);
+        memory.map_word(attributes_ptr + 8, 0);
+        memory.map_halfword(descriptor_ptr + 2, 0x34);
+        memory.map_word(descriptor_out_ptr, 0xfeed_cafe);
+        memory.map_word(descriptor_size_out_ptr, 0xdead_beef);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [0, descriptor_out_ptr, descriptor_size_out_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(descriptor_out_ptr), 0);
+        assert_eq!(memory.word(descriptor_size_out_ptr), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [attributes_ptr, descriptor_out_ptr, descriptor_size_out_ptr,],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(descriptor_out_ptr), descriptor_ptr);
+        assert_eq!(memory.word(descriptor_size_out_ptr), 0x34);
+
+        memory.map_word(attributes_ptr, 8);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [attributes_ptr, descriptor_out_ptr, descriptor_size_out_ptr,],
+            ),
+            Some(ERROR_INVALID_SECURITY_DESCR)
         );
     }
 
