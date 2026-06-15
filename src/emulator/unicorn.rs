@@ -2175,8 +2175,6 @@ impl UnicornMips {
         Self::clear_orphaned_direct_send_callouts_for_context(
             &mut self.pending_wndproc_returns,
             kernel,
-            Some(self.current_thread_id),
-            kernel.current_process_id(),
             context_pcs,
             context_frames,
         )
@@ -2186,8 +2184,6 @@ impl UnicornMips {
     fn clear_orphaned_direct_send_callouts_for_context(
         pending_wndproc_returns: &mut Vec<PendingWndProcReturn>,
         kernel: &CeKernel,
-        current_thread_id: Option<u32>,
-        current_process_id: u32,
         context_pcs: [Option<u32>; 2],
         context_frames: [Option<(u32, u32, u32)>; 2],
     ) -> bool {
@@ -2201,13 +2197,6 @@ impl UnicornMips {
                 && pending.send_timeout_result_ptr.is_none()
                 && matches!(pending.source, "SendMessageW" | "SendMessageTimeout");
             if !direct_send || kernel.gwe.active_sent_message_id(thread_id).is_some() {
-                return true;
-            }
-            let still_active_receiver_context = current_thread_id == Some(thread_id)
-                && kernel.gwe.window(pending.hwnd).is_some_and(|window| {
-                    !window.destroyed && window.process_id == current_process_id
-                });
-            if still_active_receiver_context {
                 return true;
             }
             let pending_call_sp = pending.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
@@ -5481,8 +5470,6 @@ impl UnicornMips {
                     let _ = Self::clear_orphaned_direct_send_callouts_for_context(
                         &mut pending_wndproc_returns,
                         unsafe { &*kernel_ptr },
-                        Some(*current_thread_id_timeslice_hook.borrow()),
-                        unsafe { &*kernel_ptr }.current_process_id(),
                         [Some(context_pc), None],
                         [
                             Some((
@@ -22007,8 +21994,8 @@ mod wait_scheduler_tests {
             pc: 0x0007_34d8,
             regs: super::MipsGuestContext::zero(),
         });
-        assert!(!scheduler.clear_orphaned_direct_send_callouts(&kernel));
-        assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
+        assert!(scheduler.clear_orphaned_direct_send_callouts(&kernel));
+        assert!(scheduler.pending_wndproc_returns.is_empty());
         scheduler.pending_wndproc_returns.clear();
 
         kernel.gwe.begin_send_message(1);
