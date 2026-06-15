@@ -1085,7 +1085,11 @@ impl CeKernel {
             MessageQueueState {
                 name,
                 flags: options.flags,
-                max_messages: options.max_messages.max(16),
+                max_messages: if options.max_messages == 0 {
+                    16
+                } else {
+                    options.max_messages
+                },
                 max_message_bytes: options.max_message_bytes,
                 messages: VecDeque::new(),
                 max_queue_messages: 0,
@@ -1322,7 +1326,9 @@ impl CeKernel {
         let payload =
             encode_devdetail_payload(advertisement.class_guid, &advertisement.name, attached);
         for queue_handle in subscriptions {
-            let _ = self.write_message_queue(queue_handle, payload.clone(), 0);
+            if let Ok(queue_id) = self.message_queue_id(queue_handle) {
+                let _ = self.write_message_queue_by_id(queue_id, payload.clone(), 0);
+            }
         }
     }
 
