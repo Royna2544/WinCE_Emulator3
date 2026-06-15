@@ -27165,14 +27165,6 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    let width = if width > 0 { width } else { 32 };
-    let height = if height > 0 { height } else { 32 };
-    if width <= 0 || height <= 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
     // Icons created via CreateIconIndirect / ExtractIconEx have a bitmap-backed IconObject
     if let Some(icon_obj) = kernel.resources.icon(icon) {
         const DI_MASK: u32 = 0x0001;
@@ -27199,6 +27191,26 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
             .bitmap(source_bitmap)
             .map(|bitmap| (bitmap.width.abs().max(1), bitmap.height.abs().max(1)))
             .unwrap_or((width, height));
+        let width = if width > 0 {
+            width
+        } else if width == 0 {
+            source_width
+        } else {
+            32
+        };
+        let height = if height > 0 {
+            height
+        } else if height == 0 {
+            source_height
+        } else {
+            32
+        };
+        if width <= 0 || height <= 0 {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
         let image = crate::ce::resource::ImageListImage {
             bitmap: source_bitmap,
             mask: if effective_flags == DI_NORMAL && color_bitmap != 0 && !mask_only {
@@ -27245,6 +27257,14 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
         }
         kernel.threads.set_last_error(thread_id, 0);
         return true;
+    }
+    let width = if width > 0 { width } else { 32 };
+    let height = if height > 0 { height } else { 32 };
+    if width <= 0 || height <= 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
     }
     let flags = ((icon >> SHELL_ICON_OVERLAY_SHIFT) & 0x0f) << 8;
     let draw = ImageListDraw {

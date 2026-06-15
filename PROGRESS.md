@@ -4193,3 +4193,21 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `Rectangle`/`RoundRect` ROP2 test, two focused orphaned WNDPROC recovery
   tests, and `cargo build --release --features unicorn` passed. Cargo still
   emits the existing unused-code warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: bitmap-backed
+  `DrawIconEx` now preserves the icon bitmap's native dimensions when callers
+  pass zero width/height, matching the CE `winuser.h` `DrawIcon` macro and
+  CE `imagelist.cpp` `DrawIconEx_I(..., 0, 0, DI_NORMAL)` image-storage path.
+  The selected-DIB regression proves a 2x2 icon stays 2x2 instead of expanding
+  to the synthetic 32-pixel shell-icon fallback.
+- Focused validation after the bitmap-backed `DrawIconEx` native-size slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_destroy_icon_accepts_loaded_icon_handles` passed.
+  Cargo still emits the existing unused-code warnings and recurring
+  `target\debug\incremental` finalize access-denied note, but the test command
+  returned success.
+- Broader validation after the bitmap-backed `DrawIconEx` native-size slice:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`, `CARGO_INCREMENTAL=0
+  cargo check --features unicorn,trace,win32-desktop`, and `CARGO_INCREMENTAL=0
+  cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` passed. The full raw GWE test binary reported 349 passing
+  tests, and Cargo still emits the existing unused-code warnings.

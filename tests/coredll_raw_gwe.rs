@@ -1355,6 +1355,53 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
         0x0000
     );
 
+    let (native_dst_dc, native_dst_bits, native_dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 6, 6);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [native_dst_dc, 1, 1, scaled_icon, 0, 0, 0, 0, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        rgb565_at(&memory, native_dst_bits, native_dst_stride, 1, 1),
+        0xf800,
+        "zero-sized DrawIconEx should use the icon bitmap's native width"
+    );
+    assert_eq!(
+        rgb565_at(&memory, native_dst_bits, native_dst_stride, 2, 1),
+        0x07e0,
+        "zero-sized DrawIconEx should preserve native source columns"
+    );
+    assert_eq!(
+        rgb565_at(&memory, native_dst_bits, native_dst_stride, 1, 2),
+        0x001f,
+        "zero-sized DrawIconEx should preserve native source rows"
+    );
+    assert_eq!(
+        rgb565_at(&memory, native_dst_bits, native_dst_stride, 2, 2),
+        0xffff,
+        "zero-sized DrawIconEx should draw the native lower-right pixel"
+    );
+    assert_eq!(
+        rgb565_at(&memory, native_dst_bits, native_dst_stride, 3, 1),
+        0x0000,
+        "zero-sized DrawIconEx should not expand bitmap-backed icons to 32 pixels"
+    );
+    assert_eq!(
+        rgb565_at(&memory, native_dst_bits, native_dst_stride, 1, 3),
+        0x0000,
+        "zero-sized DrawIconEx should not expand bitmap-backed icons to 32 pixels"
+    );
+
     let mut bitmap_framebuffer = VirtualFramebuffer::new(8, 8, PixelFormat::Rgb565)?;
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer(

@@ -1252,11 +1252,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     deterministic pseudo-icon into attached window framebuffers and selected
     memory DIBs for shell pseudo-icons, and draws bitmap-backed icons through
     the same bitmap renderer as image lists. Bitmap-backed framebuffer and
-    selected-memory-DIB draws now scale from the icon bitmap's native source dimensions into
-    caller-requested destination sizes, bitmap-backed `DI_MASK` draws use
-    the icon mask bitmap as the source instead of the color bitmap, and
-    bitmap-backed `DI_NORMAL` draws honor extracted AND-mask transparency,
-    including covered 1bpp mask-only framebuffer and selected-memory-DIB paths. CE
+    selected-memory-DIB draws now scale from the icon bitmap's native source
+    dimensions into caller-requested destination sizes, preserve the native
+    bitmap-backed icon dimensions for zero width/height calls like the
+    `winuser.h` `DrawIcon` macro and CE `imagelist.cpp` `DrawIconEx_I(..., 0,
+    0, DI_NORMAL)` storage path, bitmap-backed `DI_MASK` draws use the icon
+    mask bitmap as the source instead of the color bitmap, and bitmap-backed
+    `DI_NORMAL` draws honor extracted AND-mask transparency, including covered
+    1bpp mask-only framebuffer and selected-memory-DIB paths. CE
     `imagelist.cpp` uses `DrawIconEx_I(..., DI_NORMAL)` for image storage and
     `DrawIconEx_I(..., DI_MASK)` for mask storage when replacing an image-list
     icon. `pcommctr.h` defines CE's implemented image-list creation flag mask
