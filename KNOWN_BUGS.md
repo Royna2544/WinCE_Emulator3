@@ -68,8 +68,10 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   also returns active state to iNavi after the Happyway modal thread handles the
   button, cross-thread visible-message handoff now skips unmapped guest WNDPROC
   targets instead of consuming/reposting them, direct-send WNDPROC cleanup
-  now preserves live callouts until the saved PC reaches their return PC, and
-  orphaned WNDPROC return stubs can recover from the last valid return record. The
+  now preserves live callouts until the saved PC reaches their return PC,
+  orphaned WNDPROC return stubs can recover from the last valid return record,
+  and escaped cross-thread visible-message WNDPROC callouts are cleared when the
+  guest reaches their saved return PC. The
   app still remains on the animated splash while loading resources/map data.
   Current evidence points at repeated file-position/resource loading around
   `iNavi.exe+0x642f8` (`SetFilePointer`, `COREDLL` ordinal 173) after

@@ -4344,6 +4344,16 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `cargo test -j 1 --features unicorn,trace,win32-desktop --test
   coredll_raw_kernel coredll_raw_comm_state_mask_wait_and_purge_are_stateful
   -- --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- `src/emulator/unicorn.rs`: escaped cross-thread visible-message WNDPROC
+  callouts are now cleared when execution has already reached the saved
+  `resume_import` return PC, covering the live iNavi touch path where
+  `WM_LBUTTONDOWN/UP` reached the AFX window but the pending
+  `OrphanedVisibleMessage` record stayed live after the guest bypassed the
+  synthetic WNDPROC return stub.
+- Focused validation after the escaped visible-message WNDPROC slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop
+  cross_thread_visible_message_requires_mapped_wndproc_before_handoff --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.
 - `tests/coredll_raw_memory_file.rs`: aligned the older raw serial control
   ordinal fixture with the CE-backed `GetCommModemStatus` behavior so it now
   expects asserted CTS, DSR, and RLSD bits rather than the former zero-status

@@ -50,9 +50,10 @@ Regenerated on 2026-06-11 from current source and test coverage.
   handles the modal button, cross-thread visible-message handoff now requires a
   mapped guest WNDPROC before consuming the message, direct-send WNDPROC cleanup
   now preserves live callouts until the saved PC reaches their return PC, and
-  orphaned WNDPROC return stubs can recover from the last valid return record,
-  post-dialog taps reach iNavi, and the app opens/reads mapdata, resource,
-  font, and config files.
+  orphaned WNDPROC return stubs can recover from the last valid return record;
+  escaped cross-thread visible-message WNDPROC callouts are now cleared when the
+  guest reaches their saved return PC. Post-dialog taps reach iNavi, and the app
+  opens/reads mapdata, resource, font, and config files.
   Determine why the animated splash does not transition to the map UI, starting
   from the repeated `SetFilePointer` (`COREDLL` ordinal 173) path around
   `iNavi.exe+0x642f8` and the continuing `resi_800x480.bin`/mapdata reads.

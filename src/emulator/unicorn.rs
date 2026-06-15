@@ -1303,7 +1303,10 @@ impl UnicornMips {
                     && pending.send_restore.is_none()
                     && pending.continuation.is_none()
                     && pending.resume_import.is_none();
-                get_message_sent || direct_send
+                let visible_message = pending.source == "OrphanedVisibleMessage"
+                    && pending.return_pc == *pc
+                    && pending.resume_import.is_some();
+                get_message_sent || direct_send || visible_message
             })
         });
         let repair_match = repair_pc.is_some();
@@ -2183,6 +2186,59 @@ impl UnicornMips {
             context_frames,
             Some(&mut self.orphaned_wndproc_returns),
         )
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn clear_escaped_visible_message_callouts(&mut self) -> bool {
+        let context_pcs = [
+            self.saved_context.as_ref().map(|saved| saved.pc),
+            self.last_debug.as_ref().map(|snapshot| snapshot.pc),
+        ];
+        Self::clear_escaped_visible_message_callouts_for_context(
+            &mut self.pending_wndproc_returns,
+            context_pcs,
+            Some(&mut self.orphaned_wndproc_returns),
+        )
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn clear_escaped_visible_message_callouts_for_context(
+        pending_wndproc_returns: &mut Vec<PendingWndProcReturn>,
+        context_pcs: [Option<u32>; 2],
+        mut orphaned_wndproc_returns: Option<&mut Vec<UnicornWndProcReturn>>,
+    ) -> bool {
+        let before = pending_wndproc_returns.len();
+        let mut removed_callouts = Vec::new();
+        pending_wndproc_returns.retain(|pending| {
+            let escaped_visible_message = pending.source == "OrphanedVisibleMessage"
+                && pending.resume_import.is_some()
+                && pending.return_pc != 0
+                && context_pcs
+                    .iter()
+                    .copied()
+                    .flatten()
+                    .any(|pc| pc == pending.return_pc);
+            if escaped_visible_message {
+                removed_callouts.push(pending.clone());
+            }
+            !escaped_visible_message
+        });
+        let removed = before.saturating_sub(pending_wndproc_returns.len());
+        if removed == 0 {
+            return false;
+        }
+        if let Some(returns) = orphaned_wndproc_returns.as_deref_mut() {
+            archive_removed_wndproc_callouts(returns, &removed_callouts);
+        }
+        tracing::warn!(
+            target: "ce.gwe",
+            removed,
+            removed_callouts = ?removed_callouts,
+            saved_pc = ?context_pcs[0],
+            last_pc = ?context_pcs[1],
+            "cleared escaped visible-message WNDPROC callouts"
+        );
+        true
     }
 
     #[cfg(feature = "unicorn")]
@@ -5494,6 +5550,11 @@ impl UnicornMips {
                             )),
                             None,
                         ],
+                        Some(&mut last_wndproc_returns),
+                    );
+                    let _ = Self::clear_escaped_visible_message_callouts_for_context(
+                        &mut pending_wndproc_returns,
+                        [Some(context_pc), None],
                         Some(&mut last_wndproc_returns),
                     );
                 }
@@ -22281,6 +22342,21 @@ mod wait_scheduler_tests {
         );
         assert_eq!(resume.import_pc, active_pc);
         assert_eq!(resume.regs.regs[29], return_sp);
+
+        assert!(
+            super::UnicornMips::clear_escaped_visible_message_callouts_for_context(
+                &mut scheduler.pending_wndproc_returns,
+                [Some(active_pc), None],
+                Some(&mut scheduler.orphaned_wndproc_returns),
+            )
+        );
+        assert!(scheduler.pending_wndproc_returns.is_empty());
+        assert_eq!(scheduler.orphaned_wndproc_returns.len(), 1);
+        assert_eq!(
+            scheduler.orphaned_wndproc_returns[0].source,
+            "OrphanedVisibleMessage"
+        );
+        assert_eq!(scheduler.orphaned_wndproc_returns[0].return_pc, active_pc);
     }
 
     #[test]
