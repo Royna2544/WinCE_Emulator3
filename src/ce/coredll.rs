@@ -126,6 +126,7 @@ const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
 const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+const ERROR_GEN_FAILURE: u32 = 31;
 const CE_VOLUME_INFO_LEVEL_STANDARD: u32 = 0;
 const CE_VOLUME_INFO_SIZE: u32 = 144;
 const CE_VOLUME_INFO_NAME_CHARS: usize = 32;
@@ -11649,8 +11650,10 @@ enum FsdmgrImport {
     FsdmgrCreateSearchHandle,
     FsdmgrDeleteCache,
     FsdmgrDeregisterVolume,
+    FsdmgrDeviceHandleToHdsk,
     FsdmgrDiskIoControl,
     FsdmgrFlushCache,
+    FsdmgrFormatVolume,
     FsdmgrGetDiskInfo,
     FsdmgrGetDiskName,
     FsdmgrGetVolumeHandle,
@@ -11661,6 +11664,7 @@ enum FsdmgrImport {
     FsdmgrReadDiskEx,
     FsdmgrRegisterVolume,
     FsdmgrResizeCache,
+    FsdmgrScanVolume,
     FsdmgrSyncCache,
     FsdmgrWriteDisk,
     FsdmgrWriteDiskEx,
@@ -11725,6 +11729,7 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         FsdmgrImport::FsdmgrDeregisterVolume => {
             fsdmgr_deregister_volume_raw(kernel, thread_id, raw_arg(args, 0))
         }
+        FsdmgrImport::FsdmgrDeviceHandleToHdsk => raw_arg(args, 0),
         FsdmgrImport::FsdmgrDiskIoControl => fsdmgr_disk_io_control_raw(
             kernel,
             memory,
@@ -11740,6 +11745,9 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         FsdmgrImport::FsdmgrFlushCache => {
             let status = kernel.fsdmgr_flush_cache(raw_arg(args, 0));
             fsdmgr_cache_status_raw(kernel, thread_id, status)
+        }
+        FsdmgrImport::FsdmgrFormatVolume | FsdmgrImport::FsdmgrScanVolume => {
+            fsdmgr_volume_util_status_raw(kernel, thread_id, raw_arg(args, 0))
         }
         FsdmgrImport::FsdmgrGetDiskInfo => fsdmgr_get_disk_info_raw(
             kernel,
@@ -11882,8 +11890,10 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         8 => Some(FsdmgrImport::FsdmgrCreateSearchHandle),
         9 => Some(FsdmgrImport::FsdmgrDeleteCache),
         10 => Some(FsdmgrImport::FsdmgrDeregisterVolume),
+        11 => Some(FsdmgrImport::FsdmgrDeviceHandleToHdsk),
         12 => Some(FsdmgrImport::FsdmgrDiskIoControl),
         14 => Some(FsdmgrImport::FsdmgrFlushCache),
+        15 => Some(FsdmgrImport::FsdmgrFormatVolume),
         16 => Some(FsdmgrImport::FsdmgrGetDiskInfo),
         17 => Some(FsdmgrImport::FsdmgrGetDiskName),
         21 => Some(FsdmgrImport::FsdmgrGetVolumeHandle),
@@ -11893,6 +11903,7 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         26 => Some(FsdmgrImport::FsdmgrReadDiskEx),
         27 => Some(FsdmgrImport::FsdmgrRegisterVolume),
         30 => Some(FsdmgrImport::FsdmgrResizeCache),
+        31 => Some(FsdmgrImport::FsdmgrScanVolume),
         32 => Some(FsdmgrImport::FsdmgrSyncCache),
         37 => Some(FsdmgrImport::FsdmgrGetMountFlags),
         35 => Some(FsdmgrImport::FsdmgrWriteDisk),
@@ -11920,8 +11931,10 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsdmgr_createsearchhandle" => Some(FsdmgrImport::FsdmgrCreateSearchHandle),
         "fsdmgr_deletecache" => Some(FsdmgrImport::FsdmgrDeleteCache),
         "fsdmgr_deregistervolume" => Some(FsdmgrImport::FsdmgrDeregisterVolume),
+        "fsdmgr_devicehandletohdsk" => Some(FsdmgrImport::FsdmgrDeviceHandleToHdsk),
         "fsdmgr_diskiocontrol" => Some(FsdmgrImport::FsdmgrDiskIoControl),
         "fsdmgr_flushcache" => Some(FsdmgrImport::FsdmgrFlushCache),
+        "fsdmgr_formatvolume" => Some(FsdmgrImport::FsdmgrFormatVolume),
         "fsdmgr_getdiskinfo" => Some(FsdmgrImport::FsdmgrGetDiskInfo),
         "fsdmgr_getdiskname" => Some(FsdmgrImport::FsdmgrGetDiskName),
         "fsdmgr_getvolumehandle" => Some(FsdmgrImport::FsdmgrGetVolumeHandle),
@@ -11932,6 +11945,7 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsdmgr_readdiskex" => Some(FsdmgrImport::FsdmgrReadDiskEx),
         "fsdmgr_registervolume" => Some(FsdmgrImport::FsdmgrRegisterVolume),
         "fsdmgr_resizecache" => Some(FsdmgrImport::FsdmgrResizeCache),
+        "fsdmgr_scanvolume" => Some(FsdmgrImport::FsdmgrScanVolume),
         "fsdmgr_synccache" => Some(FsdmgrImport::FsdmgrSyncCache),
         "fsdmgr_writedisk" => Some(FsdmgrImport::FsdmgrWriteDisk),
         "fsdmgr_writediskex" => Some(FsdmgrImport::FsdmgrWriteDiskEx),
@@ -11953,6 +11967,16 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
 }
 
 fn fsdmgr_cache_status_raw(kernel: &mut CeKernel, thread_id: u32, status: u32) -> u32 {
+    kernel.threads.set_last_error(thread_id, status);
+    status
+}
+
+fn fsdmgr_volume_util_status_raw(kernel: &mut CeKernel, thread_id: u32, disk_ptr: u32) -> u32 {
+    let status = if disk_ptr == 0 {
+        ERROR_GEN_FAILURE
+    } else {
+        ERROR_FILE_NOT_FOUND
+    };
     kernel.threads.set_last_error(thread_id, status);
     status
 }

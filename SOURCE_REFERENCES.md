@@ -2990,9 +2990,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_InvalidateCache @24`, `FSDMGR_ResizeCache @30`, and
     `FSDMGR_SyncCache @32`, plus `FSDMGR_CreateFileHandle @7`,
     `FSDMGR_CreateSearchHandle @8`, `FSDMGR_DeregisterVolume @10`,
+    `FSDMGR_DeviceHandleToHDSK @11`, `FSDMGR_FormatVolume @15`,
     `FSDMGR_GetDiskInfo @16`, `FSDMGR_GetDiskName @17`,
     `FSDMGR_GetVolumeHandle @21`, `FSDMGR_GetVolumeName @22`,
-    `FSDMGR_RegisterVolume @27`, `FSDMGR_GetMountFlags @37`, and
+    `FSDMGR_RegisterVolume @27`, `FSDMGR_ScanVolume @31`,
+    `FSDMGR_GetMountFlags @37`, and
     `STOREMGR_FsIoControlW @44`; `fsdmgr.h` declares their public HVOL/PDSK
     and cache signatures. `fsdcache.cpp` loads a configured cache DLL when one
     exists and otherwise falls back to the CE null-cache function table.
@@ -3013,6 +3015,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_GetVolumeHandle` maps that same `PDSK`/`LogicalDisk_t` pointer back
     to the associated `MountedVolume_t` handle, while
     `FSDMGR_DeregisterVolume` is a no-op in this CE 6 source.
+    `storemain.cpp::FSDMGR_DeviceHandleToHDSK` is an identity cast from the
+    incoming device handle to `PDSK`. `fsdmgrapi.cpp::FSDMGR_FormatVolume` and
+    `FSDMGR_ScanVolume` call a utility DLL named by the disk's `Util` registry
+    value; when that value is absent, `CallUtilApi` returns
+    `ERROR_FILE_NOT_FOUND`.
     `FSDMGR_CreateFileHandle` and `FSDMGR_CreateSearchHandle` ignore the HVOL
     and originating process handle in this CE 6 source and simply return the
     caller-supplied FSD file/search context pointer reinterpreted as a handle.
@@ -3033,7 +3040,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     FSDMGR `STOREMGR_FsIoControlW` import; raw AFS volume handles now cover
     owner-checked `AFS_Unmount`/`CloseHandle` mounted-root removal and mounted
     `FSCTL_GET_VOLUME_INFO` metadata. FSDMGR import traps now also expose
-    direct CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path,
+    direct CE `FSDMGR_DeviceHandleToHDSK` identity mapping,
+    `FSDMGR_FormatVolume`/`FSDMGR_ScanVolume` no-utility failure status, direct
+    CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path,
     existing mounted HVOL names, AFS hidden/system/permanent mount flags, and a
     lightweight FSD `PDSK` to HVOL association for registered host-backed mount
     names, the CE context-pointer return behavior for FSD file/search handle
@@ -3049,11 +3058,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
     for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
-    forwarding, external cache DLL/filter behavior, real static sector address
-    mapping, real external-copy accelerator behavior, hardware flash
-    secure-wipe resume behavior, hardware power-state timing, and mounted-FSD
-    `FsIoControl` hook forwarding beyond the host-backed unsupported stub
-    remain queued fidelity gaps.
+    forwarding, external cache DLL/filter behavior, real utility DLL
+    format/scan execution, real static sector address mapping, real
+    external-copy accelerator behavior, hardware flash secure-wipe resume
+    behavior, hardware power-state timing, and mounted-FSD `FsIoControl` hook
+    forwarding beyond the host-backed unsupported stub remain queued fidelity
+    gaps.
 
 - CE file write syscall and error surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,

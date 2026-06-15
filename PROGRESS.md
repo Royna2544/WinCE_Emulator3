@@ -4796,3 +4796,11 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored because that toolchain is not configured, and Cargo
   still emits the existing unused-code warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: fsdmgr import traps now cover
+  CE `FSDMGR_DeviceHandleToHDSK @11` from `storemain.cpp` as an identity
+  handle-to-disk cast, plus CE `FSDMGR_FormatVolume @15` and
+  `FSDMGR_ScanVolume @31` from `fsdmgrapi.cpp` as the no-configured-`Util`
+  utility DLL failure status for synthetic disks. Real utility DLL lookup and
+  execution remains queued with the broader physical block-driver fidelity
+  work.

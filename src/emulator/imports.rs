@@ -780,8 +780,10 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 8
                     | 9
                     | 10
+                    | 11
                     | 12
                     | 14
+                    | 15
                     | 16
                     | 17
                     | 21
@@ -791,6 +793,7 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 26
                     | 27
                     | 30
+                    | 31
                     | 32
                     | 35
                     | 36
@@ -1140,6 +1143,24 @@ mod tests {
                 ImportThunk {
                     thunk_rva: 0x2050,
                     iat_rva: 0x3050,
+                    import: ImportBy::Ordinal(11),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2054,
+                    iat_rva: 0x3054,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_FormatVolume".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2058,
+                    iat_rva: 0x3058,
+                    import: ImportBy::Ordinal(31),
+                },
+                ImportThunk {
+                    thunk_rva: 0x205c,
+                    iat_rva: 0x305c,
                     import: ImportBy::Name {
                         hint: 0,
                         name: "FSEXT_UnsupportedStorageApi".to_owned(),
@@ -1157,8 +1178,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(table.len(), 20);
-        for index in 0..20 {
+        assert_eq!(table.len(), 23);
+        for index in 0..23 {
             let iat = 0x3000 + index * 4;
             assert_eq!(
                 u32::from_le_bytes(mapped[iat..iat + 4].try_into().unwrap()),
@@ -1166,7 +1187,7 @@ mod tests {
             );
         }
         assert_eq!(
-            u32::from_le_bytes(mapped[0x3050..0x3054].try_into().unwrap()),
+            u32::from_le_bytes(mapped[0x305c..0x3060].try_into().unwrap()),
             0
         );
         assert_eq!(
@@ -1303,6 +1324,28 @@ mod tests {
                 .unwrap()
                 .ordinal,
             Some(17)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 20)
+                .unwrap()
+                .ordinal,
+            Some(11)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 21)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("FSDMGR_FormatVolume")
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 22)
+                .unwrap()
+                .ordinal,
+            Some(31)
         );
     }
 
@@ -2829,6 +2872,93 @@ mod tests {
             kernel.threads.get_last_error(11),
             crate::ce::thread::ERROR_INVALID_PARAMETER
         );
+    }
+
+    #[test]
+    fn fsdmgr_device_handle_and_util_imports_match_ce_helper_shape() {
+        const ERROR_GEN_FAILURE: u32 = 31;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_DeviceHandleToHDSK".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(15),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_ScanVolume".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let disk_handle = 0x1000_6000;
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_handle]
+            ),
+            Some(disk_handle)
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_handle, 0],
+            ),
+            Some(crate::ce::thread::ERROR_FILE_NOT_FOUND)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_FILE_NOT_FOUND
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [0, 0],
+            ),
+            Some(ERROR_GEN_FAILURE)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_GEN_FAILURE);
     }
 
     #[test]
