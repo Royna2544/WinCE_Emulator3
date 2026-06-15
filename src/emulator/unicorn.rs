@@ -34330,6 +34330,74 @@ fn write_create_window_wndproc_call_registers<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn decode_mips_absolute_jump_thunk_slot(bytes: &[u8]) -> Option<u32> {
+    if bytes.len() < 16 {
+        return None;
+    }
+    let lui = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
+    let load = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
+    let jump = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+    let delay = u32::from_le_bytes(bytes[12..16].try_into().ok()?);
+
+    let lui_opcode = lui >> 26;
+    let reg = (lui >> 16) & 0x1f;
+    let load_opcode = load >> 26;
+    let load_base = (load >> 21) & 0x1f;
+    let load_target = (load >> 16) & 0x1f;
+    let jump_opcode = jump >> 26;
+    let jump_reg = (jump >> 21) & 0x1f;
+    let jump_tail = jump & 0x001f_ffff;
+
+    if lui_opcode != 0x0f
+        || reg == 0
+        || load_opcode != 0x23
+        || load_base != reg
+        || load_target != reg
+        || jump_opcode != 0
+        || jump_reg != reg
+        || jump_tail != 0x0000_0008
+        || delay != 0
+    {
+        return None;
+    }
+
+    let high = (lui & 0xffff) << 16;
+    let low = (load as i16 as i32) as u32;
+    Some(high.wrapping_add(low))
+}
+
+#[cfg(feature = "unicorn")]
+fn resolve_mips_absolute_jump_thunk_target<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    address: u32,
+) -> Option<(u32, u32)> {
+    let mut thunk = [0u8; 16];
+    uc.mem_read(u64::from(address), &mut thunk).ok()?;
+    let slot = decode_mips_absolute_jump_thunk_slot(&thunk)?;
+    let mut target = [0u8; 4];
+    uc.mem_read(u64::from(slot), &mut target).ok()?;
+    Some((slot, u32::from_le_bytes(target)))
+}
+
+#[cfg(feature = "unicorn")]
+fn call_window_proc_target_is_executable(
+    kernel: &CeKernel,
+    target: u32,
+    trampoline_jumps: &[MipsTrampolineJump],
+) -> bool {
+    if target == 0 {
+        return false;
+    }
+    if kernel.loaded_module_for_address(target).is_some() {
+        return true;
+    }
+    trampoline_jumps.iter().any(|jump| {
+        let end = jump.stub.saturating_add(jump.byte_len);
+        target >= jump.stub && target < end
+    })
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_call_window_proc_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -34371,6 +34439,23 @@ fn try_enter_call_window_proc_callout<D>(
         let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
         return true;
     }
+    let mut call_wndproc = wndproc;
+    if let Some((slot, target)) = resolve_mips_absolute_jump_thunk_target(uc, wndproc) {
+        if !call_window_proc_target_is_executable(kernel, target, trampoline_jumps) {
+            tracing::warn!(
+                target: "ce.gwe",
+                hwnd = format_args!("0x{hwnd:08x}"),
+                msg = format_args!("0x{msg:08x}"),
+                wndproc = format_args!("0x{wndproc:08x}"),
+                thunk_slot = format_args!("0x{slot:08x}"),
+                thunk_target = format_args!("0x{target:08x}"),
+                "declining CallWindowProcW guest callout with non-executable thunk target"
+            );
+            return false;
+        }
+        call_wndproc = target;
+    }
+
     let raw_return_pc = read_mips_reg(uc, RegisterMIPS::RA);
     let return_pc = import_callout_return_pc(raw_return_pc, trampoline_jumps);
     if raw_return_pc == WNDPROC_RETURN_STUB_ADDR {
@@ -34401,7 +34486,7 @@ fn try_enter_call_window_proc_callout<D>(
         msg = format_args!("0x{msg:08x}"),
         wparam = format_args!("0x{wparam:08x}"),
         lparam = format_args!("0x{lparam:08x}"),
-        wndproc = format_args!("0x{wndproc:08x}"),
+        wndproc = format_args!("0x{call_wndproc:08x}"),
         raw_ra = format_args!("0x{raw_return_pc:08x}"),
         ra = format_args!("0x{return_pc:08x}"),
         "CallWindowProcW guest wndproc callout"
@@ -34413,7 +34498,7 @@ fn try_enter_call_window_proc_callout<D>(
         msg,
         wparam,
         lparam,
-        wndproc,
+        wndproc: call_wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
         caller_regs: None,
@@ -34436,7 +34521,7 @@ fn try_enter_call_window_proc_callout<D>(
         msg,
         wparam,
         lparam,
-        wndproc,
+        call_wndproc,
         WNDPROC_RETURN_STUB_ADDR,
     ) {
         true
@@ -37507,6 +37592,36 @@ mod unicorn_tests {
             &pending,
         ));
         assert!(pending.borrow().is_empty());
+    }
+
+    #[test]
+    fn call_window_proc_declines_thunk_to_non_executable_target() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let pending = Rc::new(RefCell::new(Vec::<super::PendingWndProcReturn>::new()));
+
+        uc.mem_map(0x0001_3000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_map(0x0052_5000, 0x1000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x0001_35cc, 0x3c08_0052);
+        write_u32(&mut uc, 0x0001_35d0, 0x8d08_504c);
+        write_u32(&mut uc, 0x0001_35d4, 0x0100_0008);
+        write_u32(&mut uc, 0x0001_35d8, 0);
+        write_u32(&mut uc, 0x0052_504c, 0x7470_6d78);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_f578).unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0005_e7d8).unwrap();
+
+        assert!(!super::try_enter_call_window_proc_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_CALL_WINDOW_PROC_W),
+            &[0x0001_35cc, 0x0002_0000, crate::ce::gwe::WM_PAINT, 0, 0],
+            &[],
+            &pending,
+        ));
+        assert!(pending.borrow().is_empty());
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0);
     }
 
     #[test]
