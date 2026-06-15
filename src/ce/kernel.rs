@@ -1474,11 +1474,11 @@ impl CeKernel {
     ) {
         for spec in specs {
             let owner = DeviceInterfaceAdvertisementOwner::Mount(spec.owner);
-            for class in spec.classes {
-                if let Some(class_guid) = parse_guid_string(&class) {
+            for interface in spec.interfaces {
+                if let Some(class_guid) = parse_guid_string(&interface.class) {
                     self.advertise_device_interface_with_owner(
                         class_guid,
-                        spec.device_path.clone(),
+                        interface.name,
                         owner.clone(),
                         add,
                     );

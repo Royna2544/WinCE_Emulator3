@@ -67,8 +67,13 @@ pub struct FileMount {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInterfaceAdvertisementSpec {
     pub owner: String,
-    pub classes: Vec<String>,
-    pub device_path: String,
+    pub interfaces: Vec<DeviceInterfaceClassAdvertisementSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceInterfaceClassAdvertisementSpec {
+    pub class: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1554,10 +1559,55 @@ fn device_interface_advertisement_spec(
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| volume_name_from_guest_root(&mount.guest_root));
+    let legacy_name = device_name.trim_matches(['\\', '/']).to_owned();
+    let default_device_path = format!("\\StoreMgr\\{legacy_name}");
+    let interfaces: Vec<_> = mount
+        .interface_classes
+        .iter()
+        .filter_map(|entry| {
+            device_interface_class_advertisement_spec(entry, &default_device_path, &legacy_name)
+        })
+        .collect();
+    if interfaces.is_empty() {
+        return None;
+    }
     Some(DeviceInterfaceAdvertisementSpec {
         owner: mount.guest_root.clone(),
-        classes: mount.interface_classes.clone(),
-        device_path: format!("\\StoreMgr\\{}", device_name.trim_matches(['\\', '/'])),
+        interfaces,
+    })
+}
+
+fn device_interface_class_advertisement_spec(
+    entry: &str,
+    default_device_path: &str,
+    legacy_name: &str,
+) -> Option<DeviceInterfaceClassAdvertisementSpec> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+    let (class, name) = if let Some((class, explicit_name)) = entry.split_once('=') {
+        let class = class.trim();
+        let explicit_name = explicit_name.trim();
+        if class.is_empty() || explicit_name.is_empty() {
+            return None;
+        }
+        let name = if explicit_name.eq_ignore_ascii_case("%d") {
+            format!("$device\\{legacy_name}")
+        } else if explicit_name.eq_ignore_ascii_case("%l") {
+            legacy_name.to_owned()
+        } else if explicit_name.eq_ignore_ascii_case("%b") {
+            return None;
+        } else {
+            explicit_name.to_owned()
+        };
+        (class, name)
+    } else {
+        (entry, default_device_path.to_owned())
+    };
+    Some(DeviceInterfaceClassAdvertisementSpec {
+        class: class.to_owned(),
+        name,
     })
 }
 

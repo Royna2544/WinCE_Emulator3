@@ -3630,6 +3630,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 - Rust now mirrors the owner-retained lifetime for configured mounted-storage
   `IClass` advertisements: duplicate GUID/name entries remain unique for
   `EnumDeviceInterfaces`, but each mounted root owns its contribution, and the
-  shared advertisement is detached only when the final owner withdraws. Real
-  device-manager `fsdev_t` handles, `GUID=name` interface strings, and
-  `%d`/`%b`/`%l` substitution parsing remain unsupported.
+  shared advertisement is detached only when the final owner withdraws. The
+  configured-mount parser also accepts CE devcore-style `GUID=name` entries:
+  plain GUIDs keep the FSDMGR `\\StoreMgr\\<device>` address, explicit names
+  publish as supplied, `%d` maps to `$device\\<device>`, and `%l` maps to the
+  legacy device name. Real device-manager `fsdev_t` handles and bus-backed
+  `%b` interface names remain unsupported.

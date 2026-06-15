@@ -4984,6 +4984,23 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored,
   and Cargo still emits the existing unused-code warnings.
+- `src/ce/file.rs`, `src/ce/kernel.rs`, `tests/basic_subsystems.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`:
+  configured mounted-storage `IClass` parsing now accepts CE devcore-style
+  `GUID=name` entries in addition to the FSDMGR plain-GUID form. Plain GUIDs
+  still publish `\StoreMgr\<device>`, explicit names publish the supplied
+  address, `%d` publishes `$device\<device>`, `%l` publishes the legacy device
+  name, empty explicit names are skipped, and `%b` remains unsupported for
+  configured mounts because no bus namespace/open callback is modeled there.
+- Focused validation after the mounted `IClass` name-parsing slice:
+  `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  mount_iclass -- --nocapture` passed. Cargo still emits the existing
+  unused-code warnings.
+- Full validation after the mounted `IClass` name-parsing slice:
+  `cargo fmt --check`, `git diff --check`, and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored,
+  and Cargo still emits the existing unused-code warnings.
 - `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
   `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: direct
   FSDMGR disk IOCTL handling now persists validated CE `DISK_INFO` payloads

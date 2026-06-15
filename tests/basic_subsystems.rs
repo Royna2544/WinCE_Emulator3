@@ -3199,6 +3199,69 @@ fn kernel_boot_publishes_mount_iclass_interfaces_and_unmount_removes_them() -> R
 }
 
 #[test]
+fn mount_iclass_entries_parse_explicit_and_namespace_names() -> Result<()> {
+    const BLOCK_GUID_TEXT: &str = "{A4E7EDDA-E575-4252-9D6B-4195D48BB865}";
+    const BLOCK_GUID: [u8; 16] = [
+        0xda, 0xed, 0xe7, 0xa4, 0x75, 0xe5, 0x52, 0x42, 0x9d, 0x6b, 0x41, 0x95, 0xd4, 0x8b, 0xb8,
+        0x65,
+    ];
+
+    let root = unique_test_root("mount_iclass_name_parse");
+    fs::create_dir_all(&root).unwrap();
+    let mut config = RuntimeConfig::load_default()?;
+    config.storage.mounts.push(MountConfig {
+        name: Some("sdmmc".to_owned()),
+        device_name: Some("DSK5:".to_owned()),
+        guest_root: "\\SDMMC Disk".to_owned(),
+        host_root: Some(root.clone()),
+        total_mbytes: 128,
+        free_mbytes: 64,
+        writable: true,
+        removable: true,
+        system: false,
+        hidden: false,
+        interface_classes: vec![
+            BLOCK_GUID_TEXT.to_owned(),
+            format!("{BLOCK_GUID_TEXT}=\\Custom\\Card"),
+            format!("{BLOCK_GUID_TEXT}=%d"),
+            format!("{BLOCK_GUID_TEXT}=%l"),
+            format!("{BLOCK_GUID_TEXT}="),
+            format!("{BLOCK_GUID_TEXT}=%b"),
+            "not-a-guid=\\Ignored".to_owned(),
+        ],
+    });
+
+    let mut kernel = CeKernel::boot(config);
+    let expected_names = [
+        "\\StoreMgr\\DSK5:",
+        "\\Custom\\Card",
+        "$device\\DSK5:",
+        "DSK5:",
+    ];
+    assert_eq!(
+        kernel.advertised_device_interfaces().len(),
+        expected_names.len()
+    );
+    for name in expected_names {
+        assert!(
+            kernel
+                .advertised_device_interfaces()
+                .contains(&DeviceInterfaceAdvertisement {
+                    class_guid: BLOCK_GUID,
+                    name: name.to_owned(),
+                }),
+            "missing advertised interface name {name}"
+        );
+    }
+
+    assert!(kernel.unmount_guest_root("\\SDMMC Disk"));
+    assert!(kernel.advertised_device_interfaces().is_empty());
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
 fn mount_iclass_duplicate_advertisements_are_owner_scoped() -> Result<()> {
     const BLOCK_GUID_TEXT: &str = "{A4E7EDDA-E575-4252-9D6B-4195D48BB865}";
     const BLOCK_GUID: [u8; 16] = [
