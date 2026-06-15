@@ -811,6 +811,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     bad HDCs with `ERROR_INVALID_HANDLE`; `GetClipBox(valid_hdc, NULL)` fails
     with `ERROR_INVALID_PARAMETER`. Raw clip entrypoints now follow that
     validation ordering before mutating DC clip state or writing output rects.
+    CE's clip-rect tests run against the HDC's drawable extent, so raw
+    `IntersectClipRect` and `ExcludeClipRect` now start no-prior-clip calls
+    from the implicit HDC surface before applying the caller rectangle.
   - `SetWindowRgn(HWND, HRGN, BOOL)` consumes the region shape owned by GWE and
     only requests redraw when the third argument is nonzero. v3 now mirrors
     that boundary generically instead of invalidating every region change.

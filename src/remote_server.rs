@@ -61,8 +61,9 @@
 //   It queues {"type":"key","phase":type,"vk":vk} and returns {"ok":true}.
 //
 // Sensors:
-// - POST /api/v1/sensors/location accepts JSON containing numeric lat and lon,
-//   queues it with type "location", and returns {"ok":true,"sentencesGenerated":3}.
+// - POST /api/v1/sensors/location accepts JSON containing numeric lat/lon
+//   or latitude/longitude, queues it with type "location", and returns
+//   {"ok":true,"sentencesGenerated":3}.
 // - POST /api/v1/sensors/nmea accepts JSON {"sentences":[...]} and queues it
 //   with type "nmea"; non-string entries are ignored in the accepted count.
 // - POST /api/v1/sensors/imu accepts any JSON object, queues it with type
@@ -657,11 +658,19 @@ impl RemoteServer {
             Ok(body) => body,
             Err(response) => return response,
         };
-        if body.get("lat").and_then(Value::as_f64).is_none()
-            || body.get("lon").and_then(Value::as_f64).is_none()
-        {
+        let lat = body
+            .get("lat")
+            .or_else(|| body.get("latitude"))
+            .and_then(Value::as_f64);
+        let lon = body
+            .get("lon")
+            .or_else(|| body.get("longitude"))
+            .and_then(Value::as_f64);
+        let (Some(lat), Some(lon)) = (lat, lon) else {
             return HttpResponse::json(400, json!({"ok": false, "error": "invalid location body"}));
-        }
+        };
+        body["lat"] = json!(lat);
+        body["lon"] = json!(lon);
         body["type"] = Value::String("location".to_owned());
         self.queue_control(body);
         HttpResponse::json(200, json!({"ok": true, "sentencesGenerated": 3}))
@@ -1729,6 +1738,33 @@ mod tests {
         let queued = server.drain_control_messages();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0]["phase"], "single-touch");
+    }
+
+    #[test]
+    fn remote_server_normalizes_location_coordinate_aliases() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+
+        let body = r#"{"latitude":37.5665,"longitude":126.9780}"#;
+        let response = http_request(
+            server.local_addr(),
+            &format!(
+                "POST /api/v1/sensors/location HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+
+        assert!(response.contains("200 OK"));
+        assert!(response.contains(r#""ok":true"#));
+        let queued = server.drain_control_messages();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0]["type"], "location");
+        assert_eq!(queued[0]["lat"], 37.5665);
+        assert_eq!(queued[0]["lon"], 126.9780);
     }
 
     #[test]

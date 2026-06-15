@@ -45566,12 +45566,12 @@ fn intersect_clip_rect_raw(
     let new_rects = if is_rect_empty_value(new_rect) {
         Vec::new()
     } else {
-        // Intersect with existing clip region if any; otherwise new rect is the clip.
-        let existing = kernel.resources.clip_region(hdc).map(|r| r.rects.clone());
-        match existing {
-            Some(rects) => intersect_region_rects(&rects, &[new_rect]),
-            None => vec![new_rect],
-        }
+        let existing = kernel
+            .resources
+            .clip_region(hdc)
+            .map(|r| r.rects.clone())
+            .unwrap_or_else(|| vec![hdc_base_clip_rect(kernel, hdc)]);
+        intersect_region_rects(&existing, &[new_rect])
     };
     let status = region_status_from_rects(&new_rects);
     kernel.resources.select_clip_region_rects(hdc, new_rects);
@@ -45600,12 +45600,11 @@ fn exclude_clip_rect_raw(
         right,
         bottom,
     };
-    let Some(existing_region) = kernel.resources.clip_region(hdc) else {
-        // No current clip region: ExcludeClipRect without a prior clip is a no-op.
-        kernel.threads.set_last_error(thread_id, 0);
-        return SIMPLEREGION;
-    };
-    let existing = existing_region.rects.clone();
+    let existing = kernel
+        .resources
+        .clip_region(hdc)
+        .map(|region| region.rects.clone())
+        .unwrap_or_else(|| vec![hdc_base_clip_rect(kernel, hdc)]);
     let new_rects = if is_rect_empty_value(cut_rect) {
         existing
     } else {
@@ -45615,6 +45614,15 @@ fn exclude_clip_rect_raw(
     kernel.resources.select_clip_region_rects(hdc, new_rects);
     kernel.threads.set_last_error(thread_id, 0);
     status
+}
+
+fn hdc_base_clip_rect(kernel: &CeKernel, hdc: u32) -> Rect {
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc) {
+        return Rect::from_origin_size(0, 0, bitmap.width.max(0), bitmap.height.max(0));
+    }
+    hdc_to_hwnd(hdc)
+        .and_then(|hwnd| kernel.gwe.get_client_rect(hwnd))
+        .unwrap_or_else(|| Rect::from_origin_size(0, 0, 800, 480))
 }
 
 fn region_status_from_rects(rects: &[Rect]) -> u32 {

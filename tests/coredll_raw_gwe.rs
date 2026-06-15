@@ -44177,6 +44177,115 @@ fn coredll_raw_intersect_clip_rect_and_exclude_clip_rect_update_dc_clip() -> Res
         "ExcludeClipRect leaving two rects must return COMPLEXREGION=3, got {ex_result:?}"
     );
 
+    let implicit_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(implicit clip) did not return a handle: {other:?}"),
+    };
+
+    let oversize_result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_INTERSECT_CLIP_RECT,
+        [
+            implicit_dc,
+            (-10_i32) as u32,
+            (-20_i32) as u32,
+            820_u32,
+            500_u32,
+        ],
+    );
+    assert!(
+        matches!(
+            oversize_result,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(2),
+                ..
+            }
+        ),
+        "oversized IntersectClipRect must return SIMPLEREGION=2, got {oversize_result:?}"
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_CLIP_BOX,
+        [implicit_dc, rect_ptr],
+    );
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 0, "bounded clip left");
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 0, "bounded clip top");
+    assert_eq!(
+        memory.read_u32(rect_ptr + 8)? as i32,
+        800,
+        "bounded clip right"
+    );
+    assert_eq!(
+        memory.read_u32(rect_ptr + 12)? as i32,
+        480,
+        "bounded clip bottom"
+    );
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SELECT_CLIP_RGN,
+        [implicit_dc, 0],
+    );
+    let excluded = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_EXCLUDE_CLIP_RECT,
+        [implicit_dc, 100_u32, 100_u32, 200_u32, 200_u32],
+    );
+    assert!(
+        matches!(
+            excluded,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(3),
+                ..
+            }
+        ),
+        "implicit ExcludeClipRect must return COMPLEXREGION=3, got {excluded:?}"
+    );
+    let out = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(implicit out) did not return a region: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIP_RGN,
+            [implicit_dc, out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.resources.region(out).unwrap().rects.len(), 4);
+
     Ok(())
 }
 

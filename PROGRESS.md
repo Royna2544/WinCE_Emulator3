@@ -4231,3 +4231,16 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   cargo test -j 1 --features unicorn,trace,win32-desktop --test
   coredll_raw_gwe` passed. The full raw GWE test binary reported 350 passing
   tests, and Cargo still emits the existing unused-code warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `IntersectClipRect`/`ExcludeClipRect` now use the implicit HDC surface when
+  no clip region has been selected, matching the CE `clip.cpp` fixture shape
+  where clip-rect operations are bounded by the drawable DC extent. The
+  regression covers an oversized intersect clipping back to the default
+  800x480 surface and an exclude-from-implicit-surface call producing a complex
+  stored clip region.
+- Focused validation after the implicit clip-surface slice: `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_intersect_clip_rect_and_exclude_clip_rect_update_dc_clip`
+  passed. Cargo still emits the existing unused-code warnings and recurring
+  `target\debug\incremental` finalize access-denied note, but the test command
+  returned success.
