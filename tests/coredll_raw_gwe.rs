@@ -31,24 +31,25 @@ use wince_emulation_v3::{
             ORD_GET_BK_COLOR, ORD_GET_BK_MODE, ORD_GET_CAPTURE, ORD_GET_CARET_BLINK_TIME,
             ORD_GET_CARET_POS, ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_ABCWIDTHS_I,
             ORD_GET_CHAR_WIDTH32, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT,
-            ORD_GET_CLIP_BOX, ORD_GET_CURRENT_OBJECT, ORD_GET_CURSOR, ORD_GET_CURSOR_POS,
-            ORD_GET_DC, ORD_GET_DESKTOP_WINDOW, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS,
-            ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT,
-            ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS, ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE,
-            ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW, ORD_GET_KEY_STATE,
-            ORD_GET_KEYBOARD_LAYOUT, ORD_GET_KEYBOARD_LAYOUT_LIST, ORD_GET_KEYBOARD_LAYOUT_NAME_W,
-            ORD_GET_KEYBOARD_TARGET, ORD_GET_LAYOUT, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
-            ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
-            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_COLOR,
-            ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM,
-            ORD_GET_OBJECT_TYPE, ORD_GET_OBJECT_W, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
-            ORD_GET_PIXEL, ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_ROP2,
-            ORD_GET_STOCK_OBJECT, ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR,
-            ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS,
-            ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA,
-            ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
-            ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W,
-            ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
+            ORD_GET_CLIP_BOX, ORD_GET_CLIP_RGN, ORD_GET_CURRENT_OBJECT, ORD_GET_CURSOR,
+            ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DESKTOP_WINDOW, ORD_GET_DEVICE_CAPS,
+            ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
+            ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
+            ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE, ORD_GET_FOREGROUND_KEYBOARD_TARGET,
+            ORD_GET_FOREGROUND_WINDOW, ORD_GET_KEY_STATE, ORD_GET_KEYBOARD_LAYOUT,
+            ORD_GET_KEYBOARD_LAYOUT_LIST, ORD_GET_KEYBOARD_LAYOUT_NAME_W, ORD_GET_KEYBOARD_TARGET,
+            ORD_GET_LAYOUT, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W, ORD_GET_MESSAGE_POS,
+            ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W,
+            ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_COLOR, ORD_GET_NEAREST_PALETTE_INDEX,
+            ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_OBJECT_TYPE,
+            ORD_GET_OBJECT_W, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT, ORD_GET_PIXEL,
+            ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_ROP2, ORD_GET_STOCK_OBJECT,
+            ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH,
+            ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES,
+            ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR,
+            ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W,
+            ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W, ORD_GET_WINDOW,
+            ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
             ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
             ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL,
             ORD_HIDE_CARET, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_INDIRECT,
@@ -43159,6 +43160,158 @@ fn coredll_raw_intersect_clip_rect_and_exclude_clip_rect_update_dc_clip() -> Res
         ),
         "ExcludeClipRect leaving two rects must return COMPLEXREGION=3, got {ex_result:?}"
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_select_clip_rgn_copies_region_lifetime_like_ce() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 181_u32;
+    let rect_ptr = 0x1_0000_u32;
+    memory.map_words(rect_ptr, 4);
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC did not return a handle: {other:?}"),
+    };
+    let source = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [10, 20, 50, 60],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateRectRgn(source) did not return a region: {other:?}"),
+    };
+    let out = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateRectRgn(out) did not return a region: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_CLIP_RGN,
+            [dc, source],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_RECT_RGN,
+            [source, 100, 110, 120, 130],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [source],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIP_RGN,
+            [dc, out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_RGN_BOX,
+            [out, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 10);
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 20);
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 50);
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 60);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_CLIP_RGN,
+            [dc, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIP_RGN,
+            [dc, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
 
     Ok(())
 }

@@ -4933,7 +4933,7 @@ fn resource_system_font_brush_pen_palette_dc_and_gdi_object_kind() {
     };
     let rh = res.create_region(r);
     res.select_clip_region(hdc, Some(rh));
-    assert_eq!(res.clip_region(hdc), Some(rh));
+    assert_eq!(res.clip_region(hdc).map(|region| region.rect), Some(r));
     res.select_clip_region(hdc, None);
     assert_eq!(res.clip_region(hdc), None);
 
@@ -10290,7 +10290,23 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     let hdc = res.create_compatible_dc();
     assert!(res.clip_region(hdc).is_none()); // no clip region set
     res.select_clip_region(hdc, Some(rh));
-    assert_eq!(res.clip_region(hdc), Some(rh));
+    assert_eq!(
+        res.clip_region(hdc).map(|region| region.rects.clone()),
+        Some(vec![
+            Rect {
+                left: 0,
+                top: 0,
+                right: 50,
+                bottom: 50
+            },
+            Rect {
+                left: 60,
+                top: 0,
+                right: 100,
+                bottom: 50
+            }
+        ])
+    );
     // Deselect clip region.
     res.select_clip_region(hdc, None);
     assert!(res.clip_region(hdc).is_none());

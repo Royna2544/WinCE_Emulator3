@@ -5678,6 +5678,9 @@ impl UnicornMips {
                     let Some(callout) =
                         pop_pending_wndproc_return_for_call_sp(&pending_wndproc_returns_hook, call_sp)
                     else {
+                        if recover_orphaned_wndproc_return_stub(uc, &last_wndproc_returns_hook) {
+                            return;
+                        }
                         let last_return = last_wndproc_returns_hook.borrow().last().cloned();
                         tracing::warn!(
                             target: "ce.gwe",
@@ -33480,6 +33483,49 @@ fn handle_create_window_return_stub<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn recover_orphaned_wndproc_return_stub<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    last_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<UnicornWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(record) = last_wndproc_returns.borrow().last().cloned() else {
+        return false;
+    };
+    if record.return_pc == 0 || record.return_pc == WNDPROC_RETURN_STUB_ADDR {
+        return false;
+    }
+    let current_fp = read_mips_reg(uc, RegisterMIPS::FP);
+    let frame_matches = [record.live_fp, record.caller_fp]
+        .into_iter()
+        .flatten()
+        .any(|frame_fp| frame_fp == current_fp);
+    if !frame_matches {
+        return false;
+    }
+    let result = read_mips_reg(uc, RegisterMIPS::V0);
+    let writes = [
+        uc.reg_write(RegisterMIPS::V0, u64::from(result)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(record.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(record.return_pc)),
+    ];
+    if writes.into_iter().any(|write| write.is_err()) {
+        return false;
+    }
+    tracing::warn!(
+        target: "ce.gwe",
+        source = record.source,
+        hwnd = format_args!("0x{:08x}", record.hwnd),
+        msg = format_args!("0x{:08x}", record.msg),
+        return_pc = format_args!("0x{:08x}", record.return_pc),
+        current_fp = format_args!("0x{current_fp:08x}"),
+        result = format_args!("0x{result:08x}"),
+        "recovered orphaned WNDPROC return stub from last matching return record"
+    );
+    true
+}
+
+#[cfg(feature = "unicorn")]
 fn recover_orphaned_create_window_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     last_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<UnicornWndProcReturn>>>,
@@ -35385,7 +35431,14 @@ fn import_dc_detail(kernel: &CeKernel, prefix: &str, hdc: u32) -> String {
         import_bitmap_detail(kernel, &format!("{prefix}_handle_bitmap"), hdc),
     ];
     if let Some(clip) = kernel.resources.clip_region(hdc) {
-        parts.push(format!("{prefix}_clip=0x{clip:08x}"));
+        parts.push(format!(
+            "{prefix}_clip_rects={}/bbox={},{}-{},{}",
+            clip.rects.len(),
+            clip.rect.left,
+            clip.rect.top,
+            clip.rect.right,
+            clip.rect.bottom
+        ));
     }
     parts.join("/")
 }
@@ -36680,6 +36733,70 @@ mod unicorn_tests {
 
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x6004_f134);
         assert_eq!(uc.reg_read(RegisterMIPS::T9).unwrap() as u32, 0x6004_f134);
+    }
+
+    #[test]
+    fn orphaned_wndproc_return_stub_recovers_matching_frame() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let frame = 0x3004_a988;
+        let return_pc = 0x0005_a1d8;
+        let returns = Rc::new(RefCell::new(vec![super::UnicornWndProcReturn {
+            source: "SendMessageW",
+            hwnd: 0x0002_0004,
+            msg: 0x534c,
+            wparam: 5,
+            lparam: 0,
+            wndproc: 0x6004_f2b8,
+            return_pc,
+            return_pc_trampoline_origin: None,
+            result: 0,
+            live_fp: Some(frame),
+            caller_fp: Some(frame),
+            class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
+        }]));
+        uc.reg_write(RegisterMIPS::FP, u64::from(frame)).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 1).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+
+        assert!(super::recover_orphaned_wndproc_return_stub(
+            &mut uc, &returns
+        ));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+    }
+
+    #[test]
+    fn orphaned_wndproc_return_stub_rejects_stale_frame() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let returns = Rc::new(RefCell::new(vec![super::UnicornWndProcReturn {
+            source: "SendMessageW",
+            hwnd: 0x0002_0004,
+            msg: 0x534c,
+            wparam: 5,
+            lparam: 0,
+            wndproc: 0x6004_f2b8,
+            return_pc: 0x0005_a1d8,
+            return_pc_trampoline_origin: None,
+            result: 0,
+            live_fp: Some(0x3004_a988),
+            caller_fp: Some(0x3004_a988),
+            class_name: None,
+        }]));
+        uc.reg_write(RegisterMIPS::FP, 0x3004_b000).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+
+        assert!(!super::recover_orphaned_wndproc_return_stub(
+            &mut uc, &returns
+        ));
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
+            super::WNDPROC_RETURN_STUB_ADDR
+        );
     }
 
     #[test]

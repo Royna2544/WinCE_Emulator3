@@ -15,6 +15,19 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: orphaned WNDPROC return stubs now recover through
+  the last recorded WNDPROC return only when the recorded live/caller frame
+  matches the current frame pointer and the return PC is a real guest address.
+  The recovery preserves the current guest `v0` result instead of replaying
+  stale metadata. Focused validation passed for matching-frame recovery,
+  stale-frame rejection, direct-send cleanup preservation, mapped-WNDPROC
+  visible handoff, and the release Unicorn build.
+- `src/ce/coredll.rs`, `src/ce/resource.rs`, `tests/basic_subsystems.rs`, and
+  `tests/coredll_raw_gwe.rs`: CE clip-region state now copies selected region
+  geometry into the DC instead of retaining a live `HRGN` handle. Raw
+  `GetClipRgn`, drawing clip helpers, intersect/exclude clip updates, and
+  resource-system tests now use copied region objects so callers can mutate or
+  delete the source region after `SelectClipRgn`.
 - `src/ce/gwe.rs`, `src/ce/kernel.rs`, `src/emulator/unicorn.rs`, and
   `src/main.rs`: restored cross-thread visible-window message handoff after the
   reset. The scheduler now peeks visible-only queues before taking a message,
@@ -3959,3 +3972,29 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   unicorn,trace,win32-desktop` passed. The AlphaBlend filter is at 19 passing
   tests, and the full suite still ignores the eVC4 MIPSII fixture because that
   toolchain is not configured.
+- `src/ce/resource.rs`, `src/ce/coredll.rs`, `src/emulator/unicorn.rs`,
+  `tests/basic_subsystems.rs`, and `tests/coredll_raw_gwe.rs`: selected DC
+  clip regions now store copied `RegionObject` geometry instead of retaining a
+  live source `HRGN` handle. Raw `SelectClipRgn`/`GetClipRgn` now matches CE
+  `clip.cpp::TestNormalClipRgn` and `TestNoClipRgn`: callers can mutate/delete
+  the source region after selection without changing the DC clip, `GetClipRgn`
+  copies complex rect lists into the caller region, and null output handles are
+  tolerated only when no clip exists. Unicorn DC diagnostics now report copied
+  clip rect counts/bounds instead of a stale source handle.
+- `src/emulator/unicorn.rs`: orphaned WNDPROC return stubs can recover through
+  the latest saved return record with a matching current MIPS frame pointer,
+  preserving the guest caller return path when a pending return record was
+  pruned too early.
+- Focused validation after the clip-region copy/lifetime slice:
+  `cargo fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_select_clip_rgn_copies_region_lifetime_like_ce`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe clip`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test basic_subsystems resource_system` passed.
+- Broader validation after the clip-region copy/lifetime slice:
+  `cargo check --features unicorn,trace,win32-desktop` and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The first
+  full run caught one stale direct resource-system assertion, which was updated
+  before the successful rerun. Cargo still emits the existing unused-code
+  warnings.

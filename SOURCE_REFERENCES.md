@@ -777,6 +777,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 - GWE/GDI region and window-region behavior:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\clip.cpp`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`, and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\gweapiset1.hpp`
@@ -794,6 +795,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `CombineRgn(RGN_DIFF)` holes remain unpainted on memory DIBs and display
     HDCs. Focused fixture:
     `coredll_raw_fill_rect_respects_complex_clip_holes_on_memory_dib`.
+  - CE `clip.cpp::TestNormalClipRgn` reuses the same `HRGN` as both selected
+    clip source and `GetClipRgn` destination, then mutates the `HRGN` with
+    `SetRectRgn`; `passNull2ClipRegion` also deletes a selected source region
+    after clearing the clip. v3 now stores selected DC clips as copied region
+    geometry, so later source-region mutation/deletion does not alter the DC
+    clip. `TestNoClipRgn` shows `GetClipRgn(hdc, NULL)` returns no-clip `0`
+    only when no clip exists; with a real clip, null or non-region outputs
+    report invalid handle.
   - `SetWindowRgn(HWND, HRGN, BOOL)` consumes the region shape owned by GWE and
     only requests redraw when the third argument is nonzero. v3 now mirrors
     that boundary generically instead of invalidating every region change.
@@ -1654,6 +1663,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the stack pointer on the WNDPROC return stub, and defers scheduler
     blocked-wait/get-message resumes until the WNDPROC return is complete so
     callee state is not interleaved with a different runnable thread.
+  - If execution reaches the synthetic WNDPROC return stub after the pending
+    return record was already pruned, v3 can now recover through the latest
+    saved return record whose live/caller frame pointer matches the current
+    MIPS frame. This keeps the invalid user-kdata return boundary fail-closed
+    while preserving the guest's normal caller return path.
 
 - Registry API boundary:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/fscall.c`

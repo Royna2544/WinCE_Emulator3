@@ -6314,12 +6314,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             // Returns 1 if clip region exists, 0 if none, -1 on error.
             let hdc = raw_arg(args, 0);
             let hrgn = raw_arg(args, 1);
-            let clip = kernel.resources.clip_region(hdc);
+            if !is_valid_hdc(kernel, hdc) {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return Some(CoredllValue::U32((-1i32) as u32));
+            }
             kernel.threads.set_last_error(thread_id, 0);
-            if let Some(clip_hrgn) = clip {
-                if let Some(src_rect) = kernel.resources.region(clip_hrgn).map(|r| r.rect) {
-                    kernel.resources.set_region(hrgn, src_rect);
+            if let Some(clip) = kernel.resources.clip_region(hdc).cloned() {
+                if kernel.resources.region(hrgn).is_none() {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    return Some(CoredllValue::U32((-1i32) as u32));
                 }
+                kernel.resources.set_region_rects(hrgn, clip.rects);
                 Some(CoredllValue::U32(1))
             } else {
                 Some(CoredllValue::U32(0))
@@ -38609,11 +38618,7 @@ fn hdc_clip_rects(kernel: &CeKernel, hdc: u32, rect: Rect, width: i32, height: i
     if is_rect_empty_value(rect) {
         return Vec::new();
     }
-    if let Some(region) = kernel
-        .resources
-        .clip_region(hdc)
-        .and_then(|region| kernel.resources.region(region))
-    {
+    if let Some(region) = kernel.resources.clip_region(hdc) {
         return clip_rects_to_region(rect, &region.rects);
     }
     vec![rect]
@@ -38643,11 +38648,7 @@ fn hdc_framebuffer_client_clip_rects(
     if visible_clips.is_empty() {
         return None;
     }
-    let clips = if let Some(region) = kernel
-        .resources
-        .clip_region(hdc)
-        .and_then(|region| kernel.resources.region(region))
-    {
+    let clips = if let Some(region) = kernel.resources.clip_region(hdc) {
         visible_clips
             .into_iter()
             .flat_map(|rect| clip_rects_to_region(rect, &region.rects))
@@ -45271,7 +45272,7 @@ fn get_rgn_box_raw<M: CoredllGuestMemory>(
 }
 
 fn select_clip_rgn_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, region: u32) -> u32 {
-    if hdc == 0 || (region != 0 && kernel.resources.region(region).is_none()) {
+    if !is_valid_hdc(kernel, hdc) || (region != 0 && kernel.resources.region(region).is_none()) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -45313,20 +45314,14 @@ fn intersect_clip_rect_raw(
         Vec::new()
     } else {
         // Intersect with existing clip region if any; otherwise new rect is the clip.
-        let existing = kernel
-            .resources
-            .clip_region(hdc)
-            .and_then(|h| kernel.resources.region(h))
-            .map(|r| r.rects.clone());
+        let existing = kernel.resources.clip_region(hdc).map(|r| r.rects.clone());
         match existing {
             Some(rects) => intersect_region_rects(&rects, &[new_rect]),
             None => vec![new_rect],
         }
     };
     let status = region_status_from_rects(&new_rects);
-    let new_hrgn = kernel.resources.create_region(Rect::default());
-    kernel.resources.set_region_rects(new_hrgn, new_rects);
-    kernel.resources.select_clip_region(hdc, Some(new_hrgn));
+    kernel.resources.select_clip_region_rects(hdc, new_rects);
     kernel.threads.set_last_error(thread_id, 0);
     status
 }
@@ -45352,25 +45347,19 @@ fn exclude_clip_rect_raw(
         right,
         bottom,
     };
-    let Some(existing_hrgn) = kernel.resources.clip_region(hdc) else {
+    let Some(existing_region) = kernel.resources.clip_region(hdc) else {
         // No current clip region: ExcludeClipRect without a prior clip is a no-op.
         kernel.threads.set_last_error(thread_id, 0);
         return SIMPLEREGION;
     };
-    let existing = kernel
-        .resources
-        .region(existing_hrgn)
-        .map(|r| r.rects.clone())
-        .unwrap_or_default();
+    let existing = existing_region.rects.clone();
     let new_rects = if is_rect_empty_value(cut_rect) {
         existing
     } else {
         diff_region_rects(&existing, &[cut_rect])
     };
     let status = region_status_from_rects(&new_rects);
-    let new_hrgn = kernel.resources.create_region(Rect::default());
-    kernel.resources.set_region_rects(new_hrgn, new_rects);
-    kernel.resources.select_clip_region(hdc, Some(new_hrgn));
+    kernel.resources.select_clip_region_rects(hdc, new_rects);
     kernel.threads.set_last_error(thread_id, 0);
     status
 }
@@ -45390,11 +45379,7 @@ fn get_clip_box_raw<M: CoredllGuestMemory>(
     hdc: u32,
     rect_ptr: u32,
 ) -> u32 {
-    let rect = if let Some(region) = kernel
-        .resources
-        .clip_region(hdc)
-        .and_then(|region| kernel.resources.region(region))
-    {
+    let rect = if let Some(region) = kernel.resources.clip_region(hdc) {
         region.rect
     } else {
         hdc_to_hwnd(hdc)

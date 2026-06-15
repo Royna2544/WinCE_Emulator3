@@ -462,7 +462,7 @@ pub struct ResourceSystem {
     memory_dcs: BTreeSet<u32>,
     dc_states: BTreeMap<u32, DcState>,
     dc_save_stacks: BTreeMap<u32, Vec<DcState>>,
-    dc_clips: BTreeMap<u32, u32>,
+    dc_clips: BTreeMap<u32, RegionObject>,
     last_popup_tracking: Option<PopupMenuTracking>,
     popup_notifications: Vec<PopupMenuNotification>,
     image_list_drag: Option<ImageListDragState>,
@@ -916,20 +916,34 @@ impl ResourceSystem {
     }
 
     pub fn delete_region(&mut self, handle: u32) -> bool {
-        self.dc_clips.retain(|_, region| *region != handle);
         self.regions.remove(&handle).is_some()
     }
 
     pub fn select_clip_region(&mut self, hdc: u32, region: Option<u32>) {
         if let Some(region) = region {
-            self.dc_clips.insert(hdc, region);
+            if let Some(region) = self.regions.get(&region) {
+                self.dc_clips.insert(hdc, region.clone());
+            }
         } else {
             self.dc_clips.remove(&hdc);
         }
     }
 
-    pub fn clip_region(&self, hdc: u32) -> Option<u32> {
-        self.dc_clips.get(&hdc).copied()
+    pub fn select_clip_region_rects(&mut self, hdc: u32, rects: Vec<Rect>) {
+        let rects = canonicalize_region_rects(rects);
+        let rect = bounding_region_rect(&rects);
+        self.dc_clips.insert(
+            hdc,
+            RegionObject {
+                handle: 0,
+                rect,
+                rects,
+            },
+        );
+    }
+
+    pub fn clip_region(&self, hdc: u32) -> Option<&RegionObject> {
+        self.dc_clips.get(&hdc)
     }
 
     pub fn create_menu(
