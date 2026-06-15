@@ -4761,3 +4761,18 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored because that toolchain is not configured, and Cargo
   still emits the existing unused-code warnings.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `ExtEscape` now covers
+  DeviceEmulator `GETRAWFRAMEBUFFER` metadata from CE `gxdma.h` and
+  `image_cfg.h`, including the `QUERYESCSUPPORT` response, 28-byte
+  `RawFrameBufferInfo` output, RGB565/16 bpp fields, uncached framebuffer
+  base, x/y strides, dimensions, and invalid-output no-touch behavior. The
+  remaining framebuffer-access gap is guest-readable direct memory behind the
+  returned pointer.
+- Focused validation after the DeviceEmulator raw-framebuffer `ExtEscape`
+  slice: `cargo fmt --check`, `git diff --check`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop
+  coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges --test
+  coredll_raw_gwe -- --nocapture`, and `cargo build --release --features
+  unicorn,win32-desktop` passed. Cargo still emits the existing unused-code
+  warnings.

@@ -3451,13 +3451,20 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\VGAFLAT\gpeflat.cpp`
   - `pwingdi.h` defines `EXTESC_NOTSUPPORTED`, `EXTESC_SUPPORTED`,
     `EXTESC_ERROR`, `QUERYESCSUPPORT`, and the display-driver escape IDs for
-    gamma and screen rotation. `dispperf.h` defines the display-performance
+    gamma and screen rotation. DeviceEmulator `gxdma.h` defines
+    `GETRAWFRAMEBUFFER` (`0x00020001`), the 28-byte `RawFrameBufferInfo`
+    payload (`wFormat`, `wBPP`, `pFramePointer`, `cxStride`, `cyStride`,
+    `cxPixels`, `cyPixels`), `FORMAT_565`, and the 240x320 RGB565 stride
+    constants, while `image_cfg.h` defines `IMAGE_FRAMEBUFFER_UA_BASE`
+    (`0xA3F00000`). `dispperf.h` defines the display-performance
     escape IDs, query-support list, and 32-entry `DISPPERF_TIMING` table shape
     used by `DispPerfDrvEscape`. The CE GDIAPI `dc.cpp`
     `ExtEscapeInvalidAccess` test expects direct private display escapes for
     get/set rotation, get/set video protection, save/restore video memory, and
     get/set gamma to return `EXTESC_ERROR` with invalid-access status, while
-    `QUERYESCSUPPORT` for the raw-framebuffer escape reports not supported.
+    the historical raw test covered `QUERYESCSUPPORT` for the raw-framebuffer
+    escape as not supported before this DeviceEmulator-specific metadata path
+    was implemented.
     Rust now implements that query/protected-error surface, including get/set
     gamma and get/set rotation query support, CE GPE direct get/set gamma
     payloads with `ddi_if.cpp`'s `cjIn` gamma value and `pvIn` BOOL-buffer ABI,
@@ -3471,7 +3478,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `ContrastCmdInputParm` command/parm input, optional four-byte output,
     get/set/increase/decrease/default/max commands, signed 0..15 set-value
     clamping, default-command zero return, max-value query, and the shared
-    LCDCON3 high-nibble/backlight-bit coupling, and the
+    LCDCON3 high-nibble/backlight-bit coupling, DeviceEmulator
+    `GETRAWFRAMEBUFFER` metadata from `gxdma.h`/`image_cfg.h` with the
+    28-byte `RawFrameBufferInfo` output, RGB565 format, 16 bpp, uncached
+    framebuffer base, byte/pitch strides, and screen dimensions, and the
     CE-sized
     `DISPPERF_EXTESC_GETSIZE`/`GETTIMING`/`CLEARTIMING`/`GETUNHANDLED` payload
     contract for raw `ExtEscape`, including local nonzero GPE timing rows for
@@ -3501,5 +3511,6 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `DrvTransparentBlt`/`AnyBlt` path. Framebuffer-destination
     `AlphaBlend` records `PARAM_DESTINVIDMEM` while preserving the
     `BLT_STRETCH` counter from `DrvAlphaBlend`/`AnyBlt`. Real video-protection,
-    framebuffer-access, and broader DISPPERF payload execution outside those
-    raw draw paths remains unsupported.
+    guest-readable direct framebuffer memory behind the returned
+    `pFramePointer`, and broader DISPPERF payload execution outside those raw
+    draw paths remains unsupported.
