@@ -25,7 +25,7 @@ use crate::{
         },
         kernel::{
             CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
-            MessageQueueOptions, MessageQueueReadStatus,
+            MessageQueueOptions, MessageQueueReadStatus, MessageQueueWriteStatus,
         },
         memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
         object::{
@@ -12351,12 +12351,22 @@ fn read_msg_queue_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
             return false;
         }
-        Ok(MessageQueueReadStatus::BufferTooSmall { required }) => {
-            let _ = memory.write_u32(bytes_read_ptr, required);
+        Ok(MessageQueueReadStatus::BufferTooSmall(message)) => {
+            let writes_ok = memory.write_bytes(buffer_ptr, &message.bytes).is_ok()
+                && memory
+                    .write_u32(bytes_read_ptr, message.bytes.len() as u32)
+                    .is_ok()
+                && memory.write_u32(flags_ptr, message.flags).is_ok();
+            if !writes_ok {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
-            return false;
+            return true;
         }
         Err(Error::AccessDenied(_)) => {
             kernel
@@ -12395,7 +12405,7 @@ fn write_msg_queue_raw<M: CoredllGuestMemory>(
     buffer_bytes: u32,
     flags: u32,
 ) -> bool {
-    if buffer_ptr == 0 && buffer_bytes != 0 {
+    if buffer_ptr == 0 || buffer_bytes == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -12409,9 +12419,21 @@ fn write_msg_queue_raw<M: CoredllGuestMemory>(
         return false;
     }
     match kernel.write_message_queue(queue_handle, bytes, flags) {
-        Ok(()) => {
+        Ok(MessageQueueWriteStatus::Written) => {
             kernel.threads.set_last_error(thread_id, 0);
             true
+        }
+        Ok(MessageQueueWriteStatus::Full) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
+            false
+        }
+        Ok(MessageQueueWriteStatus::MessageTooLarge) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+            false
         }
         Err(Error::InvalidArgument(_)) => {
             kernel

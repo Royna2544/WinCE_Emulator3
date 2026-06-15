@@ -138,7 +138,14 @@ pub struct MessageQueueRead {
 pub enum MessageQueueReadStatus {
     Message(MessageQueueRead),
     Empty,
-    BufferTooSmall { required: u32 },
+    BufferTooSmall(MessageQueueRead),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageQueueWriteStatus {
+    Written,
+    Full,
+    MessageTooLarge,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -895,6 +902,12 @@ fn encode_devdetail_payload(class_guid: [u8; 16], name: &str, attached: bool) ->
 }
 
 impl CeKernel {
+    const MSGQUEUE_NOPRECOMMIT: u32 = 0x0000_0001;
+    const MSGQUEUE_ALLOW_BROKEN: u32 = 0x0000_0002;
+    const MSGQUEUE_VALID_FLAGS: u32 = Self::MSGQUEUE_NOPRECOMMIT | Self::MSGQUEUE_ALLOW_BROKEN;
+    const MSGQUEUE_MAX_NODE_SIZE: u32 = 0x0010_0000;
+    const MSGQUEUE_MAX_NUM_NODES: u32 = 0x0010_0000;
+
     pub fn boot(config: RuntimeConfig) -> Self {
         let mut registry = Registry::from_dump(config.registry);
         seed_testime_sample_dictionary(&mut registry);
@@ -1009,6 +1022,21 @@ impl CeKernel {
         if options.max_message_bytes == 0 {
             return Err(Error::InvalidArgument(
                 "message queue max message size is zero".to_owned(),
+            ));
+        }
+        if options.max_message_bytes > Self::MSGQUEUE_MAX_NODE_SIZE {
+            return Err(Error::InvalidArgument(
+                "message queue max message size exceeds CE limit".to_owned(),
+            ));
+        }
+        if options.max_messages > Self::MSGQUEUE_MAX_NUM_NODES {
+            return Err(Error::InvalidArgument(
+                "message queue max messages exceeds CE limit".to_owned(),
+            ));
+        }
+        if options.flags & !Self::MSGQUEUE_VALID_FLAGS != 0 {
+            return Err(Error::InvalidArgument(
+                "message queue flags contain unsupported bits".to_owned(),
             ));
         }
         let normalized_name = name.filter(|name| !name.is_empty());
@@ -1155,9 +1183,7 @@ impl CeKernel {
             return Err(Error::InvalidHandle(handle));
         };
         if !endpoint.read_access {
-            return Err(Error::AccessDenied(
-                "message queue is write-only".to_owned(),
-            ));
+            return Err(Error::InvalidHandle(handle));
         }
         let Some(queue) = self.message_queues.get_mut(&endpoint.queue_id) else {
             return Err(Error::InvalidHandle(handle));
@@ -1166,9 +1192,12 @@ impl CeKernel {
             return Ok(MessageQueueReadStatus::Empty);
         };
         if buffer_bytes < message.bytes.len() as u32 {
-            return Ok(MessageQueueReadStatus::BufferTooSmall {
-                required: message.bytes.len() as u32,
-            });
+            let mut message = queue.messages.pop_front().expect("front message exists");
+            message.bytes.truncate(buffer_bytes as usize);
+            return Ok(MessageQueueReadStatus::BufferTooSmall(MessageQueueRead {
+                bytes: message.bytes,
+                flags: message.flags,
+            }));
         }
         let message = queue.messages.pop_front().expect("front message exists");
         Ok(MessageQueueReadStatus::Message(MessageQueueRead {
@@ -1177,9 +1206,19 @@ impl CeKernel {
         }))
     }
 
-    pub fn write_message_queue(&mut self, handle: u32, bytes: Vec<u8>, flags: u32) -> Result<()> {
-        let queue_id = self.message_queue_id(handle)?;
-        self.write_message_queue_by_id(queue_id, bytes, flags)
+    pub fn write_message_queue(
+        &mut self,
+        handle: u32,
+        bytes: Vec<u8>,
+        flags: u32,
+    ) -> Result<MessageQueueWriteStatus> {
+        let KernelObject::MessageQueue(endpoint) = self.handles.get(handle)?.clone() else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        if endpoint.read_access {
+            return Err(Error::InvalidHandle(handle));
+        }
+        self.write_message_queue_by_id(endpoint.queue_id, bytes, flags)
     }
 
     fn write_message_queue_by_id(
@@ -1187,19 +1226,15 @@ impl CeKernel {
         queue_id: u32,
         bytes: Vec<u8>,
         flags: u32,
-    ) -> Result<()> {
+    ) -> Result<MessageQueueWriteStatus> {
         let Some(queue) = self.message_queues.get_mut(&queue_id) else {
             return Err(Error::InvalidHandle(queue_id));
         };
         if bytes.len() > queue.max_message_bytes as usize {
-            return Err(Error::InvalidArgument(format!(
-                "message length {} exceeds queue maximum {}",
-                bytes.len(),
-                queue.max_message_bytes
-            )));
+            return Ok(MessageQueueWriteStatus::MessageTooLarge);
         }
         if queue.messages.len() >= queue.max_messages as usize {
-            return Err(Error::AccessDenied("message queue is full".to_owned()));
+            return Ok(MessageQueueWriteStatus::Full);
         }
         queue
             .messages
@@ -1218,7 +1253,7 @@ impl CeKernel {
         for handle in handles {
             self.queue_object_wake_candidates(handle);
         }
-        Ok(())
+        Ok(MessageQueueWriteStatus::Written)
     }
 
     fn message_queue_id(&self, handle: u32) -> Result<u32> {

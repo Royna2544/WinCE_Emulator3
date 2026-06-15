@@ -606,6 +606,210 @@ fn coredll_raw_msg_queues_deliver_device_notification_devdetails() -> Result<()>
 }
 
 #[test]
+fn coredll_raw_msg_queues_follow_ce_access_and_capacity_edges() -> Result<()> {
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    const ERROR_TIMEOUT: u32 = 1460;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let read_options_ptr = 0x3100;
+    let write_options_ptr = 0x3200;
+    let input_ptr = 0x3300;
+    let output_ptr = 0x3400;
+    let bytes_read_ptr = 0x3500;
+    let flags_ptr = 0x3600;
+    memory.map_words(read_options_ptr, 5);
+    memory.write_word(read_options_ptr, 20);
+    memory.write_word(read_options_ptr + 8, 1);
+    memory.write_word(read_options_ptr + 12, 4);
+    memory.write_word(read_options_ptr + 16, 1);
+    memory.map_words(write_options_ptr, 5);
+    memory.write_word(write_options_ptr, 20);
+    memory.write_word(write_options_ptr + 8, 1);
+    memory.write_word(write_options_ptr + 12, 4);
+    memory.write_word(write_options_ptr + 16, 0);
+    memory.map_bytes(input_ptr, 8);
+    memory.write_bytes(input_ptr, &[1, 2, 3, 4, 5, 6, 7, 8]);
+    memory.map_bytes(output_ptr, 8);
+    memory.map_words(bytes_read_ptr, 1);
+    memory.map_words(flags_ptr, 1);
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(read_queue),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_MSG_QUEUE,
+        [0, read_options_ptr],
+    )
+    else {
+        panic!("CreateMsgQueue did not return a handle");
+    };
+    assert_ne!(read_queue, 0);
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(write_queue),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_OPEN_MSG_QUEUE,
+        [0, read_queue, write_options_ptr],
+    )
+    else {
+        panic!("OpenMsgQueue did not return a handle");
+    };
+    assert_ne!(write_queue, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_MSG_QUEUE,
+            [write_queue, output_ptr, 4, bytes_read_ptr, 0, flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_MSG_QUEUE,
+            [read_queue, input_ptr, 4, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_MSG_QUEUE,
+            [write_queue, input_ptr, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_MSG_QUEUE,
+            [write_queue, input_ptr, 5, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_MSG_QUEUE,
+            [write_queue, input_ptr, 4, 0, 0x42],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_MSG_QUEUE,
+            [write_queue, input_ptr + 4, 4, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_TIMEOUT);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_MSG_QUEUE,
+            [read_queue, output_ptr, 2, bytes_read_ptr, 0, flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+    assert_eq!(memory.read_u32(bytes_read_ptr)?, 2);
+    assert_eq!(memory.read_u32(flags_ptr)?, 0x42);
+    assert_eq!(memory.read_bytes(output_ptr, 2), vec![1, 2]);
+    assert_eq!(kernel.is_wait_ready(read_queue, thread_id), Some(false));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_MSG_QUEUE,
+            [read_queue, output_ptr, 4, bytes_read_ptr, 0, flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_TIMEOUT);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
