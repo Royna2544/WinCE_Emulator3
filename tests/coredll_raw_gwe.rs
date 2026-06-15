@@ -54,27 +54,28 @@ use wince_emulation_v3::{
             ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
             ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL,
             ORD_HIDE_CARET, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
-            ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
-            ORD_IMM_ENUM_REGISTER_WORD_W, ORD_IMM_ESCAPE_W, ORD_IMM_GENERATE_MESSAGE,
-            ORD_IMM_GET_CANDIDATE_LIST_COUNT_W, ORD_IMM_GET_CANDIDATE_LIST_W,
-            ORD_IMM_GET_CANDIDATE_WINDOW, ORD_IMM_GET_COMPOSITION_FONT_W,
-            ORD_IMM_GET_COMPOSITION_STRING_W, ORD_IMM_GET_COMPOSITION_WINDOW, ORD_IMM_GET_CONTEXT,
-            ORD_IMM_GET_CONVERSION_LIST_W, ORD_IMM_GET_CONVERSION_STATUS,
-            ORD_IMM_GET_DEFAULT_IMEWND, ORD_IMM_GET_DESCRIPTION_W, ORD_IMM_GET_GUIDE_LINE_W,
-            ORD_IMM_GET_HOT_KEY, ORD_IMM_GET_IMCCLOCK_COUNT, ORD_IMM_GET_IMCCSIZE,
-            ORD_IMM_GET_IMCLOCK_COUNT, ORD_IMM_GET_IMEFILE_NAME_W, ORD_IMM_GET_KEYBOARD_LAYOUT,
-            ORD_IMM_GET_OPEN_STATUS, ORD_IMM_GET_PROPERTY, ORD_IMM_GET_REGISTER_WORD_STYLE_W,
-            ORD_IMM_GET_STATUS_WINDOW_POS, ORD_IMM_IS_IME, ORD_IMM_IS_UIMESSAGE_W,
-            ORD_IMM_LOCK_IMC, ORD_IMM_LOCK_IMCC, ORD_IMM_NOTIFY_IME, ORD_IMM_RE_SIZE_IMCC,
-            ORD_IMM_REGISTER_WORD_W, ORD_IMM_RELEASE_CONTEXT, ORD_IMM_SET_CANDIDATE_WINDOW,
-            ORD_IMM_SET_COMPOSITION_FONT_W, ORD_IMM_SET_COMPOSITION_STRING_W,
-            ORD_IMM_SET_COMPOSITION_WINDOW, ORD_IMM_SET_CONVERSION_STATUS, ORD_IMM_SET_OPEN_STATUS,
-            ORD_IMM_SET_STATUS_WINDOW_POS, ORD_IMM_SIPANEL_STATE, ORD_IMM_UNLOCK_IMC,
-            ORD_IMM_UNLOCK_IMCC, ORD_IMM_UNREGISTER_WORD_W, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT,
-            ORD_INSERT_MENU_W, ORD_INTERSECT_CLIP_RECT, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
-            ORD_INVERT_RECT, ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY,
-            ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT,
+            ORD_IMAGE_LIST_GET_ICON, ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT,
+            ORD_IMM_CREATE_IMCC, ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC,
+            ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME, ORD_IMM_ENUM_REGISTER_WORD_W,
+            ORD_IMM_ESCAPE_W, ORD_IMM_GENERATE_MESSAGE, ORD_IMM_GET_CANDIDATE_LIST_COUNT_W,
+            ORD_IMM_GET_CANDIDATE_LIST_W, ORD_IMM_GET_CANDIDATE_WINDOW,
+            ORD_IMM_GET_COMPOSITION_FONT_W, ORD_IMM_GET_COMPOSITION_STRING_W,
+            ORD_IMM_GET_COMPOSITION_WINDOW, ORD_IMM_GET_CONTEXT, ORD_IMM_GET_CONVERSION_LIST_W,
+            ORD_IMM_GET_CONVERSION_STATUS, ORD_IMM_GET_DEFAULT_IMEWND, ORD_IMM_GET_DESCRIPTION_W,
+            ORD_IMM_GET_GUIDE_LINE_W, ORD_IMM_GET_HOT_KEY, ORD_IMM_GET_IMCCLOCK_COUNT,
+            ORD_IMM_GET_IMCCSIZE, ORD_IMM_GET_IMCLOCK_COUNT, ORD_IMM_GET_IMEFILE_NAME_W,
+            ORD_IMM_GET_KEYBOARD_LAYOUT, ORD_IMM_GET_OPEN_STATUS, ORD_IMM_GET_PROPERTY,
+            ORD_IMM_GET_REGISTER_WORD_STYLE_W, ORD_IMM_GET_STATUS_WINDOW_POS, ORD_IMM_IS_IME,
+            ORD_IMM_IS_UIMESSAGE_W, ORD_IMM_LOCK_IMC, ORD_IMM_LOCK_IMCC, ORD_IMM_NOTIFY_IME,
+            ORD_IMM_RE_SIZE_IMCC, ORD_IMM_REGISTER_WORD_W, ORD_IMM_RELEASE_CONTEXT,
+            ORD_IMM_SET_CANDIDATE_WINDOW, ORD_IMM_SET_COMPOSITION_FONT_W,
+            ORD_IMM_SET_COMPOSITION_STRING_W, ORD_IMM_SET_COMPOSITION_WINDOW,
+            ORD_IMM_SET_CONVERSION_STATUS, ORD_IMM_SET_OPEN_STATUS, ORD_IMM_SET_STATUS_WINDOW_POS,
+            ORD_IMM_SIPANEL_STATE, ORD_IMM_UNLOCK_IMC, ORD_IMM_UNLOCK_IMCC,
+            ORD_IMM_UNREGISTER_WORD_W, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT, ORD_INSERT_MENU_W,
+            ORD_INTERSECT_CLIP_RECT, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_INVERT_RECT,
+            ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW,
+            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT,
             ORD_KEYBD_VKEY_TO_UNICODE, ORD_KILL_TIMER, ORD_LINE_TO, ORD_LOAD_ACCELERATORS_W,
             ORD_LOAD_BITMAP_W, ORD_LOAD_CURSOR_W, ORD_LOAD_ICON_W, ORD_LOAD_KEYBOARD_LAYOUT_W,
             ORD_LOAD_MENU_W, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT,
@@ -1157,6 +1158,7 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
 #[test]
 fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
     const RT_GROUP_ICON: u32 = 14;
+    const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -1305,6 +1307,83 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
         &framebuffer.pixels()[outside_offset..outside_offset + 2],
         &[0, 0],
         "DrawIconEx should leave pixels outside the icon rectangle untouched"
+    );
+    let overlay_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_ICON,
+        [SHELL_SYSTEM_IMAGE_LIST_HANDLE, 2, 0x0100],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_GetIcon(overlay) did not return a handle: {other:?}"),
+    };
+    assert_ne!(overlay_icon, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [hdc, 20, 8, overlay_icon, 16, 16, 0, 0, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let pseudo_body = framebuffer_rgb565_at(&framebuffer, 21, 9);
+    let pseudo_overlay = framebuffer_rgb565_at(&framebuffer, 32, 20);
+    assert_ne!(
+        pseudo_body, 0,
+        "DrawIconEx should paint the synthetic pseudo-icon body from ImageList_GetIcon handles"
+    );
+    assert_ne!(
+        pseudo_overlay, 0,
+        "DrawIconEx should paint a valid synthetic pseudo-icon overlay from handle flags"
+    );
+    assert_ne!(
+        pseudo_overlay, pseudo_body,
+        "DrawIconEx pseudo-icon overlays should be visibly distinct from the body"
+    );
+    let invalid_overlay_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_ICON,
+        [SHELL_SYSTEM_IMAGE_LIST_HANDLE, 2, 0x0500],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_GetIcon(invalid overlay) did not return a handle: {other:?}"),
+    };
+    assert_ne!(invalid_overlay_icon, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [hdc, 20, 24, invalid_overlay_icon, 16, 16, 0, 0, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        framebuffer_rgb565_at(&framebuffer, 32, 36),
+        framebuffer_rgb565_at(&framebuffer, 21, 25),
+        "DrawIconEx should ignore invalid CE overlay slots above four in pseudo-icon handles"
     );
 
     let (mem_dc, bits_ptr, stride) =

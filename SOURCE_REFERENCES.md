@@ -1279,7 +1279,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     object. The synthetic shell system image-list fallback now renders its
     deterministic pseudo body and valid overlay marker into selected memory DIBs
     as well as framebuffers, while invalid overlay slots above CE's four
-    registered overlays stay ignored. `imagelist.cpp` also converts a missing color-depth mask to
+    registered overlays stay ignored; direct `DrawIconEx` coverage now also
+    consumes those returned pseudo handles and checks the decoded overlay bits.
+    `imagelist.cpp` also converts a missing color-depth mask to
     `ILC_COLORDDB` for CE backward compatibility, so raw and direct
     image-list creation now store `ILC_COLORDDB` when callers pass
     `ILC_COLOR`/zero color bits. CE `imagelist.cpp::SetIconSize` only treats

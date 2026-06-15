@@ -15,6 +15,25 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `tests/coredll_raw_gwe.rs`: `DrawIconEx` now covers shell/system
+  `ImageList_GetIcon` pseudo handles with valid overlay flags and verifies
+  invalid overlay slots above CE's four registered overlay entries stay ignored
+  when those pseudo handles are rendered into framebuffers.
+- `src/emulator/unicorn.rs`: direct-send orphaned wndproc-callout cleanup now
+  threads mapped-blob module context into the stack-grace check, so a nearby
+  saved frame only preserves a pending direct-send callout when it is unmapped,
+  image-backed, or belongs to the same mapped module as the pending wndproc when
+  that module is known.
+- Validation after the pseudo-icon `DrawIconEx` overlay slice: `cargo fmt
+  --check`, `git diff --check`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_destroy_icon_accepts_loaded_icon_handles`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop
+  direct_send_wndproc_cleanup_keeps_live_callout_until_return_pc`, `cargo test
+  -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and a
+  rerun of `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
+  The eVC4 MIPSII fixture remains ignored without toolchain configuration, and
+  Cargo still emits the existing unused-code warnings.
 - `tests/coredll_raw_gwe.rs`: raw framebuffer-HDC `TransparentImage` now has
   CE `draw.cpp::StretchBltFlipMirrorTest(ETransparentImage)` coverage for
   negative source and destination extents through the transparent color key,

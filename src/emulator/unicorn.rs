@@ -2186,6 +2186,7 @@ impl UnicornMips {
         Self::clear_orphaned_direct_send_callouts_for_context(
             &mut self.pending_wndproc_returns,
             kernel,
+            &self.mapped_blobs,
             context_pcs,
             context_frames,
             Some(&mut self.orphaned_wndproc_returns),
@@ -2249,6 +2250,7 @@ impl UnicornMips {
     fn clear_orphaned_direct_send_callouts_for_context(
         pending_wndproc_returns: &mut Vec<PendingWndProcReturn>,
         kernel: &CeKernel,
+        mapped_blobs: &[MappedBlob],
         context_pcs: [Option<u32>; 2],
         context_frames: [Option<(u32, u32, u32)>; 2],
         mut orphaned_wndproc_returns: Option<&mut Vec<UnicornWndProcReturn>>,
@@ -2266,18 +2268,31 @@ impl UnicornMips {
                 return true;
             }
             let pending_call_sp = pending.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+            let pending_module = mapped_blob_module_for_pc(mapped_blobs, pending.wndproc);
             let keep = context_frames
                 .iter()
                 .copied()
                 .flatten()
                 .any(|(pc, ra, sp)| {
+                    let same_wndproc_module = pending_module.as_ref().is_none_or(|module| {
+                        let mut frame_modules = [pc, ra]
+                            .into_iter()
+                            .filter_map(|addr| mapped_blob_module_for_pc(mapped_blobs, addr));
+                        let mut saw_mapped_frame = false;
+                        let same = frame_modules.any(|frame_module| {
+                            saw_mapped_frame = true;
+                            &frame_module == module || frame_module.starts_with("image:")
+                        });
+                        same || !saw_mapped_frame
+                    });
                     pc == pending.return_pc
                         || pc == WNDPROC_RETURN_STUB_ADDR
                         || (ra == WNDPROC_RETURN_STUB_ADDR && sp == pending_call_sp)
                         || (ra != 0
                             && sp <= pending_call_sp
                             && pending_call_sp < pending.return_sp
-                            && pending_call_sp.wrapping_sub(sp) <= WNDPROC_NESTED_STACK_GRACE_BYTES)
+                            && pending_call_sp.wrapping_sub(sp) <= WNDPROC_NESTED_STACK_GRACE_BYTES
+                            && same_wndproc_module)
                 });
             if !keep {
                 removed_callouts.push(pending.clone());
@@ -5501,6 +5516,7 @@ impl UnicornMips {
         let pending_qsort_returns_timeslice_hook = Rc::clone(&pending_qsort_returns);
         let pending_dll_lifecycle_returns_timeslice_hook =
             Rc::clone(&pending_dll_lifecycle_returns);
+        let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
         let trampoline_jumps_timeslice_hook = trampoline_jumps.clone();
         uc.add_block_hook(1, 0, move |uc, address, _size| {
@@ -5545,6 +5561,7 @@ impl UnicornMips {
                     let _ = Self::clear_orphaned_direct_send_callouts_for_context(
                         &mut pending_wndproc_returns,
                         unsafe { &*kernel_ptr },
+                        unsafe { &*mapped_blobs_ptr },
                         [Some(context_pc), None],
                         [
                             Some((
@@ -5722,7 +5739,6 @@ impl UnicornMips {
         let loaded_modules_ptr = &mut self.loaded_modules as *mut Vec<LoadedPeModuleInfo>;
         let resource_strings_ptr = &mut self.resource_strings as *mut Vec<MappedResourceString>;
         let resources_ptr = &mut self.resources as *mut Vec<MappedResource>;
-        let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
         let trampoline_ranges_ptr = &mut self.trampoline_ranges as *mut Vec<(u32, u32)>;
         let trampoline_jumps_ptr = &mut self.trampoline_jumps as *mut Vec<MipsTrampolineJump>;
         let live_trampoline_state_import_hook = Rc::clone(&live_trampoline_state);
@@ -22127,6 +22143,90 @@ mod wait_scheduler_tests {
         assert!(!scheduler.clear_orphaned_direct_send_callouts(&kernel));
         assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
         scheduler.pending_wndproc_returns.clear();
+
+        scheduler.mapped_blobs.push(super::MappedBlob {
+            name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
+            base: 0x6004_0000,
+            bytes: vec![0; 0x20_000],
+        });
+        scheduler.mapped_blobs.push(super::MappedBlob {
+            name: r"dll:D:\INAVI_Emulator\INAVI\INavi\TpSysAuth.dll".to_owned(),
+            base: 0x6029_c000,
+            bytes: vec![0; 0xa000],
+        });
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "SendMessageW",
+                hwnd: 0x0002_0004,
+                msg: 0x5237,
+                wparam: 0,
+                lparam: 0,
+                wndproc: 0x6004_f0f4,
+                return_pc,
+                return_sp: 0x7ffd_f578,
+                caller_regs: Some(super::MipsGuestContext::zero()),
+                class_name: None,
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: Some(1),
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: None,
+                clear_focus_after_return: None,
+            });
+        let mut same_module_deep_regs = super::MipsGuestContext::zero();
+        same_module_deep_regs.regs[29] = 0x7ffd_dee8;
+        same_module_deep_regs.regs[31] = 0x6004_f200;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: 0x6004_f100,
+            regs: same_module_deep_regs,
+        });
+        assert!(!scheduler.clear_orphaned_direct_send_callouts(&kernel));
+        assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
+        scheduler.pending_wndproc_returns.clear();
+
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "SendMessageW",
+                hwnd: 0x0002_0004,
+                msg: 0x5237,
+                wparam: 0,
+                lparam: 0,
+                wndproc: 0x6004_f0f4,
+                return_pc,
+                return_sp: 0x7ffd_f578,
+                caller_regs: Some(super::MipsGuestContext::zero()),
+                class_name: None,
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: Some(1),
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: None,
+                clear_focus_after_return: None,
+            });
+        let mut cross_module_deep_regs = super::MipsGuestContext::zero();
+        cross_module_deep_regs.regs[29] = 0x7ffd_dee8;
+        cross_module_deep_regs.regs[31] = 0x6029_d828;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: 0x6029_d470,
+            regs: cross_module_deep_regs,
+        });
+        assert!(scheduler.clear_orphaned_direct_send_callouts(&kernel));
+        assert!(scheduler.pending_wndproc_returns.is_empty());
+        assert_eq!(scheduler.orphaned_wndproc_returns.len(), 1);
+        assert_eq!(scheduler.orphaned_wndproc_returns[0].return_pc, return_pc);
+        scheduler.orphaned_wndproc_returns.clear();
 
         scheduler
             .pending_wndproc_returns
