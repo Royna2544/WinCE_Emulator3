@@ -4881,8 +4881,9 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `fsdmgr.def`/`fsdmgrapi.cpp`. The host-backed model validates registered
   HVOLs, returns `ERROR_DEVICE_REMOVED` for missing volumes, writes a synthetic
   HVOL lock token to the caller outputs, rejects bad output/mismatched lock
-  state with `ERROR_INVALID_PARAMETER`, and keeps real CE
-  `MountedVolume_t::Enter/Exit` lifetime accounting queued.
+  state with `ERROR_INVALID_PARAMETER`, and keeps the deeper CE
+  `MountedVolume_t::Enter/Exit` availability, powerdown, and thread-exit wait
+  reference behavior queued.
 - Focused validation after the direct fsdmgr async-volume import slice:
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop
@@ -5047,3 +5048,21 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture
   remains ignored, and Cargo still emits the existing unused-code warnings.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: direct
+  CE `FSDMGR_AsyncEnterVolume @80` now allocates a distinct one-shot synthetic
+  lock token for registered HVOLs, returns the HVOL as lock data, and cleans the
+  token if output copying fails. `FSDMGR_AsyncExitVolume @81` now rejects null,
+  mismatched, duplicate, and stale lock/data pairs, consumes successful exits,
+  and drops outstanding async volume locks when their mounted volume is
+  unmounted or closed. Real CE mounted-volume availability, powerdown, and
+  thread-exit wait reference behavior remains queued.
+- Focused validation after the FSDMGR async volume lock-lifetime slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop
+  fsdmgr_async_volume_imports_lock_registered_hvol_shape -- --nocapture`
+  passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the FSDMGR async volume lock-lifetime slice:
+  `cargo fmt --check`, `git diff --check`, and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored,
+  and Cargo still emits the existing unused-code warnings.

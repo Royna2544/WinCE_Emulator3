@@ -12598,25 +12598,24 @@ fn fsdmgr_async_enter_volume_raw<M: CoredllGuestMemory>(
     lock_ptr: u32,
     lock_data_ptr: u32,
 ) -> u32 {
-    if kernel.volume_root_for_handle(volume_handle).is_err() {
-        return ERROR_DEVICE_REMOVED;
-    }
+    let (lock_handle, lock_data) = match kernel.fsdmgr_async_enter_volume(volume_handle) {
+        Ok(lock) => lock,
+        Err(_) => return ERROR_DEVICE_REMOVED,
+    };
     if lock_ptr == 0
         || lock_data_ptr == 0
-        || memory.write_u32(lock_ptr, volume_handle).is_err()
-        || memory.write_u32(lock_data_ptr, volume_handle).is_err()
+        || memory.write_u32(lock_ptr, lock_handle).is_err()
+        || memory.write_u32(lock_data_ptr, lock_data).is_err()
     {
+        let _ = kernel.fsdmgr_async_exit_volume(lock_handle, lock_data);
         return ERROR_INVALID_PARAMETER;
     }
     0
 }
 
 fn fsdmgr_async_exit_volume_raw(kernel: &mut CeKernel, lock_handle: u32, lock_data: u32) -> u32 {
-    if lock_handle == 0 || lock_handle != lock_data {
-        return ERROR_INVALID_PARAMETER;
-    }
-    match kernel.volume_root_for_handle(lock_handle) {
-        Ok(_) => 0,
+    match kernel.fsdmgr_async_exit_volume(lock_handle, lock_data) {
+        Ok(()) => 0,
         Err(_) => ERROR_INVALID_PARAMETER,
     }
 }

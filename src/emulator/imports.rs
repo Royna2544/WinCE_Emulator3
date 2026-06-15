@@ -3559,7 +3559,8 @@ mod tests {
             ),
             Some(0)
         );
-        assert_eq!(memory.word(lock_ptr), volume_handle);
+        assert_ne!(memory.word(lock_ptr), 0);
+        assert_ne!(memory.word(lock_ptr), volume_handle);
         assert_eq!(memory.word(lock_data_ptr), volume_handle);
 
         let lock_handle = memory.word(lock_ptr);
@@ -3570,9 +3571,29 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [lock_handle, 0x4444_0000],
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
                 [lock_handle, lock_data],
             ),
             Some(0)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [lock_handle, lock_data],
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
         );
 
         assert_eq!(
@@ -3595,13 +3616,27 @@ mod tests {
             ),
             Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
         );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [volume_handle, lock_ptr, lock_data_ptr],
+            ),
+            Some(0)
+        );
+        let stale_lock_handle = memory.word(lock_ptr);
+        let stale_lock_data = memory.word(lock_data_ptr);
+        assert!(kernel.unmount_volume_handle(volume_handle).unwrap());
         assert_eq!(
             table.dispatch_trap(
                 &mut kernel,
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
-                [volume_handle, 0x4444_0000],
+                [stale_lock_handle, stale_lock_data],
             ),
             Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
         );

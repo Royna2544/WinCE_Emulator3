@@ -3122,7 +3122,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_GetRegistryFlag`/`String`/`Value` missing-value status and
     output-clearing behavior,
     `FSDMGR_AsyncEnterVolume`/`FSDMGR_AsyncExitVolume` registered-HVOL
-    validation with a synthetic HVOL lock token,
+    validation with a distinct one-shot HVOL lock token whose mismatched,
+    duplicate, stale, and output-fault cleanup paths now match the CE status
+    surface,
     `FSDMGR_ParseSecurityDescriptor` output/null/malformed validation with
     private `SECDESHDR.cbSize` reporting,
     existing mounted HVOL names, AFS hidden/system/permanent mount flags, and a
@@ -3141,7 +3143,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
     for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
     forwarding, real logical-disk registry-root lookup/cache DLL/filter
-    behavior, real CE mounted-volume enter/exit lifetime accounting, broader file-security ACL storage and
+    behavior, real CE mounted-volume availability, powerdown, and thread-exit
+    wait reference behavior, broader file-security ACL storage and
     enforcement, real utility DLL
     format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume

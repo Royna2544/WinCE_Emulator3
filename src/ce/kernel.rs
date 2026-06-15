@@ -97,6 +97,11 @@ struct FsdmgrCacheEntry {
     disable_flush: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FsdmgrVolumeLock {
+    volume_handle: u32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RemoteServerControlDrain {
     pub handled: usize,
@@ -227,6 +232,8 @@ pub struct CeKernel {
     next_message_queue_id: u32,
     fsdmgr_disk_sectors: BTreeMap<(u32, u32), Vec<u8>>,
     fsdmgr_disk_info_overrides: BTreeMap<u32, [u32; 6]>,
+    fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
+    next_fsdmgr_volume_lock: u32,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
     live_pump_timeout_stop_tick: Option<u32>,
     runtime_loader_stats: RuntimeLoaderStats,
@@ -974,6 +981,8 @@ impl CeKernel {
             next_message_queue_id: 1,
             fsdmgr_disk_sectors: BTreeMap::new(),
             fsdmgr_disk_info_overrides: BTreeMap::new(),
+            fsdmgr_volume_locks: BTreeMap::new(),
+            next_fsdmgr_volume_lock: 0x6d00_0001,
             modal_dialog_results: BTreeMap::new(),
             live_pump_timeout_stop_tick: None,
             runtime_loader_stats: RuntimeLoaderStats::default(),
@@ -2360,6 +2369,7 @@ impl CeKernel {
             .files
             .device_interface_advertisement_specs_for_guest_root(guest_root);
         if self.files.unmount_guest_root(guest_root).is_some() {
+            self.drop_fsdmgr_volume_locks_for_guest_root(guest_root);
             self.publish_mount_device_interface_specs(advertised_interfaces, false);
             self.post_shell_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
             self.signal_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
@@ -2449,6 +2459,66 @@ impl CeKernel {
                 KernelObject::Volume(volume) if volume.disk_ptr == Some(disk_ptr) => Some(handle),
                 _ => None,
             })
+    }
+
+    pub fn fsdmgr_async_enter_volume(&mut self, volume_handle: u32) -> Result<(u32, u32)> {
+        self.volume_root_for_handle(volume_handle)?;
+        let lock_handle = self.allocate_fsdmgr_volume_lock(volume_handle);
+        Ok((lock_handle, volume_handle))
+    }
+
+    pub fn fsdmgr_async_exit_volume(&mut self, lock_handle: u32, lock_data: u32) -> Result<()> {
+        if lock_handle == 0 || lock_data == 0 {
+            return Err(Error::InvalidArgument("null FSDMGR volume lock".to_owned()));
+        }
+        let Some(volume_lock) = self.fsdmgr_volume_locks.get(&lock_handle).copied() else {
+            return Err(Error::InvalidHandle(lock_handle));
+        };
+        if volume_lock.volume_handle != lock_data {
+            return Err(Error::InvalidArgument(
+                "mismatched FSDMGR volume lock data".to_owned(),
+            ));
+        }
+        self.volume_root_for_handle(volume_lock.volume_handle)?;
+        self.fsdmgr_volume_locks.remove(&lock_handle);
+        Ok(())
+    }
+
+    fn allocate_fsdmgr_volume_lock(&mut self, volume_handle: u32) -> u32 {
+        loop {
+            let lock_handle = self.next_fsdmgr_volume_lock;
+            self.next_fsdmgr_volume_lock = self
+                .next_fsdmgr_volume_lock
+                .wrapping_add(1)
+                .max(0x6d00_0001);
+            if !self.fsdmgr_volume_locks.contains_key(&lock_handle) {
+                self.fsdmgr_volume_locks
+                    .insert(lock_handle, FsdmgrVolumeLock { volume_handle });
+                return lock_handle;
+            }
+        }
+    }
+
+    fn drop_fsdmgr_volume_locks_for_handle(&mut self, volume_handle: u32) {
+        self.fsdmgr_volume_locks
+            .retain(|_, volume_lock| volume_lock.volume_handle != volume_handle);
+    }
+
+    fn drop_fsdmgr_volume_locks_for_guest_root(&mut self, guest_root: &str) {
+        let volume_handles: BTreeSet<u32> = self
+            .handles
+            .iter()
+            .filter_map(|(handle, object)| match object {
+                KernelObject::Volume(volume)
+                    if volume.guest_root.eq_ignore_ascii_case(guest_root) =>
+                {
+                    Some(handle)
+                }
+                _ => None,
+            })
+            .collect();
+        self.fsdmgr_volume_locks
+            .retain(|_, volume_lock| !volume_handles.contains(&volume_lock.volume_handle));
     }
 
     pub fn fsdmgr_create_cache(&mut self, disk_ptr: u32, block_size: u32) -> Option<u32> {
@@ -2729,6 +2799,7 @@ impl CeKernel {
         };
         self.ensure_volume_owner(&volume, handle)?;
         self.unmount_guest_root(&volume.guest_root);
+        self.drop_fsdmgr_volume_locks_for_handle(handle);
         self.handles.close(handle)?;
         Ok(true)
     }
@@ -4136,6 +4207,7 @@ impl CeKernel {
             KernelObject::Volume(volume) => {
                 self.ensure_volume_owner(&volume, handle)?;
                 self.unmount_guest_root(&volume.guest_root);
+                self.drop_fsdmgr_volume_locks_for_handle(handle);
             }
             KernelObject::FileChangeNotification(notification) => {
                 self.ensure_file_change_notification_owner(&notification, handle)?;
