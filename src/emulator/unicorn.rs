@@ -107,6 +107,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_wndproc_returns: Vec<PendingWndProcReturn>,
     #[cfg(feature = "unicorn")]
+    orphaned_wndproc_returns: Vec<UnicornWndProcReturn>,
+    #[cfg(feature = "unicorn")]
     blocked_guest_thread: Option<BlockedGuestThread>,
     #[cfg(feature = "unicorn")]
     displaced_blocked_get_messages: Vec<BlockedGuestThread>,
@@ -1008,6 +1010,8 @@ impl UnicornMips {
             pending_create_window_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_wndproc_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            orphaned_wndproc_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             blocked_guest_thread: None,
             #[cfg(feature = "unicorn")]
@@ -2177,6 +2181,7 @@ impl UnicornMips {
             kernel,
             context_pcs,
             context_frames,
+            Some(&mut self.orphaned_wndproc_returns),
         )
     }
 
@@ -2186,6 +2191,7 @@ impl UnicornMips {
         kernel: &CeKernel,
         context_pcs: [Option<u32>; 2],
         context_frames: [Option<(u32, u32, u32)>; 2],
+        mut orphaned_wndproc_returns: Option<&mut Vec<UnicornWndProcReturn>>,
     ) -> bool {
         let before = pending_wndproc_returns.len();
         let mut removed_callouts = Vec::new();
@@ -2221,6 +2227,9 @@ impl UnicornMips {
         let removed = before.saturating_sub(pending_wndproc_returns.len());
         if removed == 0 {
             return false;
+        }
+        if let Some(returns) = orphaned_wndproc_returns.as_deref_mut() {
+            archive_removed_wndproc_callouts(returns, &removed_callouts);
         }
         tracing::warn!(
             target: "ce.gwe",
@@ -4020,6 +4029,8 @@ impl UnicornMips {
                 #[cfg(feature = "unicorn")]
                 pending_wndproc_returns: std::mem::take(&mut self.pending_wndproc_returns),
                 #[cfg(feature = "unicorn")]
+                orphaned_wndproc_returns: std::mem::take(&mut self.orphaned_wndproc_returns),
+                #[cfg(feature = "unicorn")]
                 blocked_guest_thread: self.blocked_guest_thread.take(),
                 #[cfg(feature = "unicorn")]
                 displaced_blocked_get_messages: std::mem::take(
@@ -5189,7 +5200,9 @@ impl UnicornMips {
         let import_counts_hook = Rc::clone(&import_counts);
         let last_messages = Rc::new(RefCell::new(Vec::<UnicornLastMessage>::new()));
         let last_messages_hook = Rc::clone(&last_messages);
-        let last_wndproc_returns = Rc::new(RefCell::new(Vec::<UnicornWndProcReturn>::new()));
+        let last_wndproc_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.orphaned_wndproc_returns,
+        )));
         let last_wndproc_returns_hook = Rc::clone(&last_wndproc_returns);
         let last_wndproc_call_traces = Rc::new(RefCell::new(Vec::<UnicornWndProcCallTrace>::new()));
         let last_wndproc_call_traces_hook = Rc::clone(&last_wndproc_call_traces);
@@ -5423,6 +5436,7 @@ impl UnicornMips {
         let blocked_clipboard_data_timeslice_hook = Rc::clone(&blocked_clipboard_data);
         let blocked_get_message_timeslice_hook = Rc::clone(&blocked_get_message);
         let pending_wndproc_returns_timeslice_hook = Rc::clone(&pending_wndproc_returns);
+        let last_wndproc_returns_timeslice_hook = Rc::clone(&last_wndproc_returns);
         let pending_guest_thread_returns_timeslice_hook = Rc::clone(&pending_guest_thread_returns);
         let pending_qsort_returns_timeslice_hook = Rc::clone(&pending_qsort_returns);
         let pending_dll_lifecycle_returns_timeslice_hook =
@@ -5467,6 +5481,7 @@ impl UnicornMips {
                 let mut pending_wndproc_returns =
                     pending_wndproc_returns_timeslice_hook.borrow_mut();
                 if !pending_wndproc_returns.is_empty() {
+                    let mut last_wndproc_returns = last_wndproc_returns_timeslice_hook.borrow_mut();
                     let _ = Self::clear_orphaned_direct_send_callouts_for_context(
                         &mut pending_wndproc_returns,
                         unsafe { &*kernel_ptr },
@@ -5479,6 +5494,7 @@ impl UnicornMips {
                             )),
                             None,
                         ],
+                        Some(&mut last_wndproc_returns),
                     );
                 }
             }
@@ -7801,6 +7817,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             pending_dll_lifecycle_returns: Vec::new(),
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
+            orphaned_wndproc_returns: Vec::new(),
             blocked_guest_thread: None,
             #[cfg(feature = "unicorn")]
             displaced_blocked_get_messages: Vec::new(),
@@ -21787,6 +21804,9 @@ mod wait_scheduler_tests {
 
         assert!(scheduler.clear_orphaned_direct_send_callouts(&kernel));
         assert!(scheduler.pending_wndproc_returns.is_empty());
+        assert_eq!(scheduler.orphaned_wndproc_returns.len(), 1);
+        assert_eq!(scheduler.orphaned_wndproc_returns[0].return_pc, return_pc);
+        scheduler.orphaned_wndproc_returns.clear();
 
         scheduler
             .pending_wndproc_returns
@@ -21892,6 +21912,7 @@ mod wait_scheduler_tests {
         });
         assert!(scheduler.clear_orphaned_direct_send_callouts(&kernel));
         assert!(scheduler.pending_wndproc_returns.is_empty());
+        scheduler.orphaned_wndproc_returns.clear();
 
         scheduler
             .pending_wndproc_returns
@@ -22111,6 +22132,7 @@ mod wait_scheduler_tests {
         });
         assert!(scheduler.clear_orphaned_direct_send_callouts(&kernel));
         assert!(scheduler.pending_wndproc_returns.is_empty());
+        scheduler.orphaned_wndproc_returns.clear();
         scheduler.pending_wndproc_returns.clear();
 
         kernel.gwe.begin_send_message(1);
@@ -22148,6 +22170,7 @@ mod wait_scheduler_tests {
         });
         assert!(scheduler.clear_orphaned_direct_send_callouts(&kernel));
         assert!(scheduler.pending_wndproc_returns.is_empty());
+        scheduler.orphaned_wndproc_returns.clear();
         assert!(scheduler.clear_orphaned_send_depths(&mut kernel));
         assert!(!kernel.gwe.in_send_message(1));
     }
@@ -26942,6 +26965,36 @@ fn record_wndproc_return(
         returns.remove(0);
     }
     returns.push(record);
+}
+
+#[cfg(feature = "unicorn")]
+fn archive_removed_wndproc_callouts(
+    last_wndproc_returns: &mut Vec<UnicornWndProcReturn>,
+    callouts: &[PendingWndProcReturn],
+) {
+    for callout in callouts {
+        if callout.return_pc == 0 || callout.return_pc == WNDPROC_RETURN_STUB_ADDR {
+            continue;
+        }
+        let caller_fp = callout.caller_regs.as_ref().map(|regs| regs.regs[30]);
+        if last_wndproc_returns.len() == UNICORN_TRACE_LIMIT {
+            last_wndproc_returns.remove(0);
+        }
+        last_wndproc_returns.push(UnicornWndProcReturn {
+            source: callout.source,
+            hwnd: callout.hwnd,
+            msg: callout.msg,
+            wparam: callout.wparam,
+            lparam: callout.lparam,
+            wndproc: callout.wndproc,
+            return_pc: callout.return_pc,
+            return_pc_trampoline_origin: None,
+            result: callout.api_result.unwrap_or(0),
+            live_fp: None,
+            caller_fp,
+            class_name: callout.class_name.clone(),
+        });
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -36925,6 +36978,66 @@ mod unicorn_tests {
             caller_fp: Some(frame),
             class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
         }]));
+        uc.reg_write(RegisterMIPS::FP, u64::from(frame)).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 1).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+
+        assert!(super::recover_orphaned_wndproc_return_stub(
+            &mut uc, &returns
+        ));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+    }
+
+    #[test]
+    fn archived_direct_send_callout_recovers_orphaned_wndproc_return_stub() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let kernel = CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let frame = 0x3004_a988;
+        let return_pc = 0x0002_bcd8;
+        let mut caller_regs = super::MipsGuestContext::zero();
+        caller_regs.regs[30] = frame;
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "SendMessageW",
+                hwnd: 0x0002_0004,
+                msg: 0x5237,
+                wparam: 0,
+                lparam: 0,
+                wndproc: 0x6004_f0f4,
+                return_pc,
+                return_sp: 0x7ffd_f578,
+                caller_regs: Some(caller_regs),
+                class_name: Some("afx:10000:b:0:40000006:0".to_owned()),
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: Some(1),
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: None,
+                clear_focus_after_return: None,
+            });
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: 0x004b_b428,
+            regs: super::MipsGuestContext::zero(),
+        });
+
+        assert!(scheduler.clear_orphaned_direct_send_callouts(&kernel));
+        assert!(scheduler.pending_wndproc_returns.is_empty());
+        let returns = Rc::new(RefCell::new(std::mem::take(
+            &mut scheduler.orphaned_wndproc_returns,
+        )));
         uc.reg_write(RegisterMIPS::FP, u64::from(frame)).unwrap();
         uc.reg_write(RegisterMIPS::V0, 1).unwrap();
         uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
