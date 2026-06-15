@@ -4017,3 +4017,30 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   coredll_raw_gwe`, and full `cargo test -j 1 --features
   unicorn,trace,win32-desktop` passed. The full suite still ignores the eVC4
   MIPSII fixture because that toolchain is not configured.
+- `src/ce/resource.rs`, `src/ce/coredll.rs`, `src/ce/kernel.rs`, and
+  `tests/coredll_raw_gwe.rs`: raw `SetViewportOrgEx` now stores real viewport
+  origin state, returns the previous origin through `lpPoint`, and applies the
+  selected-DIB viewport offset to `LineTo`, `Polyline`, and `Polygon` pixels
+  like CE `draw.cpp::ViewPort`. Process exit cleanup also snapshots backing
+  store restoration targets before window destruction so already-destroyed
+  windows can still restore their captured framebuffer pixels.
+- `src/emulator/unicorn.rs`: orphaned direct-send WNDPROC recovery now has a
+  wider nested-stack grace window and a regression for a deeper live WNDPROC
+  frame, so legitimate nested callouts are not pruned as stale recovery records.
+- Focused validation after the viewport/backing-store/WNDPROC slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_polyline_and_polygon_apply_viewport_origin_on_selected_dib`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_gdi_device_attribute_modes_follow_ce_sentinels`,
+  and `cargo test -j 1 --features unicorn,trace,win32-desktop
+  process_exit_restores_backing_store_for_already_destroyed_window` passed.
+- Broader validation after the viewport/backing-store/WNDPROC slice:
+  `cargo fmt --check`, `cargo check --features unicorn,trace,win32-desktop`,
+  full `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop`, and `git diff --check` passed. Cargo still
+  emits the existing unused-code warnings; one run also reported a transient
+  `target\debug\incremental` finalize access-denied note, but all validation
+  commands returned success. The full suite still ignores the eVC4 MIPSII
+  fixture because that toolchain is not configured.

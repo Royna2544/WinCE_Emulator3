@@ -2531,9 +2531,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     invalid HDCs while successful layout state remains a non-sentinel value.
   - The same `PassNull2da` switch expects exported `SetViewportOrgEx` to return
     `FALSE` and set `ERROR_INVALID_HANDLE` for null and bad HDCs. The local CE
-    export map currently exposes only `SetViewportOrgEx` from this origin/ext
-    API family, so the raw implementation now validates the HDC before applying
-    its existing no-op `(0,0)` viewport-origin behavior.
+    `draw.cpp::ViewPort` path also verifies that `SetViewportOrgEx` returns
+    the previous viewport origin through `lpPoint`, that resetting a nonzero
+    origin reports that old point, and that `LineTo`, `Polyline`, and `Polygon`
+    draws move by the viewport origin. Rust now stores the viewport origin in
+    DC state, reports the previous origin, and applies the origin to
+    selected-DIB `LineTo`/`Polyline`/`Polygon` pixels. The local CE export map
+    still exposes only `SetViewportOrgEx` from this origin/ext API family, so
+    `GetViewportOrgEx`, `OffsetViewportOrgEx`, `SetWindowOrgEx`,
+    `GetWindowOrgEx`, and extent-query parity remain open.
   - `brush.cpp` `passBrushNULL(ESetBrushOrgEx)` expects `SetBrushOrgEx` to
     return `FALSE` with `ERROR_INVALID_HANDLE` for null and bad HDCs, and
     `SimpleSetBrushOrgExTest` expects valid calls to return the previous brush
@@ -3255,7 +3261,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `draw.cpp::SimplePolyTest` accepts `Polyline` count zero as a successful
     no-op. `Polygon` counts `-1`, `0`, and `1` fail while leaving last error at
     success. Rust now mirrors those raw validation and last-error edges before
-    reading guest point arrays or drawing.
+    reading guest point arrays or drawing. `draw.cpp::ViewPort(EPolygon/
+    EPolyline/ELineTo)` draws the same primitives before and after a
+    viewport-origin change and compares screen halves; Rust now applies
+    `SetViewportOrgEx` origin translation to selected-DIB `Polygon`, `Polyline`,
+    and `LineTo` pixels while keeping the logical current position unchanged.
 
 - CE GDI shape-HDC validation authority:
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
