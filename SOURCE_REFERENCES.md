@@ -3052,9 +3052,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `DEVDETAIL` attach/detach records for matching advertised interfaces. The
     message-queue path now also follows CE `msgqueue.c` for read/write endpoint
     direction, explicit queue-capacity limits, zero/oversized write failures,
-    full-queue timeout status, and truncated-read success with
-    `ERROR_INSUFFICIENT_BUFFER`; full CE `fsdev_t` per-device scoping plus
-    alert-message, broken-end, and blocking-wait queue semantics remain queued.
+    full-queue timeout status, truncated-read success with
+    `ERROR_INSUFFICIENT_BUFFER`, and `MSGQUEUE_ALLOW_BROKEN` vs default
+    `ERROR_PIPE_NOT_CONNECTED` counterpart-closure behavior; full CE `fsdev_t`
+    per-device scoping plus alert-message and blocking-wait queue semantics
+    remain queued.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted

@@ -31,11 +31,13 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   state, reject wrong read/write endpoints like CE, preserve explicit
   `dwMaxMessages` limits, report full queues as `ERROR_TIMEOUT`, reject
   oversized writes with `ERROR_INSUFFICIENT_BUFFER`, consume truncated reads
-  with CE's success-plus-error surface, wake waits when messages arrive, and
-  device advertisement changes enqueue CE-shaped `DEVDETAIL` attach/detach
-  records that the storage-manager-style `ReadMsgQueue` path can consume. Full
-  CE `fsdev_t` per-device interface scoping plus message-queue alert/broken-end
-  and blocking-wait edge cases remain queued.
+  with CE's success-plus-error surface, report non-`MSGQUEUE_ALLOW_BROKEN`
+  counterpart closure as `ERROR_PIPE_NOT_CONNECTED`, preserve allow-broken
+  drain/write behavior, wake waits when messages arrive, and device
+  advertisement changes enqueue CE-shaped `DEVDETAIL` attach/detach records
+  that the storage-manager-style `ReadMsgQueue` path can consume. Full CE
+  `fsdev_t` per-device interface scoping plus message-queue alert-message and
+  blocking-wait edge cases remain queued.
 - `src/config.rs`, `src/ce/file.rs`, `src/ce/kernel.rs`, `mounts.toml`, and
   `tests/basic_subsystems.rs`: mounted storage config now carries optional
   CE-style block `device_name` plus `interface_classes` GUID strings. Kernel
