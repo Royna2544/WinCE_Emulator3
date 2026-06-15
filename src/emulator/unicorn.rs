@@ -5911,8 +5911,11 @@ impl UnicornMips {
                     }
                     if callout.finalize_destroy {
                         let destroy_root = callout.destroy_root_hwnd.unwrap_or(callout.hwnd);
-                        let _ = unsafe { &mut *kernel_ptr }
-                            .destroy_window_with_reason(destroy_root, callout.source);
+                        let _ = unsafe { &mut *kernel_ptr }.destroy_window_with_framebuffer(
+                            destroy_root,
+                            callout.source,
+                            Some(unsafe { &mut *framebuffer_ptr }),
+                        );
                     }
                     let api_result = callout.api_result.or_else(|| {
                         callout
@@ -6755,6 +6758,7 @@ impl UnicornMips {
                     try_enter_destroy_window_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
+                        Some(unsafe { &mut *framebuffer_ptr }),
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -30222,6 +30226,7 @@ fn try_enter_def_window_proc_callout<D>(
             hwnd,
             "DefWindowProcW/WM_CLOSE",
             0,
+            None,
             pending_returns,
         );
     }
@@ -30467,6 +30472,7 @@ fn try_enter_enable_window_callout<D>(
 fn try_enter_destroy_window_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    framebuffer: Option<&mut dyn Framebuffer>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -30485,6 +30491,7 @@ fn try_enter_destroy_window_callout<D>(
         hwnd,
         "DestroyWindow/WM_DESTROY",
         1,
+        framebuffer,
         pending_returns,
     )
 }
@@ -30496,6 +30503,7 @@ fn enter_destroy_window_wm_destroy_callout<D>(
     hwnd: u32,
     source: &'static str,
     api_result: u32,
+    framebuffer: Option<&mut dyn Framebuffer>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -30529,7 +30537,7 @@ fn enter_destroy_window_wm_destroy_callout<D>(
         return false;
     };
     if callouts.is_empty() {
-        let destroyed = kernel.destroy_window_with_reason(hwnd, source);
+        let destroyed = kernel.destroy_window_with_framebuffer(hwnd, source, framebuffer);
         let result = if api_result == 0 {
             0
         } else {
@@ -33719,6 +33727,7 @@ fn try_enter_call_window_proc_callout<D>(
                 hwnd,
                 "CallWindowProcW(DEFAULT)/WM_CLOSE",
                 0,
+                None,
                 pending_returns,
             );
         }

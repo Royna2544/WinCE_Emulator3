@@ -5511,6 +5511,24 @@ impl CeKernel {
         self.destroy_window_with_reason(hwnd, "DestroyWindow")
     }
 
+    pub fn destroy_window_with_framebuffer(
+        &mut self,
+        hwnd: u32,
+        reason: &'static str,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        let targets = self.window_destroy_targets(hwnd);
+        let destroyed = self.destroy_window_with_reason(hwnd, reason);
+        if destroyed {
+            if let Some(framebuffer) = framebuffer {
+                let _ = self.restore_window_backing_stores(&targets, framebuffer);
+            } else {
+                self.discard_window_backing_stores(&targets);
+            }
+        }
+        destroyed
+    }
+
     pub fn destroy_window_with_reason(&mut self, hwnd: u32, reason: &'static str) -> bool {
         let Some(targets) = self.gwe.window_and_descendants(hwnd) else {
             self.record_window_lifecycle_trace(
@@ -7278,12 +7296,50 @@ mod tests {
             }
         }
 
-        let targets = kernel.window_destroy_targets(hwnd);
-        assert!(kernel.destroy_window(hwnd));
-        assert_eq!(
-            kernel.restore_window_backing_stores(&targets, &mut framebuffer),
-            1
+        assert!(kernel.destroy_window_with_framebuffer(
+            hwnd,
+            "DestroyWindow",
+            Some(&mut framebuffer)
+        ));
+        assert_eq!(framebuffer.pixels(), original.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn destroy_window_with_framebuffer_restores_captured_backing_store() -> Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        for (index, byte) in framebuffer.pixels_mut().iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let original = framebuffer.snapshot().pixels;
+        let hwnd = kernel.create_window_ex_w_with_rect(
+            1,
+            "DIALOG",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(1, 1, 4, 4),
         );
+
+        assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        let info = framebuffer.info();
+        let bytes_per_pixel = info.format.bytes_per_pixel();
+        for y in 1usize..5 {
+            for x in 1usize..5 {
+                let offset = y * info.stride + x * bytes_per_pixel;
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel].fill(0xff);
+            }
+        }
+
+        assert!(kernel.destroy_window_with_framebuffer(hwnd, "test", Some(&mut framebuffer)));
         assert_eq!(framebuffer.pixels(), original.as_slice());
         Ok(())
     }

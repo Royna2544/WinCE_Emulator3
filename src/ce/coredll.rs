@@ -45875,14 +45875,8 @@ fn destroy_window_raw<M: CoredllGuestMemory>(
         let wparam = (child_id << 16) | crate::ce::gwe::WM_DESTROY;
         kernel.post_message_w(parent_hwnd, crate::ce::gwe::WM_PARENTNOTIFY, wparam, hwnd);
     }
-    let targets = kernel.window_destroy_targets(hwnd);
-    let destroyed = kernel.destroy_window(hwnd);
+    let destroyed = kernel.destroy_window_with_framebuffer(hwnd, "DestroyWindow", framebuffer);
     if destroyed {
-        if let Some(framebuffer) = framebuffer {
-            let _ = kernel.restore_window_backing_stores(&targets, framebuffer);
-        } else {
-            kernel.discard_window_backing_stores(&targets);
-        }
         write_completed_send_message_timeout_results(kernel, memory, thread_id);
     }
     destroyed
