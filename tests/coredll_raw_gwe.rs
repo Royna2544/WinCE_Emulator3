@@ -5759,6 +5759,119 @@ fn coredll_raw_bitblt_decodes_16bpp_bitfields_dib() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_create_dibsection_accepts_ce_16bpp_alpha_bitfields() -> Result<()> {
+    const BI_ALPHABITFIELDS: u32 = 6;
+    const DIB_RGB_COLORS: u32 = 0;
+    const SRCCOPY: u32 = 0x00cc_0020;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+
+    let src_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+
+    let info = 0x1_2000;
+    let bits_out = 0x1_2100;
+    memory.map_bytes(info, 56);
+    memory.map_words(bits_out, 1);
+    let mut header = [0u8; 56];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&2i32.to_le_bytes());
+    header[8..12].copy_from_slice(&(-1i32).to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&16u16.to_le_bytes());
+    header[16..20].copy_from_slice(&BI_ALPHABITFIELDS.to_le_bytes());
+    header[32..36].copy_from_slice(&4u32.to_le_bytes());
+    header[40..44].copy_from_slice(&0x0000_0f00u32.to_le_bytes());
+    header[44..48].copy_from_slice(&0x0000_00f0u32.to_le_bytes());
+    header[48..52].copy_from_slice(&0x0000_000fu32.to_le_bytes());
+    header[52..56].copy_from_slice(&0x0000_f000u32.to_le_bytes());
+    memory.write_bytes(info, &header);
+    memory.write_word(info, 40);
+    memory.write_word(info + 16, BI_ALPHABITFIELDS);
+    memory.write_word(info + 32, 4);
+
+    let src_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_DIBSECTION,
+        [src_dc, info, DIB_RGB_COLORS, bits_out, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateDIBSection(BI_ALPHABITFIELDS 16bpp) returned unexpected: {other:?}"),
+    };
+    assert_ne!(
+        src_bitmap,
+        0,
+        "last_error={}",
+        kernel.threads.get_last_error(thread_id)
+    );
+    let object = kernel.resources.bitmap(src_bitmap).expect("bitmap object");
+    assert_eq!(object.bits_pixel, 16);
+    assert_eq!(
+        object.rgb_masks,
+        Some([0x0000_0f00, 0x0000_00f0, 0x0000_000f])
+    );
+
+    let src_bits = memory.read_u32(bits_out)?;
+    memory.write_bytes(src_bits, &[0x23, 0xf1, 0x00, 0x0f]);
+    assert_eq!(memory.read_bytes(src_bits, 4), vec![0x23, 0xf1, 0x00, 0x0f]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [src_dc, src_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BIT_BLT,
+            [dst_dc, 0, 0, 2, 1, src_dc, 0, 0, SRCCOPY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0x1106);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0xf800);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_create_dibsection_accepts_ce_24bpp_bitfields_as_bgr() -> Result<()> {
     const BI_BITFIELDS: u32 = 3;
 

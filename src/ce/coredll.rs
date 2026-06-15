@@ -30475,7 +30475,7 @@ fn dib_rgb_masks_from_bytes(
                 read_le_u32(mask_bytes, 8)?,
             ]))
         }
-        BI_ALPHABITFIELDS if bits_pixel == 32 => {
+        BI_ALPHABITFIELDS if matches!(bits_pixel, 16 | 32) => {
             let mask_offset = if header_size >= 56 {
                 40usize
             } else {
@@ -30584,7 +30584,7 @@ fn dib_rgb_masks<M: CoredllGuestMemory>(
                 read_le_u32(&mask_bytes, 8)?,
             ]))
         }
-        BI_ALPHABITFIELDS if bits_pixel == 32 => {
+        BI_ALPHABITFIELDS if matches!(bits_pixel, 16 | 32) => {
             let mask_bytes = if header_size >= 56 {
                 read_guest_bytes(kernel, memory, thread_id, info_ptr.wrapping_add(40), 16)?
             } else {

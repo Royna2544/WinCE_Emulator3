@@ -16,6 +16,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 ## Recent Source-Visible Slices
 
 - `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `CreateDIBSection` now accepts the CE alpha stress module's 16 bpp
+  `BI_ALPHABITFIELDS` 4-4-4-4 layout, skips the fourth alpha mask before pixel
+  storage, preserves the RGB masks, and renders selected 16 bpp
+  alpha-bitfield sources through ordinary `BitBlt`.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
   `CreateDIBSection` now accepts the CE alpha stress module's 32 bpp
   `BI_ALPHABITFIELDS` layout with four masks, skips the alpha mask before pixel
   storage, and preserves high-byte per-pixel alpha for selected-DIB
