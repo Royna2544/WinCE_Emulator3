@@ -195,6 +195,7 @@ const ERROR_FILE_EXISTS_LOCAL: u32 = 80;
 const ERROR_MOD_NOT_FOUND_LOCAL: u32 = 126;
 const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
 const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
+const ERROR_PIPE_NOT_CONNECTED: u32 = 233;
 const ERROR_INVALID_FLAGS_LOCAL: u32 = 1004;
 pub(crate) const ERROR_TIMEOUT_LOCAL: u32 = 1460;
 const MAX_PATH_CHARS: usize = 260;
@@ -12351,6 +12352,12 @@ fn read_msg_queue_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
             return false;
         }
+        Ok(MessageQueueReadStatus::Broken) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_PIPE_NOT_CONNECTED);
+            return false;
+        }
         Ok(MessageQueueReadStatus::BufferTooSmall(message)) => {
             let writes_ok = memory.write_bytes(buffer_ptr, &message.bytes).is_ok()
                 && memory
@@ -12433,6 +12440,12 @@ fn write_msg_queue_raw<M: CoredllGuestMemory>(
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+            false
+        }
+        Ok(MessageQueueWriteStatus::Broken) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_PIPE_NOT_CONNECTED);
             false
         }
         Err(Error::InvalidArgument(_)) => {

@@ -139,6 +139,7 @@ pub enum MessageQueueReadStatus {
     Message(MessageQueueRead),
     Empty,
     BufferTooSmall(MessageQueueRead),
+    Broken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +147,7 @@ pub enum MessageQueueWriteStatus {
     Written,
     Full,
     MessageTooLarge,
+    Broken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1192,6 +1194,9 @@ impl CeKernel {
         let Some(queue) = self.message_queues.get_mut(&endpoint.queue_id) else {
             return Err(Error::InvalidHandle(handle));
         };
+        if queue.writers == 0 && queue.flags & Self::MSGQUEUE_ALLOW_BROKEN == 0 {
+            return Ok(MessageQueueReadStatus::Broken);
+        }
         let Some(message) = queue.messages.front() else {
             return Ok(MessageQueueReadStatus::Empty);
         };
@@ -1236,6 +1241,9 @@ impl CeKernel {
         };
         if bytes.len() > queue.max_message_bytes as usize {
             return Ok(MessageQueueWriteStatus::MessageTooLarge);
+        }
+        if queue.readers == 0 && queue.flags & Self::MSGQUEUE_ALLOW_BROKEN == 0 {
+            return Ok(MessageQueueWriteStatus::Broken);
         }
         if queue.messages.len() >= queue.max_messages as usize {
             return Ok(MessageQueueWriteStatus::Full);
