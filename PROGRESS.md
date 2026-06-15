@@ -4244,3 +4244,16 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   passed. Cargo still emits the existing unused-code warnings and recurring
   `target\debug\incremental` finalize access-denied note, but the test command
   returned success.
+- `src/remote_server.rs`: the remote location endpoint now accepts
+  `latitude`/`longitude` aliases in addition to `lat`/`lon`, normalizing the
+  queued control payload back to the canonical `lat`/`lon` fields used by the
+  CE remote sensor path.
+- Validation after the implicit clip-surface and remote location-alias slices:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`,
+  `CARGO_INCREMENTAL=0 cargo check --features unicorn,trace,win32-desktop`,
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features unicorn,trace,win32-desktop
+  --test coredll_raw_gwe`, focused `remote_server_normalizes_location_coordinate_aliases`,
+  and full `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured, and Cargo still emits the existing
+  unused-code warnings.
