@@ -4826,3 +4826,16 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored because that toolchain is not configured, and Cargo
   still emits the existing unused-code warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: fsdmgr import traps now cover
+  CE `FSDMGR_ParseSecurityDescriptor @82` from
+  `fsdmgr.def`/`fsdmgrapi.cpp` with the private `aclpriv.h::SDSize`
+  `SECDESHDR.cbSize` rule. The raw trap writes null/zero for null
+  `SECURITY_ATTRIBUTES`, validates 12-byte `SECURITY_ATTRIBUTES`,
+  `bInheritHandle == FALSE`, and kernel-mode descriptor pointers, returns
+  `ERROR_INVALID_SECURITY_DESCR` for malformed descriptors, and leaves broader
+  file-security ACL storage/enforcement queued.
+- Focused validation after the direct fsdmgr security-descriptor parser slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop
+  fsdmgr_parse_security_descriptor_import_matches_ce_shape --lib --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.

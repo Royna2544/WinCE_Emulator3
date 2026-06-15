@@ -2947,6 +2947,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\filesystem.hpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\aclpriv.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\apis.c`,
   `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\shfileop.cpp`,
@@ -2995,7 +2996,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_GetVolumeHandle @21`, `FSDMGR_GetVolumeName @22`,
     `FSDMGR_RegisterVolume @27`, `FSDMGR_ScanVolume @31`,
     `FSDMGR_GetMountFlags @37`, `FSDMGR_AsyncEnterVolume @80`,
-    `FSDMGR_AsyncExitVolume @81`, and
+    `FSDMGR_AsyncExitVolume @81`, `FSDMGR_ParseSecurityDescriptor @82`, and
     `STOREMGR_FsIoControlW @44`; `fsdmgr.h` declares their public HVOL/PDSK
     and cache signatures. `fsdcache.cpp` loads a configured cache DLL when one
     exists and otherwise falls back to the CE null-cache function table.
@@ -3029,6 +3030,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     pointer to call `Exit`, treats bad lock/pointer state as
     `ERROR_INVALID_PARAMETER`, unlocks the handle, and otherwise returns
     success.
+    `fsdmgrapi.cpp::FSDMGR_ParseSecurityDescriptor` parses the
+    `SECURITY_ATTRIBUTES` supplied to FSD create calls: null input writes a
+    null descriptor and zero size; non-null input must have a 12-byte
+    `SECURITY_ATTRIBUTES`, `bInheritHandle == FALSE`, and a kernel-mode
+    descriptor pointer, otherwise it returns `ERROR_INVALID_SECURITY_DESCR`.
+    `aclpriv.h::SDSize` reports the CE private `SECDESHDR.cbSize` word at
+    offset 2.
     `FSDMGR_CreateFileHandle` and `FSDMGR_CreateSearchHandle` ignore the HVOL
     and originating process handle in this CE 6 source and simply return the
     caller-supplied FSD file/search context pointer reinterpreted as a handle.
@@ -3054,6 +3062,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path,
     `FSDMGR_AsyncEnterVolume`/`FSDMGR_AsyncExitVolume` registered-HVOL
     validation with a synthetic HVOL lock token,
+    `FSDMGR_ParseSecurityDescriptor` output/null/malformed validation with
+    private `SECDESHDR.cbSize` reporting,
     existing mounted HVOL names, AFS hidden/system/permanent mount flags, and a
     lightweight FSD `PDSK` to HVOL association for registered host-backed mount
     names, the CE context-pointer return behavior for FSD file/search handle
@@ -3070,7 +3080,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
     for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
     forwarding, external cache DLL/filter behavior, real CE mounted-volume
-    enter/exit lifetime accounting, real utility DLL
+    enter/exit lifetime accounting, broader file-security ACL storage and
+    enforcement, real utility DLL
     format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume
     behavior, hardware power-state timing, and mounted-FSD `FsIoControl` hook
