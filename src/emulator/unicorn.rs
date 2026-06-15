@@ -1517,8 +1517,7 @@ impl UnicornMips {
             || self.running_guest_thread.is_some()
             || !self.pending_guest_thread_returns.is_empty()
             || !self.pending_wndproc_returns.is_empty()
-            || self.blocked_guest_thread.is_some()
-            || !self.blocked_wait_threads.is_empty()
+            || self.thread_has_blocked_scheduler_context(self.current_thread_id())
             || self.blocked_send_message_timeout.is_some()
             || self.blocked_clipboard_data.is_some()
         {
@@ -26518,6 +26517,71 @@ mod guest_thread_stack_tests {
             scheduler.pending_wndproc_returns[0].source,
             "OrphanedVisibleMessage"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn orphaned_return_stub_active_dispatches_visible_message_with_other_blocked_waits()
+    -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let thread_id = 1;
+        let visible_wndproc = 0x6004_f0f4;
+        scheduler.set_initial_thread_id(thread_id);
+        scheduler.current_thread_id = thread_id;
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[29] = 0x7ffd_f558;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            regs,
+        });
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            ra: GUEST_THREAD_RETURN_STUB_ADDR,
+            ..Default::default()
+        });
+        scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            wait_id: 8,
+            thread_id: 8,
+            thread_handle: 0x1008,
+            wait_handles: Vec::new(),
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0010_8000,
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let visible = kernel.create_window_ex_w(
+            thread_id,
+            "visible",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        kernel
+            .gwe
+            .set_window_long(visible, crate::ce::gwe::GWL_WNDPROC, visible_wndproc);
+        assert!(kernel.post_message_w(visible, crate::ce::gwe::WM_LBUTTONDOWN, 1, 0x0020_0010));
+
+        assert!(scheduler.prepare_active_orphaned_visible_message_callout(&mut kernel));
+
+        let saved = scheduler
+            .saved_context
+            .as_ref()
+            .expect("orphaned visible message callout");
+        assert_eq!(saved.pc, visible_wndproc);
+        assert_eq!(saved.regs.regs[4], visible);
+        assert_eq!(saved.regs.regs[5], crate::ce::gwe::WM_LBUTTONDOWN);
+        assert_eq!(scheduler.blocked_wait_threads.len(), 1);
 
         Ok(())
     }
