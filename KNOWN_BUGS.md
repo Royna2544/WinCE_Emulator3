@@ -79,7 +79,12 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   modal/winsock scheduler waits. The guest now reaches `COM7:` plus
   `MFS1:`/`SMB1:` device initialization, and detached `drive97` proves
   posted-touch dispatch plus non-black splash rendering through the remote
-  server. Normal map UI transition is still not observed.
+  server. A later full trace-mode run on `192.168.0.39:8765` stayed on the real
+  iNavi SE splash while still advancing through `resmapi_800x480.bin`
+  decompression at `iNavi.exe+0x2ff8xx`/`+0x2ff9xx`, with no render/controller
+  milestones yet. Normal map UI transition is still not observed, and the
+  non-trace fast-live host crash remains the practical blocker to reaching the
+  map transition quickly.
 - Hidden Happyway child scheduling remains incomplete. The real modal dialog
   can be dismissed and its framebuffer pixels restore correctly, but
   `happyway_win.exe` may remain parked with stale modal/close state while iNavi
@@ -89,8 +94,10 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   `remote_gps` serial port, live `drive29` confirms queued NMEA drains when
   iNavi opens `COM7:`, and raw `GetCommModemStatus` now reports asserted
   CTS/DSR/RLSD for serial handles. Remaining risk: subsequent GPS posts can
-  queue while the guest is sleeping/polling other workers, so the exact serial
-  read/event cadence and parsed-position consumption still need proof.
+  queue while the guest is sleeping/polling other workers, and the latest
+  trace-mode splash/resource-loading run did not open `COM7:`, `MFS1:`, or
+  `SMB1:` at all, so the exact serial read/event cadence and parsed-position
+  consumption still need proof.
 
 ## Build And Validation Risks
 

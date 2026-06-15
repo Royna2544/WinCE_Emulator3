@@ -2930,6 +2930,18 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
 - `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after the
   state-owned remote listener/startup-probe fix and the direct-send WNDPROC
   regression update. The eVC4 MIPSII fixture remains intentionally ignored.
+- Live trace-mode iNavi drive on `192.168.0.39:8765` after commit `5d020dc`
+  confirmed the current splash stall is still making guest progress: valid
+  remote touch JSON is `{"type":"tap","x":N,"y":N}` and drains into the visible
+  iNavi window, the real `happyway_win.exe` dialog is created by the guest and
+  destroyed through the existing modal path, `iSearch.exe` remains parked in a
+  normal `GetMessage` wait, and iNavi continues reading/decompressing
+  `\SDMMC Disk\INavi\res\resmapi_800x480.bin`. Current PCs around
+  `iNavi.exe+0x2ff8xx`/`+0x2ff9xx` disassemble as the byte-copy/decompression
+  loop reached from `iNavi.exe+0x2ed4cc`, while render/controller milestones
+  remain empty. In this run no `COM7:`, `MFS1:`, or `SMB1:` handles are open;
+  posted GPS NMEA bytes stay queued, so the sensor symptom is lack of guest
+  polling/opening during this startup phase rather than a failed REST enqueue.
 - `src/ce/coredll.rs`: implemented the CE `compr2.c` raw/all-zero packet
   branches for `StringCompress`/`StringDecompress`. The new raw kernel
   regression covers UTF-16-style low-byte raw packet round-trip, all-zero

@@ -58,7 +58,10 @@ Regenerated on 2026-06-11 from current source and test coverage.
   latest post-import-thunk state: traced live-pump runs now pass the early
   `COREDLL.dll@1047` import-thunk wall stop, clear/recover Happyway WNDPROC
   state, and reach `iNavi.exe+0x329da8` with later resource/file activity while
-  modal/winsock waits remain in the scheduler.
+  modal/winsock waits remain in the scheduler. The latest trace-mode run also
+  reaches `iNavi.exe+0x2ff8xx`/`+0x2ff9xx` decompression loops while repeatedly
+  reading `resmapi_800x480.bin`; fix or instrument the non-trace fast-live host
+  crash so the map transition can be tested at realistic speed.
 - Continue the Happyway hidden-child scheduling investigation: modal dismissal
   and framebuffer restoration are fixed, and the active-process self-park
   duplicate is filtered, but `happyway_win.exe` can still remain parked with
@@ -68,7 +71,9 @@ Regenerated on 2026-06-11 from current source and test coverage.
   remote GPS target and opens `MFS1:`/`SMB1:` for motion sensors, but repeated
   location posts can still queue until the guest's next serial read/event path.
   Capture the concrete `ReadFile`/`WaitCommEvent` cadence and confirm whether
-  map/UI code consumes parsed GPS position after startup.
+  map/UI code consumes parsed GPS position after startup. In the latest
+  trace-mode splash/resource-loading run no serial or sensor handles opened at
+  all, so queued NMEA alone is not evidence that REST injection failed.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or a
   real caller trace before adding accelerometer commands; do not use the
   unverified `0xb100...` family as SMB380 evidence.
