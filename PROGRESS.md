@@ -4188,3 +4188,8 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   passed. Cargo still emits the existing unused-code warnings and recurring
   `target\debug\incremental` finalize access-denied note, but the test command
   returned success.
+- Follow-up validation while recovering the UI-drive run: `cargo fmt`, `cargo
+  fmt --check`, `git diff --check`, the focused selected-DIB
+  `Rectangle`/`RoundRect` ROP2 test, two focused orphaned WNDPROC recovery
+  tests, and `cargo build --release --features unicorn` passed. Cargo still
+  emits the existing unused-code warnings.
