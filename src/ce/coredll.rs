@@ -4250,6 +4250,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_ADVERTISE_INTERFACE => Some(CoredllValue::Bool(advertise_interface_raw(
             kernel, memory, thread_id, args[0], args[1], args[2],
         ))),
+        ORD_ENUM_DEVICE_INTERFACES => Some(CoredllValue::Bool(enum_device_interfaces_raw(
+            kernel, memory, thread_id, args[0], args[1], args[2], args[3], args[4],
+        ))),
         // GetCallStackSnapshot
         ORD_GET_CALL_STACK_SNAPSHOT => {
             kernel
@@ -12110,6 +12113,86 @@ fn advertise_interface_impl<M: CoredllGuestMemory>(
     kernel.advertise_device_interface(class_guid, name, add != 0);
     kernel.threads.set_last_error(thread_id, 0);
     1
+}
+
+fn enum_device_interfaces_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    index: u32,
+    class_ptr: u32,
+    name_buf_ptr: u32,
+    name_buf_size_ptr: u32,
+) -> bool {
+    if class_ptr == 0 || (name_buf_ptr != 0 && name_buf_size_ptr == 0) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if handle != 0 && kernel.handles.get(handle).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let Some(advertisement) = kernel.enum_device_interface_advertisement(index) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_ITEMS);
+        return false;
+    };
+    if memory
+        .write_bytes(class_ptr, &advertisement.class_guid)
+        .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if name_buf_size_ptr != 0 {
+        let Ok(capacity_bytes) = memory.read_u32(name_buf_size_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        let name_units: Vec<u16> = advertisement
+            .name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let needed_bytes = (name_units.len() * 2) as u32;
+        if memory.write_u32(name_buf_size_ptr, needed_bytes).is_err() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        if capacity_bytes < needed_bytes {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+            return false;
+        }
+        if name_buf_ptr != 0 {
+            for (offset, unit) in name_units.iter().copied().enumerate() {
+                if memory
+                    .write_u16(name_buf_ptr.wrapping_add((offset as u32) * 2), unit)
+                    .is_err()
+                {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    return false;
+                }
+            }
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn fsdmgr_volume_util_status_raw(kernel: &mut CeKernel, thread_id: u32, disk_ptr: u32) -> u32 {

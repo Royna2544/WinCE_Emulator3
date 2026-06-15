@@ -912,6 +912,16 @@ impl CeKernel {
         &self.device_interface_advertisements
     }
 
+    pub fn enum_device_interface_advertisement(
+        &self,
+        index: u32,
+    ) -> Option<DeviceInterfaceAdvertisement> {
+        self.device_interface_advertisements
+            .iter()
+            .nth(index as usize)
+            .cloned()
+    }
+
     fn publish_configured_mount_device_interfaces(&mut self, add: bool) {
         let specs = self.files.device_interface_advertisement_specs();
         self.publish_mount_device_interface_specs(specs, add);

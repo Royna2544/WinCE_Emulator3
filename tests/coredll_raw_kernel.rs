@@ -12,31 +12,32 @@ use wince_emulation_v3::{
             ORD_CREATE_THREAD, ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DESTROY_ICON,
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
             ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
-            ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME,
-            ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
-            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
-            ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_STATE,
-            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
-            ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_PRIORITY_CLIPBOARD_FORMAT,
-            ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROCESS_ID,
-            ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION,
-            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
-            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
-            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD,
-            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
-            ORD_IMAGE_LIST_COPY_DITHER_IMAGE, ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY,
-            ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE,
-            ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX,
-            ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG,
-            ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
-            ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
-            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
-            ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON,
-            ORD_IMAGE_LIST_SET_BK_COLOR, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
-            ORD_IMAGE_LIST_SET_ICON_SIZE, ORD_IMAGE_LIST_SET_IMAGE_COUNT,
-            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_ENUM_DEVICE_INTERFACES, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX,
+            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
+            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
+            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
+            ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
+            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
+            ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
+            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
+            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
+            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
+            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
+            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
+            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE,
+            ORD_IMAGE_LIST_GET_IMAGE_COUNT, ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE, ORD_IMAGE_LIST_REMOVE,
+            ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_ICON_SIZE,
+            ORD_IMAGE_LIST_SET_IMAGE_COUNT, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
             ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_IMAGE_W,
             ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
@@ -74,7 +75,7 @@ use wince_emulation_v3::{
         },
         memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
-        registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE, RegistryValue},
+        registry::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, RegistryValue},
         resource::ResourceId,
         scheduler::SchedulerBlockedWaitKind,
         shell::{
@@ -97,6 +98,143 @@ use wince_emulation_v3::{
 
 mod support;
 use support::{TestGuestMemory, unique_test_root};
+
+#[test]
+fn coredll_raw_enum_device_interfaces_exposes_advertised_interfaces() -> Result<()> {
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    const BLOCK_GUID: [u8; 16] = [
+        0xda, 0xed, 0xe7, 0xa4, 0x75, 0xe5, 0x52, 0x42, 0x9d, 0x6b, 0x41, 0x95, 0xd4, 0x8b, 0xb8,
+        0x65,
+    ];
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    kernel.advertise_device_interface(BLOCK_GUID, r"\StoreMgr\DSK5:".to_owned(), true);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let guid_ptr = 0x2100;
+    let name_ptr = 0x2200;
+    let size_ptr = 0x2300;
+    memory.map_bytes(guid_ptr, 16);
+    memory.map_halfwords(name_ptr, 64);
+    memory.map_words(size_ptr, 1);
+
+    memory.write_word(size_ptr, 4);
+    let first_dispatch = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_ENUM_DEVICE_INTERFACES,
+        [0, 0, guid_ptr, name_ptr, size_ptr],
+    );
+    assert!(
+        matches!(
+            first_dispatch,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ),
+        "{first_dispatch:?}"
+    );
+    assert_eq!(memory.read_bytes(guid_ptr, 16), BLOCK_GUID);
+    assert_eq!(memory.read_u32(size_ptr)?, 32);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+
+    memory.write_word(size_ptr, 32);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_DEVICE_INTERFACES,
+            [0, 0, guid_ptr, name_ptr, size_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(name_ptr, 64), r"\StoreMgr\DSK5:");
+    assert_eq!(memory.read_u32(size_ptr)?, 32);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_bytes(guid_ptr, &[0; 16]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_DEVICE_INTERFACES,
+            [0, 0, guid_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(guid_ptr, 16), BLOCK_GUID);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_DEVICE_INTERFACES,
+            [0, 1, guid_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_ITEMS
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_DEVICE_INTERFACES,
+            [0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_DEVICE_INTERFACES,
+            [0xdead_beef, 0, guid_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    Ok(())
+}
 
 #[test]
 fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Result<()> {

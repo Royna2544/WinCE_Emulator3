@@ -3036,8 +3036,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     registries. Rust mount configuration now carries optional `device_name` and
     `interface_classes` metadata, parses CE text GUIDs into in-memory GUID
     layout, publishes configured `\StoreMgr\<device>` advertisements at boot,
-    and removes them on unmount; guest-facing `EnumDeviceInterfaces` remains
-    queued.
+    and removes them on unmount. `devapi.c::DM_EnumDeviceInterfaces` enumerates
+    a device's advertised interface list by index, writes the class GUID, writes
+    the required name byte count, returns `ERROR_INSUFFICIENT_BUFFER` for small
+    buffers, and returns `ERROR_NO_MORE_ITEMS` at list end. Rust now exposes
+    coredll `EnumDeviceInterfaces @1874` over the tracked advertisement table
+    with that GUID/name/size/error surface; full CE `fsdev_t` per-device
+    scoping and device-notification delivery remain queued.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted

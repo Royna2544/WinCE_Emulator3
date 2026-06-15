@@ -15,6 +15,16 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `src/ce/coredll_ordinals.rs`,
+  `src/ce/kernel.rs`, and `tests/coredll_raw_kernel.rs`: coredll now exports
+  CE `EnumDeviceInterfaces @1874` and enumerates the kernel's tracked
+  advertised interface table. The raw path writes the advertised GUID, reports
+  required UTF-16 byte counts for names, returns `ERROR_INSUFFICIENT_BUFFER`
+  for undersized buffers, supports class-only enumeration, reports
+  `ERROR_NO_MORE_ITEMS` at the end, and rejects invalid class pointers,
+  name-buffer/size-pointer combinations, and unknown nonzero handles. Full
+  CE `fsdev_t` per-device interface scoping and notification delivery remain
+  queued.
 - `src/config.rs`, `src/ce/file.rs`, `src/ce/kernel.rs`, `mounts.toml`, and
   `tests/basic_subsystems.rs`: mounted storage config now carries optional
   CE-style block `device_name` plus `interface_classes` GUID strings. Kernel

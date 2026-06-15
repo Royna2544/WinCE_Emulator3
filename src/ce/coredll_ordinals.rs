@@ -6,7 +6,7 @@ pub struct CoredllOrdinalDef {
     pub ordinal: u32,
 }
 
-pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1529] = &[
+pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1530] = &[
     CoredllOrdinalDef {
         name: "??2@YAPAXI@Z",
         ordinal: 1095,
@@ -1242,6 +1242,10 @@ pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1529] = &[
     CoredllOrdinalDef {
         name: "EnumDevices",
         ordinal: 124,
+    },
+    CoredllOrdinalDef {
+        name: "EnumDeviceInterfaces",
+        ordinal: 1874,
     },
     CoredllOrdinalDef {
         name: "EnumDisplayDevices",
