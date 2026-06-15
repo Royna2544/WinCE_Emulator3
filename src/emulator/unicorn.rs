@@ -7594,6 +7594,7 @@ impl UnicornMips {
         if snapshot.host_wall_clock_stop.is_some() {
             self.last_wall_clock_debug = Some(snapshot.clone());
         }
+        self.orphaned_wndproc_returns = last_wndproc_returns.borrow().clone();
         self.saved_context = Some(snapshot_context);
         if let Err(err) = sync_mapped_blobs_from_unicorn(&uc, &mut self.mapped_blobs) {
             self.last_debug = Some(snapshot);
