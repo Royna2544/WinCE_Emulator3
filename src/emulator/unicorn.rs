@@ -5759,7 +5759,11 @@ impl UnicornMips {
                     let Some(callout) =
                         pop_pending_wndproc_return_for_call_sp(&pending_wndproc_returns_hook, call_sp)
                     else {
-                        if recover_orphaned_wndproc_return_stub(uc, &last_wndproc_returns_hook) {
+                        if recover_orphaned_wndproc_return_stub(
+                            uc,
+                            &last_wndproc_returns_hook,
+                            unsafe { &*trampoline_jumps_ptr },
+                        ) {
                             return;
                         }
                         let last_return = last_wndproc_returns_hook.borrow().last().cloned();
@@ -6879,6 +6883,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        unsafe { &*trampoline_jumps_ptr },
                         &pending_wndproc_returns_hook,
                     )
                 }) {
@@ -33896,6 +33901,7 @@ fn orphaned_call_window_proc_return_can_recover_without_frame<D>(
 fn recover_orphaned_wndproc_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     last_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<UnicornWndProcReturn>>>,
+    trampoline_jumps: &[MipsTrampolineJump],
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -33937,11 +33943,12 @@ fn recover_orphaned_wndproc_return_stub<D>(
             }
         };
     drop(returns);
+    let return_pc = import_callout_return_pc(record.return_pc, trampoline_jumps);
     let result = read_mips_reg(uc, RegisterMIPS::V0);
     let writes = [
         uc.reg_write(RegisterMIPS::V0, u64::from(result)),
-        uc.reg_write(RegisterMIPS::PC, u64::from(record.return_pc)),
-        uc.reg_write(RegisterMIPS::RA, u64::from(record.return_pc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
     ];
     if writes.into_iter().any(|write| write.is_err()) {
         return false;
@@ -33951,7 +33958,8 @@ fn recover_orphaned_wndproc_return_stub<D>(
         source = record.source,
         hwnd = format_args!("0x{:08x}", record.hwnd),
         msg = format_args!("0x{:08x}", record.msg),
-        return_pc = format_args!("0x{:08x}", record.return_pc),
+        raw_return_pc = format_args!("0x{:08x}", record.return_pc),
+        return_pc = format_args!("0x{return_pc:08x}"),
         current_fp = format_args!("0x{current_fp:08x}"),
         result = format_args!("0x{result:08x}"),
         live_fp = ?record.live_fp.map(|fp| format!("0x{fp:08x}")),
@@ -34046,6 +34054,7 @@ fn try_enter_call_window_proc_callout<D>(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    trampoline_jumps: &[MipsTrampolineJump],
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -34080,8 +34089,9 @@ fn try_enter_call_window_proc_callout<D>(
         let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
         return true;
     }
-    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
-    if return_pc == WNDPROC_RETURN_STUB_ADDR {
+    let raw_return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let return_pc = import_callout_return_pc(raw_return_pc, trampoline_jumps);
+    if raw_return_pc == WNDPROC_RETURN_STUB_ADDR {
         let return_sp = wndproc_return_sp(uc);
         let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
         let has_enclosing_wndproc_frame = pending_returns
@@ -34110,6 +34120,7 @@ fn try_enter_call_window_proc_callout<D>(
         wparam = format_args!("0x{wparam:08x}"),
         lparam = format_args!("0x{lparam:08x}"),
         wndproc = format_args!("0x{wndproc:08x}"),
+        raw_ra = format_args!("0x{raw_return_pc:08x}"),
         ra = format_args!("0x{return_pc:08x}"),
         "CallWindowProcW guest wndproc callout"
     );
@@ -37210,6 +37221,7 @@ mod unicorn_tests {
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_CALL_WINDOW_PROC_W),
             &[0x6004_f2b8, 0x0002_0004, 0x534c, 0, 0],
+            &[],
             &pending,
         ));
         assert!(pending.borrow().is_empty());
@@ -37242,7 +37254,9 @@ mod unicorn_tests {
             .unwrap();
 
         assert!(super::recover_orphaned_wndproc_return_stub(
-            &mut uc, &returns
+            &mut uc,
+            &returns,
+            &[]
         ));
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
@@ -37278,7 +37292,9 @@ mod unicorn_tests {
             .unwrap();
 
         assert!(super::recover_orphaned_wndproc_return_stub(
-            &mut uc, &returns
+            &mut uc,
+            &returns,
+            &[]
         ));
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
@@ -37288,7 +37304,13 @@ mod unicorn_tests {
     #[test]
     fn orphaned_call_window_proc_paint_return_stub_recovers_without_caller_frame() {
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let return_pc = 0x7002_940c;
+        let return_pc = 0x6002_5cc4;
+        let raw_return_pc = 0x7002_940c;
+        let trampoline_jumps = [super::MipsTrampolineJump {
+            origin: return_pc,
+            stub: 0x7002_9400,
+            byte_len: 0x20,
+        }];
         let returns = Rc::new(RefCell::new(vec![super::UnicornWndProcReturn {
             source: "CallWindowProcW",
             hwnd: 0x0002_0000,
@@ -37296,7 +37318,7 @@ mod unicorn_tests {
             wparam: 0,
             lparam: 0,
             wndproc: 0x6004_f2b8,
-            return_pc,
+            return_pc: raw_return_pc,
             return_pc_trampoline_origin: None,
             result: 0,
             live_fp: Some(0x3000_3800),
@@ -37311,7 +37333,9 @@ mod unicorn_tests {
             .unwrap();
 
         assert!(super::recover_orphaned_wndproc_return_stub(
-            &mut uc, &returns
+            &mut uc,
+            &returns,
+            &trampoline_jumps
         ));
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
@@ -37371,7 +37395,9 @@ mod unicorn_tests {
             .unwrap();
 
         assert!(super::recover_orphaned_wndproc_return_stub(
-            &mut uc, &returns
+            &mut uc,
+            &returns,
+            &[]
         ));
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
@@ -37400,7 +37426,9 @@ mod unicorn_tests {
             .unwrap();
 
         assert!(!super::recover_orphaned_wndproc_return_stub(
-            &mut uc, &returns
+            &mut uc,
+            &returns,
+            &[]
         ));
         assert_eq!(
             uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
@@ -37430,7 +37458,9 @@ mod unicorn_tests {
             .unwrap();
 
         assert!(!super::recover_orphaned_wndproc_return_stub(
-            &mut uc, &returns
+            &mut uc,
+            &returns,
+            &[]
         ));
         assert_eq!(
             uc.reg_read(RegisterMIPS::PC).unwrap() as u32,

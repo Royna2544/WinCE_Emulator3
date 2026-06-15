@@ -4463,3 +4463,19 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture
   remains ignored because that toolchain is not configured, and Cargo still
   emits the existing unused-code warnings.
+- `tests/coredll_raw_gwe.rs`, `PLAN.MD`, and `SOURCE_REFERENCES.md`: extended
+  the CE `draw.cpp::NegativeSize(EMaskBlt)`/`swblt.cpp` signed-extent coverage
+  with a framebuffer HDC regression that uses a 1 bpp mask, a negative
+  destination width, and verifies mirrored RGB565 pixels plus the resulting
+  dirty rectangle.
+- Focused validation after the framebuffer `MaskBlt` signed-extent slice:
+  `cargo fmt --check` and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_mask_blt_mirrors_negative_destination_width_to_framebuffer`
+  passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the framebuffer `MaskBlt` signed-extent slice:
+  `git diff --check`, `cargo fmt --check`, and `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored
+  because that toolchain is not configured, and Cargo still emits the existing
+  unused-code warnings plus the intermittent incremental cleanup access-denied
+  note under `target/debug/incremental`.

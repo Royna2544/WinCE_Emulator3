@@ -9755,6 +9755,96 @@ fn coredll_raw_mask_blt_copies_selected_dib_to_framebuffer_through_1bpp_mask() -
 }
 
 #[test]
+fn coredll_raw_mask_blt_mirrors_negative_destination_width_to_framebuffer() -> Result<()> {
+    const SRCCOPY: u32 = 0x00cc_0020;
+    const WHITENESS: u32 = 0x00ff_0062;
+    fn makerop4(foreground: u32, background: u32) -> u32 {
+        foreground | ((background << 8) & 0xff00_0000)
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "MASKBLT_NEG_FB",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 4, 1),
+    );
+    let dst_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [hwnd],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 1);
+    let (_mask_dc, mask_bitmap, mask_bits, _mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 1);
+
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, src_bits, src_stride, 2, 0, 0x001f);
+    write_rgb565(&mut memory, src_bits, src_stride, 3, 0, 0xffff);
+    memory.write_u8(mask_bits, 0xf0)?; // four foreground pixels from left to right.
+
+    let mut framebuffer = VirtualFramebuffer::new(4, 1, PixelFormat::Rgb565)?;
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_MASK_BLT,
+            [
+                dst_dc,
+                4,
+                0,
+                (-4i32) as u32,
+                1,
+                src_dc,
+                0,
+                0,
+                mask_bitmap,
+                0,
+                0,
+                makerop4(SRCCOPY, WHITENESS),
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), 0xffff);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 0), 0x001f);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 0), 0x07e0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 3, 0), 0xf800);
+    assert_eq!(
+        framebuffer.dirty_rects(),
+        &[FramebufferRect::new(0, 0, 4, 1)]
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_mask_blt_applies_generic_rop4_to_framebuffer() -> Result<()> {
     const SRCINVERT: u32 = 0x0066_0046;
     const PATCOPY: u32 = 0x00f0_0021;

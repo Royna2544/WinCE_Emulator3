@@ -2527,9 +2527,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     implements those validation paths plus selected-DIB and framebuffer masked
     copies for that CE source-backed ROP4 shape, generic ROP4
     foreground/background byte evaluation, selected-DIB/framebuffer negative
-    destination extent mirroring for masked draws, and the null-mask
-    source-copy shortcut through the same signed destination helper as direct
-    `BitBlt`.
+    destination extent mirroring for masked draws, including a framebuffer HDC
+    negative destination-width regression, and the null-mask source-copy
+    shortcut through the same signed destination helper as direct `BitBlt`.
   - CE `core\dll\apis.c::SystemParametersInfoW` routes
     `SPI_GETOEMINFO` and related device-info actions through
     `KernelIoControl(IOCTL_HAL_GET_DEVICE_INFO, ...)` before GWE handles the
