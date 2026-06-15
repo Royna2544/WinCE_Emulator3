@@ -4589,6 +4589,106 @@ fn coredll_raw_polyline_applies_rop2_xorpen_on_selected_memory_dib() -> Result<(
 }
 
 #[test]
+fn coredll_raw_two_point_polygon_applies_rop2_xorpen_once_on_selected_memory_dib() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 6);
+    let points_ptr = 0x1_0200;
+    let logpen_ptr = 0x1_0300;
+    memory.map_bytes(points_ptr, 16);
+    memory.map_bytes(logpen_ptr, 16);
+    memory.write_point(points_ptr, 1, 3);
+    memory.write_point(points_ptr + 8, 6, 3);
+    write_rgb565(&mut memory, bits_ptr, stride, 3, 3, 0xffff);
+    memory.write_bytes(
+        logpen_ptr,
+        &[
+            0x00, 0x00, 0x00, 0x00, // PS_SOLID
+            0x01, 0x00, 0x00, 0x00, // width 1
+            0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, // red
+        ],
+    );
+
+    let pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PEN_INDIRECT,
+        [logpen_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePenIndirect did not return a pen: {other:?}"),
+    };
+    let null_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [5],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(NULL_BRUSH) did not return a handle: {other:?}"),
+    };
+    for object in [pen, null_brush] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SELECT_OBJECT,
+                [mem_dc, object],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle != 0
+        ));
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_ROP2,
+            [mem_dc, 7],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(13),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYGON,
+            [mem_dc, points_ptr, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 3, 3), 0x07ff);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 3), 0xf800);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_polygon_fills_selected_memory_dib_with_selected_brush() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

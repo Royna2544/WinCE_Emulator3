@@ -4460,6 +4460,27 @@ impl CeKernel {
         self.show_window_with_activation(hwnd, visible, visible)
     }
 
+    pub fn show_window_with_framebuffer(
+        &mut self,
+        hwnd: u32,
+        visible: bool,
+        activate: bool,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        let backing_store_targets = (!visible && self.gwe.is_window_visible(hwnd))
+            .then(|| self.window_destroy_targets(hwnd))
+            .unwrap_or_default();
+        let previous = self.show_window_with_activation(hwnd, visible, activate);
+        if previous && !visible && !backing_store_targets.is_empty() {
+            if let Some(framebuffer) = framebuffer {
+                let _ = self.restore_window_backing_stores(&backing_store_targets, framebuffer);
+            } else {
+                self.discard_window_backing_stores(&backing_store_targets);
+            }
+        }
+        previous
+    }
+
     pub fn show_window_with_activation(
         &mut self,
         hwnd: u32,
@@ -4661,6 +4682,37 @@ impl CeKernel {
         if moved {
             let target = self.top_level_window(hwnd);
             let _ = self.activate_window(Some(target));
+        }
+        moved
+    }
+
+    pub fn set_window_pos_with_framebuffer(
+        &mut self,
+        hwnd: u32,
+        insert_after: Option<u32>,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: u32,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        if flags & SWP_SHOWWINDOW != 0 && !self.gwe.is_window_visible(hwnd) {
+            if let Some(framebuffer) = framebuffer.as_deref() {
+                let _ = self.capture_window_backing_store(hwnd, framebuffer);
+            }
+        }
+        let backing_store_targets = (flags & SWP_HIDEWINDOW != 0
+            && self.gwe.is_window_visible(hwnd))
+        .then(|| self.window_destroy_targets(hwnd))
+        .unwrap_or_default();
+        let moved = self.set_window_pos(hwnd, insert_after, x, y, width, height, flags);
+        if moved && flags & SWP_HIDEWINDOW != 0 && !backing_store_targets.is_empty() {
+            if let Some(framebuffer) = framebuffer {
+                let _ = self.restore_window_backing_stores(&backing_store_targets, framebuffer);
+            } else {
+                self.discard_window_backing_stores(&backing_store_targets);
+            }
         }
         moved
     }
@@ -7340,6 +7392,110 @@ mod tests {
         }
 
         assert!(kernel.destroy_window_with_framebuffer(hwnd, "test", Some(&mut framebuffer)));
+        assert_eq!(framebuffer.pixels(), original.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn show_window_hide_restores_captured_framebuffer_backing_store() -> Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        for (index, byte) in framebuffer.pixels_mut().iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let original = framebuffer.snapshot().pixels;
+        let parent = kernel.create_window_ex_w_with_rect(
+            1,
+            "DIALOG",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(1, 1, 5, 5),
+        );
+        let child = kernel.create_window_ex_w_with_rect(
+            1,
+            "STATIC",
+            "text",
+            Some(parent),
+            0,
+            WS_VISIBLE | crate::ce::gwe::WS_CHILD,
+            0,
+            Rect::from_origin_size(2, 2, 2, 2),
+        );
+
+        assert!(kernel.capture_window_backing_store(parent, &framebuffer));
+        assert!(kernel.capture_window_backing_store(child, &framebuffer));
+        let info = framebuffer.info();
+        let bytes_per_pixel = info.format.bytes_per_pixel();
+        for y in 1usize..6 {
+            for x in 1usize..6 {
+                let offset = y * info.stride + x * bytes_per_pixel;
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel].fill(0xaa);
+            }
+        }
+        for y in 2usize..4 {
+            for x in 2usize..4 {
+                let offset = y * info.stride + x * bytes_per_pixel;
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel].fill(0xbb);
+            }
+        }
+
+        assert!(kernel.show_window_with_framebuffer(parent, false, false, Some(&mut framebuffer)));
+        assert_eq!(framebuffer.pixels(), original.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn set_window_pos_hide_restores_captured_framebuffer_backing_store() -> Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        for (index, byte) in framebuffer.pixels_mut().iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let original = framebuffer.snapshot().pixels;
+        let hwnd = kernel.create_window_ex_w_with_rect(
+            1,
+            "DIALOG",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(1, 1, 4, 4),
+        );
+
+        assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        let info = framebuffer.info();
+        let bytes_per_pixel = info.format.bytes_per_pixel();
+        for y in 1usize..5 {
+            for x in 1usize..5 {
+                let offset = y * info.stride + x * bytes_per_pixel;
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel].fill(0xff);
+            }
+        }
+
+        assert!(kernel.set_window_pos_with_framebuffer(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_HIDEWINDOW,
+            Some(&mut framebuffer)
+        ));
         assert_eq!(framebuffer.pixels(), original.as_slice());
         Ok(())
     }

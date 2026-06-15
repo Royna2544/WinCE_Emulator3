@@ -6981,7 +6981,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.set_window_pos(
+        ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.set_window_pos_with_framebuffer(
             raw_arg(args, 0),
             Some(raw_arg(args, 1)),
             raw_i32_arg(args, 2),
@@ -6989,6 +6989,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_i32_arg(args, 4),
             raw_i32_arg(args, 5),
             raw_arg(args, 6),
+            framebuffer,
         ))),
         ORD_MOVE_WINDOW => Some(CoredllValue::Bool(kernel.move_window(
             raw_arg(args, 0),
@@ -32130,7 +32131,7 @@ fn show_window_raw(
             let _ = kernel.capture_window_backing_store(hwnd, framebuffer);
         }
     }
-    let previous = kernel.show_window_with_activation(hwnd, visible, activate);
+    let previous = kernel.show_window_with_framebuffer(hwnd, visible, activate, framebuffer);
     kernel.record_window_lifecycle_trace(
         "show_window_cmd",
         thread_id,
@@ -42371,7 +42372,9 @@ fn polygon_raw<M: CoredllGuestMemory>(
             }
             if let Some(pen) = selected_pen_model(kernel, hdc) {
                 let mut closed = device_points.clone();
-                if let Some(first) = device_points.first().copied() {
+                if device_points.len() > 2
+                    && let Some(first) = device_points.first().copied()
+                {
                     closed.push(first);
                 }
                 draw_polyline_for_hdc(kernel, framebuffer, hdc, &closed, pen);
@@ -43528,7 +43531,9 @@ fn draw_closed_bitmap_polyline<M: CoredllGuestMemory>(
             &mut style_state,
         );
     }
-    if let (Some(first), Some(last)) = (points.first().copied(), points.last().copied()) {
+    if points.len() > 2
+        && let (Some(first), Some(last)) = (points.first().copied(), points.last().copied())
+    {
         draw_bitmap_line(memory, bitmap, last, first, clip, pen, &mut style_state);
     }
 }
