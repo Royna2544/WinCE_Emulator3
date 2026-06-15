@@ -4835,7 +4835,15 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `bInheritHandle == FALSE`, and kernel-mode descriptor pointers, returns
   `ERROR_INVALID_SECURITY_DESCR` for malformed descriptors, and leaves broader
   file-security ACL storage/enforcement queued.
-- Focused validation after the direct fsdmgr security-descriptor parser slice:
+- Reset recovery validation for the fsdmgr security-descriptor parser slice:
   `cargo test -j 1 --features unicorn,trace,win32-desktop
   fsdmgr_parse_security_descriptor_import_matches_ce_shape --lib --
-  --nocapture` passed. Cargo still emits the existing unused-code warnings.
+  --nocapture` and `cargo fmt --check` passed. Cargo still emits the existing
+  unused-code warnings.
+- Live iNavi drive checkpoint after the reset recovery: the host process stayed
+  alive, touch injection posted `WM_LBUTTONDOWN/WM_LBUTTONUP` to the full-screen
+  `afx:10000:3:0:b5000:0` iNavi window, and no message boxes were live. GPS
+  injection was accepted by the remote endpoint, but `COM7:` was not open in
+  the guest and the queued serial buffer grew, so the sensor path is waiting on
+  the app to reach its GPS consumer. The app remained on the SE splash while
+  active guest code continued reading `\SDMMC Disk\INavi\res\resmapi_800x480.bin`.
