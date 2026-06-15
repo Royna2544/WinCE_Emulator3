@@ -4836,10 +4836,14 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `ERROR_INVALID_SECURITY_DESCR` for malformed descriptors, and leaves broader
   file-security ACL storage/enforcement queued.
 - Reset recovery validation for the fsdmgr security-descriptor parser slice:
-  `cargo test -j 1 --features unicorn,trace,win32-desktop
-  fsdmgr_parse_security_descriptor_import_matches_ce_shape --lib --
-  --nocapture` and `cargo fmt --check` passed. Cargo still emits the existing
-  unused-code warnings.
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_parse_security_descriptor_import_uses_ce_secdeschdr_size --
+  --nocapture`, `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. Cargo still emits the
+  existing unused-code warnings.
 - Live iNavi drive checkpoint after the reset recovery: the host process stayed
   alive, touch injection posted `WM_LBUTTONDOWN/WM_LBUTTONUP` to the full-screen
   `afx:10000:3:0:b5000:0` iNavi window, and no message boxes were live. GPS
