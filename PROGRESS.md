@@ -15,6 +15,29 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: host wall-clock timeout capture now recognizes
+  MIPS `jr` import-thunk stubs with a `nop` delay slot and records the actual
+  import-trap target PC, so resume/restart bookkeeping lands at the imported
+  coredll trap instead of the thunk instruction.
+- Validation after the wall-clock import-thunk resume slice so far: `cargo
+  test -j 1 --features unicorn,trace,win32-desktop
+  wall_clock_import_jr_thunk_resumes_at_import_trap`, `cargo fmt --check`,
+  `git diff --check`, and a full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed.
+- `src/ce/coredll.rs` and `tests/coredll_raw_kernel.rs`: bitmap-backed
+  image-list rendering now applies CE's non-DDB first-palette latch while
+  decoding indexed image pixels, so later 8bpp entries draw through the list's
+  first color table instead of their own source bitmap palette; `ILC_COLORDDB`
+  lists still draw each indexed bitmap through its own palette.
+- Validation after the image-list indexed draw palette slice so far: `cargo
+  fmt`, `cargo check --features unicorn,trace,win32-desktop`, and `cargo test
+  -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel
+  image_list_ordinals_track_created_lists_and_icons` passed. `cargo fmt
+  --check`, `git diff --check`, and a full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` also passed. Cargo still emits the existing
+  unused-code warnings plus Windows profile/incremental-cache cleanup noise,
+  and the eVC4 MIPSII fixture remains ignored because that toolchain is not
+  configured.
 - `src/ce/resource.rs`, `tests/basic_subsystems.rs`, and
   `tests/coredll_raw_kernel.rs`: image-list objects now record CE's first-add
   indexed palette latch for non-`ILC_COLORDDB` lists, preserving the first

@@ -27287,6 +27287,7 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
                 &image,
                 None,
                 None,
+                None,
             );
         } else {
             render_image_list_bitmap_entry_hdc(
@@ -27300,6 +27301,7 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
                 source_width,
                 source_height,
                 &image,
+                None,
                 None,
                 None,
             );
@@ -28877,6 +28879,8 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
     let src_width = list.width.max(1);
     let src_height = list.height.max(1);
     let blend = ild_blend_mode(draw_flags, draw.rgb_fg, mask_only);
+    let image_color_table =
+        (!mask_only && !list.color_table.is_empty()).then_some(list.color_table.as_slice());
     if !render_image_list_bitmap_entry_framebuffer(
         kernel,
         memory,
@@ -28889,6 +28893,7 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
         src_width,
         src_height,
         &effective_image,
+        image_color_table,
         blend,
         rop,
     ) {
@@ -28913,6 +28918,8 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
             overlay.mask = 0;
             overlay.transparent_color = None;
         }
+        let overlay_color_table = (draw_flags & ILD_MASK == 0 && !list.color_table.is_empty())
+            .then_some(list.color_table.as_slice());
         let _ = render_image_list_bitmap_entry_framebuffer(
             kernel,
             memory,
@@ -28925,6 +28932,7 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
             overlay_record.width.max(1),
             overlay_record.height.max(1),
             &overlay,
+            overlay_color_table,
             None, // overlay not blended
             None,
         );
@@ -28993,6 +29001,8 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     let src_width = list.width.max(1);
     let src_height = list.height.max(1);
     let blend = ild_blend_mode(draw_flags, draw.rgb_fg, mask_only);
+    let image_color_table =
+        (!mask_only && !list.color_table.is_empty()).then_some(list.color_table.as_slice());
     if !render_image_list_bitmap_entry_hdc(
         kernel,
         memory,
@@ -29004,6 +29014,7 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
         src_width,
         src_height,
         &effective_image,
+        image_color_table,
         blend,
         rop,
     ) {
@@ -29028,6 +29039,8 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
             overlay.mask = 0;
             overlay.transparent_color = None;
         }
+        let overlay_color_table = (draw_flags & ILD_MASK == 0 && !list.color_table.is_empty())
+            .then_some(list.color_table.as_slice());
         let _ = render_image_list_bitmap_entry_hdc(
             kernel,
             memory,
@@ -29039,6 +29052,7 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
             overlay_record.width.max(1),
             overlay_record.height.max(1),
             &overlay,
+            overlay_color_table,
             None, // overlay not blended
             None,
         );
@@ -29081,6 +29095,7 @@ fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
     src_width: i32,
     src_height: i32,
     image: &crate::ce::resource::ImageListImage,
+    image_color_table: Option<&[[u8; 4]]>,
     blend: Option<ImageListBlend>,
     rop: Option<u32>,
 ) -> bool {
@@ -29131,6 +29146,7 @@ fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
         src_height,
         bitmap,
         &bitmap_bytes,
+        image_color_table,
         mask_bitmap_bytes
             .as_ref()
             .map(|(mask, bytes)| (*mask, bytes.as_slice())),
@@ -29153,6 +29169,7 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
     src_width: i32,
     src_height: i32,
     image: &crate::ce::resource::ImageListImage,
+    image_color_table: Option<&[[u8; 4]]>,
     blend: Option<ImageListBlend>,
     rop: Option<u32>,
 ) -> bool {
@@ -29206,6 +29223,7 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
             src_height,
             src_bitmap,
             &src_bytes,
+            image_color_table,
             mask_bitmap_bytes
                 .as_ref()
                 .map(|(mask, bytes)| (*mask, bytes.as_slice())),
@@ -29479,6 +29497,7 @@ fn copy_image_list_bitmap_pixels<M: CoredllGuestMemory>(
         height,
         src_bitmap,
         &src_bytes,
+        None,
         None,
         None,
         None,
@@ -39944,6 +39963,7 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                         None,
                         None,
                         None,
+                        None,
                         brush.as_ref(),
                         (rop != SRCCOPY).then_some(rop),
                         clip,
@@ -39964,6 +39984,7 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                     height.saturating_abs(),
                     &src_bitmap,
                     &src_bytes,
+                    None,
                     None,
                     None,
                     None,
@@ -40072,6 +40093,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                         None,
                         None,
                         None,
+                        None,
                         brush.as_ref(),
                         (rop != SRCCOPY).then_some(rop),
                         clip,
@@ -40092,6 +40114,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                     src_height,
                     &src_bitmap,
                     &src_bytes,
+                    None,
                     None,
                     None,
                     None,
@@ -40574,6 +40597,7 @@ fn draw_dib_source_to_memory_dc<M: CoredllGuestMemory>(
     src_height: i32,
     bitmap: &crate::ce::resource::BitmapObject,
     bitmap_bytes: &[u8],
+    source_color_table: Option<&[[u8; 4]]>,
     brush: Option<&BrushPixelSource>,
     rop: Option<u32>,
 ) -> bool {
@@ -40601,6 +40625,7 @@ fn draw_dib_source_to_memory_dc<M: CoredllGuestMemory>(
             src_height,
             bitmap,
             bitmap_bytes,
+            source_color_table,
             None,
             None,
             None,
@@ -40626,6 +40651,7 @@ fn draw_dib_source_to_framebuffer(
     src_height: i32,
     bitmap: &crate::ce::resource::BitmapObject,
     bitmap_bytes: &[u8],
+    source_color_table: Option<&[[u8; 4]]>,
     brush: Option<&BrushPixelSource>,
     rop: Option<u32>,
 ) {
@@ -40643,6 +40669,7 @@ fn draw_dib_source_to_framebuffer(
         src_height,
         bitmap,
         bitmap_bytes,
+        source_color_table,
         None,
         None,
         None,
@@ -40828,6 +40855,7 @@ fn draw_bitmap_bytes_to_framebuffer(
     src_height: i32,
     bitmap: &crate::ce::resource::BitmapObject,
     bitmap_bytes: &[u8],
+    source_color_table: Option<&[[u8; 4]]>,
     mask_bitmap: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     transparent_rgb: Option<[u8; 3]>,
     blend: Option<ImageListBlend>,
@@ -40863,7 +40891,13 @@ fn draw_bitmap_bytes_to_framebuffer(
                 let client_x = screen_x - client_origin.x;
                 let dst_rel_x = blt_axis_offset(client_x, dst_x, dst_width);
                 let source_x = blt_source_coord(client_x, dst_x, dst_width, src_x, src_width);
-                let Some(rgb) = bitmap_pixel_rgb(bitmap, bitmap_bytes, source_x, source_y) else {
+                let Some(rgb) = bitmap_pixel_rgb_with_color_table(
+                    bitmap,
+                    bitmap_bytes,
+                    source_x,
+                    source_y,
+                    source_color_table,
+                ) else {
                     continue;
                 };
                 if let Some((mask, mask_bytes)) = mask_bitmap
@@ -40925,6 +40959,7 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
     src_height: i32,
     src: &crate::ce::resource::BitmapObject,
     src_bytes: &[u8],
+    source_color_table: Option<&[[u8; 4]]>,
     mask_bitmap: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     transparent_rgb: Option<[u8; 3]>,
     blend: Option<ImageListBlend>,
@@ -40962,7 +40997,13 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
         for x in left..right {
             let dst_rel_x = blt_axis_offset(x, dst_x, dst_width);
             let source_x = blt_source_coord(x, dst_x, dst_width, src_x, src_width);
-            let Some(rgb) = bitmap_pixel_rgb(src, src_bytes, source_x, source_y) else {
+            let Some(rgb) = bitmap_pixel_rgb_with_color_table(
+                src,
+                src_bytes,
+                source_x,
+                source_y,
+                source_color_table,
+            ) else {
                 continue;
             };
             if let Some((mask, mask_bytes)) = mask_bitmap
@@ -41106,6 +41147,16 @@ fn bitmap_pixel_rgb(
     x: i32,
     y: i32,
 ) -> Option<[u8; 3]> {
+    bitmap_pixel_rgb_with_color_table(bitmap, bytes, x, y, None)
+}
+
+fn bitmap_pixel_rgb_with_color_table(
+    bitmap: &crate::ce::resource::BitmapObject,
+    bytes: &[u8],
+    x: i32,
+    y: i32,
+    color_table: Option<&[[u8; 4]]>,
+) -> Option<[u8; 3]> {
     if x < 0 || y < 0 || x >= bitmap.width || y >= bitmap.height {
         return None;
     }
@@ -41121,7 +41172,7 @@ fn bitmap_pixel_rgb(
             let offset = row_start.checked_add(x / 8)?;
             let byte = *bytes.get(offset)?;
             let bit = (byte >> (7 - (x % 8))) & 1;
-            Some(rgb_from_color_table(bitmap, bit))
+            Some(rgb_from_color_table_override(bitmap, bit, color_table))
         }
         32 => {
             let offset = row_start.checked_add(x.checked_mul(4)?)?;
@@ -41164,15 +41215,15 @@ fn bitmap_pixel_rgb(
         8 => bytes
             .get(row_start + x)
             .copied()
-            .map(|index| rgb_from_color_table(bitmap, index)),
+            .map(|index| rgb_from_color_table_override(bitmap, index, color_table)),
         4 => bytes.get(row_start + (x / 2)).copied().map(|byte| {
             let index = if x % 2 == 0 { byte >> 4 } else { byte & 0x0f };
-            rgb_from_color_table(bitmap, index)
+            rgb_from_color_table_override(bitmap, index, color_table)
         }),
         2 => bytes.get(row_start + (x / 4)).copied().map(|byte| {
             let shift = 6 - ((x % 4) * 2);
             let index = (byte >> shift) & 0x03;
-            rgb_from_color_table(bitmap, index)
+            rgb_from_color_table_override(bitmap, index, color_table)
         }),
         _ => None,
     }
@@ -41344,6 +41395,19 @@ fn pattern_pixel_rgb(
 }
 
 fn rgb_from_color_table(bitmap: &crate::ce::resource::BitmapObject, index: u8) -> [u8; 3] {
+    rgb_from_color_table_override(bitmap, index, None)
+}
+
+fn rgb_from_color_table_override(
+    bitmap: &crate::ce::resource::BitmapObject,
+    index: u8,
+    color_table: Option<&[[u8; 4]]>,
+) -> [u8; 3] {
+    if let Some(color_table) = color_table
+        && let Some(entry) = color_table.get(index as usize)
+    {
+        return [entry[2], entry[1], entry[0]];
+    }
     bitmap
         .color_table
         .get(index as usize)
@@ -41770,6 +41834,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                         &src_bitmap,
                         &bitmap_bytes,
                         None,
+                        None,
                         Some(colorref_rgb(transparent_color)),
                         None,
                         None,
@@ -41792,6 +41857,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                     src_height,
                     &src_bitmap,
                     &bitmap_bytes,
+                    None,
                     None,
                     Some(colorref_rgb(transparent_color)),
                     None,
@@ -41910,6 +41976,7 @@ fn stretch_dibits_raw<M: CoredllGuestMemory>(
             src_height,
             &bitmap,
             &bitmap_bytes,
+            None,
             brush.as_ref(),
             (rop != SRCCOPY).then_some(rop),
         ) && let Some(framebuffer) = framebuffer
@@ -41928,6 +41995,7 @@ fn stretch_dibits_raw<M: CoredllGuestMemory>(
                 src_height,
                 &bitmap,
                 &bitmap_bytes,
+                None,
                 brush.as_ref(),
                 (rop != SRCCOPY).then_some(rop),
             );
@@ -42018,6 +42086,7 @@ fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
         &bitmap_bytes,
         None,
         None,
+        None,
     ) && let Some(framebuffer) = framebuffer
     {
         draw_dib_source_to_framebuffer(
@@ -42034,6 +42103,7 @@ fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
             lines as i32,
             &bitmap,
             &bitmap_bytes,
+            None,
             None,
             None,
         );

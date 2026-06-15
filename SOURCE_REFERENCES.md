@@ -1287,8 +1287,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `ILC_COLOR`/zero color bits. CE `imagelist.cpp::Add` also clones the
     source bitmap DIB color table into an empty non-`ILC_COLORDDB` image list
     through `GetDIBColorTable_I` and `m_bColorsSet`; v3 now records that first
-    indexed bitmap palette for direct and raw `ImageList_Add` paths while
-    leaving DDB lists and later adds untouched. CE `imagelist.cpp::SetIconSize` only treats
+    indexed bitmap palette for direct and raw `ImageList_Add` paths and uses it
+    when drawing later indexed entries from non-DDB lists, while DDB lists and
+    later adds leave the stored palette state untouched. CE `imagelist.cpp::SetIconSize` only treats
     unchanged dimensions as failure before storing the new width/height and
     clearing images through `Remove(-1)`, so raw `ImageList_SetIconSize` now
     accepts changed zero/negative dimensions while preserving the no-op

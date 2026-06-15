@@ -1,18 +1,19 @@
 #[cfg(feature = "unicorn")]
 use super::cpu_mips::{
     LiveTrampolineState, MIPS_JMPBUF_FP_SLOT, MIPS_JMPBUF_GP_SLOT, MIPS_JMPBUF_RA_SLOT,
-    MIPS_JMPBUF_RETURN_PC_SLOT, MIPS_JMPBUF_S0_SLOT, MIPS_JMPBUF_SP_SLOT, MipsGuestContext,
-    MipsTrampolineJump, MipsTrampolinePatchResult, capture_mips_gprs, decode_addiu_zero,
-    decode_direct_jump_target, decode_indirect_call_register, decode_jalr_register,
-    decode_jr_register, decode_old_mips_kernel_call, decode_trampoline_long_jump_target,
-    decode_trampoline_sentinel_target, is_mips_delay_slot_pc, is_patched_trampoline_jump,
-    is_trampoline_sentinel_first_word, mips_gpr_name, mips_trampoline_origin_for_pc,
-    patch_mips_unicorn_trampolines, read_mips_gpr, read_mips_import_args, read_mips_reg,
-    restore_mips_gprs, target_in_ranges, trampoline_stub_by_origin, write_mips_gpr,
+    MIPS_JMPBUF_RETURN_PC_SLOT, MIPS_JMPBUF_S0_SLOT, MIPS_JMPBUF_SP_SLOT, MIPS_NOP,
+    MipsGuestContext, MipsTrampolineJump, MipsTrampolinePatchResult, capture_mips_gprs,
+    decode_addiu_zero, decode_direct_jump_target, decode_indirect_call_register,
+    decode_jalr_register, decode_jr_register, decode_old_mips_kernel_call,
+    decode_trampoline_long_jump_target, decode_trampoline_sentinel_target, is_mips_delay_slot_pc,
+    is_patched_trampoline_jump, is_trampoline_sentinel_first_word, mips_gpr_name,
+    mips_trampoline_origin_for_pc, patch_mips_unicorn_trampolines, read_mips_gpr,
+    read_mips_import_args, read_mips_reg, restore_mips_gprs, target_in_ranges,
+    trampoline_stub_by_origin, write_mips_gpr,
 };
 #[cfg(all(test, feature = "unicorn"))]
 use super::cpu_mips::{
-    MIPS_NOP, MipsBranch, MipsBranchLikely, branch_likely_stub_words, decode_mips_branch_likely,
+    MipsBranch, MipsBranchLikely, branch_likely_stub_words, decode_mips_branch_likely,
     decode_mips_normal_branch, encode_mips_jr, encode_mips_lui, encode_mips_ori,
     is_mips_control_transfer_instruction, jal_stub_words, mips_byte_jump_table_ranges,
     mips_halfword_jump_table_ranges, mips_patch_rva_overlaps_data_ranges, normal_branch_stub_words,
@@ -7545,7 +7546,13 @@ impl UnicornMips {
                 .map(|timeout| timeout != 0)
                 .unwrap_or(false);
         if unicorn_native_timeout && host_wall_clock_stop.borrow().is_none() {
-            let pc = read_mips_reg(&uc, RegisterMIPS::PC);
+            let mut pc = read_mips_reg(&uc, RegisterMIPS::PC);
+            if let Some(target) =
+                import_trap_target_for_mips_jr_thunk(&uc, &import_traps_live.borrow(), pc)
+            {
+                let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
+                pc = target;
+            }
             *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
                 pc,
                 ra: read_mips_reg(&uc, RegisterMIPS::RA),
@@ -30612,6 +30619,26 @@ fn wall_clock_restart_pc_for_mips_trampoline(
 }
 
 #[cfg(feature = "unicorn")]
+fn import_trap_target_for_mips_jr_thunk<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    traps: &ImportTrapTable,
+    pc: u32,
+) -> Option<u32> {
+    if pc >= IMPORT_TRAP_BASE {
+        return None;
+    }
+    let instruction = read_unicorn_u32(uc, pc)?;
+    let register = decode_jr_register(instruction)?;
+    if read_unicorn_u32(uc, pc.wrapping_add(4))? != MIPS_NOP {
+        return None;
+    }
+    let target = read_mips_gpr(uc, register)?;
+    (traps.trap_at(target).is_some()
+        || crate::emulator::imports::dynamic_coredll_proc_trap(target).is_some())
+    .then_some(target)
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_def_window_proc_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -39058,6 +39085,46 @@ mod unicorn_tests {
         );
         assert_eq!(
             super::wall_clock_restart_pc_for_mips_trampoline(origin, &trampoline_jumps, |_| None),
+            None
+        );
+    }
+
+    #[test]
+    fn wall_clock_import_jr_thunk_resumes_at_import_trap() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let pc: u32 = 0x0040_0000;
+        uc.mem_map(pc as u64, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(pc), &super::encode_mips_jr(8).to_le_bytes())
+            .unwrap();
+        uc.mem_write(
+            u64::from(pc.wrapping_add(4)),
+            &super::MIPS_NOP.to_le_bytes(),
+        )
+        .unwrap();
+
+        let target = crate::emulator::imports::dynamic_coredll_proc_address(
+            crate::ce::coredll_ordinals::ORD_MEMSET,
+        )
+        .unwrap();
+        uc.reg_write(RegisterMIPS::T0, u64::from(target)).unwrap();
+
+        assert_eq!(
+            super::import_trap_target_for_mips_jr_thunk(
+                &uc,
+                &crate::emulator::imports::ImportTrapTable::new(),
+                pc
+            ),
+            Some(target)
+        );
+
+        uc.mem_write(u64::from(pc.wrapping_add(4)), &0x2402_0001u32.to_le_bytes())
+            .unwrap();
+        assert_eq!(
+            super::import_trap_target_for_mips_jr_thunk(
+                &uc,
+                &crate::emulator::imports::ImportTrapTable::new(),
+                pc
+            ),
             None
         );
     }
