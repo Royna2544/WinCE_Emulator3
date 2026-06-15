@@ -4584,6 +4584,11 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     )
     .unwrap();
     fs::write(
+        root.join("Docs").join("thirtytwo-bpp-icon.exe"),
+        pe32_with_32bpp_icon(),
+    )
+    .unwrap();
+    fs::write(
         root.join("Docs").join("masked-twentyfour-bpp-icon.exe"),
         pe32_with_24bpp_masked_icon(),
     )
@@ -5150,6 +5155,69 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         &twentyfour_bpp_framebuffer.pixels()[twentyfour_right..twentyfour_right + 2],
         &[0xe0, 0x07],
         "24bpp RT_ICON draw should decode the second padded BGR source pixel"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(path_ptr, r"\Docs\thirtytwo-bpp-icon.exe");
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let thirtytwo_bpp_icon = memory.read_u32(large_icon_ptr)?;
+    assert_ne!(thirtytwo_bpp_icon, 0);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, thirtytwo_bpp_icon);
+    let thirtytwo_bpp_icon_obj = kernel
+        .resources
+        .icon(thirtytwo_bpp_icon)
+        .expect("32bpp PE icon");
+    let thirtytwo_bpp_bitmap = kernel
+        .resources
+        .bitmap(thirtytwo_bpp_icon_obj.color_bitmap)
+        .expect("32bpp PE icon bitmap");
+    assert_eq!(thirtytwo_bpp_bitmap.bits_pixel, 32);
+    assert_eq!(
+        (thirtytwo_bpp_bitmap.width, thirtytwo_bpp_bitmap.height),
+        (2, 1)
+    );
+    assert_ne!(
+        thirtytwo_bpp_icon_obj.mask_bitmap, 0,
+        "32bpp RT_ICON with trailing AND-mask bytes should create a mask bitmap"
+    );
+    let mut thirtytwo_bpp_framebuffer = VirtualFramebuffer::new(4, 2, PixelFormat::Rgb565)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut thirtytwo_bpp_framebuffer),
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [hdc, 1, 0, thirtytwo_bpp_icon, 2, 1, 0, 0, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        &thirtytwo_bpp_framebuffer.pixels()[twentyfour_left..twentyfour_left + 2],
+        &[0x82, 0xc9],
+        "32bpp RT_ICON draw should decode the first BGRA source pixel"
+    );
+    assert_eq!(
+        &thirtytwo_bpp_framebuffer.pixels()[twentyfour_right..twentyfour_right + 2],
+        &[0x82, 0xc9],
+        "32bpp RT_ICON draw should decode the following BGRA source pixel"
     );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
@@ -6154,6 +6222,17 @@ fn pe32_with_24bpp_icon() -> Vec<u8> {
     put_test_u8(&mut bytes, 0x200 + 0x500 + 6, 2);
     put_test_u32(&mut bytes, 0x200 + 0x2a0 + 4, icon_dib.len() as u32);
     put_test_u16(&mut bytes, 0x200 + 0x500 + 12, 24);
+    put_test_u32(&mut bytes, 0x200 + 0x500 + 14, icon_dib.len() as u32);
+    put_test_bytes(&mut bytes, 0x200 + 0x700, &icon_dib);
+    bytes
+}
+
+fn pe32_with_32bpp_icon() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    let icon_dib = icon_dib_32bpp(2, 1, 0x10);
+    put_test_u8(&mut bytes, 0x200 + 0x500 + 6, 2);
+    put_test_u32(&mut bytes, 0x200 + 0x2a0 + 4, icon_dib.len() as u32);
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 12, 32);
     put_test_u32(&mut bytes, 0x200 + 0x500 + 14, icon_dib.len() as u32);
     put_test_bytes(&mut bytes, 0x200 + 0x700, &icon_dib);
     bytes

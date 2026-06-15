@@ -1316,12 +1316,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     tolerates present `RT_ICON` DIB payloads that have color pixels but omit
     trailing AND-mask bytes by creating a color-only icon, preserves color
     tables for covered 1bpp, 4bpp, and 8bpp indexed `RT_ICON` payloads,
-    preserves stride-padded 24bpp `BI_RGB` payloads and 16bpp
-    `BI_BITFIELDS`/RGB555 masks when creating the extracted color bitmap,
-    preserves 24bpp trailing AND masks as 1bpp mask bitmaps, and decodes 1bpp
-    high-bit palette indexes, 4bpp high/low-nibble palette indexes, 24bpp BGR
-    pixels, 24bpp AND-mask transparency, and RGB555 bitfield colors when drawing
-    extracted icons,
+    preserves stride-padded 24bpp `BI_RGB` payloads, 32bpp `BI_RGB` BGRA
+    payloads, and 16bpp `BI_BITFIELDS`/RGB555 masks when creating the extracted
+    color bitmap, preserves 24bpp trailing AND masks as 1bpp mask bitmaps, and
+    decodes 1bpp high-bit palette indexes, 4bpp high/low-nibble palette indexes,
+    24bpp BGR pixels, 32bpp BGRA pixels, 24bpp AND-mask transparency, and RGB555
+    bitfield colors when drawing extracted icons,
     and keeps the index-zero shell fallback for non-PE paths that writes the
     same synthetic `HICON` values that
     `SHGetFileInfo` would select, including CE shortcut overlays, while

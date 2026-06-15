@@ -15,6 +15,22 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, and `SOURCE_REFERENCES.md`: raw
+  `ExtractIconExW` PE coverage now includes a dedicated 32bpp `BI_RGB`
+  `RT_ICON` fixture, verifying extracted bitmap metadata, trailing AND-mask
+  backing, and `DrawIconEx(DI_NORMAL)` BGRA-to-RGB565 rendering.
+- `src/emulator/unicorn.rs`: the saved-register diagnostic string now includes
+  `t0` alongside `pc`, `ra`, stack/frame, return-value, and saved-register
+  fields, making parked process dumps a little more useful when tracing MIPS
+  handoff state.
+- Validation after the 32bpp PE icon and Unicorn diagnostic slice: `cargo
+  fmt`, focused `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_kernel
+  sh_get_file_info_uses_registry_associations_and_attributes -- --nocapture`,
+  `cargo fmt --check`, `git diff --check`, and full `CARGO_INCREMENTAL=0 cargo
+  test -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and Cargo
+  still emits the existing unused-code warnings.
 - `src/emulator/unicorn.rs`: host wall-clock timeout capture now recognizes
   MIPS `jr` import-thunk stubs with a `nop` delay slot and records the actual
   import-trap target PC, so resume/restart bookkeeping lands at the imported

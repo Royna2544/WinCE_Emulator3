@@ -2815,12 +2815,13 @@ impl UnicornMips {
             .as_ref()
             .map(|saved| {
                 format!(
-                    "pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} fp=0x{:08x} v0=0x{:08x} t4=0x{:08x} s4=0x{:08x} s5=0x{:08x} s7=0x{:08x}",
+                    "pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} fp=0x{:08x} v0=0x{:08x} t0=0x{:08x} t4=0x{:08x} s4=0x{:08x} s5=0x{:08x} s7=0x{:08x}",
                     saved.pc,
                     saved.regs.regs[31],
                     saved.regs.regs[29],
                     saved.regs.regs[30],
                     saved.regs.regs[2],
+                    saved.regs.regs[8],
                     saved.regs.regs[12],
                     saved.regs.regs[20],
                     saved.regs.regs[21],
@@ -4637,6 +4638,19 @@ impl UnicornMips {
                 );
             }
             if host_wall_clock_stop_pending_hook.get() && pc < IMPORT_TRAP_BASE {
+                if let Some(target) = import_trap_page_target_for_mips_jr_thunk(uc, pc) {
+                    host_wall_clock_stop_pending_hook.set(false);
+                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
+                    *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
+                        pc: target,
+                        ra: read_mips_reg(uc, RegisterMIPS::RA),
+                        sp: read_mips_reg(uc, RegisterMIPS::SP),
+                        instruction: read_unicorn_u32(uc, target),
+                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                    });
+                    let _ = uc.emu_stop();
+                    return;
+                }
                 let restart_pc = {
                     let trampoline_state = live_trampoline_state_wall_clock_hook.borrow();
                     wall_clock_restart_pc_for_mips_trampoline(
@@ -30624,6 +30638,17 @@ fn import_trap_target_for_mips_jr_thunk<D>(
     traps: &ImportTrapTable,
     pc: u32,
 ) -> Option<u32> {
+    let target = import_trap_page_target_for_mips_jr_thunk(uc, pc)?;
+    (traps.trap_at(target).is_some()
+        || crate::emulator::imports::dynamic_coredll_proc_trap(target).is_some())
+    .then_some(target)
+}
+
+#[cfg(feature = "unicorn")]
+fn import_trap_page_target_for_mips_jr_thunk<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    pc: u32,
+) -> Option<u32> {
     if pc >= IMPORT_TRAP_BASE {
         return None;
     }
@@ -30633,9 +30658,11 @@ fn import_trap_target_for_mips_jr_thunk<D>(
         return None;
     }
     let target = read_mips_gpr(uc, register)?;
-    (traps.trap_at(target).is_some()
-        || crate::emulator::imports::dynamic_coredll_proc_trap(target).is_some())
-    .then_some(target)
+    let import_page_end = IMPORT_TRAP_BASE.saturating_add(IMPORT_TRAP_PAGE_SIZE);
+    (target >= IMPORT_TRAP_BASE
+        && target < import_page_end
+        && (target - IMPORT_TRAP_BASE) % crate::emulator::imports::IMPORT_TRAP_STRIDE == 0)
+        .then_some(target)
 }
 
 #[cfg(feature = "unicorn")]
@@ -39115,6 +39142,22 @@ mod unicorn_tests {
                 pc
             ),
             Some(target)
+        );
+
+        let static_import_target = crate::emulator::imports::IMPORT_TRAP_BASE + 0x3a60;
+        uc.reg_write(RegisterMIPS::T0, u64::from(static_import_target))
+            .unwrap();
+        assert_eq!(
+            super::import_trap_page_target_for_mips_jr_thunk(&uc, pc),
+            Some(static_import_target)
+        );
+        assert_eq!(
+            super::import_trap_target_for_mips_jr_thunk(
+                &uc,
+                &crate::emulator::imports::ImportTrapTable::new(),
+                pc
+            ),
+            None
         );
 
         uc.mem_write(u64::from(pc.wrapping_add(4)), &0x2402_0001u32.to_le_bytes())
