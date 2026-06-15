@@ -4154,3 +4154,26 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   The full suite still ignores the eVC4 MIPSII fixture because that toolchain
   is not configured, and Cargo still emits the existing unused-code warnings
   plus the recurring `target\debug\incremental` finalize access-denied note.
+- `src/ce/kernel.rs` and `src/ce/coredll.rs`: framebuffer-backed
+  `ShowWindow` and `SetWindowPos(SWP_HIDEWINDOW)` now use the captured
+  backing-store restoration path when hiding visible windows, with no-framebuffer
+  calls discarding stale saved backing instead of leaving it live.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw two-point
+  selected-DIB `Polygon` now follows CE `draw.cpp::ShapeColorTest(EPolygon)`
+  by stroking the single segment once. This fixes `R2_XORPEN` cancellation from
+  drawing the reverse closing segment over the same pixels.
+- Focused validation after the recovered hide/backing-store and two-point
+  polygon ROP2 slice: `cargo fmt --check`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop framebuffer_backing_store`, and `cargo test -j 1
+  --features unicorn,trace,win32-desktop
+  coredll_raw_two_point_polygon_applies_rop2_xorpen_once_on_selected_memory_dib`
+  passed. Cargo still emits the existing unused-code warnings and recurring
+  `target\debug\incremental` finalize access-denied note, but both test
+  commands returned success.
+- Broader validation after the recovered hide/backing-store and two-point
+  polygon ROP2 slice: `cargo check --features unicorn,trace,win32-desktop`,
+  `git diff --check`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The full suite still ignores the eVC4
+  MIPSII fixture because that toolchain is not configured, and Cargo still
+  emits the existing unused-code warnings plus the recurring
+  `target\debug\incremental` finalize access-denied note.

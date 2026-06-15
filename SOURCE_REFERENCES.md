@@ -1893,6 +1893,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     evidence `target\showwindow_direct_visibility_virtual_150s_*` confirms the
     real app receives hide payloads with `SWP_HIDEWINDOW`, no-move/no-size,
     no-zorder, and no-activate flags without forcing any paint.
+    Framebuffer-backed raw `ShowWindow`/`SetWindowPos(SWP_HIDEWINDOW)` now also
+    restore captured backing-store pixels for hidden visible windows, matching
+    the existing destroy/process-exit backing-store cleanup contract while
+    discarding the saved backing when no framebuffer is available.
   - `window.hpp` declares `SetParent_I(HWND hwnd, HWND hwndParent)` and
     `GetParent_I(HWND hwnd)`, and CE SDK `winuser.h` exposes `SetParent`/
     `GetParent` beside `GW_CHILD` traversal and `WS_CHILD` style checks used
@@ -3291,6 +3295,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and checks that polygon/polyline output remains contained by the clip box.
     Rust now covers selected-DIB `Polygon` and `Polyline` rendering through a
     selected clip region so pixels just outside the clip remain untouched.
+    `draw.cpp::ShapeColorTest(EPolygon)` also uses a two-point polygon under
+    varying ROP2 modes; Rust now treats that as a single stroked segment so
+    `R2_XORPEN` changes the destination once instead of drawing a reverse
+    closing segment that cancels the XOR.
 
 - CE GDI shape-HDC validation authority:
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`
