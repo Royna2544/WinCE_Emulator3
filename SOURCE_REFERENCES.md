@@ -2990,6 +2990,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FSDMGR_InvalidateCache @24`, `FSDMGR_ResizeCache @30`, and
     `FSDMGR_SyncCache @32`, plus `FSDMGR_CreateFileHandle @7`,
     `FSDMGR_CreateSearchHandle @8`, `FSDMGR_DeregisterVolume @10`,
+    `FSDMGR_GetDiskInfo @16`, `FSDMGR_GetDiskName @17`,
     `FSDMGR_GetVolumeHandle @21`, `FSDMGR_GetVolumeName @22`,
     `FSDMGR_RegisterVolume @27`, `FSDMGR_GetMountFlags @37`, and
     `STOREMGR_FsIoControlW @44`; `fsdmgr.h` declares their public HVOL/PDSK
@@ -3032,6 +3033,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     FSDMGR `STOREMGR_FsIoControlW` import; raw AFS volume handles now cover
     owner-checked `AFS_Unmount`/`CloseHandle` mounted-root removal and mounted
     `FSCTL_GET_VOLUME_INFO` metadata. FSDMGR import traps now also expose
+    direct CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path,
     existing mounted HVOL names, AFS hidden/system/permanent mount flags, and a
     lightweight FSD `PDSK` to HVOL association for registered host-backed mount
     names, the CE context-pointer return behavior for FSD file/search handle

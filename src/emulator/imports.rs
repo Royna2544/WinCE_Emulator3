@@ -782,6 +782,8 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 10
                     | 12
                     | 14
+                    | 16
+                    | 17
                     | 21
                     | 22
                     | 24
@@ -1127,6 +1129,19 @@ mod tests {
                     iat_rva: 0x3048,
                     import: ImportBy::Name {
                         hint: 0,
+                        name: "FSDMGR_GetDiskInfo".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x204c,
+                    iat_rva: 0x304c,
+                    import: ImportBy::Ordinal(17),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2050,
+                    iat_rva: 0x3050,
+                    import: ImportBy::Name {
+                        hint: 0,
                         name: "FSEXT_UnsupportedStorageApi".to_owned(),
                     },
                 },
@@ -1142,8 +1157,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(table.len(), 18);
-        for index in 0..18 {
+        assert_eq!(table.len(), 20);
+        for index in 0..20 {
             let iat = 0x3000 + index * 4;
             assert_eq!(
                 u32::from_le_bytes(mapped[iat..iat + 4].try_into().unwrap()),
@@ -1151,7 +1166,7 @@ mod tests {
             );
         }
         assert_eq!(
-            u32::from_le_bytes(mapped[0x3048..0x304c].try_into().unwrap()),
+            u32::from_le_bytes(mapped[0x3050..0x3054].try_into().unwrap()),
             0
         );
         assert_eq!(
@@ -1273,6 +1288,21 @@ mod tests {
                 .unwrap()
                 .ordinal,
             Some(36)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 18)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("FSDMGR_GetDiskInfo")
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 19)
+                .unwrap()
+                .ordinal,
+            Some(17)
         );
     }
 
@@ -2709,6 +2739,96 @@ mod tests {
         );
         memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
         assert!(read_back.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn fsdmgr_direct_disk_info_and_name_imports_use_ce_metadata_contract() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Ordinal(16),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_GetDiskName".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let mut memory = TestMemory::default();
+        let disk_ptr = 0x1000_6000;
+        let disk_info_ptr = 0x1000_7000;
+        let disk_name_ptr = 0x1000_8000;
+
+        for offset in (0..24).step_by(4) {
+            memory.map_word(disk_info_ptr + offset, 0xfeed_cafe);
+        }
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, disk_info_ptr]
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.word(disk_info_ptr), 0x0002_0000);
+        assert_eq!(memory.word(disk_info_ptr + 4), 512);
+        assert_eq!(memory.word(disk_info_ptr + 8), 1);
+        assert_eq!(memory.word(disk_info_ptr + 12), 1);
+        assert_eq!(memory.word(disk_info_ptr + 16), 0x0002_0000);
+        assert_eq!(memory.word(disk_info_ptr + 20), 0);
+
+        memory.map_wide_buffer(disk_name_ptr, 260);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, disk_name_ptr],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.read_wide_z(disk_name_ptr, 260), "Storage Card");
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, 0]
+            ),
+            Some(crate::ce::thread::ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_INVALID_PARAMETER
+        );
     }
 
     #[test]

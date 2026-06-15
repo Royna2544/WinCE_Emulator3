@@ -11651,6 +11651,8 @@ enum FsdmgrImport {
     FsdmgrDeregisterVolume,
     FsdmgrDiskIoControl,
     FsdmgrFlushCache,
+    FsdmgrGetDiskInfo,
+    FsdmgrGetDiskName,
     FsdmgrGetVolumeHandle,
     FsdmgrGetVolumeName,
     FsdmgrGetMountFlags,
@@ -11739,6 +11741,20 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             let status = kernel.fsdmgr_flush_cache(raw_arg(args, 0));
             fsdmgr_cache_status_raw(kernel, thread_id, status)
         }
+        FsdmgrImport::FsdmgrGetDiskInfo => fsdmgr_get_disk_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ),
+        FsdmgrImport::FsdmgrGetDiskName => u32::from(fsdmgr_get_disk_name_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        )),
         FsdmgrImport::FsdmgrGetVolumeHandle => {
             fsdmgr_get_volume_handle_raw(kernel, thread_id, raw_arg(args, 0))
         }
@@ -11868,6 +11884,8 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         10 => Some(FsdmgrImport::FsdmgrDeregisterVolume),
         12 => Some(FsdmgrImport::FsdmgrDiskIoControl),
         14 => Some(FsdmgrImport::FsdmgrFlushCache),
+        16 => Some(FsdmgrImport::FsdmgrGetDiskInfo),
+        17 => Some(FsdmgrImport::FsdmgrGetDiskName),
         21 => Some(FsdmgrImport::FsdmgrGetVolumeHandle),
         22 => Some(FsdmgrImport::FsdmgrGetVolumeName),
         24 => Some(FsdmgrImport::FsdmgrInvalidateCache),
@@ -11904,6 +11922,8 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsdmgr_deregistervolume" => Some(FsdmgrImport::FsdmgrDeregisterVolume),
         "fsdmgr_diskiocontrol" => Some(FsdmgrImport::FsdmgrDiskIoControl),
         "fsdmgr_flushcache" => Some(FsdmgrImport::FsdmgrFlushCache),
+        "fsdmgr_getdiskinfo" => Some(FsdmgrImport::FsdmgrGetDiskInfo),
+        "fsdmgr_getdiskname" => Some(FsdmgrImport::FsdmgrGetDiskName),
         "fsdmgr_getvolumehandle" => Some(FsdmgrImport::FsdmgrGetVolumeHandle),
         "fsdmgr_getvolumename" => Some(FsdmgrImport::FsdmgrGetVolumeName),
         "fsdmgr_getmountflags" => Some(FsdmgrImport::FsdmgrGetMountFlags),
@@ -12167,6 +12187,31 @@ fn fsdmgr_cache_io_control_raw(
         },
     );
     result
+}
+
+fn fsdmgr_get_disk_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    info_ptr: u32,
+) -> u32 {
+    if fsdmgr_disk_info_raw(kernel, memory, thread_id, disk_ptr, info_ptr, 24, 0) {
+        kernel.threads.set_last_error(thread_id, 0);
+        0
+    } else {
+        kernel.threads.get_last_error(thread_id)
+    }
+}
+
+fn fsdmgr_get_disk_name_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    name_ptr: u32,
+) -> bool {
+    fsdmgr_disk_get_name_raw(kernel, memory, thread_id, disk_ptr, name_ptr, 260 * 2, 0)
 }
 
 fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
