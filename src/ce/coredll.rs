@@ -45644,18 +45644,19 @@ fn get_clip_box_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return ERROR_REGION;
     }
-    let rect = if let Some(region) = kernel.resources.clip_region(hdc) {
-        region.rect
+    let (rect, status) = if let Some(region) = kernel.resources.clip_region(hdc) {
+        (region.rect, region_status_object(region))
     } else {
-        hdc_to_hwnd(hdc)
+        let rect = hdc_to_hwnd(hdc)
             .and_then(|hwnd| kernel.gwe.get_client_rect(hwnd))
-            .unwrap_or_else(|| Rect::from_origin_size(0, 0, 800, 480))
+            .unwrap_or_else(|| Rect::from_origin_size(0, 0, 800, 480));
+        (rect, region_status(rect))
     };
     if !write_guest_rect(kernel, memory, thread_id, rect_ptr, rect) {
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    region_status(rect)
+    status
 }
 
 // GetRegionData(hrgn, dwCount, lpRgnData) — serialise region into RGNDATA buffer.

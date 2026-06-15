@@ -800,9 +800,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `SetRectRgn`; `passNull2ClipRegion` also deletes a selected source region
     after clearing the clip. v3 now stores selected DC clips as copied region
     geometry, so later source-region mutation/deletion does not alter the DC
-    clip. `TestNoClipRgn` shows `GetClipRgn(hdc, NULL)` returns no-clip `0`
-    only when no clip exists; with a real clip, null or non-region outputs
-    report invalid handle.
+    clip. `clip.cpp::SelectComplexTest` compares `CombineRgn`,
+    `SelectClipRgn`, and `GetClipBox` return statuses for the same complex
+    region; raw `GetClipBox` now classifies the selected clip from its stored
+    region rect list while still writing the bounding box. `TestNoClipRgn`
+    shows `GetClipRgn(hdc, NULL)` returns no-clip `0` only when no clip exists;
+    with a real clip, null or non-region outputs report invalid handle.
   - CE `clip.cpp::passNull2ClipRegion` also requires
     `IntersectClipRect`, `ExcludeClipRect`, and `GetClipBox` to reject null or
     bad HDCs with `ERROR_INVALID_HANDLE`; `GetClipBox(valid_hdc, NULL)` fails

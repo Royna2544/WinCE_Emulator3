@@ -44442,3 +44442,194 @@ fn coredll_raw_select_clip_rgn_copies_region_lifetime_like_ce() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn coredll_raw_select_clip_rgn_copies_complex_region_lifetime_like_ce() -> Result<()> {
+    const COMPLEXREGION: u32 = 3;
+    const RGN_DIFF: u32 = 4;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 181_u32;
+    let rect_ptr = 0x1_1000_u32;
+    memory.map_words(rect_ptr, 4);
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC did not return a handle: {other:?}"),
+    };
+    let outer = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 100, 100],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateRectRgn(outer) did not return a region: {other:?}"),
+    };
+    let inner = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [25, 25, 75, 75],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateRectRgn(inner) did not return a region: {other:?}"),
+    };
+    let complex = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateRectRgn(complex) did not return a region: {other:?}"),
+    };
+    let out = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateRectRgn(out) did not return a region: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COMBINE_RGN,
+            [complex, outer, inner, RGN_DIFF],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+    assert_eq!(kernel.resources.region(complex).unwrap().rects.len(), 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_CLIP_RGN,
+            [dc, complex],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_RECT_RGN,
+            [complex, 1, 1, 2, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [complex],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIP_RGN,
+            [dc, out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let copied = kernel.resources.region(out).unwrap();
+    assert_eq!(copied.rects.len(), 4);
+    assert_eq!(copied.rect.left, 0);
+    assert_eq!(copied.rect.top, 0);
+    assert_eq!(copied.rect.right, 100);
+    assert_eq!(copied.rect.bottom, 100);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_RGN_BOX,
+            [out, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 0);
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 0);
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 100);
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 100);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIP_BOX,
+            [dc, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 0);
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 0);
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 100);
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 100);
+
+    Ok(())
+}

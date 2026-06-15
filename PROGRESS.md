@@ -4211,3 +4211,23 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   cargo test -j 1 --features unicorn,trace,win32-desktop --test
   coredll_raw_gwe` passed. The full raw GWE test binary reported 349 passing
   tests, and Cargo still emits the existing unused-code warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: `GetClipBox` now
+  reports `COMPLEXREGION` for selected complex clip regions using the stored
+  clip rect list instead of collapsing to the bounding rectangle's simple
+  status. The CE `clip.cpp::SelectComplexTest`-style regression selects a
+  `CombineRgn(RGN_DIFF)` complex region, mutates and deletes the source region,
+  then verifies `GetClipRgn`, `GetRgnBox`, and `GetClipBox` still expose the
+  original complex clip.
+- Focused validation after the complex `SelectClipRgn`/`GetClipBox` slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_select_clip_rgn_copies_complex_region_lifetime_like_ce` passed.
+  Cargo still emits the existing unused-code warnings and recurring
+  `target\debug\incremental` finalize access-denied note, but the test command
+  returned success.
+- Broader validation after the complex `SelectClipRgn`/`GetClipBox` slice:
+  `cargo fmt`, `cargo fmt --check`, `git diff --check`, `CARGO_INCREMENTAL=0
+  cargo check --features unicorn,trace,win32-desktop`, and `CARGO_INCREMENTAL=0
+  cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe` passed. The full raw GWE test binary reported 350 passing
+  tests, and Cargo still emits the existing unused-code warnings.
