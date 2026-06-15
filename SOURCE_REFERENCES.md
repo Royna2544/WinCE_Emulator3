@@ -3001,7 +3001,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     success, forwards cached read/write to `FSDMGR_ReadDisk`/`WriteDisk`, and
     turns failed `IOCTL_DISK_DELETE_SECTORS`/flush forwarding into future
     disabled-success behavior. `diskio.h` defines
-    `IOCTL_DISK_DELETE_SECTORS` as `0x00071c4c`.
+    `IOCTL_DISK_DELETE_SECTORS` as `0x00071c4c` and
+    `IOCTL_DISK_FLUSH_CACHE` as `0x00071c54`.
     `fsdmgrapi.cpp::FSDMGR_RegisterVolume` receives the
     `MountableDisk_t` pointer originally passed to `FSD_MountDisk`, strips a
     leading slash from the requested mount name, rejects an already-mounted
@@ -3039,8 +3040,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `COMPLETE` fixed `FILE_COPY_EXTERNAL` validation with unsupported
     no-touch failure behavior, `GET_SECTOR_ADDR` validation with
     no-XIP unsupported failure, `GETPMTIMINGS` zero timing snapshots,
-    secure-wipe sparse-sector clearing, set-secure-wipe-flag validation/no-op
-    behavior, exact `DELETE_SECTOR_INFO` input-size rejection,
+    successful no-op `IOCTL_DISK_FLUSH_CACHE`, secure-wipe sparse-sector
+    clearing, set-secure-wipe-flag validation/no-op behavior, exact
+    `DELETE_SECTOR_INFO` input-size rejection,
     copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior

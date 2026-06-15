@@ -4695,3 +4695,24 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   coredll_raw_msgwait_bad_handle_pointer_records_failed_msgwait --
   --nocapture` passed. Cargo still emits the existing unused-code warnings and
   the intermittent Windows incremental-cache cleanup note.
+- `src/ce/coredll.rs`, `src/ce/kernel.rs`, `src/emulator/imports.rs`,
+  `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: direct
+  `FSDMGR_DiskIoControl(IOCTL_DISK_FLUSH_CACHE)` is now named from CE
+  `diskio.h` and covered as a successful no-op on synthetic sparse disks,
+  matching the optional flush-forwarding behavior in CE `fsdcache.cpp` and
+  `nullcache.cpp`.
+- `src/emulator/unicorn.rs`: fixed the full feature test build by cloning the
+  reused synthetic `MipsGuestContext` in the direct-send WNDPROC cleanup test
+  fixture before the first `SavedCpuContext` consumes it.
+- Focused validation after the FSDMGR disk flush-cache and test-fixture slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the FSDMGR disk flush-cache and test-fixture slice:
+  `git diff --check`, `cargo fmt --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and Cargo
+  still emits the existing unused-code warnings.
