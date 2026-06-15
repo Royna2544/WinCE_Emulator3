@@ -149,7 +149,7 @@ pub struct CeKernel {
     fsdmgr_caches: Vec<Option<FsdmgrCacheEntry>>,
     display_gamma_value: u32,
     display_rotation: u32,
-    display_backlight_enabled: bool,
+    display_lcdcon3_high_nibble: u8,
     display_perf_timings: Vec<DisplayPerfTiming>,
     display_perf_unhandled: u32,
     window_backing_stores: BTreeMap<u32, FramebufferBackingStore>,
@@ -833,7 +833,7 @@ impl CeKernel {
             fsdmgr_caches: Vec::new(),
             display_gamma_value: 2330,
             display_rotation: 0,
-            display_backlight_enabled: true,
+            display_lcdcon3_high_nibble: 0,
             display_perf_timings: Vec::new(),
             display_perf_unhandled: 0,
             window_backing_stores: BTreeMap::new(),
@@ -861,11 +861,44 @@ impl CeKernel {
     }
 
     pub fn display_backlight_enabled(&self) -> bool {
-        self.display_backlight_enabled
+        self.display_lcdcon3_high_nibble & 1 == 0
     }
 
     pub fn set_display_backlight_enabled(&mut self, enabled: bool) {
-        self.display_backlight_enabled = enabled;
+        if enabled {
+            self.display_lcdcon3_high_nibble &= !1;
+        } else {
+            self.display_lcdcon3_high_nibble |= 1;
+        }
+    }
+
+    pub fn display_contrast_value(&self) -> u32 {
+        15 - u32::from(self.display_lcdcon3_high_nibble & 0x0f)
+    }
+
+    pub fn set_display_contrast_value(&mut self, value: i32) -> u32 {
+        let contrast = value.clamp(0, 15) as u8;
+        self.display_lcdcon3_high_nibble = 15 - contrast;
+        u32::from(contrast)
+    }
+
+    pub fn increase_display_contrast(&mut self) -> u32 {
+        if self.display_lcdcon3_high_nibble > 0 {
+            self.display_lcdcon3_high_nibble -= 1;
+        }
+        self.display_contrast_value()
+    }
+
+    pub fn decrease_display_contrast(&mut self) -> u32 {
+        if self.display_lcdcon3_high_nibble < 15 {
+            self.display_lcdcon3_high_nibble += 1;
+        }
+        self.display_contrast_value()
+    }
+
+    pub fn reset_display_contrast(&mut self) -> u32 {
+        self.display_lcdcon3_high_nibble = 0;
+        0
     }
 
     pub fn clear_display_perf_timings(&mut self) {

@@ -491,6 +491,13 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     const DRVESC_SAVEVIDEOMEM: u32 = 6501;
     const DRVESC_RESTOREVIDEOMEM: u32 = 6502;
     const DRVESC_GETRAWFRAMEBUFFER: u32 = 0x0002_0001;
+    const CONTRASTCOMMAND: u32 = 6149;
+    const CONTRAST_CMD_GET: u32 = 0;
+    const CONTRAST_CMD_SET: u32 = 1;
+    const CONTRAST_CMD_INCREASE: u32 = 2;
+    const CONTRAST_CMD_DECREASE: u32 = 3;
+    const CONTRAST_CMD_DEFAULT: u32 = 4;
+    const CONTRAST_CMD_MAX: u32 = 5;
     const SETBACKLIGHT: u32 = 100_000;
     const GETBACKLIGHT: u32 = 100_001;
     const DMDO_0: u32 = 0;
@@ -519,6 +526,8 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     let rotation_out = 0x3000_3020;
     let backlight_ptr = 0x3000_3030;
     let backlight_out = 0x3000_3040;
+    let contrast_in = 0x3000_3050;
+    let contrast_out = 0x3000_3060;
     memory.map_words(query_ptr, 1);
     memory.map_words(dispperf_out, DISPPERF_TIMING_TABLE_SIZE / 4);
     memory.map_words(gamma_update_ptr, 1);
@@ -526,6 +535,8 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     memory.map_words(rotation_out, 1);
     memory.map_words(backlight_ptr, 1);
     memory.map_words(backlight_out, 1);
+    memory.map_words(contrast_in, 2);
+    memory.map_words(contrast_out, 1);
 
     let hdc = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -546,6 +557,7 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
         DRVESC_GETGAMMAVALUE,
         DRVESC_SETSCREENROTATION,
         DRVESC_GETSCREENROTATION,
+        CONTRASTCOMMAND,
         DISPPERF_EXTESC_GETSIZE,
         DISPPERF_EXTESC_GETTIMING,
         DISPPERF_EXTESC_CLEARTIMING,
@@ -703,6 +715,345 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     ));
     assert_eq!(memory.read_u32(backlight_out)?, 1);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(contrast_in, CONTRAST_CMD_GET);
+    memory.write_word(contrast_in + 4, 0xdead_beef);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(contrast_out)?,
+        15,
+        "DeviceEmulator default LCDCON3 nibble reports maximum contrast"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(contrast_in, CONTRAST_CMD_SET);
+    memory.write_word(contrast_in + 4, 7);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(contrast_out)?, 7);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_word(contrast_in, CONTRAST_CMD_GET);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(contrast_out)?, 7);
+
+    memory.write_word(contrast_in, CONTRAST_CMD_SET);
+    memory.write_word(contrast_in + 4, (-5i32) as u32);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(contrast_out)?,
+        0,
+        "CONTRAST_CMD_SET clamps negative values to CE's minimum"
+    );
+
+    memory.write_word(backlight_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, GETBACKLIGHT, 0, 0, 4, backlight_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(backlight_out)?,
+        0,
+        "minimum contrast sets LCDCON3 bit 28, which GETBACKLIGHT treats as off"
+    );
+
+    memory.write_word(contrast_in, CONTRAST_CMD_SET);
+    memory.write_word(contrast_in + 4, 20);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(contrast_out)?,
+        15,
+        "CONTRAST_CMD_SET clamps high values to CE's maximum"
+    );
+
+    memory.write_word(backlight_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, GETBACKLIGHT, 0, 0, 4, backlight_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(backlight_out)?,
+        1,
+        "maximum contrast clears LCDCON3 bit 28, which GETBACKLIGHT treats as on"
+    );
+
+    memory.write_word(contrast_in, CONTRAST_CMD_DECREASE);
+    memory.write_word(contrast_in + 4, 0);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(contrast_out)?, 14);
+
+    memory.write_word(contrast_in, CONTRAST_CMD_INCREASE);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(contrast_out)?, 15);
+
+    memory.write_word(contrast_in, CONTRAST_CMD_DEFAULT);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(contrast_out)?,
+        0,
+        "CE returns zero from CONTRAST_CMD_DEFAULT before later GET reads back max"
+    );
+
+    memory.write_word(contrast_in, CONTRAST_CMD_GET);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(contrast_out)?, 15);
+
+    memory.write_word(contrast_in, CONTRAST_CMD_SET);
+    memory.write_word(contrast_in + 4, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    memory.write_word(contrast_in, CONTRAST_CMD_GET);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(contrast_out)?,
+        3,
+        "CONTRASTCOMMAND accepts a null output pointer and still updates state"
+    );
+
+    memory.write_word(contrast_in, CONTRAST_CMD_MAX);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(contrast_out)?, 15);
+    memory.write_word(contrast_in, CONTRAST_CMD_GET);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(contrast_out)?,
+        3,
+        "CONTRAST_CMD_MAX reports the limit without changing current contrast"
+    );
+
+    memory.write_word(contrast_in, CONTRAST_CMD_GET);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 4, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        memory.read_u32(contrast_out)?,
+        0xfeed_beef,
+        "CONTRASTCOMMAND invalid input size should not mutate caller storage"
+    );
+
+    memory.write_word(contrast_in, 99);
+    memory.write_word(contrast_out, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [hdc, CONTRASTCOMMAND, 8, contrast_in, 4, contrast_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        memory.read_u32(contrast_out)?,
+        0xfeed_beef,
+        "CONTRASTCOMMAND unknown commands should not mutate caller storage"
+    );
 
     memory.write_word(backlight_out, 0xfeed_beef);
     assert!(matches!(

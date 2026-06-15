@@ -36150,6 +36150,13 @@ const DRVESC_SETVIDEOPROTECTION: u32 = 6401;
 const DRVESC_GETVIDEOPROTECTION: u32 = 6402;
 const DRVESC_SAVEVIDEOMEM: u32 = 6501;
 const DRVESC_RESTOREVIDEOMEM: u32 = 6502;
+const CONTRASTCOMMAND: u32 = 6149;
+const CONTRAST_CMD_GET: u32 = 0;
+const CONTRAST_CMD_SET: u32 = 1;
+const CONTRAST_CMD_INCREASE: u32 = 2;
+const CONTRAST_CMD_DECREASE: u32 = 3;
+const CONTRAST_CMD_DEFAULT: u32 = 4;
+const CONTRAST_CMD_MAX: u32 = 5;
 const SETBACKLIGHT: u32 = 100_000;
 const GETBACKLIGHT: u32 = 100_001;
 const DMDO_0: u32 = 0;
@@ -36215,6 +36222,10 @@ fn ext_escape_raw<M: CoredllGuestMemory>(
         drvesc_get_screen_rotation_raw(kernel, memory, thread_id, output_len, output_ptr)
     } else if escape == DRVESC_SETSCREENROTATION {
         drvesc_set_screen_rotation_raw(kernel, memory, thread_id, input_len, input_ptr)
+    } else if escape == CONTRASTCOMMAND {
+        contrast_command_raw(
+            kernel, memory, thread_id, input_len, input_ptr, output_len, output_ptr,
+        )
     } else if escape == SETBACKLIGHT {
         set_backlight_raw(kernel, memory, thread_id, input_len, input_ptr)
     } else if escape == GETBACKLIGHT {
@@ -36231,6 +36242,50 @@ fn ext_escape_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
         EXTESC_NOTSUPPORTED
     }
+}
+
+fn contrast_command_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    input_len: u32,
+    input_ptr: u32,
+    output_len: u32,
+    output_ptr: u32,
+) -> u32 {
+    if input_len != 8 || input_ptr == 0 || (output_ptr != 0 && output_len != 4) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return EXTESC_ERROR;
+    }
+    let Some(command) = read_guest_u32(kernel, memory, thread_id, input_ptr) else {
+        return EXTESC_ERROR;
+    };
+    let Some(parm) = read_guest_u32(kernel, memory, thread_id, input_ptr.wrapping_add(4)) else {
+        return EXTESC_ERROR;
+    };
+
+    let out_value = match command {
+        CONTRAST_CMD_GET => kernel.display_contrast_value(),
+        CONTRAST_CMD_SET => kernel.set_display_contrast_value(parm as i32),
+        CONTRAST_CMD_INCREASE => kernel.increase_display_contrast(),
+        CONTRAST_CMD_DECREASE => kernel.decrease_display_contrast(),
+        CONTRAST_CMD_DEFAULT => kernel.reset_display_contrast(),
+        CONTRAST_CMD_MAX => 15,
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return EXTESC_ERROR;
+        }
+    };
+
+    if output_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, output_ptr, out_value) {
+        return EXTESC_ERROR;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    EXTESC_SUPPORTED
 }
 
 fn set_backlight_raw<M: CoredllGuestMemory>(
@@ -36457,6 +36512,7 @@ fn is_queryable_display_escape(escape: u32) -> bool {
             | DRVESC_GETGAMMAVALUE
             | DRVESC_SETSCREENROTATION
             | DRVESC_GETSCREENROTATION
+            | CONTRASTCOMMAND
             | DISPPERF_EXTESC_GETSIZE
             | DISPPERF_EXTESC_GETTIMING
             | DISPPERF_EXTESC_CLEARTIMING
