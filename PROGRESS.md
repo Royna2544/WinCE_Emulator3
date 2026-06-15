@@ -4044,3 +4044,23 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `target\debug\incremental` finalize access-denied note, but all validation
   commands returned success. The full suite still ignores the eVC4 MIPSII
   fixture because that toolchain is not configured.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `OffsetRgn` now
+  returns the region's post-offset CE status instead of treating every
+  non-empty region as `SIMPLEREGION`. Complex difference regions retain their
+  multi-rect hole geometry, move their bounds by the requested offset, continue
+  to reject points in the shifted hole, and report `COMPLEXREGION` through both
+  `OffsetRgn` and `GetRgnBox`.
+- Focused validation after the `OffsetRgn` complex-status slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_combine_rgn_diff_preserves_holes` passed. Cargo
+  still emits the existing unused-code warnings and the recurring
+  `target\debug\incremental` finalize access-denied note, but the command
+  returned success.
+- Broader validation after the `OffsetRgn` complex-status slice and overlapping
+  WNDPROC grace regression: `cargo fmt --check`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop direct_send_wndproc_cleanup_keeps_live_callout_until_return_pc`,
+  `cargo check --features unicorn,trace,win32-desktop`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. The full
+  suite still ignores the eVC4 MIPSII fixture because that toolchain is not
+  configured, and Cargo still emits the existing unused-code warnings plus the
+  recurring `target\debug\incremental` finalize access-denied note.

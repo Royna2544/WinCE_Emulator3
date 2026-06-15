@@ -2274,6 +2274,20 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     non-paletted while keeping the stock default palette readable through the
     palette APIs.
 
+- GDI region status and offset behavior:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\region.cpp`
+  - CE `wingdi.h` publishes the region status constants `NULLREGION == 1`,
+    `SIMPLEREGION == 2`, `COMPLEXREGION == 3`, and declares `OffsetRgn`.
+    CE `region.cpp::OffsetRgn_T`, `passNull2Region(EOffsetRgn)`,
+    `checkReturnValues(EOffsetRgn)`, `RgnRegressionTest(EOffsetRgn)`, and
+    `OffsetRgnNULLRegionTest(EOffsetRgn)` keep the API on the normal region
+    status surface: invalid handles fail, empty regions report `NULLREGION`,
+    and represented non-empty geometry reports its actual simple/complex
+    status after offsetting. Raw `OffsetRgn` now reclassifies the stored region
+    after moving it, so multi-rect hole regions keep `COMPLEXREGION` instead of
+    being collapsed to `SIMPLEREGION`.
+
 - GDI DIB/color-table and DIB brush surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
   `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\da.cpp`,
