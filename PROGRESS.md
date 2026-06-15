@@ -21,12 +21,15 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `BF_MIDDLE | BF_RECT` center fill and `BF_FLAT | BF_RECT` center preservation
   through real selected-DIB pixel reads. Focused validation passed for
   `coredll_raw_draw_edge_matches_ce_middle_and_flat_center_pixels`.
-- `src/emulator/unicorn.rs`: orphaned WNDPROC return stubs now recover through
-  the last recorded WNDPROC return when the return PC is a real guest address.
-  The recovery preserves the current guest `v0` result instead of replaying
-  stale metadata. Focused validation passed for return-record recovery,
-  missing-return-PC rejection, direct-send cleanup preservation, mapped-WNDPROC
-  visible handoff, and the release Unicorn build.
+- `src/emulator/unicorn.rs`: orphaned WNDPROC return stubs now scan recent
+  archived WNDPROC returns for a real guest return PC whose saved frame matches
+  the current frame exactly or by one WNDPROC call-frame. This covers the live
+  iNavi return-stub stall where the archived direct-send frame was 0x20 bytes
+  above the current FP, while still rejecting larger mismatches. The recovery
+  preserves the current guest `v0` result instead of replaying stale metadata.
+  Focused validation passed for matching-frame recovery, nearby-frame recovery,
+  missing-return-PC rejection, mismatched-frame rejection, and archived
+  direct-send cleanup recovery.
 - `src/ce/coredll.rs`, `src/ce/resource.rs`, `tests/basic_subsystems.rs`, and
   `tests/coredll_raw_gwe.rs`: CE clip-region state now copies selected region
   geometry into the DC instead of retaining a live `HRGN` handle. Raw
