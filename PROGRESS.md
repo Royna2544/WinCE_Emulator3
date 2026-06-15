@@ -4897,3 +4897,14 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   emulator's coredll `AdvertiseInterface` fail-closed surface
   (`FALSE`/`ERROR_NOT_SUPPORTED`), while real device-interface advertisement
   publication remains queued.
+- Validation after the FSDMGR advertise-interface import slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_advertise_interface_import_matches_coredll_stub -- --nocapture`,
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop patches_supported_fsdmgr_imports_only --
+  --nocapture`, `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture
+  remains ignored, and Cargo still emits the existing unused-code warnings.
