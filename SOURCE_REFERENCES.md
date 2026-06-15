@@ -489,8 +489,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     partition-relative to disk-relative form, and forwards the payload to the
     block driver. DOSPART `part.cpp` wraps secure
     wipe requests in a partition-sized `DELETE_SECTOR_INFO`, and MSFLASH
-    `falmain.cpp` validates that same payload for both secure wipe and
-    set-secure-wipe-flag. v3 now traps the direct ordinals, persists
+    `falmain.cpp` requires exactly `sizeof(DELETE_SECTOR_INFO)` before
+    accepting delete-sector, secure-wipe, or set-secure-wipe-flag requests.
+    v3 now traps the direct ordinals, persists
     direct/cache/Ex writes in sparse synthetic 512-byte sectors, reads unwritten
     sectors as zero-filled data, writes synthetic `DISK_INFO`, disk name,
     device info, and storage-id metadata, fills Ex result sector counts, handles
@@ -499,7 +500,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     validates `COPY_EXTERNAL_START`/`COMPLETE` `DISK_COPY_EXTERNAL` headers and sector-list
     entries before returning unsupported without touching caller buffers,
     returns a CE `PowerTimings`-sized zero timing snapshot for
-    `GETPMTIMINGS`, validates the `DELETE_SECTOR_INFO` payload for
+    `GETPMTIMINGS`, validates the exact `DELETE_SECTOR_INFO` payload size for
     `SET_SECURE_WIPE_FLAG` without erasing, clears sparse sectors for
     secure-wipe and delete-sector requests, clears the synthetic disk for
     format-media requests, and treats initialized and flush-cache as
@@ -3033,7 +3034,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     no-touch failure behavior, `GET_SECTOR_ADDR` validation with
     no-XIP unsupported failure, `GETPMTIMINGS` zero timing snapshots,
     secure-wipe sparse-sector clearing, set-secure-wipe-flag validation/no-op
-    behavior, copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
+    behavior, exact `DELETE_SECTOR_INFO` input-size rejection,
+    copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
     for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL

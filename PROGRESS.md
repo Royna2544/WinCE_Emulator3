@@ -4645,3 +4645,18 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   364 passing tests, the eVC4 MIPSII fixture remains ignored because that
   toolchain is not configured, and Cargo still emits the existing unused-code
   warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `FSDMGR_DiskIoControl`
+  delete-sector, secure-wipe, and set-secure-wipe-flag payload validation now
+  requires the exact CE `sizeof(DELETE_SECTOR_INFO)` byte count before reading
+  or mutating sparse synthetic disk sectors, matching `diskio.h` plus the
+  MSFLASH `falmain.cpp` parameter gate.
+- Validation after the exact `DELETE_SECTOR_INFO` size slice: focused
+  `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info -- --nocapture`,
+  `cargo fmt --check`, `git diff --check`, `CARGO_INCREMENTAL=0 cargo check
+  --features unicorn,trace,win32-desktop`, and full `CARGO_INCREMENTAL=0 cargo
+  test -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored because that toolchain is not configured, and Cargo
+  still emits the existing unused-code warnings.

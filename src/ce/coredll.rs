@@ -12282,7 +12282,7 @@ fn fsdmgr_disk_validate_delete_sector_info_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return None;
     }
-    if delete_info_ptr == 0 || delete_info_bytes < 12 {
+    if delete_info_ptr == 0 || delete_info_bytes != 12 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);

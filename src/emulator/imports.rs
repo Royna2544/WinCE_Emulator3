@@ -2443,6 +2443,27 @@ mod tests {
         memory.map_word(delete_info_ptr, 12);
         memory.map_word(delete_info_ptr + 4, 13);
         memory.map_word(delete_info_ptr + 8, 1);
+        memory.map_word(delete_info_ptr + 12, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_SET_SECURE_WIPE_FLAG,
+                    delete_info_ptr,
+                    16,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
         assert_eq!(
             table.dispatch_trap(
                 &mut kernel,
@@ -2554,6 +2575,38 @@ mod tests {
         memory.map_word(delete_info_ptr, 12);
         memory.map_word(delete_info_ptr + 4, 11);
         memory.map_word(delete_info_ptr + 8, 1);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_DELETE_SECTORS,
+                    delete_info_ptr,
+                    16,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 11, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert_eq!(&read_back[..17], b"direct-disk-write");
         assert_eq!(
             table.dispatch_trap(
                 &mut kernel,
