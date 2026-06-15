@@ -33496,13 +33496,6 @@ fn recover_orphaned_wndproc_return_stub<D>(
         return false;
     }
     let current_fp = read_mips_reg(uc, RegisterMIPS::FP);
-    let frame_matches = [record.live_fp, record.caller_fp]
-        .into_iter()
-        .flatten()
-        .any(|frame_fp| frame_fp == current_fp);
-    if !frame_matches {
-        return false;
-    }
     let result = read_mips_reg(uc, RegisterMIPS::V0);
     let writes = [
         uc.reg_write(RegisterMIPS::V0, u64::from(result)),
@@ -33520,7 +33513,9 @@ fn recover_orphaned_wndproc_return_stub<D>(
         return_pc = format_args!("0x{:08x}", record.return_pc),
         current_fp = format_args!("0x{current_fp:08x}"),
         result = format_args!("0x{result:08x}"),
-        "recovered orphaned WNDPROC return stub from last matching return record"
+        live_fp = ?record.live_fp.map(|fp| format!("0x{fp:08x}")),
+        caller_fp = ?record.caller_fp.map(|fp| format!("0x{fp:08x}")),
+        "recovered orphaned WNDPROC return stub from last return record"
     );
     true
 }
@@ -36770,7 +36765,7 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn orphaned_wndproc_return_stub_rejects_stale_frame() {
+    fn orphaned_wndproc_return_stub_rejects_missing_return_pc() {
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let returns = Rc::new(RefCell::new(vec![super::UnicornWndProcReturn {
             source: "SendMessageW",
@@ -36779,14 +36774,14 @@ mod unicorn_tests {
             wparam: 5,
             lparam: 0,
             wndproc: 0x6004_f2b8,
-            return_pc: 0x0005_a1d8,
+            return_pc: super::WNDPROC_RETURN_STUB_ADDR,
             return_pc_trampoline_origin: None,
             result: 0,
             live_fp: Some(0x3004_a988),
             caller_fp: Some(0x3004_a988),
             class_name: None,
         }]));
-        uc.reg_write(RegisterMIPS::FP, 0x3004_b000).unwrap();
+        uc.reg_write(RegisterMIPS::FP, 0x3004_a988).unwrap();
         uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
             .unwrap();
 

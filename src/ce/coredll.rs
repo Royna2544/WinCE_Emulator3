@@ -45298,7 +45298,7 @@ fn intersect_clip_rect_raw(
     right: i32,
     bottom: i32,
 ) -> u32 {
-    if hdc == 0 {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -45335,7 +45335,7 @@ fn exclude_clip_rect_raw(
     right: i32,
     bottom: i32,
 ) -> u32 {
-    if hdc == 0 {
+    if !is_valid_hdc(kernel, hdc) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -45379,6 +45379,18 @@ fn get_clip_box_raw<M: CoredllGuestMemory>(
     hdc: u32,
     rect_ptr: u32,
 ) -> u32 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return ERROR_REGION;
+    }
+    if rect_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return ERROR_REGION;
+    }
     let rect = if let Some(region) = kernel.resources.clip_region(hdc) {
         region.rect
     } else {
@@ -45386,9 +45398,10 @@ fn get_clip_box_raw<M: CoredllGuestMemory>(
             .and_then(|hwnd| kernel.gwe.get_client_rect(hwnd))
             .unwrap_or_else(|| Rect::from_origin_size(0, 0, 800, 480))
     };
-    if rect_ptr != 0 && !write_guest_rect(kernel, memory, thread_id, rect_ptr, rect) {
+    if !write_guest_rect(kernel, memory, thread_id, rect_ptr, rect) {
         return 0;
     }
+    kernel.threads.set_last_error(thread_id, 0);
     region_status(rect)
 }
 

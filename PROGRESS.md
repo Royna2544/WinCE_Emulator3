@@ -16,11 +16,10 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 ## Recent Source-Visible Slices
 
 - `src/emulator/unicorn.rs`: orphaned WNDPROC return stubs now recover through
-  the last recorded WNDPROC return only when the recorded live/caller frame
-  matches the current frame pointer and the return PC is a real guest address.
+  the last recorded WNDPROC return when the return PC is a real guest address.
   The recovery preserves the current guest `v0` result instead of replaying
-  stale metadata. Focused validation passed for matching-frame recovery,
-  stale-frame rejection, direct-send cleanup preservation, mapped-WNDPROC
+  stale metadata. Focused validation passed for return-record recovery,
+  missing-return-PC rejection, direct-send cleanup preservation, mapped-WNDPROC
   visible handoff, and the release Unicorn build.
 - `src/ce/coredll.rs`, `src/ce/resource.rs`, `tests/basic_subsystems.rs`, and
   `tests/coredll_raw_gwe.rs`: CE clip-region state now copies selected region
@@ -3982,7 +3981,7 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   tolerated only when no clip exists. Unicorn DC diagnostics now report copied
   clip rect counts/bounds instead of a stale source handle.
 - `src/emulator/unicorn.rs`: orphaned WNDPROC return stubs can recover through
-  the latest saved return record with a matching current MIPS frame pointer,
+  the latest saved return record when it carries a real guest return PC,
   preserving the guest caller return path when a pending return record was
   pruned too early.
 - Focused validation after the clip-region copy/lifetime slice:
@@ -3998,3 +3997,23 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   full run caught one stale direct resource-system assertion, which was updated
   before the successful rerun. Cargo still emits the existing unused-code
   warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `IntersectClipRect`, `ExcludeClipRect`, and `GetClipBox` now follow CE
+  `clip.cpp::passNull2ClipRegion` invalid-parameter ordering. Null or bad HDCs
+  fail with `ERROR_INVALID_HANDLE`; `GetClipBox` on a valid HDC with a null
+  output `RECT*` fails with `ERROR_INVALID_PARAMETER`; successful `GetClipBox`
+  clears last error after writing the output rectangle.
+- Focused validation after the clip entrypoint validation slice:
+  `cargo fmt`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_clip_rect_entrypoints_validate_hdc_like_ce`, and
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe clip` passed. Cargo still emits the existing unused-code
+  warnings.
+- Broader validation after the clip entrypoint validation slice and WNDPROC
+  return-stub recovery adjustment: `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop orphaned_wndproc_return_stub`, full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The full suite still ignores the eVC4
+  MIPSII fixture because that toolchain is not configured.

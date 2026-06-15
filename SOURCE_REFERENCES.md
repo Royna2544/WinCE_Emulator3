@@ -803,6 +803,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     clip. `TestNoClipRgn` shows `GetClipRgn(hdc, NULL)` returns no-clip `0`
     only when no clip exists; with a real clip, null or non-region outputs
     report invalid handle.
+  - CE `clip.cpp::passNull2ClipRegion` also requires
+    `IntersectClipRect`, `ExcludeClipRect`, and `GetClipBox` to reject null or
+    bad HDCs with `ERROR_INVALID_HANDLE`; `GetClipBox(valid_hdc, NULL)` fails
+    with `ERROR_INVALID_PARAMETER`. Raw clip entrypoints now follow that
+    validation ordering before mutating DC clip state or writing output rects.
   - `SetWindowRgn(HWND, HRGN, BOOL)` consumes the region shape owned by GWE and
     only requests redraw when the third argument is nonzero. v3 now mirrors
     that boundary generically instead of invalidating every region change.
@@ -1665,9 +1670,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     callee state is not interleaved with a different runnable thread.
   - If execution reaches the synthetic WNDPROC return stub after the pending
     return record was already pruned, v3 can now recover through the latest
-    saved return record whose live/caller frame pointer matches the current
-    MIPS frame. This keeps the invalid user-kdata return boundary fail-closed
-    while preserving the guest's normal caller return path.
+    saved return record when it carries a real guest return PC. This keeps the
+    invalid user-kdata return boundary fail-closed while preserving the guest's
+    normal caller return path.
 
 - Registry API boundary:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/fscall.c`
