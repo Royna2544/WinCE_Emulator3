@@ -4354,6 +4354,15 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `cargo test -j 1 --features unicorn,trace,win32-desktop
   cross_thread_visible_message_requires_mapped_wndproc_before_handoff --
   --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- `src/ce/coredll.rs` and `tests/coredll_raw_kernel.rs`: `SHGetFileInfoW`
+  now distinguishes CE small and large system image lists. Calls with
+  `SHGFI_SMALLICON` keep the 16x16 pseudo-list handle, while calls without it
+  return a separate 32x32 large-list handle that participates in image-list
+  count, icon-size, icon, image-info, background-color, and destroy semantics.
+- Focused validation after the shell system image-list slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel sh_get_file_info_system_image_list_supports_icon_queries_and_draw
+  -- --nocapture` passed. Cargo still emits the existing unused-code warnings.
 - `tests/coredll_raw_memory_file.rs`: aligned the older raw serial control
   ordinal fixture with the CE-backed `GetCommModemStatus` behavior so it now
   expects asserted CTS, DSR, and RLSD bits rather than the former zero-status

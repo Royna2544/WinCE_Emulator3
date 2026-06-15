@@ -6776,6 +6776,7 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
     const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
     const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
     const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
+    const SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE: u32 = 0x000b_f100;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -6812,6 +6813,26 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
     assert_eq!(memory.read_i32(info_ptr + SHFILEINFO_IICON_OFFSET)?, 0);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
+    let ret = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHGET_FILE_INFO,
+        [path_ptr, 0, info_ptr, SHFILEINFO_SIZE_W, SHGFI_SYSICONINDEX],
+    );
+    assert!(
+        matches!(
+            ret,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE),
+                ..
+            }
+        ),
+        "CE SHGetFileInfo should return the large system image list without SHGFI_SMALLICON"
+    );
+    assert_eq!(memory.read_i32(info_ptr + SHFILEINFO_IICON_OFFSET)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     memory.write_wide_z(path_ptr, r"\Docs\ghost.nav");
     memory.map_words(size_ptr, 2);
     memory.map_words(image_info_ptr, 8);
@@ -6832,7 +6853,7 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
     assert!(matches!(
         ret,
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(SHELL_SYSTEM_IMAGE_LIST_HANDLE),
+            value: CoredllValue::U32(SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE),
             ..
         }
     ));
@@ -6855,12 +6876,25 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
     assert!(matches!(
         ret,
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(SHELL_SYSTEM_IMAGE_LIST_HANDLE),
+            value: CoredllValue::U32(SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE),
             ..
         }
     ));
     assert_ne!(memory.read_u32(info_ptr + SHFILEINFO_HICON_OFFSET)?, 0);
 
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_IMAGE_COUNT,
+            [SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(8192),
+            ..
+        }
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -6889,6 +6923,21 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
     ));
     assert_eq!(memory.read_i32(size_ptr)?, 16);
     assert_eq!(memory.read_i32(size_ptr + 4)?, 16);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_ICON_SIZE,
+            [SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE, size_ptr, size_ptr + 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(size_ptr)?, 32);
+    assert_eq!(memory.read_i32(size_ptr + 4)?, 32);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -6928,6 +6977,27 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
             ..
         } if handle == shell_pseudo_icon_handle(icon_index)
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            [
+                SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE,
+                icon_index as u32,
+                image_info_ptr
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_ne!(memory.read_u32(image_info_ptr)?, 0);
+    assert_eq!(memory.read_i32(image_info_ptr + 20)?, 0);
+    assert_eq!(memory.read_i32(image_info_ptr + 24)?, icon_index * 32 + 32);
+    assert_eq!(memory.read_i32(image_info_ptr + 28)?, 32);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

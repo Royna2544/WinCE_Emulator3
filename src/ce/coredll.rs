@@ -240,9 +240,12 @@ const SHELL_SHORTCUT_ICON: u32 = 32517;
 const SHELL_ICON_OVERLAY_SHIFT: u32 = 24;
 const SHELL_ICON_OVERLAY_MASK: u32 = 0x0f00;
 const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
+const SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE: u32 = 0x000b_f100;
 const SHELL_SYSTEM_IMAGE_LIST_COUNT: u32 = 8192;
 const SHELL_SYSTEM_IMAGE_LIST_CX: i32 = 16;
 const SHELL_SYSTEM_IMAGE_LIST_CY: i32 = 16;
+const SHELL_SYSTEM_LARGE_IMAGE_LIST_CX: i32 = 32;
+const SHELL_SYSTEM_LARGE_IMAGE_LIST_CY: i32 = 32;
 const CLR_NONE: u32 = 0xffff_ffff;
 const CLR_DEFAULT: u32 = 0xff00_0000;
 const NOTIFYICONDATA_TIP_OFFSET: u32 = 24;
@@ -22637,12 +22640,9 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     } else {
         None
     };
-    if flags & SHGFI_SYSICONINDEX != 0 {
-        kernel.resources.create_shell_system_image_list(
-            SHELL_SYSTEM_IMAGE_LIST_HANDLE,
-            SHELL_SYSTEM_IMAGE_LIST_CX,
-            SHELL_SYSTEM_IMAGE_LIST_CY,
-        );
+    let system_image_list = shell_system_image_list_handle(flags);
+    if flags & (SHGFI_ICON | SHGFI_SYSICONINDEX) != 0 {
+        ensure_shell_system_image_list(kernel, system_image_list);
     }
     if !write_guest_u32(
         kernel,
@@ -22728,7 +22728,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
 
     kernel.threads.set_last_error(thread_id, 0);
     if flags & (SHGFI_ICON | SHGFI_SYSICONINDEX) != 0 {
-        SHELL_SYSTEM_IMAGE_LIST_HANDLE
+        system_image_list
     } else {
         1
     }
@@ -23684,6 +23684,39 @@ fn resolve_ce_shortcut_icon_target(kernel: &CeKernel, path: &str) -> Option<Shel
         }
     }
     None
+}
+
+fn shell_system_image_list_handle(flags: u32) -> u32 {
+    if flags & SHGFI_SMALLICON != 0 {
+        SHELL_SYSTEM_IMAGE_LIST_HANDLE
+    } else {
+        SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE
+    }
+}
+
+fn shell_system_image_list_size(handle: u32) -> Option<(i32, i32)> {
+    match handle {
+        SHELL_SYSTEM_IMAGE_LIST_HANDLE => {
+            Some((SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY))
+        }
+        SHELL_SYSTEM_LARGE_IMAGE_LIST_HANDLE => Some((
+            SHELL_SYSTEM_LARGE_IMAGE_LIST_CX,
+            SHELL_SYSTEM_LARGE_IMAGE_LIST_CY,
+        )),
+        _ => None,
+    }
+}
+
+fn is_shell_system_image_list_handle(handle: u32) -> bool {
+    shell_system_image_list_size(handle).is_some()
+}
+
+fn ensure_shell_system_image_list(kernel: &mut CeKernel, handle: u32) {
+    if let Some((width, height)) = shell_system_image_list_size(handle) {
+        kernel
+            .resources
+            .create_shell_system_image_list(handle, width, height);
+    }
 }
 
 fn shell_icon_handle_with_flags(index: i32, flags: u32) -> u32 {
@@ -27340,7 +27373,7 @@ fn image_list_create_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) ->
 
 fn image_list_destroy_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
     let owned_bitmaps = image_list_owned_bitmap_handles(kernel, handle);
-    if handle != SHELL_SYSTEM_IMAGE_LIST_HANDLE && kernel.resources.destroy_image_list(handle) {
+    if !is_shell_system_image_list_handle(handle) && kernel.resources.destroy_image_list(handle) {
         for bitmap in owned_bitmaps {
             delete_owned_bitmap(kernel, bitmap);
         }
@@ -27870,7 +27903,7 @@ fn image_list_set_image_count_raw(kernel: &mut CeKernel, thread_id: u32, args: &
 }
 
 fn image_list_get_count_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
-    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+    if is_shell_system_image_list_handle(handle) {
         kernel.threads.set_last_error(thread_id, 0);
         return SHELL_SYSTEM_IMAGE_LIST_COUNT;
     }
@@ -27903,8 +27936,8 @@ fn image_list_get_icon_size_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let size = if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
-        Some((SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY))
+    let size = if let Some(size) = shell_system_image_list_size(handle) {
+        Some(size)
     } else {
         kernel
             .resources
@@ -27935,7 +27968,7 @@ fn image_list_get_icon_raw<M: CoredllGuestMemory>(
     let handle = raw_arg(args, 0);
     let index = raw_i32_arg(args, 1);
     let flags = raw_arg(args, 2);
-    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+    if is_shell_system_image_list_handle(handle) {
         if index < 0 || index as u32 >= SHELL_SYSTEM_IMAGE_LIST_COUNT {
             kernel
                 .threads
@@ -28116,18 +28149,18 @@ fn image_list_get_image_info_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let info = if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+    let info = if let Some((width, height)) = shell_system_image_list_size(handle) {
         if index < 0 || index as u32 >= SHELL_SYSTEM_IMAGE_LIST_COUNT {
             None
         } else {
-            let left = index.saturating_mul(SHELL_SYSTEM_IMAGE_LIST_CX);
+            let left = index.saturating_mul(width);
             Some((
                 shell_system_image_bitmap_handle(index),
                 0,
                 left,
                 0,
-                left.saturating_add(SHELL_SYSTEM_IMAGE_LIST_CX),
-                SHELL_SYSTEM_IMAGE_LIST_CY,
+                left.saturating_add(width),
+                height,
             ))
         }
     } else {
@@ -28171,7 +28204,7 @@ fn image_list_set_bk_color_raw<M: CoredllGuestMemory>(
 ) -> u32 {
     let handle = raw_arg(args, 0);
     let color = raw_arg(args, 1);
-    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+    if is_shell_system_image_list_handle(handle) {
         kernel.threads.set_last_error(thread_id, 0);
         return CLR_NONE;
     }
@@ -28240,7 +28273,7 @@ fn reset_image_list_bitmap_bk_color<M: CoredllGuestMemory>(
 }
 
 fn image_list_get_bk_color_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
-    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+    if is_shell_system_image_list_handle(handle) {
         kernel.threads.set_last_error(thread_id, 0);
         return CLR_NONE;
     }
@@ -28271,8 +28304,8 @@ fn image_list_draw_raw<M: CoredllGuestMemory>(
     let x = raw_i32_arg(args, 3);
     let y = raw_i32_arg(args, 4);
     let flags = raw_arg(args, 5);
-    let (width, height) = if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
-        (SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY)
+    let (width, height) = if let Some(size) = shell_system_image_list_size(handle) {
+        size
     } else if let Some(list) = kernel.resources.image_list(handle) {
         (list.width, list.height)
     } else {
@@ -28327,7 +28360,7 @@ fn image_list_draw_ex_raw<M: CoredllGuestMemory>(
     let rgb_bk = raw_arg(args, 7);
     let rgb_fg = raw_arg(args, 8);
     let raw_flags = raw_arg(args, 9);
-    if handle != SHELL_SYSTEM_IMAGE_LIST_HANDLE && kernel.resources.image_list(handle).is_none() {
+    if !is_shell_system_image_list_handle(handle) && kernel.resources.image_list(handle).is_none() {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -28544,12 +28577,8 @@ fn normalize_image_list_draw(kernel: &CeKernel, mut draw: ImageListDraw) -> Imag
     const ILD_TRANSPARENT: u32 = 0x0001;
     const ILD_BLENDMASK: u32 = 0x000e;
     let (default_width, default_height, bk_color) =
-        if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
-            (
-                SHELL_SYSTEM_IMAGE_LIST_CX,
-                SHELL_SYSTEM_IMAGE_LIST_CY,
-                CLR_NONE,
-            )
+        if let Some((width, height)) = shell_system_image_list_size(draw.image_list) {
+            (width, height, CLR_NONE)
         } else if let Some(list) = kernel.resources.image_list(draw.image_list) {
             (list.width, list.height, list.bk_color)
         } else {
@@ -28582,13 +28611,14 @@ fn render_image_list_draw_framebuffer<M: CoredllGuestMemory>(
     let Some(framebuffer) = framebuffer else {
         return;
     };
-    let (default_width, default_height) = if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
-        (SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY)
-    } else if let Some(list) = kernel.resources.image_list(draw.image_list) {
-        (list.width, list.height)
-    } else {
-        return;
-    };
+    let (default_width, default_height) =
+        if let Some(size) = shell_system_image_list_size(draw.image_list) {
+            size
+        } else if let Some(list) = kernel.resources.image_list(draw.image_list) {
+            (list.width, list.height)
+        } else {
+            return;
+        };
     let width = if draw.width > 0 {
         draw.width
     } else {
@@ -28635,13 +28665,14 @@ fn render_image_list_draw_bitmap<M: CoredllGuestMemory>(
     if !kernel.resources.is_memory_dc(draw.hdc) {
         return false;
     }
-    let (default_width, default_height) = if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
-        (SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY)
-    } else if let Some(list) = kernel.resources.image_list(draw.image_list) {
-        (list.width, list.height)
-    } else {
-        return true;
-    };
+    let (default_width, default_height) =
+        if let Some(size) = shell_system_image_list_size(draw.image_list) {
+            size
+        } else if let Some(list) = kernel.resources.image_list(draw.image_list) {
+            (list.width, list.height)
+        } else {
+            return true;
+        };
     let width = if draw.width > 0 {
         draw.width
     } else {
@@ -28779,7 +28810,7 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
     const ILD_MASK: u32 = 0x0010;
     const ILD_IMAGE: u32 = 0x0020;
 
-    if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE || draw.index < 0 {
+    if is_shell_system_image_list_handle(draw.image_list) || draw.index < 0 {
         return false;
     }
     let Some(list) = kernel.resources.image_list(draw.image_list) else {
@@ -28894,7 +28925,7 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     const ILD_MASK: u32 = 0x0010;
     const ILD_IMAGE: u32 = 0x0020;
 
-    if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE || draw.index < 0 {
+    if is_shell_system_image_list_handle(draw.image_list) || draw.index < 0 {
         return false;
     }
     let Some(list) = kernel.resources.image_list(draw.image_list) else {
@@ -29662,10 +29693,8 @@ fn image_list_duplicate_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     handle: u32,
 ) -> u32 {
-    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
-        kernel
-            .resources
-            .create_shell_system_image_list(SHELL_SYSTEM_IMAGE_LIST_HANDLE, 16, 16);
+    if is_shell_system_image_list_handle(handle) {
+        ensure_shell_system_image_list(kernel, handle);
     }
     let Some(source) = kernel.resources.image_list(handle).cloned() else {
         kernel
@@ -29914,7 +29943,7 @@ fn record_image_list_draw(kernel: &mut CeKernel, thread_id: u32, draw: ImageList
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+    if is_shell_system_image_list_handle(draw.image_list) {
         if draw.index as u32 >= SHELL_SYSTEM_IMAGE_LIST_COUNT {
             kernel
                 .threads
