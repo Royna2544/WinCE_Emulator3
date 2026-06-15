@@ -6163,6 +6163,37 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
+        ORD_GET_VIEWPORT_ORG_EX => Some(CoredllValue::Bool(get_dc_origin_ex_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            false,
+        ))),
+        ORD_OFFSET_VIEWPORT_ORG_EX => Some(CoredllValue::Bool(offset_viewport_org_ex_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SET_WINDOW_ORG_EX => Some(CoredllValue::Bool(set_window_org_ex_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_WINDOW_ORG_EX => Some(CoredllValue::Bool(get_dc_origin_ex_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            true,
+        ))),
+        ORD_GET_VIEWPORT_EXT_EX | ORD_GET_WINDOW_EXT_EX => {
+            Some(CoredllValue::Bool(get_dc_extent_ex_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+            )))
+        }
         ORD_SET_PIXEL => {
             let hdc = raw_arg(args, 0);
             let x = raw_i32_arg(args, 1);
@@ -41959,11 +41990,154 @@ struct PenModel {
     style: u32,
 }
 
+fn get_dc_origin_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hdc: u32,
+    point_ptr: u32,
+    window_origin: bool,
+) -> bool {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if point_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let point = kernel
+        .resources
+        .dc_state(hdc)
+        .map(|state| {
+            if window_origin {
+                state.window_origin
+            } else {
+                state.viewport_origin
+            }
+        })
+        .unwrap_or(Point { x: 0, y: 0 });
+    if !write_guest_point(kernel, memory, thread_id, point_ptr, point) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn offset_viewport_org_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let delta = Point {
+        x: raw_i32_arg(args, 1),
+        y: raw_i32_arg(args, 2),
+    };
+    let Some(previous) = kernel.resources.offset_viewport_origin(hdc, delta) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let point_ptr = raw_arg(args, 3);
+    if point_ptr != 0 && !write_guest_point(kernel, memory, thread_id, point_ptr, previous) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn set_window_org_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let point = Point {
+        x: raw_i32_arg(args, 1).saturating_neg(),
+        y: raw_i32_arg(args, 2).saturating_neg(),
+    };
+    let Some(previous) = kernel.resources.set_window_origin(hdc, point) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let point_ptr = raw_arg(args, 3);
+    if point_ptr != 0 && !write_guest_point(kernel, memory, thread_id, point_ptr, previous) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_dc_extent_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hdc: u32,
+    size_ptr: u32,
+) -> bool {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if size_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let (cx, cy) = selected_bitmap_object(kernel, hdc)
+        .map(|bitmap| (bitmap.width, bitmap.height))
+        .unwrap_or_else(|| {
+            (
+                kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN),
+                kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN),
+            )
+        });
+    if !write_size(kernel, memory, thread_id, size_ptr, cx, cy) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn hdc_viewport_origin(kernel: &CeKernel, hdc: u32) -> Point {
     kernel
         .resources
         .dc_state(hdc)
-        .map(|state| state.viewport_origin)
+        .map(|state| Point {
+            x: state
+                .viewport_origin
+                .x
+                .saturating_add(state.window_origin.x),
+            y: state
+                .viewport_origin
+                .y
+                .saturating_add(state.window_origin.y),
+        })
         .unwrap_or(Point { x: 0, y: 0 })
 }
 

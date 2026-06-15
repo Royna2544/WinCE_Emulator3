@@ -33772,6 +33772,27 @@ fn try_enter_call_window_proc_callout<D>(
         return true;
     }
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    if return_pc == WNDPROC_RETURN_STUB_ADDR {
+        let return_sp = wndproc_return_sp(uc);
+        let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+        let has_enclosing_wndproc_frame = pending_returns
+            .borrow()
+            .iter()
+            .any(|pending| pending.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES) == call_sp);
+        if !has_enclosing_wndproc_frame {
+            tracing::warn!(
+                target: "ce.gwe",
+                hwnd = format_args!("0x{hwnd:08x}"),
+                msg = format_args!("0x{msg:08x}"),
+                wparam = format_args!("0x{wparam:08x}"),
+                lparam = format_args!("0x{lparam:08x}"),
+                wndproc = format_args!("0x{wndproc:08x}"),
+                call_sp = format_args!("0x{call_sp:08x}"),
+                "declining CallWindowProcW guest callout with orphaned WNDPROC return stub"
+            );
+            return false;
+        }
+    }
 
     tracing::debug!(
         target: "ce.gwe",
@@ -36861,6 +36882,28 @@ mod unicorn_tests {
 
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x6004_f134);
         assert_eq!(uc.reg_read(RegisterMIPS::T9).unwrap() as u32, 0x6004_f134);
+    }
+
+    #[test]
+    fn call_window_proc_declines_orphaned_wndproc_return_stub() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let pending = Rc::new(RefCell::new(Vec::<super::PendingWndProcReturn>::new()));
+
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_f578).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+
+        assert!(!super::try_enter_call_window_proc_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_CALL_WINDOW_PROC_W),
+            &[0x6004_f2b8, 0x0002_0004, 0x534c, 0, 0],
+            &pending,
+        ));
+        assert!(pending.borrow().is_empty());
     }
 
     #[test]

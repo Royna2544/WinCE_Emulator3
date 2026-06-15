@@ -6,7 +6,7 @@ pub struct CoredllOrdinalDef {
     pub ordinal: u32,
 }
 
-pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1523] = &[
+pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1529] = &[
     CoredllOrdinalDef {
         name: "??2@YAPAXI@Z",
         ordinal: 1095,
@@ -4098,6 +4098,30 @@ pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1523] = &[
     CoredllOrdinalDef {
         name: "SetUserDefaultLCID",
         ordinal: 1795,
+    },
+    CoredllOrdinalDef {
+        name: "SetWindowOrgEx",
+        ordinal: 1984,
+    },
+    CoredllOrdinalDef {
+        name: "GetWindowOrgEx",
+        ordinal: 1985,
+    },
+    CoredllOrdinalDef {
+        name: "GetWindowExtEx",
+        ordinal: 1986,
+    },
+    CoredllOrdinalDef {
+        name: "OffsetViewportOrgEx",
+        ordinal: 1987,
+    },
+    CoredllOrdinalDef {
+        name: "GetViewportOrgEx",
+        ordinal: 1988,
+    },
+    CoredllOrdinalDef {
+        name: "GetViewportExtEx",
+        ordinal: 1989,
     },
     CoredllOrdinalDef {
         name: "SetViewportOrgEx",
@@ -13233,6 +13257,12 @@ pub const ORD_CREATE_PEN: u32 = 926;
 pub const ORD_FILL_RGN: u32 = 927;
 pub const ORD_SET_ROP2: u32 = 928;
 pub const ORD_GET_ROP2: u32 = 1990;
+pub const ORD_SET_WINDOW_ORG_EX: u32 = 1984;
+pub const ORD_GET_WINDOW_ORG_EX: u32 = 1985;
+pub const ORD_GET_WINDOW_EXT_EX: u32 = 1986;
+pub const ORD_OFFSET_VIEWPORT_ORG_EX: u32 = 1987;
+pub const ORD_GET_VIEWPORT_ORG_EX: u32 = 1988;
+pub const ORD_GET_VIEWPORT_EXT_EX: u32 = 1989;
 pub const ORD_CREATE_DIBPATTERN_BRUSH_PT: u32 = 929;
 pub const ORD_CREATE_PEN_INDIRECT: u32 = 930;
 pub const ORD_CREATE_SOLID_BRUSH: u32 = 931;

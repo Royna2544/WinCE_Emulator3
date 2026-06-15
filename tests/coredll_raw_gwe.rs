@@ -48,8 +48,9 @@ use wince_emulation_v3::{
             ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES,
             ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR,
             ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W,
-            ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W, ORD_GET_WINDOW,
-            ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
+            ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W, ORD_GET_VIEWPORT_EXT_EX,
+            ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW, ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W,
+            ORD_GET_WINDOW_ORG_EX, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
             ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
             ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL,
             ORD_HIDE_CARET, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_INDIRECT,
@@ -79,31 +80,33 @@ use wince_emulation_v3::{
             ORD_LOAD_MENU_W, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT,
             ORD_MAP_VIEW_OF_FILE, ORD_MAP_VIRTUAL_KEY_W, ORD_MAP_WINDOW_POINTS, ORD_MASK_BLT,
             ORD_MESSAGE_BOX_W, ORD_MOVE_TO_EX, ORD_MOVE_WINDOW,
-            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_OFFSET_RGN, ORD_PAT_BLT,
-            ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE,
-            ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT,
-            ORD_PT_IN_REGION, ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_RECT_VISIBLE,
-            ORD_RECTANGLE, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE,
-            ORD_REGISTER_SIPANEL, ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE,
-            ORD_RELEASE_DC, ORD_RELEASE_MUTEX, ORD_REMOVE_FONT_RESOURCE_W, ORD_REMOVE_MENU,
-            ORD_RESTORE_DC, ORD_ROUND_RECT, ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SELECT_CLIP_RGN,
-            ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
-            ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
-            ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BITMAP_BITS, ORD_SET_BK_COLOR,
-            ORD_SET_BK_MODE, ORD_SET_BRUSH_ORG_EX, ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME,
-            ORD_SET_CARET_POS, ORD_SET_CURSOR, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE,
-            ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
-            ORD_SET_FOREGROUND_WINDOW, ORD_SET_KEYBOARD_TARGET, ORD_SET_LAYOUT, ORD_SET_LOCAL_TIME,
-            ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT,
-            ORD_SET_PIXEL, ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_RECT_RGN, ORD_SET_ROP2,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_OFFSET_RGN,
+            ORD_OFFSET_VIEWPORT_ORG_EX, ORD_PAT_BLT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE,
+            ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE,
+            ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION, ORD_REALIZE_PALETTE,
+            ORD_RECT_IN_REGION, ORD_RECT_VISIBLE, ORD_RECTANGLE, ORD_REDRAW_WINDOW,
+            ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_REGISTER_SIPANEL,
+            ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
+            ORD_REMOVE_FONT_RESOURCE_W, ORD_REMOVE_MENU, ORD_RESTORE_DC, ORD_ROUND_RECT,
+            ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SELECT_CLIP_RGN, ORD_SELECT_OBJECT,
+            ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT,
+            ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW,
+            ORD_SET_ASSOCIATED_MENU, ORD_SET_BITMAP_BITS, ORD_SET_BK_COLOR, ORD_SET_BK_MODE,
+            ORD_SET_BRUSH_ORG_EX, ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME, ORD_SET_CARET_POS,
+            ORD_SET_CURSOR, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
+            ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
+            ORD_SET_KEYBOARD_TARGET, ORD_SET_LAYOUT, ORD_SET_LOCAL_TIME, ORD_SET_MENU,
+            ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_PIXEL,
+            ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_RECT_RGN, ORD_SET_ROP2,
             ORD_SET_STRETCH_BLT_MODE, ORD_SET_SYS_COLORS, ORD_SET_SYSTEM_TIME, ORD_SET_TEXT_ALIGN,
             ORD_SET_TEXT_CHARACTER_EXTRA, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
-            ORD_SET_VIEWPORT_ORG_EX, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN,
-            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_CARET, ORD_SHOW_WINDOW, ORD_SHSIP_PREFERENCE_I,
-            ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS,
-            ORD_SYSTEM_PARAMETERS_INFO_W, ORD_TRACK_POPUP_MENU_EX, ORD_TRANSLATE_ACCELERATOR_W,
-            ORD_TRANSLATE_MESSAGE, ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
-            ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
+            ORD_SET_VIEWPORT_ORG_EX, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_ORG_EX,
+            ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_CARET,
+            ORD_SHOW_WINDOW, ORD_SHSIP_PREFERENCE_I, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
+            ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
+            ORD_TRACK_POPUP_MENU_EX, ORD_TRANSLATE_ACCELERATOR_W, ORD_TRANSLATE_MESSAGE,
+            ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
+            ORD_WINDOW_FROM_POINT,
         },
         file::{GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
@@ -3960,6 +3963,220 @@ fn coredll_raw_shapes_apply_viewport_origin_on_selected_dib() -> Result<()> {
     ));
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 6), 0x0000);
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 10, 8), 0xf800);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_origin_apis_follow_ce_viewport_contract() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 10);
+    let point_ptr = 0x1_0200;
+    let size_ptr = 0x1_0220;
+    memory.map_words(point_ptr, 2);
+    memory.map_words(size_ptr, 2);
+
+    let read_pair = |memory: &TestGuestMemory, ptr| -> Result<(i32, i32)> {
+        Ok((
+            CoredllGuestMemory::read_u32(memory, ptr)? as i32,
+            CoredllGuestMemory::read_u32(memory, ptr + 4)? as i32,
+        ))
+    };
+
+    for ordinal in [
+        ORD_SET_WINDOW_ORG_EX,
+        ORD_GET_WINDOW_ORG_EX,
+        ORD_GET_WINDOW_EXT_EX,
+        ORD_OFFSET_VIEWPORT_ORG_EX,
+        ORD_GET_VIEWPORT_ORG_EX,
+        ORD_GET_VIEWPORT_EXT_EX,
+    ] {
+        assert!(
+            table.resolve_ordinal(ordinal).is_some(),
+            "missing CE coredll origin/ext ordinal {ordinal}"
+        );
+    }
+
+    match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_VIEWPORT_ORG_EX,
+        [mem_dc, point_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        } => {}
+        other => panic!("GetViewportOrgEx initial state failed: {other:?}"),
+    }
+    assert_eq!(read_pair(&memory, point_ptr)?, (0, 0));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OFFSET_VIEWPORT_ORG_EX,
+            [mem_dc, 3, 1, point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(read_pair(&memory, point_ptr)?, (0, 0));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_VIEWPORT_ORG_EX,
+            [mem_dc, point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(read_pair(&memory, point_ptr)?, (3, 1));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_ORG_EX,
+            [mem_dc, (-4i32) as u32, (-2i32) as u32, point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(read_pair(&memory, point_ptr)?, (0, 0));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW_ORG_EX,
+            [mem_dc, point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(read_pair(&memory, point_ptr)?, (4, 2));
+
+    for ordinal in [ORD_GET_VIEWPORT_EXT_EX, ORD_GET_WINDOW_EXT_EX] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ordinal,
+                [mem_dc, size_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(read_pair(&memory, size_ptr)?, (16, 10));
+    }
+
+    let red_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x0000_00ff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    let null_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [8],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(NULL_PEN) did not return a handle: {other:?}"),
+    };
+    for object in [red_brush, null_pen] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SELECT_OBJECT,
+                [mem_dc, object],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle != 0
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECTANGLE,
+            [mem_dc, 0, 0, 2, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 7, 3), 0xf800);
+
+    for ordinal in [
+        ORD_GET_VIEWPORT_ORG_EX,
+        ORD_GET_VIEWPORT_EXT_EX,
+        ORD_SET_WINDOW_ORG_EX,
+        ORD_GET_WINDOW_ORG_EX,
+        ORD_GET_WINDOW_EXT_EX,
+        ORD_OFFSET_VIEWPORT_ORG_EX,
+    ] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ordinal,
+                [0, 0, 0, point_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
+    }
 
     Ok(())
 }
