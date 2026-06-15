@@ -3420,7 +3420,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     records that row and marks the CE stretch parameter when source and
     destination extents differ. The table also includes CE VGAFLAT
     `ROP_LINE` timing rows for raw `LineTo`/`Polyline`, and raw `PatBlt`
-    now mirrors `dispperf.h::DispPerfParam` for `PARAM_COLORBLACK` and
-    `PARAM_COLORWHITE` on black/white solid-brush `PATCOPY` rows. Real
-    video-protection, framebuffer-access, and broader DISPPERF payload
-    execution outside those raw draw paths remains unsupported.
+    now mirrors `dispperf.h::DispPerfParam` for display-target
+    `PARAM_DESTINVIDMEM` plus `PARAM_COLORBLACK` and `PARAM_COLORWHITE` on
+    black/white solid-brush `PATCOPY` rows. Real video-protection,
+    framebuffer-access, and broader DISPPERF payload execution outside those
+    raw draw paths remains unsupported.

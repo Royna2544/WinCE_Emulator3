@@ -1033,6 +1033,11 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
         2
     );
     assert_eq!(
+        u32::from_le_bytes(patcopy_timing[44..48].try_into().unwrap()),
+        2,
+        "PARAM_DESTINVIDMEM should count PatBlt rows targeting the display surface"
+    );
+    assert_eq!(
         u32::from_le_bytes(patcopy_timing[48..52].try_into().unwrap()),
         1,
         "PARAM_COLORBLACK should count the black solid brush blit"

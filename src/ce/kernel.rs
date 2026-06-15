@@ -587,6 +587,15 @@ pub struct DisplayPerfTiming {
     pub blt_params: [u32; 8],
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DisplayPerfBltParams {
+    pub src_in_video_mem: bool,
+    pub dest_in_video_mem: bool,
+    pub solid_rgb: Option<[u8; 3]>,
+    pub stretch: bool,
+    pub transparent: bool,
+}
+
 impl DisplayPerfTiming {
     fn new(rop_code: u32) -> Self {
         Self {
@@ -881,7 +890,14 @@ impl CeKernel {
     }
 
     pub fn record_display_perf_gpe(&mut self, rop_code: u32, stretch: bool, transparent: bool) {
-        self.record_display_perf_gpe_with_solid_color(rop_code, stretch, transparent, None);
+        self.record_display_perf_gpe_with_params(
+            rop_code,
+            DisplayPerfBltParams {
+                stretch,
+                transparent,
+                ..DisplayPerfBltParams::default()
+            },
+        );
     }
 
     pub fn record_display_perf_gpe_with_solid_color(
@@ -891,7 +907,25 @@ impl CeKernel {
         transparent: bool,
         solid_rgb: Option<[u8; 3]>,
     ) {
+        self.record_display_perf_gpe_with_params(
+            rop_code,
+            DisplayPerfBltParams {
+                solid_rgb,
+                stretch,
+                transparent,
+                ..DisplayPerfBltParams::default()
+            },
+        );
+    }
+
+    pub fn record_display_perf_gpe_with_params(
+        &mut self,
+        rop_code: u32,
+        params: DisplayPerfBltParams,
+    ) {
         const DISPPERF_TIMING_ROWS: usize = 32;
+        const PARAM_SRCINVIDMEM: usize = 2;
+        const PARAM_DESTINVIDMEM: usize = 3;
         const PARAM_COLORBLACK: usize = 4;
         const PARAM_COLORWHITE: usize = 5;
         const PARAM_STRETCH: usize = 6;
@@ -914,14 +948,22 @@ impl CeKernel {
         let timing = &mut self.display_perf_timings[index];
         timing.c_gpe = timing.c_gpe.saturating_add(1);
         timing.dw_gpe_time = timing.dw_gpe_time.saturating_add(1);
-        if stretch {
+        if params.src_in_video_mem {
+            timing.blt_params[PARAM_SRCINVIDMEM] =
+                timing.blt_params[PARAM_SRCINVIDMEM].saturating_add(1);
+        }
+        if params.dest_in_video_mem {
+            timing.blt_params[PARAM_DESTINVIDMEM] =
+                timing.blt_params[PARAM_DESTINVIDMEM].saturating_add(1);
+        }
+        if params.stretch {
             timing.blt_params[PARAM_STRETCH] = timing.blt_params[PARAM_STRETCH].saturating_add(1);
         }
-        if transparent {
+        if params.transparent {
             timing.blt_params[PARAM_TRANSPARENT] =
                 timing.blt_params[PARAM_TRANSPARENT].saturating_add(1);
         }
-        match solid_rgb {
+        match params.solid_rgb {
             Some([0, 0, 0]) => {
                 timing.blt_params[PARAM_COLORBLACK] =
                     timing.blt_params[PARAM_COLORBLACK].saturating_add(1);

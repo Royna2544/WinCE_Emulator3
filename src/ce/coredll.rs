@@ -41599,7 +41599,14 @@ fn pat_blt_raw<M: CoredllGuestMemory>(
     let solid_rgb = rop3_depends_on_input(rop3_byte(rop), 0b100)
         .then(|| selected_brush_pixel_source(kernel, memory, dst).and_then(|source| source.solid))
         .flatten();
-    kernel.record_display_perf_gpe_with_solid_color(rop, false, false, solid_rgb);
+    kernel.record_display_perf_gpe_with_params(
+        rop,
+        crate::ce::kernel::DisplayPerfBltParams {
+            dest_in_video_mem: !kernel.resources.is_memory_dc(dst),
+            solid_rgb,
+            ..crate::ce::kernel::DisplayPerfBltParams::default()
+        },
+    );
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
