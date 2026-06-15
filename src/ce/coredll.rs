@@ -37481,11 +37481,15 @@ fn draw_edge_raw<M: CoredllGuestMemory>(
     }
     // Update rect if BF_ADJUST.
     if flags & BF_ADJUST != 0 {
+        let adjust_left = if bf_left { 2 } else { 0 };
+        let adjust_top = if bf_top { 2 } else { 0 };
+        let adjust_right = if bf_right { 2 } else { 0 };
+        let adjust_bottom = if bf_bottom { 2 } else { 0 };
         let new_rect = Rect {
-            left: (l + 2).min(r),
-            top: (t + 2).min(b),
-            right: (r - 2).max(l),
-            bottom: (b - 2).max(t),
+            left: (l + adjust_left).min(r),
+            top: (t + adjust_top).min(b),
+            right: (r - adjust_right).max(l),
+            bottom: (b - adjust_bottom).max(t),
         };
         write_guest_rect(kernel, memory, thread_id, rect_ptr, new_rect);
     }

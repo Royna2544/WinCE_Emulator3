@@ -38763,6 +38763,68 @@ fn coredll_raw_draw_edge_matches_ce_middle_and_flat_center_pixels() -> Result<()
 }
 
 #[test]
+fn coredll_raw_draw_edge_adjusts_only_requested_edges() -> Result<()> {
+    const EDGE_SUNKEN: u32 = 0x000a;
+    const BF_TOP: u32 = 0x0002;
+    const BF_BOTTOM: u32 = 0x0008;
+    const BF_ADJUST: u32 = 0x2000;
+    const BLACK: u32 = 0;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 154_u32;
+
+    let (dc, _bitmap, _bits_ptr, _stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 96, 96);
+
+    let rect_ptr = 0x1_3900;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 10);
+    memory.write_word(rect_ptr + 4, 20);
+    memory.write_word(rect_ptr + 8, 70);
+    memory.write_word(rect_ptr + 12, 90);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_EDGE,
+            [dc, rect_ptr, EDGE_SUNKEN, BF_TOP | BF_BOTTOM | BF_ADJUST,],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(memory.read_i32(rect_ptr)?, 10);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 22);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 70);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 88);
+
+    let left_mid = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_PIXEL,
+        [dc, 10, 50],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(color),
+            ..
+        } => color,
+        other => panic!("GetPixel on unrequested DrawEdge side returned {other:?}"),
+    };
+    assert_eq!(left_mid, BLACK);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_bit_blt_rejects_readonly_selected_bitmap() -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
 
