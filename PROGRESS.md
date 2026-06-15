@@ -4344,3 +4344,20 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `cargo test -j 1 --features unicorn,trace,win32-desktop --test
   coredll_raw_kernel coredll_raw_comm_state_mask_wait_and_purge_are_stateful
   -- --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- `tests/coredll_raw_memory_file.rs`: aligned the older raw serial control
+  ordinal fixture with the CE-backed `GetCommModemStatus` behavior so it now
+  expects asserted CTS, DSR, and RLSD bits rather than the former zero-status
+  placeholder.
+- Validation after aligning the memory/file modem-status fixture: `cargo fmt`,
+  focused `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_memory_file
+  coredll_raw_serial_comm_control_ordinals_accept_valid_device_handle --
+  --nocapture`, and full `CARGO_INCREMENTAL=0 cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed. The
+  raw memory/file binary reported 108 passing tests, and Cargo still emits the
+  existing unused-code warnings.
+- Full validation after the memory/file modem-status expectation cleanup:
+  `cargo fmt --check`, `git diff --check`, and `CARGO_INCREMENTAL=0 cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture
+  remains ignored because that toolchain is not configured, and Cargo still
+  emits the existing unused-code warnings.

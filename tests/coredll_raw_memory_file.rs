@@ -12144,6 +12144,10 @@ fn coredll_raw_heap_re_alloc_shrinks_in_place_and_rejects_bad_params() -> Result
 
 #[test]
 fn coredll_raw_serial_comm_control_ordinals_accept_valid_device_handle() -> Result<()> {
+    const MS_CTS_ON: u32 = 0x0010;
+    const MS_DSR_ON: u32 = 0x0020;
+    const MS_RLSD_ON: u32 = 0x0080;
+
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
@@ -12246,8 +12250,8 @@ fn coredll_raw_serial_comm_control_ordinals_accept_valid_device_handle() -> Resu
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(
         memory.read_u32(out_word)?,
-        0,
-        "GetCommModemStatus must write 0 to out pointer"
+        MS_CTS_ON | MS_DSR_ON | MS_RLSD_ON,
+        "GetCommModemStatus must write asserted serial line bits to out pointer"
     );
 
     assert!(
