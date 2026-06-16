@@ -3230,15 +3230,23 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_LOCK_FILE_EX => {
             // LockFileEx(hFile, dwFlags, dwReserved, nLow, nHigh, lpOverlapped)
-            // File locking is not enforced in emulator; return TRUE.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
+            Some(CoredllValue::Bool(file_lock_ex_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 5),
+            )))
         }
         ORD_UNLOCK_FILE_EX => {
             // UnlockFileEx(hFile, dwReserved, nLow, nHigh, lpOverlapped)
-            // File unlocking is not enforced in emulator; return TRUE.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
+            Some(CoredllValue::Bool(file_lock_ex_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 4),
+            )))
         }
         ORD_SET_FILE_ATTRIBUTES_W => Some(CoredllValue::Bool(set_file_attributes_w_raw(
             kernel,
@@ -11452,6 +11460,40 @@ fn create_file_w_last_error(err: &Error) -> u32 {
         Error::InvalidArgument(_) => ERROR_INVALID_PARAMETER,
         _ => ERROR_INVALID_PARAMETER,
     }
+}
+
+fn file_lock_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    file_handle: u32,
+    overlapped_ptr: u32,
+) -> bool {
+    if overlapped_ptr != 0 {
+        let mut overlapped = [0u8; 20];
+        if memory.read_bytes(overlapped_ptr, &mut overlapped).is_err() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    }
+
+    match kernel.is_file_handle(file_handle) {
+        Ok(true) => {}
+        Ok(false) | Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
+    }
+
+    // CE delegates byte-range arbitration to the mounted FSD. The host-backed
+    // emulator FSD has no lock container yet, so keep non-enforcing success
+    // after the CE-visible wrapper validation above.
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn iswctype_raw(wch: u32, ctype: u32) -> u32 {

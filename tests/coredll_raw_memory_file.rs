@@ -39,32 +39,33 @@ use wince_emulation_v3::{
             ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP,
             ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOCAL_ALLOC,
             ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
-            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOG, ORD_LOG10,
-            ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE,
-            ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES,
-            ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW,
-            ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW,
-            ORD_PRINTF, ORD_RAND, ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY,
-            ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W,
-            ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W,
-            ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
-            ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING,
-            ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD,
-            ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC,
-            ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE,
-            ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W,
-            ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK,
-            ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W,
-            ORD_SET_FILE_TIME, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH,
-            ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY,
-            ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK,
-            ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN, ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER,
-            ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM, ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP,
-            ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF,
-            ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR,
-            ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
-            ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
+            ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
+            ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            ORD_NED, ORD_NES, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
+            ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY,
+            ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND, ORD_READ_FILE,
+            ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W,
+            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W,
+            ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W,
+            ORD_REG_SET_VALUE_EX_W, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD,
+            ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING,
+            ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
+            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC,
+            ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
+            ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
+            ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER,
+            ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP,
+            ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND,
+            ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
+            ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN,
+            ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM,
+            ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP, ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE,
+            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF,
+            ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP,
+            ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK,
+            ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{
             CREATE_ALWAYS, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
@@ -3691,6 +3692,166 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_lock_file_ex_validates_file_handle_and_overlapped() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("lock_file_ex_validation");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    kernel.files.mount_guest_root("\\ResidentFlash", &root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let path_ptr = 0x1_0000;
+    let find_pattern_ptr = 0x1_0100;
+    let find_data_ptr = 0x1_0200;
+    let overlapped_ptr = 0x1_1000;
+    memory.write_wide_z(path_ptr, "\\ResidentFlash\\locked.bin");
+    memory.write_wide_z(find_pattern_ptr, "\\ResidentFlash\\*.bin");
+    memory.map_words(find_data_ptr, 11);
+    memory.map_halfwords(find_data_ptr + 40, 260);
+    memory.map_bytes(overlapped_ptr, 20);
+    memory.write_word(overlapped_ptr + 8, 3);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert_ne!(file, u32::MAX);
+
+    match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOCK_FILE_EX,
+        [file, 0, 0, 7, 0, overlapped_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        } => {}
+        other => panic!(
+            "LockFileEx valid file returned {other:?}, last_error={}",
+            kernel.threads.get_last_error(thread_id)
+        ),
+    }
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(memory.read_u32(overlapped_ptr + 8)?, 3);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNLOCK_FILE_EX,
+            [file, 0, 7, 0, overlapped_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [file, 0, 0, 7, 0, 0x2_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    let find = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_FILE_W,
+        [find_pattern_ptr, find_data_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstFileW did not return a find handle: {other:?}"),
+    };
+    assert_ne!(find, u32::MAX);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [find, 0, 0, 7, 0, overlapped_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let _ = fs::remove_dir_all(root);
     Ok(())
 }
 

@@ -549,6 +549,19 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     scatter/gather for page-multiple arrays through host-backed files and
     accepts ignored non-null `OVERLAPPED*` pointers, while real lower-FSD/filter
     forwarding remains queued.
+    `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h` defines public
+    `LockFileEx`/`UnlockFileEx` and their `LOCKFILE_*` flags, and
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\core_common.def` exports
+    them as `xxx_LockFileEx @1968` and `xxx_UnlockFileEx @1969`.
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp` shows the
+    external wrapper safely copying a 20-byte `OVERLAPPED` before entering the
+    internal FSD path and returning `ERROR_INVALID_PARAMETER` when that copy
+    fails. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\LOCKMGR\lockmgr.cpp`
+    then delegates real byte-range ownership and conflict decisions through the
+    FSD-acquired lock container. v3 now exposes the public coredll ordinals and
+    covers the wrapper-visible file-handle/readable-`OVERLAPPED` validation;
+    actual byte-range conflict enforcement remains queued with the host-backed
+    FSD lock-container work.
     `volumeapi.cpp` handles
     `FSCTL_GET_VOLUME_INFO` before forwarding other controls to the mounted
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for
