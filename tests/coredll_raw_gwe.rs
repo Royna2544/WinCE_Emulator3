@@ -14059,6 +14059,142 @@ fn coredll_raw_transparent_image_mirrors_negative_extents_on_framebuffer_hdc() -
 }
 
 #[test]
+fn coredll_raw_transparent_image_mirrors_negative_source_height_between_selected_dibs() -> Result<()>
+{
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const RED565: u16 = 0xf800;
+    const GREEN565: u16 = 0x07e0;
+    const WHITE565: u16 = 0xffff;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 1, 2);
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 1, 2);
+
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, RED565);
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 1, GREEN565);
+    write_rgb565(&mut memory, dst_bits, dst_stride, 0, 0, WHITE565);
+    write_rgb565(&mut memory, dst_bits, dst_stride, 0, 1, WHITE565);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            None,
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                dst_dc,
+                0,
+                0,
+                1,
+                2,
+                src_dc,
+                0,
+                2,
+                1,
+                (-2i32) as u32,
+                MAGENTA_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), GREEN565);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), RED565);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_transparent_image_mirrors_negative_source_height_to_framebuffer() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const RED565: u16 = 0xf800;
+    const GREEN565: u16 = 0x07e0;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "TRANSPARENT_SRC_H_FB",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 1, 2),
+    );
+    let dst_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [hwnd],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 1, 2);
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, RED565);
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 1, GREEN565);
+
+    let mut framebuffer = VirtualFramebuffer::new(1, 2, PixelFormat::Rgb565)?;
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                dst_dc,
+                0,
+                0,
+                1,
+                2,
+                src_dc,
+                0,
+                2,
+                1,
+                (-2i32) as u32,
+                MAGENTA_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), GREEN565);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 1), RED565);
+    assert_eq!(
+        framebuffer.dirty_rects(),
+        &[FramebufferRect::new(0, 0, 1, 2)]
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_composites_between_memory_dcs() -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
     const SRCCOPY: u32 = 0x00cc_0020;
