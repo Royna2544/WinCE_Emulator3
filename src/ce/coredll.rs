@@ -964,6 +964,36 @@ fn trace_stub_fallback(export: &CoredllExport, stub: &CoredllStubResult) {
     }
 }
 
+fn raw_context_trace_detail(context: &CoredllRawContext) -> String {
+    let caller_pc = context
+        .caller_pc
+        .map(|pc| format!("0x{pc:08x}"))
+        .unwrap_or_else(|| "none".to_owned());
+    let trap_pc = context
+        .trap_pc
+        .map(|pc| format!("0x{pc:08x}"))
+        .unwrap_or_else(|| "none".to_owned());
+    let caller_module = context.caller_module.as_deref().unwrap_or("none");
+    format!("caller_pc={caller_pc}/trap_pc={trap_pc}/caller_module={caller_module}")
+}
+
+fn record_raw_window_call_trace(
+    kernel: &mut CeKernel,
+    op: &'static str,
+    context: &CoredllRawContext,
+    thread_id: u32,
+    hwnd: Option<u32>,
+    result: Option<u32>,
+    extra: Option<String>,
+) {
+    let context_detail = raw_context_trace_detail(context);
+    let detail = match extra {
+        Some(extra) => format!("{extra}/{context_detail}"),
+        None => context_detail,
+    };
+    kernel.record_window_lifecycle_trace(op, thread_id, hwnd, result, Some(detail));
+}
+
 impl CoredllStubResult {
     fn for_export(
         export: &CoredllExport,
@@ -5605,12 +5635,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel,
             memory,
             framebuffer,
+            context,
             thread_id,
             raw_arg(args, 0),
         ))),
         ORD_SHOW_WINDOW => Some(CoredllValue::Bool(show_window_raw(
             kernel,
             framebuffer,
+            context,
             thread_id,
             args,
         ))),
@@ -7066,7 +7098,18 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             let cx = raw_i32_arg(args, 5);
             let cy = raw_i32_arg(args, 6);
             let flags = raw_arg(args, 7);
-            kernel.set_window_pos(hwnd, Some(hwnd_insert_after), x, y, cx, cy, flags);
+            let moved = kernel.set_window_pos(hwnd, Some(hwnd_insert_after), x, y, cx, cy, flags);
+            record_raw_window_call_trace(
+                kernel,
+                "defer_window_pos_cmd",
+                context,
+                thread_id,
+                Some(hwnd),
+                Some(u32::from(moved)),
+                Some(format!(
+                    "insert_after=0x{hwnd_insert_after:08x}/x={x}/y={y}/cx={cx}/cy={cy}/flags=0x{flags:08x}"
+                )),
+            );
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Handle(HDWP_SENTINEL))
         }
@@ -7075,16 +7118,37 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.set_window_pos_with_framebuffer(
-            raw_arg(args, 0),
-            Some(raw_arg(args, 1)),
-            raw_i32_arg(args, 2),
-            raw_i32_arg(args, 3),
-            raw_i32_arg(args, 4),
-            raw_i32_arg(args, 5),
-            raw_arg(args, 6),
-            framebuffer,
-        ))),
+        ORD_SET_WINDOW_POS => {
+            let hwnd = raw_arg(args, 0);
+            let hwnd_insert_after = raw_arg(args, 1);
+            let x = raw_i32_arg(args, 2);
+            let y = raw_i32_arg(args, 3);
+            let cx = raw_i32_arg(args, 4);
+            let cy = raw_i32_arg(args, 5);
+            let flags = raw_arg(args, 6);
+            let moved = kernel.set_window_pos_with_framebuffer(
+                hwnd,
+                Some(hwnd_insert_after),
+                x,
+                y,
+                cx,
+                cy,
+                flags,
+                framebuffer,
+            );
+            record_raw_window_call_trace(
+                kernel,
+                "set_window_pos_cmd",
+                context,
+                thread_id,
+                Some(hwnd),
+                Some(u32::from(moved)),
+                Some(format!(
+                    "insert_after=0x{hwnd_insert_after:08x}/x={x}/y={y}/cx={cx}/cy={cy}/flags=0x{flags:08x}"
+                )),
+            );
+            Some(CoredllValue::Bool(moved))
+        }
         ORD_MOVE_WINDOW => Some(CoredllValue::Bool(kernel.move_window(
             raw_arg(args, 0),
             raw_i32_arg(args, 1),
@@ -34016,6 +34080,7 @@ fn set_parent_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, parent: u32)
 fn show_window_raw(
     kernel: &mut CeKernel,
     framebuffer: Option<&mut dyn Framebuffer>,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
@@ -34033,8 +34098,10 @@ fn show_window_raw(
         }
     }
     let previous = kernel.show_window_with_framebuffer(hwnd, visible, activate, framebuffer);
-    kernel.record_window_lifecycle_trace(
+    record_raw_window_call_trace(
+        kernel,
         "show_window_cmd",
+        context,
         thread_id,
         Some(hwnd),
         Some(u32::from(previous)),
@@ -48432,6 +48499,7 @@ fn destroy_window_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     framebuffer: Option<&mut dyn Framebuffer>,
+    context: &CoredllRawContext,
     thread_id: u32,
     hwnd: u32,
 ) -> bool {
@@ -48446,6 +48514,15 @@ fn destroy_window_raw<M: CoredllGuestMemory>(
         kernel.post_message_w(parent_hwnd, crate::ce::gwe::WM_PARENTNOTIFY, wparam, hwnd);
     }
     let destroyed = kernel.destroy_window_with_framebuffer(hwnd, "DestroyWindow", framebuffer);
+    record_raw_window_call_trace(
+        kernel,
+        "destroy_window_cmd",
+        context,
+        thread_id,
+        Some(hwnd),
+        Some(u32::from(destroyed)),
+        None,
+    );
     if destroyed {
         write_completed_send_message_timeout_results(kernel, memory, thread_id);
     }
