@@ -88,6 +88,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Full-test
   logs are under
   `target/cargo-test-full-maskblt-all-edges.20260616-134932.*.log`.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and framebuffer `MaskBlt` now
+  cover CE `draw.cpp::NegativeSize(EMaskBlt)` vertical destination mirroring
+  with a real 1 bpp mask and `MAKEROP4(SRCCOPY, WHITENESS)`, proving source
+  rows and foreground/background mask rows stay aligned through the CE
+  bottom/right-plus-one signed-extent convention.
+- Focused validation after the `MaskBlt` negative-height slice:
+  `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_mask_blt_mirrors_negative_destination_height -- --nocapture`
+  passed, followed by `cargo fmt --check`, `git diff --check`, `cargo check
+  --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test -j
+  1 --features unicorn,trace,win32-desktop`. Test logs are under
+  `target/cargo-test-coredll-raw-gwe-maskblt-negheight.20260616-135717.*.log`
+  and `target/cargo-test-full-maskblt-negheight.20260616-135728.*.log`.
 - Validation after the transparent off-top clipping slice: focused
   `coredll_raw_transparent_image_clips_off_top`, `cargo fmt --check`, `git
   diff --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo

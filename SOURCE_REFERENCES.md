@@ -2655,9 +2655,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     implements those validation paths plus selected-DIB and framebuffer masked
     copies for that CE source-backed ROP4 shape, generic ROP4
     foreground/background byte evaluation, selected-DIB/framebuffer negative
-    destination extent mirroring for masked draws, including a framebuffer HDC
-    negative destination-width regression, all-edge selected-DIB/framebuffer
-    clip regressions that preserve source/mask alignment when destination
+    destination extent mirroring for masked draws, including framebuffer HDC
+    negative destination-width plus selected-DIB/framebuffer negative
+    destination-height regressions, all-edge selected-DIB/framebuffer clip
+    regressions that preserve source/mask alignment when destination
     clipping trims the leading or trailing edge, and the null-mask source-copy
     shortcut through the same signed destination helper as direct `BitBlt`.
   - CE `core\dll\apis.c::SystemParametersInfoW` routes
