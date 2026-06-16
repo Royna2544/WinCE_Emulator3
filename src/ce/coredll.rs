@@ -37306,7 +37306,7 @@ fn testime_private_profile_candidates(kernel: &CeKernel, reading: &str) -> Vec<S
         ))
         .unwrap_or_default()
         .into_iter()
-        .map(|(name, value)| value.as_str().unwrap_or(&name).to_owned())
+        .map(|(name, _)| name)
         .collect()
 }
 

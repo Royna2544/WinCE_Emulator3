@@ -33003,11 +33003,11 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
     assert_eq!(read_candidate_list_u32(&memory, 8), 2);
     assert_eq!(
         read_candidate_list_wide_z(&memory, read_candidate_list_u32(&memory, 24)),
-        "Route"
+        "route"
     );
     assert_eq!(
         read_candidate_list_wide_z(&memory, read_candidate_list_u32(&memory, 28)),
-        "Scenic"
+        "scenic"
     );
     kernel.registry.set_value(
         r"HKLM\SOFTWARE\Microsoft\testime\Windows\testime.DIC\abc",

@@ -878,12 +878,8 @@ fn seed_testime_sample_candidates(
     candidates: Vec<String>,
 ) {
     let path = format!(r"{root}\{reading}");
-    for (index, candidate) in candidates.into_iter().enumerate() {
-        registry.set_value(
-            &path,
-            &format!("__testime_sample_{index:03}"),
-            RegistryValue::string(candidate),
-        );
+    for candidate in candidates {
+        registry.set_value(&path, &candidate, RegistryValue::string(candidate.clone()));
     }
 }
 
