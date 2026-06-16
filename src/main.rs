@@ -1602,6 +1602,11 @@ fn publish_remote_endpoint(
             server.publish_debug_text("processes", monitor_trace_text(snapshot, "processes"));
             server.publish_debug_text("wndproc", monitor_trace_text(snapshot, "wndproc"));
             server.publish_debug_text("imports", monitor_trace_text(snapshot, "imports"));
+            server.publish_debug_text(
+                "window-imports",
+                monitor_trace_text(snapshot, "window-imports"),
+            );
+            server.publish_debug_text("presentation", monitor_trace_text(snapshot, "presentation"));
             server.publish_debug_text("milestones", monitor_trace_text(snapshot, "milestones"));
             server.publish_debug_text("counts", monitor_trace_text(snapshot, "counts"));
             server.publish_debug_text("calls", monitor_trace_text(snapshot, "calls"));

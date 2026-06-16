@@ -32,6 +32,8 @@
 // - GET /api/v1/debug/pending-wndproc.txt returns pending WNDPROC callouts.
 // - GET /api/v1/debug/wndproc.txt returns recent WNDPROC call/return traces.
 // - GET /api/v1/debug/imports.txt returns recent import calls.
+// - GET /api/v1/debug/window-imports.txt returns recent window lifecycle imports.
+// - GET /api/v1/debug/presentation.txt returns recent visible presentation imports.
 // - GET /api/v1/debug/milestones.txt returns recent milestone import calls.
 // - GET /api/v1/debug/counts.txt returns import call counts.
 // - GET /api/v1/debug/calls.txt returns recent guest call targets.
@@ -496,6 +498,12 @@ impl RemoteServer {
             }
             ("GET", "/api/v1/debug/wndproc.txt") => self.latest_debug_text("wndproc").into(),
             ("GET", "/api/v1/debug/imports.txt") => self.latest_debug_text("imports").into(),
+            ("GET", "/api/v1/debug/window-imports.txt") => {
+                self.latest_debug_text("window-imports").into()
+            }
+            ("GET", "/api/v1/debug/presentation.txt") => {
+                self.latest_debug_text("presentation").into()
+            }
             ("GET", "/api/v1/debug/milestones.txt") => self.latest_debug_text("milestones").into(),
             ("GET", "/api/v1/debug/counts.txt") => self.latest_debug_text("counts").into(),
             ("GET", "/api/v1/debug/calls.txt") => self.latest_debug_text("calls").into(),
