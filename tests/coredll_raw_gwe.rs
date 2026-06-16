@@ -6671,6 +6671,7 @@ fn coredll_raw_select_object_returns_restorable_dc_defaults() -> Result<()> {
                 ..
             }
         ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     }
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -7364,6 +7365,27 @@ fn coredll_raw_create_dibsection_accepts_null_bits_output() -> Result<()> {
                 ..
             }
         ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    }
+
+    for bad_handle in [0, 0x1234_5678] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DELETE_OBJECT,
+                [bad_handle],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
     }
 
     Ok(())

@@ -34493,9 +34493,13 @@ fn delete_object_raw<M: CoredllGuestMemory>(
     handle: u32,
 ) -> bool {
     if handle == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
     if is_stock_delete_noop(handle) {
+        kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
     let bitmap = kernel.resources.bitmap(handle).cloned();
@@ -34530,6 +34534,9 @@ fn delete_object_raw<M: CoredllGuestMemory>(
     if removed && let Some(pattern_bitmap) = owned_pattern_bitmap {
         delete_owned_bitmap(kernel, pattern_bitmap);
     }
+    kernel
+        .threads
+        .set_last_error(thread_id, if removed { 0 } else { ERROR_INVALID_HANDLE });
     removed
 }
 
