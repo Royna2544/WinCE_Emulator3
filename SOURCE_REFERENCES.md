@@ -3127,10 +3127,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     surface,
     `FSDMGR_ParseSecurityDescriptor` output/null/malformed validation with
     private `SECDESHDR.cbSize` reporting,
-    existing mounted HVOL names, AFS hidden/system/permanent mount flags, and a
-    lightweight FSD `PDSK` to HVOL association for registered host-backed mount
-    names, the CE context-pointer return behavior for FSD file/search handle
-    creation, `STOREMGR_FsIoControlW` refresh/flush no-op plus unsupported
+    existing mounted HVOL names, CE `FSDMGR_RegisterVolume` mount-name
+    slash-trimming plus suffix allocation through `Name2`-`Name9` and
+    `ERROR_OUT_OF_STRUCTURES` exhaustion, AFS hidden/system/permanent mount
+    flags, and a lightweight FSD `PDSK` to HVOL association for registered
+    host-backed mount names, the CE context-pointer return behavior for FSD
+    file/search handle creation, `STOREMGR_FsIoControlW` refresh/flush no-op plus unsupported
     host-backed no-touch failure behavior, `FSCTL_COPY_EXTERNAL_START`/
     `COMPLETE` fixed `FILE_COPY_EXTERNAL` validation with unsupported
     no-touch failure behavior, `GET_SECTOR_ADDR` validation with

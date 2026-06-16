@@ -51,7 +51,7 @@ use crate::{
             ERROR_FILE_NOT_FOUND, ERROR_INVALID_ACCESS, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NO_MORE_FILES,
             ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_OWNER, ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
-            ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
+            ERROR_OUT_OF_STRUCTURES, ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
         },
     },
     error::{Error, Result},
@@ -13757,6 +13757,12 @@ fn fsdmgr_register_volume_raw<M: CoredllGuestMemory>(
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_ALREADY_EXISTS);
+            0
+        }
+        Err(Error::OutOfStructures(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_OUT_OF_STRUCTURES);
             0
         }
         Err(_) => {

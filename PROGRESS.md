@@ -5066,3 +5066,22 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored,
   and Cargo still emits the existing unused-code warnings.
+- `src/ce/file.rs`, `src/ce/kernel.rs`, `src/ce/coredll.rs`,
+  `src/ce/thread.rs`, `src/error.rs`, `src/emulator/imports.rs`, `PLAN.MD`,
+  `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: direct
+  `FSDMGR_RegisterVolume @27` mount-name allocation now follows the CE
+  `fsdmgrapi.cpp` suffix loop for conflicting AFS folder names. Registered
+  volumes get `Name`, then `Name2` through `Name9`, and exhaustion now reports
+  `ERROR_OUT_OF_STRUCTURES` instead of collapsing into invalid-parameter.
+- Focused validation after the FSDMGR register-volume suffix slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_register_volume_maps_disk_pointer_to_volume_handle -- --nocapture`
+  passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the FSDMGR register-volume suffix slice:
+  `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored, and Cargo still emits the existing unused-code
+  warnings.

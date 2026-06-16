@@ -30,6 +30,8 @@ pub enum Error {
     AccessDenied(String),
     #[error("already exists: {0}")]
     AlreadyExists(String),
+    #[error("out of structures: {0}")]
+    OutOfStructures(String),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
     #[error("CE object handle 0x{0:08x} is not valid")]

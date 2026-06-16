@@ -2423,12 +2423,15 @@ impl CeKernel {
                 "FSDMGR disk pointer 0x{disk_ptr:08x} is already registered"
             )));
         }
-        let (guest_root, created) = self
-            .files
-            .register_fsdmgr_mount_name(mount_name)
-            .ok_or_else(|| {
-                Error::InvalidArgument(format!("invalid FSDMGR mount name: {mount_name}"))
-            })?;
+        let (guest_root, created) =
+            self.files
+                .register_fsdmgr_mount_name(mount_name)
+                .map_err(|err| match err {
+                    Error::InvalidArgument(_) | Error::OutOfStructures(_) => err,
+                    other => Error::InvalidArgument(format!(
+                        "invalid FSDMGR mount name {mount_name}: {other}"
+                    )),
+                })?;
         let handle = self.handles.insert(KernelObject::Volume(VolumeObject {
             owner_process_id: self.current_process_id,
             guest_root: guest_root.clone(),

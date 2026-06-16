@@ -1993,6 +1993,8 @@ mod tests {
 
     #[test]
     fn fsdmgr_register_volume_maps_disk_pointer_to_volume_handle() {
+        const ERROR_OUT_OF_STRUCTURES: u32 = 84;
+
         let imports = vec![ImportDescriptor {
             module_name: "fsdmgr.dll".to_owned(),
             original_first_thunk: 0x2000,
@@ -2096,6 +2098,56 @@ mod tests {
             kernel.threads.get_last_error(11),
             crate::ce::thread::ERROR_ALREADY_EXISTS
         );
+
+        let second_disk_ptr = disk_ptr + 4;
+        let second_volume = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [second_disk_ptr, mount_name_ptr, 0x0bad_f002],
+            )
+            .unwrap();
+        assert_ne!(second_volume, 0);
+        assert_ne!(second_volume, volume);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [second_volume, name_out, 32],
+            ),
+            Some("Fsd Card2".encode_utf16().count() as u32)
+        );
+        assert_eq!(memory.read_wide_z(name_out, 32), "Fsd Card2");
+
+        for suffix in 3..=9 {
+            let next_volume = table
+                .dispatch_trap(
+                    &mut kernel,
+                    &mut memory,
+                    11,
+                    IMPORT_TRAP_BASE,
+                    [disk_ptr + suffix * 4, mount_name_ptr, 0x0bad_f000 + suffix],
+                )
+                .unwrap();
+            assert_ne!(next_volume, 0, "suffix {suffix} should still register");
+            assert_eq!(kernel.threads.get_last_error(11), 0);
+        }
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr + 0x40, mount_name_ptr, 0x0bad_f010],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_OUT_OF_STRUCTURES);
 
         assert_eq!(
             table.dispatch_trap(

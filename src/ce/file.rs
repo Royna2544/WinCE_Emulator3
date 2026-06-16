@@ -396,21 +396,18 @@ impl HostFileSystem {
         });
     }
 
-    pub fn register_fsdmgr_mount_name(&mut self, mount_name: &str) -> Option<(String, bool)> {
+    pub fn register_fsdmgr_mount_name(&mut self, mount_name: &str) -> Result<(String, bool)> {
         let mut mount_name = mount_name.trim();
         while mount_name.starts_with('\\') || mount_name.starts_with('/') {
             mount_name = &mount_name[1..];
         }
         mount_name = mount_name.trim_matches(['\\', '/']);
         if mount_name.is_empty() {
-            return None;
+            return Err(Error::InvalidArgument("empty FSDMGR mount name".to_owned()));
         }
         let normalized_base = normalize_guest_path(mount_name);
         if normalized_base.is_empty() {
-            return None;
-        }
-        if self.mounts.contains_key(&normalized_base) {
-            return Some((format!("\\{}", normalized_base.replace('/', "\\")), false));
+            return Err(Error::InvalidArgument("empty FSDMGR mount name".to_owned()));
         }
         for suffix in 1..=9 {
             let candidate = if suffix == 1 {
@@ -435,9 +432,11 @@ impl HostFileSystem {
                 hidden: false,
                 interface_classes: Vec::new(),
             });
-            return Some((guest_root, true));
+            return Ok((guest_root, true));
         }
-        None
+        Err(Error::OutOfStructures(format!(
+            "no FSDMGR mount-name slots left for {mount_name}"
+        )))
     }
 
     pub fn unmount_guest_root(&mut self, guest_root: &str) -> Option<FileMount> {
