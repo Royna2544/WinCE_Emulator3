@@ -486,6 +486,11 @@ fn run_cpu_loop(
         if desktop_queued != 0 {
             reported_blocked_message_wait = false;
         }
+        if rotate_to_same_process_visible_receiver_thread(cpu, kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if (remote_drained.handled != 0 || desktop_queued != 0)
             && !kernel_has_unreturned_parked_process(kernel)
             && !cpu.active_process_has_visible_receiver_work(kernel)
@@ -730,6 +735,11 @@ fn run_cpu_loop(
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
+            continue;
+        }
+        if rotate_to_same_process_visible_receiver_thread(cpu, kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if !kernel_has_unreturned_parked_process(kernel)
@@ -1038,6 +1048,15 @@ fn should_rotate_remote_input_receiver_parked_process(
     active_has_visible_receiver_work: bool,
 ) -> bool {
     !active_has_visible_receiver_work
+}
+
+fn rotate_to_same_process_visible_receiver_thread(
+    cpu: &mut UnicornMips,
+    kernel: &CeKernel,
+) -> bool {
+    !cpu.current_thread_has_visible_receiver_work(kernel)
+        && cpu.active_process_has_visible_receiver_work(kernel)
+        && cpu.rotate_to_active_visible_receiver_thread(kernel, &[])
 }
 
 fn active_process_exited(cpu: &UnicornMips) -> bool {

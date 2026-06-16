@@ -2826,6 +2826,11 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    pub fn current_thread_has_visible_receiver_work(&self, kernel: &CeKernel) -> bool {
+        Self::thread_has_visible_receiver_work(self.current_thread_id, kernel)
+    }
+
+    #[cfg(feature = "unicorn")]
     pub fn active_process_has_receiver_work(&self, kernel: &CeKernel) -> bool {
         self.tracked_thread_ids()
             .into_iter()
@@ -3027,6 +3032,11 @@ impl UnicornMips {
         _kernel: &CeKernel,
         _target_thread_ids: &[u32],
     ) -> bool {
+        false
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    pub fn current_thread_has_visible_receiver_work(&self, _kernel: &CeKernel) -> bool {
         false
     }
 
@@ -26834,6 +26844,46 @@ mod guest_thread_stack_tests {
         assert_eq!(suspended.thread_handle, Some(active_handle));
         assert_eq!(suspended.pc, 0x0015_4b44);
         assert_eq!(suspended.regs.regs[16], 0xaaaa_0007);
+
+        Ok(())
+    }
+
+    #[test]
+    fn queued_input_rotates_to_any_active_visible_receiver_thread() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let active_thread = 7;
+        let target_thread = 1;
+
+        scheduler.set_initial_thread_id(target_thread);
+        scheduler.current_thread_id = active_thread;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0015_4adc,
+            regs: MipsGuestContext::zero(),
+        });
+        scheduler.suspended_guest_thread = Some(SuspendedGuestThread {
+            thread_id: target_thread,
+            thread_handle: Some(0x101),
+            regs: MipsGuestContext::zero(),
+            pc: 0x0040_1000,
+        });
+
+        let hwnd = kernel.create_window_ex_w(
+            target_thread,
+            "VISIBLE_TARGET",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_LBUTTONDOWN, 1, 0));
+
+        assert!(!scheduler.current_thread_has_visible_receiver_work(&kernel));
+        assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
+        assert!(scheduler.rotate_to_active_visible_receiver_thread(&kernel, &[]));
+        assert_eq!(scheduler.current_thread_id, target_thread);
 
         Ok(())
     }
