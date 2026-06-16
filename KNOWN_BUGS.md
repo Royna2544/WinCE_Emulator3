@@ -129,7 +129,11 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   now resolves the initial owned splash `ShowWindow(SW_SHOW)` to app-side stack
   candidates around `iNavi.exe+0x4d7a0`, with the concrete show-wrapper call at
   `0x0005e85c -> 0x0048e998` using `cmd=5`; no matching hide, destroy, or
-  z-order demotion for `0x00020008` has been observed.
+  z-order demotion for `0x00020008` has been observed. The later live
+  active-thread wedge at `THREAD_EXIT_STUB_ADDR` (`0x7fffffe0`) is fixed by
+  `467ae36d`, but the post-fix run still leaves the same owned splash popup
+  visible while the app continues resource decode and hidden child-window
+  layout work.
 - Hidden Happyway child scheduling remains incomplete. The real modal dialog
   can be dismissed and its framebuffer pixels restore correctly, but
   `happyway_win.exe` may remain parked with stale modal/close state while iNavi

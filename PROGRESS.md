@@ -15,6 +15,28 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: committed `467ae36d` fixes the live-pump
+  scheduler path where the active iNavi thread could stop at
+  `THREAD_EXIT_STUB_ADDR` (`0x7fffffe0`) while another active thread still had
+  visible UI work. The thread-exit import hook now first tries to resume a ready
+  blocked wait or blocked `GetMessage` receiver when no guest thread is
+  running, instead of immediately reporting thread exit.
+- Validation after the thread-exit-stub scheduler fix: focused `cargo test
+  --features unicorn,trace,win32-desktop return_stub -- --nocapture`, focused
+  `cargo test --features unicorn,trace,win32-desktop get_message_resume --
+  --nocapture`, `rustfmt --edition 2024 --check src\emulator\unicorn.rs`,
+  `git diff --check -- src\emulator\unicorn.rs`, and `cargo build --release
+  --features unicorn,trace,win32-desktop --bin wince_emulation_v3` passed.
+- Live validation after `467ae36d` on `192.168.0.39:8765`: the previous active
+  PC `0x7fffffe0` wedge no longer reproduces. The run advances through
+  `iNavi.exe+0x329d9c`, then a PNG-style resource row-filter decoder around
+  `iNavi.exe+0x3326xx..0x332858`, then into `mfcce400.dll+0x22aa4`; host file
+  reads increased from about 2.06 MB to 2.77 MB and memory-backed resource opens
+  from 161 to 334 while the splash remained visible. Remote taps target the
+  owned splash popup `0x00020008` and are consumed by `GetMessage` as
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP`; the app does not dismiss the splash from
+  those taps. Posted GPS/NMEA data continues to queue while the guest is not
+  issuing serial reads.
 - `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
   path imports now include `FSEXT_CreateDirectoryW @54`,
   `FSINT_CreateDirectoryW @55`, `FS_RemoveDirectoryW @56`,

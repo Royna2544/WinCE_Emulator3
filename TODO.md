@@ -98,7 +98,11 @@ Regenerated on 2026-06-11 from current source and test coverage.
   while the splash is visible showed `count=0`, so the next diagnostic step is
   to follow the app-side splash owner object around `iNavi.exe+0x4d7a0` and the
   `0x48e998` show-window wrapper call sites, looking for the missing hide,
-  destroy, or z-order demotion path.
+  destroy, or z-order demotion path. After `467ae36d`, the prior
+  `THREAD_EXIT_STUB_ADDR` active-thread wedge is fixed; continue from the
+  current live state where touch dispatch is consumed by `0x00020008`, resource
+  decoding is still advancing, and serial GPS bytes queue until the guest reads
+  `COM7:`.
 - Continue the Happyway hidden-child scheduling investigation: modal dismissal
   and framebuffer restoration are fixed, and the active-process self-park
   duplicate is filtered, but `happyway_win.exe` can still remain parked with
