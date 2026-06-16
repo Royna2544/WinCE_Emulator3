@@ -51020,7 +51020,7 @@ fn keybd_vkey_to_unicode_raw<M: CoredllGuestMemory>(
 
 fn translate_virtual_key_to_char_with_state(vkey: u32, shift: bool, caps: bool) -> u32 {
     match vkey {
-        0x08 | 0x09 | 0x0d | 0x1b => vkey,
+        0x03 | 0x08 | 0x09 | 0x0d | 0x1b => vkey,
         0x30..=0x39 => translate_digit_key(vkey, shift),
         0x41..=0x5a => {
             if shift ^ caps {
@@ -51096,7 +51096,7 @@ fn vkey_to_unshifted_char_for_layout(kernel: &CeKernel, vkey: u32) -> u32 {
 
 fn vkey_to_unshifted_char(vkey: u32) -> u32 {
     match vkey {
-        0x08 | 0x09 | 0x0d | 0x1b => vkey,
+        0x03 | 0x08 | 0x09 | 0x0d | 0x1b => vkey,
         0x20 => 0x20,
         0x30..=0x39 => vkey,                          // digits '0'..'9'
         0x41..=0x5a => vkey | 0x20,                   // lowercase letters 'a'..'z'
@@ -51391,13 +51391,18 @@ fn translate_control_key(vkey: u32) -> u32 {
     match vkey {
         0x41..=0x5a => vkey - 0x40,
         0x61..=0x7a => vkey - 0x60,
+        0x03 => 0x03,
+        0x08 => 0x7f,
+        0x0d => 0x0a,
+        0x1b => 0x1b,
+        0x20 => 0x20,
         0xdb => 0x1b,
         0xdc => 0x1c,
         0xdd => 0x1d,
         0xde => 0x1e,
         0xbd => 0x1f,
         0xe2 => 0x1c,
-        0x08 | 0x09 | 0x0d | 0x1b => vkey,
+        0x09 => 0x09,
         _ => 0,
     }
 }

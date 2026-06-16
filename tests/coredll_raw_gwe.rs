@@ -50249,6 +50249,44 @@ fn coredll_raw_keybd_vkey_to_unicode_honors_active_layout() -> Result<()> {
     let flags_azerty = memory.read_u32(flags_ptr)?;
     assert_eq!(flags_azerty, 1, "AZERTY '^' is a dead key (bit 0 set)");
 
+    // CE il_0409.cpp's VK_TO_WCHARS3 table gives these control-column values:
+    // Ctrl+Backspace -> DEL, Ctrl+Return -> LF, Ctrl+Space -> space, VK_CANCEL -> ETX.
+    kernel
+        .gwe
+        .activate_keyboard_layout(DEFAULT_KEYBOARD_LAYOUT_HKL);
+    let key_state_ptr: u32 = 0x1_0100;
+    memory.map_bytes(key_state_ptr, 256);
+    let mut key_state = vec![0_u8; 256];
+    key_state[VK_CONTROL as usize] = 0x80;
+    memory.write_bytes(key_state_ptr, &key_state);
+
+    for (vk, expected, label) in [
+        (0x08_u32, 0x007f_u16, "Ctrl+VK_BACK -> DEL"),
+        (0x0d_u32, 0x000a_u16, "Ctrl+VK_RETURN -> LF"),
+        (0x20_u32, 0x0020_u16, "Ctrl+VK_SPACE -> space"),
+        (0x03_u32, 0x0003_u16, "Ctrl+VK_CANCEL -> ETX"),
+    ] {
+        let result = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KEYBD_VKEY_TO_UNICODE,
+            [vk, 0, key_state_ptr, buf_ptr, 1, flags_ptr],
+        );
+        assert!(
+            matches!(
+                result,
+                CoredllDispatch::Returned {
+                    value: CoredllValue::U32(1),
+                    ..
+                }
+            ),
+            "{label}: should return 1 char written"
+        );
+        assert_eq!(memory.read_u16(buf_ptr)?, expected, "{label}");
+        assert_eq!(memory.read_u32(flags_ptr)?, 0, "{label} is not a dead key");
+    }
+
     Ok(())
 }
 
