@@ -6340,6 +6340,39 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         shell_pseudo_icon_handle(2)
     );
 
+    memory.write_wide_z(path_ptr, r"\Docs\morning.nav");
+    memory.write_u32(info_ptr + SHFILEINFO_HICON_OFFSET, 0)?;
+    memory.write_u32(info_ptr + SHFILEINFO_IICON_OFFSET, 0xdead_beef)?;
+    memory.write_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET, 0xfeed_face)?;
+    let ret = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHGET_FILE_INFO,
+        [path_ptr, 0, info_ptr, SHFILEINFO_SIZE_W, SHGFI_ICON],
+    );
+    assert!(matches!(
+        ret,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x000b_f100),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(info_ptr + SHFILEINFO_HICON_OFFSET)?,
+        shell_pseudo_icon_handle(expected_nav_icon)
+    );
+    assert_eq!(
+        memory.read_i32(info_ptr + SHFILEINFO_IICON_OFFSET)?,
+        expected_nav_icon,
+        "CE fills iIcon for SHGFI_ICON even without SHGFI_SYSICONINDEX"
+    );
+    assert_eq!(
+        memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
+        0xfeed_face,
+        "CE does not clear dwAttributes when SHGFI_ATTRIBUTES is absent"
+    );
+
     memory.write_wide_z(path_ptr, r"\Docs\two-icons.exe");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -7378,6 +7411,54 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     assert_eq!(
         memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
         SFGAO_FILESYSTEM | SFGAO_READONLY
+    );
+
+    memory.write_wide_z(path_ptr, r"\Docs\morning.nav");
+    memory.write_u32(info_ptr + SHFILEINFO_HICON_OFFSET, 0x1234_5678)?;
+    memory.write_u32(info_ptr + SHFILEINFO_IICON_OFFSET, 0x9abc_def0)?;
+    memory.write_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET, 0x0bad_f00d)?;
+    let ret = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHGET_FILE_INFO,
+        [
+            path_ptr,
+            0,
+            info_ptr,
+            SHFILEINFO_SIZE_W,
+            SHGFI_DISPLAYNAME | SHGFI_TYPENAME,
+        ],
+    );
+    assert!(matches!(
+        ret,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(info_ptr + SHFILEINFO_HICON_OFFSET)?,
+        0x1234_5678,
+        "CE leaves hIcon untouched when SHGFI_ICON is absent"
+    );
+    assert_eq!(
+        memory.read_u32(info_ptr + SHFILEINFO_IICON_OFFSET)?,
+        0x9abc_def0,
+        "CE leaves iIcon untouched when no icon/index flag is requested"
+    );
+    assert_eq!(
+        memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
+        0x0bad_f00d,
+        "CE leaves dwAttributes untouched when SHGFI_ATTRIBUTES is absent"
+    );
+    assert_eq!(
+        memory.read_wide_z(info_ptr + SHFILEINFO_DISPLAY_NAME_OFFSET, 260),
+        "morning.nav"
+    );
+    assert_eq!(
+        memory.read_wide_z(info_ptr + SHFILEINFO_TYPE_NAME_OFFSET, 80),
+        "Route Plan"
     );
 
     memory.write_wide_z(path_ptr, r"\Docs\missing.nav");

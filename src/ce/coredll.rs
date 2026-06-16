@@ -24237,27 +24237,6 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     if flags & (SHGFI_ICON | SHGFI_SYSICONINDEX) != 0 {
         ensure_shell_system_image_list(kernel, system_image_list);
     }
-    if !write_guest_u32(
-        kernel,
-        memory,
-        thread_id,
-        info_ptr + SHFILEINFO_HICON_OFFSET,
-        0,
-    ) || !write_guest_u32(
-        kernel,
-        memory,
-        thread_id,
-        info_ptr + SHFILEINFO_IICON_OFFSET,
-        0,
-    ) || !write_guest_u32(
-        kernel,
-        memory,
-        thread_id,
-        info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET,
-        0,
-    ) {
-        return 0;
-    }
 
     if flags & SHGFI_ATTRIBUTES != 0 {
         if !write_guest_u32(
@@ -24270,6 +24249,17 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
             return 0;
         }
     }
+    if flags & (SHGFI_ICON | SHGFI_SYSICONINDEX) != 0
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_IICON_OFFSET,
+            icon.index as u32,
+        )
+    {
+        return 0;
+    }
     if flags & SHGFI_ICON != 0
         && !write_guest_u32(
             kernel,
@@ -24277,17 +24267,6 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
             thread_id,
             info_ptr + SHFILEINFO_HICON_OFFSET,
             pe_icon_handle.unwrap_or(icon.handle),
-        )
-    {
-        return 0;
-    }
-    if flags & SHGFI_SYSICONINDEX != 0
-        && !write_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            info_ptr + SHFILEINFO_IICON_OFFSET,
-            icon.index as u32,
         )
     {
         return 0;

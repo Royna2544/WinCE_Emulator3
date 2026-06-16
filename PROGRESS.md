@@ -15,6 +15,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`, and
+  `SOURCE_REFERENCES.md`: raw `SHGetFileInfoW` now follows the CE
+  `CESHELL\API\api.cpp` field-write contract. Requests with `SHGFI_ICON`
+  populate both `hIcon` and `iIcon` even without `SHGFI_SYSICONINDEX`, while
+  calls that omit `SHGFI_ICON`, `SHGFI_SYSICONINDEX`, or `SHGFI_ATTRIBUTES`
+  leave the corresponding `SHFILEINFO` fields untouched instead of clearing
+  them first.
+- Validation after the raw `SHGetFileInfoW` field-write slice: focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel sh_get_file_info_uses_registry_associations_and_attributes
+  -- --nocapture` passed.
 - `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`,
   `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw
   `KernExtractIcons` now mirrors the CE `resource.cpp` distinction between

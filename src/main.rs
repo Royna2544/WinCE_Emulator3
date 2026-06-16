@@ -51,6 +51,7 @@ use wince_emulation_v3::{
 const FAST_START_RUN_SLICE_INSTRUCTIONS: usize = 250_000;
 const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
 const HOST_IDLE_MESSAGE_POLL_SLICE_MS: u64 = 100;
+const LIVE_VISIBLE_WORK_RUN_SLICE_MS: u64 = 100;
 const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 30_000;
 // Long busy slices: the in-run code hook already drains remote control
 // messages and ticks the framebuffer while the guest executes, and a fully
@@ -638,6 +639,7 @@ fn run_cpu_loop(
             args.desktop,
             args.remote_server.is_some(),
             host_idle_message_poll_slice(cpu, args.desktop),
+            cpu.active_process_has_visible_receiver_work(kernel),
         );
         let instruction_limit = effective_instruction_limit(
             args.cpu_instruction_limit,
@@ -1176,7 +1178,20 @@ fn effective_wall_clock_limit_ms(
     desktop: DesktopMode,
     remote_server_enabled: bool,
     idle_message_poll_slice: bool,
+    active_visible_receiver_work: bool,
 ) -> (u64, bool) {
+    let visible_work_slice =
+        active_visible_receiver_work && (desktop == DesktopMode::Host || remote_server_enabled);
+    if visible_work_slice {
+        if explicit_limit_ms == 0 {
+            return (LIVE_VISIBLE_WORK_RUN_SLICE_MS, true);
+        }
+        return (
+            remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed)
+                .min(LIVE_VISIBLE_WORK_RUN_SLICE_MS),
+            true,
+        );
+    }
     if desktop == DesktopMode::Host {
         if idle_message_poll_slice {
             if explicit_limit_ms == 0 {
@@ -3807,6 +3822,7 @@ mod tests {
                 DesktopMode::Host,
                 false,
                 false,
+                false,
             ),
             (HOST_LIVE_RUN_SLICE_MS, true)
         );
@@ -3817,6 +3833,7 @@ mod tests {
                 DesktopMode::Host,
                 true,
                 false,
+                false,
             ),
             (HOST_REMOTE_BUSY_RUN_SLICE_MS, true)
         );
@@ -3825,6 +3842,7 @@ mod tests {
                 0,
                 Duration::from_secs(10),
                 DesktopMode::Virtual,
+                false,
                 false,
                 false,
             ),
@@ -3837,6 +3855,7 @@ mod tests {
                 DesktopMode::Virtual,
                 true,
                 false,
+                false,
             ),
             (REMOTE_LIVE_RUN_SLICE_MS, true)
         );
@@ -3845,6 +3864,7 @@ mod tests {
                 500,
                 Duration::from_millis(125),
                 DesktopMode::Host,
+                false,
                 false,
                 false,
             ),
@@ -3857,6 +3877,7 @@ mod tests {
                 DesktopMode::Host,
                 true,
                 false,
+                false,
             ),
             (2_000 - 125, true)
         );
@@ -3867,6 +3888,7 @@ mod tests {
                 DesktopMode::Host,
                 false,
                 true,
+                false,
             ),
             (HOST_IDLE_MESSAGE_POLL_SLICE_MS, true)
         );
@@ -3877,8 +3899,53 @@ mod tests {
                 DesktopMode::Virtual,
                 true,
                 true,
+                false,
             ),
             (375, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(
+                0,
+                Duration::from_secs(10),
+                DesktopMode::Host,
+                true,
+                false,
+                true,
+            ),
+            (LIVE_VISIBLE_WORK_RUN_SLICE_MS, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(
+                500,
+                Duration::from_millis(125),
+                DesktopMode::Host,
+                true,
+                false,
+                true,
+            ),
+            (LIVE_VISIBLE_WORK_RUN_SLICE_MS, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(
+                500,
+                Duration::from_millis(450),
+                DesktopMode::Host,
+                true,
+                false,
+                true,
+            ),
+            (50, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(
+                0,
+                Duration::from_secs(10),
+                DesktopMode::Virtual,
+                true,
+                false,
+                true,
+            ),
+            (LIVE_VISIBLE_WORK_RUN_SLICE_MS, true)
         );
     }
 
