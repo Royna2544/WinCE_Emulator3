@@ -153,6 +153,9 @@ impl CoredllGuestMemory for TestGuestMemory {
     fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
         if let Some(halfword) = self.halfwords.get_mut(&addr) {
             *halfword = value;
+            let [lo, hi] = value.to_le_bytes();
+            self.bytes.insert(addr, lo);
+            self.bytes.insert(addr.wrapping_add(1), hi);
             Ok(())
         } else if is_test_heap_address(addr) {
             self.halfwords.insert(addr, value);

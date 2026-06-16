@@ -31,6 +31,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   owned zeroed backing, so CE `draw.cpp::TransparentBltTransparencyTest`-style
   `FillRect`/`SetPixel` drawing into the offscreen bitmap becomes visible to a
   later `TransparentImage` color-key copy.
+- `tests/coredll_raw_gwe.rs` and `tests/support/mod.rs`: the same
+  `TransparentBltTransparencyTest` regression now sweeps CE's raw
+  `CreateBitmap` bit depths (`1`, `2`, `4`, `8`, `16`, `24`, and `32` bpp).
+  The test memory backend now keeps repeated halfword writes visible through
+  byte snapshots, matching the `TransparentImage` source-bitmap read path.
 - `src/emulator/unicorn.rs`: escaped cross-thread visible-message WNDPROC
   callouts that already reached their saved import PC now restore the captured
   `ResumeImportAfterWndProc` thread/register context instead of being archived

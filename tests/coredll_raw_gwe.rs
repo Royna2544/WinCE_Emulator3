@@ -12648,155 +12648,199 @@ fn coredll_raw_transparent_image_copies_selected_bitmap_with_color_key() -> Resu
 }
 
 #[test]
-fn coredll_raw_transparent_image_uses_null_createbitmap_after_fill_rect() -> Result<()> {
-    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
-    const GREEN_COLORREF: u32 = 0x0000_ff00;
-    const BLUE_COLORREF: u32 = 0x00ff_0000;
-    const RED_COLORREF: u32 = 0x0000_00ff;
+fn coredll_raw_transparent_image_uses_null_createbitmap_across_bit_depths() -> Result<()> {
+    const WHITE_COLORREF: u32 = 0x00ff_ffff;
+    const BLACK_COLORREF: u32 = 0x0000_0000;
+    const RED_RGB565: u16 = 0xf800;
 
-    let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load_default()?;
-    let mut kernel = CeKernel::boot(config);
-    let mut memory = TestGuestMemory::default();
-    let thread_id = 9;
-    let mut framebuffer = VirtualFramebuffer::new(4, 4, PixelFormat::Rgb565)?;
-    framebuffer.clear(0xff);
-    let _ = framebuffer.take_dirty_rects();
-
-    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        ORD_GET_DC,
-        [0],
-    ) {
-        CoredllDispatch::Returned {
-            value: CoredllValue::Handle(handle),
-            ..
-        } => handle,
-        other => panic!("GetDC did not return a handle: {other:?}"),
-    };
-    let mem_dc = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        ORD_CREATE_COMPATIBLE_DC,
-        [screen_dc],
-    ) {
-        CoredllDispatch::Returned {
-            value: CoredllValue::Handle(handle),
-            ..
-        } => handle,
-        other => panic!("CreateCompatibleDC did not return a handle: {other:?}"),
-    };
-    let bitmap = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        ORD_CREATE_BITMAP,
-        [2, 2, 1, 32, 0],
-    ) {
-        CoredllDispatch::Returned {
-            value: CoredllValue::Handle(handle),
-            ..
-        } => handle,
-        other => panic!("CreateBitmap(NULL) did not return a handle: {other:?}"),
-    };
-    assert_ne!(bitmap, 0);
-    assert_eq!(kernel.resources.bitmap(bitmap).unwrap().bits_ptr, 0);
-
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
-            ORD_SELECT_OBJECT,
-            [mem_dc, bitmap],
-        ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::Handle(handle),
-            ..
-        } if handle != 0
-    ));
-    assert_ne!(kernel.resources.bitmap(bitmap).unwrap().bits_ptr, 0);
-
-    let rect_ptr = 0x1_0000;
-    memory.map_words(rect_ptr, 4);
-    memory.write_word(rect_ptr, 0);
-    memory.write_word(rect_ptr + 4, 0);
-    memory.write_word(rect_ptr + 8, 2);
-    memory.write_word(rect_ptr + 12, 2);
-    let brush = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        ORD_CREATE_SOLID_BRUSH,
-        [MAGENTA_COLORREF],
-    ) {
-        CoredllDispatch::Returned {
-            value: CoredllValue::Handle(handle),
-            ..
-        } => handle,
-        other => panic!("CreateSolidBrush did not return a handle: {other:?}"),
-    };
-    assert_ne!(brush, 0);
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
-            ORD_FILL_RECT,
-            [mem_dc, rect_ptr, brush],
-        ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::U32(1),
-            ..
+    for bits_pixel in [1_u32, 2, 4, 8, 16, 24, 32] {
+        let table = CoredllExportTable::default();
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut memory = TestGuestMemory::default();
+        let thread_id = 9;
+        let mut framebuffer = VirtualFramebuffer::new(4, 4, PixelFormat::Rgb565)?;
+        for pixel in framebuffer.pixels_mut().chunks_exact_mut(2) {
+            pixel.copy_from_slice(&RED_RGB565.to_le_bytes());
         }
-    ));
+        let _ = framebuffer.take_dirty_rects();
 
-    for (x, y, color) in [
-        (1, 0, GREEN_COLORREF),
-        (0, 1, BLUE_COLORREF),
-        (1, 1, RED_COLORREF),
-    ] {
+        let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DC,
+            [0],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("GetDC did not return a handle: {other:?}"),
+        };
+        let mem_dc = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_COMPATIBLE_DC,
+            [screen_dc],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("CreateCompatibleDC did not return a handle: {other:?}"),
+        };
+        let bitmap = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_BITMAP,
+            [2, 2, 1, bits_pixel, 0],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("CreateBitmap(NULL, {bits_pixel}bpp) failed: {other:?}"),
+        };
+        assert_ne!(bitmap, 0);
+        assert_eq!(kernel.resources.bitmap(bitmap).unwrap().bits_ptr, 0);
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SELECT_OBJECT,
+                [mem_dc, bitmap],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle != 0
+        ));
+        assert_ne!(kernel.resources.bitmap(bitmap).unwrap().bits_ptr, 0);
+
+        let rect_ptr = 0x1_0000;
+        memory.map_words(rect_ptr, 4);
+        memory.write_word(rect_ptr, 0);
+        memory.write_word(rect_ptr + 4, 0);
+        memory.write_word(rect_ptr + 8, 2);
+        memory.write_word(rect_ptr + 12, 2);
+        let brush = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_SOLID_BRUSH,
+            [WHITE_COLORREF],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("CreateSolidBrush did not return a handle: {other:?}"),
+        };
+        assert_ne!(brush, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FILL_RECT,
+                [mem_dc, rect_ptr, brush],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
+        ));
         assert!(matches!(
             table.dispatch_raw_ordinal_with_memory(
                 &mut kernel,
                 &mut memory,
                 thread_id,
                 ORD_SET_PIXEL,
-                [mem_dc, x, y, color],
+                [mem_dc, 1, 1, BLACK_COLORREF],
             ),
             CoredllDispatch::Returned {
-                value: CoredllValue::U32(value),
+                value: CoredllValue::U32(BLACK_COLORREF),
                 ..
-            } if value == color
+            }
         ));
-    }
-
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_framebuffer(
+        let transparent_color = match table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
-            Some(&mut framebuffer),
             thread_id,
-            ORD_TRANSPARENT_IMAGE,
-            [screen_dc, 1, 1, 2, 2, mem_dc, 0, 0, 2, 2, MAGENTA_COLORREF],
-        ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::Bool(true),
-            ..
-        }
-    ));
+            ORD_GET_PIXEL,
+            [mem_dc, 0, 0],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(color),
+                ..
+            } => color,
+            other => panic!("GetPixel did not return a color: {other:?}"),
+        };
+        assert_ne!(transparent_color, 0xffff_ffff);
+        let black_pixel = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PIXEL,
+            [mem_dc, 1, 1],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(color),
+                ..
+            } => color,
+            other => panic!("GetPixel(1, 1) did not return a color: {other:?}"),
+        };
+        assert_eq!(
+            black_pixel, BLACK_COLORREF,
+            "{bits_pixel}bpp SetPixel/GetPixel should preserve the black source pixel"
+        );
 
-    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 1), 0xffff);
-    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 1), 0x07e0);
-    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 2), 0x001f);
-    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 2), 0xf800);
-    assert_eq!(
-        framebuffer.dirty_rects(),
-        &[FramebufferRect::new(1, 1, 2, 2)]
-    );
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer(
+                &mut kernel,
+                &mut memory,
+                Some(&mut framebuffer),
+                thread_id,
+                ORD_TRANSPARENT_IMAGE,
+                [screen_dc, 1, 1, 2, 2, mem_dc, 0, 0, 2, 2, transparent_color],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+
+        assert_eq!(
+            framebuffer_rgb565_at(&framebuffer, 1, 1),
+            RED_RGB565,
+            "{bits_pixel}bpp transparent pixel should preserve destination"
+        );
+        assert_eq!(
+            framebuffer_rgb565_at(&framebuffer, 2, 1),
+            RED_RGB565,
+            "{bits_pixel}bpp transparent pixel should preserve destination"
+        );
+        assert_eq!(
+            framebuffer_rgb565_at(&framebuffer, 1, 2),
+            RED_RGB565,
+            "{bits_pixel}bpp transparent pixel should preserve destination"
+        );
+        assert_eq!(
+            framebuffer_rgb565_at(&framebuffer, 2, 2),
+            0x0000,
+            "{bits_pixel}bpp black pixel should copy through TransparentImage"
+        );
+        assert_eq!(
+            framebuffer.dirty_rects(),
+            &[FramebufferRect::new(1, 1, 2, 2)],
+            "{bits_pixel}bpp TransparentImage should dirty only the destination rectangle"
+        );
+    }
 
     Ok(())
 }
