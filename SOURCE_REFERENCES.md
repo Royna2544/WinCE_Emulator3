@@ -2189,6 +2189,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     for the timeout branch, including clearing the parked state without a
     lingering borrow, preserving the interrupted active thread in suspended
     state, switching back to the sender, and avoiding stale receiver delivery.
+    The matching scheduler `smfResultReady` branch is covered too: a completed
+    receiver result wakes the parked `SendMessageTimeout`, writes `lpdwResult`,
+    consumes the completed send state, preserves the interrupted active thread,
+    and resumes the sender with success instead of a timeout.
     The scheduler
     now has a send-reply blocked-wait kind
     keyed by sent-message id, mirroring the sender-side `pSentNext`/reply wait

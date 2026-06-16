@@ -98,8 +98,10 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   targets instead of consuming/reposting them, direct-send WNDPROC cleanup
   now preserves live callouts until the saved PC reaches their return PC,
   orphaned WNDPROC return stubs can recover from the last valid return record,
-  and escaped cross-thread visible-message WNDPROC callouts are cleared when the
-  guest reaches their saved return PC. Host live-pump runs also pass the early
+  and escaped cross-thread visible-message WNDPROC callouts now restore the
+  saved `ResumeImportAfterWndProc` context when the guest reaches their saved
+  return PC instead of archiving a lossy orphan record. Host live-pump runs also
+  pass the early
   MIPS import-thunk wall stop at `iNavi.exe+0x3554` /
   `COREDLL.dll@1047` (`memset`). The app still remains on the animated splash
   while loading resources/map data. Current traced evidence reaches

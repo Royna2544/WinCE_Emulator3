@@ -15,6 +15,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: escaped cross-thread visible-message WNDPROC
+  callouts that already reached their saved import PC now restore the captured
+  `ResumeImportAfterWndProc` thread/register context instead of being archived
+  as compact orphan return records. This prevents the later lossy
+  `OrphanedVisibleMessage` `WM_PAINT` recovery path from resuming with only
+  `PC`/`RA` and losing the original active-thread state.
+- Live iNavi drive after the escaped visible-message resume fix: the rebuilt
+  release process stayed alive past the prior heap-execute/`FETCH_PROT`
+  failure after repeated touch sweeps. The run continued through
+  `iNavi.exe+0x2f8100`, `+0x2ffe8c`, `+0x3342d4`, `+0x33432c`,
+  `+0x329da8`, and `+0x33292c` while file reads advanced through
+  `resmapi_800x480.bin`. The owned full-screen splash popup remains visible
+  and the captured framebuffer hash did not change, so the map reveal is still
+  unresolved.
 - `src/emulator/unicorn.rs`: Unicorn `SendMessageTimeout` direct import
   re-entry now clears an expired parked send without tripping the blocked-state
   `RefCell` borrow, restores the sender MIPS context to the saved return PC,
@@ -24,11 +38,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `SendMessageTimeout` resume path now has the same borrow-safe timeout cleanup
   and a regression that proves the interrupted active thread is suspended while
   execution returns to the timed-out sender without stale receiver delivery.
+- `src/emulator/unicorn.rs`: scheduler-driven `SendMessageTimeout`
+  result-ready replay now has focused coverage for the CE `smfResultReady`
+  branch. A completed receiver result writes `lpdwResult`, consumes the send
+  completion, suspends the interrupted active thread, resumes the sender with
+  `TRUE`, and leaves last error clear.
 - Focused validation after the Unicorn parked `SendMessageTimeout` timeout
   re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop send_message_timeout_ --lib`
-  passed; full validation then passed with `cargo fmt --check`, `git diff
-  --check`, `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  passed after the timeout and result-ready scheduler slices; full validation
+  then passed with `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
   unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test -j
   1 --features unicorn,trace,win32-desktop`. Cargo still emits the existing
   unused-code warnings, plus an unused `CpuBackend` import warning in filtered

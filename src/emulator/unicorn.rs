@@ -41076,6 +41076,130 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn send_message_timeout_scheduler_resume_writes_ready_result_and_suspends_active_thread() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sender_thread = 66;
+        let receiver_thread = 67;
+        let active_thread = 68;
+        let sender_handle = 0x0000_0660;
+        let active_handle = 0x0000_0680;
+        let result_ptr = 0x0001_2040;
+        let sender_return_pc = 0x0040_6600;
+        let active_pc = 0x0040_6800;
+        uc.mem_map(0x0001_2000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(result_ptr), &0xface_b00c_u32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0x6666_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_6600).unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_6600).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(sender_return_pc))
+            .unwrap();
+
+        let hwnd = kernel
+            .gwe
+            .create_window(receiver_thread, "SendTimeoutSchedulerReady", "ready");
+        let blocked_smt = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
+        let args = [
+            hwnd,
+            crate::ce::gwe::WM_USER + 216,
+            0x66,
+            0x67,
+            0,
+            1000,
+            result_ptr,
+        ];
+
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            sender_thread,
+            &blocked_smt,
+            &running_thread,
+        ));
+        let blocked = blocked_smt
+            .borrow()
+            .as_ref()
+            .expect("blocked send timeout")
+            .clone();
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_thread, blocked.block_state.send_id)
+        );
+        assert_eq!(
+            kernel.complete_active_sent_message(receiver_thread, 0x2468_ace0),
+            Some(blocked.block_state.send_id)
+        );
+        assert!(kernel.sent_message_result_ready(blocked.block_state.send_id));
+
+        *running_thread.borrow_mut() = Some((active_thread, active_handle));
+        uc.reg_write(RegisterMIPS::S0, 0x6868_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_6800).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(active_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_6810).unwrap();
+
+        let current_thread_id = Rc::new(RefCell::new(active_thread));
+        let suspended_thread = Rc::new(RefCell::new(None));
+        assert!(super::try_resume_blocked_send_message_timeout(
+            &mut kernel,
+            &mut uc,
+            active_thread,
+            &current_thread_id,
+            &blocked_smt,
+            &suspended_thread,
+            None,
+            &running_thread,
+            Some(active_pc),
+            true,
+        ));
+
+        assert!(blocked_smt.borrow().is_none());
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((sender_thread, sender_handle))
+        );
+        let suspended = suspended_thread
+            .borrow()
+            .as_ref()
+            .expect("active thread suspended")
+            .clone();
+        assert_eq!(suspended.thread_id, active_thread);
+        assert_eq!(suspended.thread_handle, Some(active_handle));
+        assert_eq!(suspended.pc, active_pc);
+        assert_eq!(suspended.regs.regs[16], 0x6868_0001);
+        assert_eq!(
+            kernel.take_completed_send_message_result(blocked.block_state.send_id),
+            None
+        );
+        assert_eq!(kernel.gwe.stats().send_transaction_timeout_count, 0);
+        assert_eq!(kernel.gwe.get_message(receiver_thread), None);
+        assert_eq!(kernel.threads.get_last_error(sender_thread), 0);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x6666_0001);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
+            sender_return_pc
+        );
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            sender_return_pc
+        );
+        let mut result_bytes = [0; 4];
+        uc.mem_read(u64::from(result_ptr), &mut result_bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0x2468_ace0);
+    }
+
+    #[test]
     fn send_message_blocked_wait_resume_recovers_missing_running_metadata() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
