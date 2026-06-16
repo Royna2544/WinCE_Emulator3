@@ -107,12 +107,12 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   posted-touch dispatch plus non-black splash rendering through the remote
   server. A later full trace-mode run on `192.168.0.39:8765` stayed on the real
   iNavi SE splash while still advancing through `resmapi_800x480.bin`
-  decompression at `iNavi.exe+0x2ff8xx`/`+0x2ff9xx`, with no render/controller
-  milestones yet. Timer state is now exposed through
-  `/api/v1/debug/timers.txt` for the next rebuilt/relaunched live run, but the
-  normal map UI transition is still not observed, and the non-trace fast-live
-  host crash remains the practical blocker to reaching the map transition
-  quickly.
+  decompression at `iNavi.exe+0x2ff8xx`/`+0x2ff9xx`, and post-flamegraph
+  no-trace runs now reach the later `iNavi.exe+0x329cxx` resource/map-loading
+  region. Timer state is exposed through `/api/v1/debug/timers.txt`, but the
+  normal map UI transition is still not observed. The current practical startup
+  performance cost is repeated Unicorn slice teardown plus remote debug
+  publishing, after fixing the old linear trampoline-origin scan.
 - Hidden Happyway child scheduling remains incomplete. The real modal dialog
   can be dismissed and its framebuffer pixels restore correctly, but
   `happyway_win.exe` may remain parked with stale modal/close state while iNavi
