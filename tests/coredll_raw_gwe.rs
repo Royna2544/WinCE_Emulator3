@@ -13531,6 +13531,91 @@ fn coredll_raw_transparent_image_clips_off_left_selected_dib_source_alignment() 
 }
 
 #[test]
+fn coredll_raw_transparent_image_clips_off_left_framebuffer_source_alignment() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const WHITE565: u16 = 0xffff;
+    const RED565: u16 = 0xf800;
+    const GREEN565: u16 = 0x07e0;
+    const MAGENTA565: u16 = 0xf81f;
+    const BLUE565: u16 = 0x001f;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let mut framebuffer = VirtualFramebuffer::new(6, 1, PixelFormat::Rgb565)?;
+
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+
+    for (x, pixel) in [WHITE565, WHITE565, RED565, GREEN565, MAGENTA565, BLUE565]
+        .into_iter()
+        .enumerate()
+    {
+        let offset = x * PixelFormat::Rgb565.bytes_per_pixel();
+        framebuffer.pixels_mut()[offset..offset + 2].copy_from_slice(&pixel.to_le_bytes());
+    }
+    let _ = framebuffer.take_dirty_rects();
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                screen_dc,
+                (-2i32) as u32,
+                0,
+                4,
+                1,
+                screen_dc,
+                2,
+                0,
+                4,
+                1,
+                MAGENTA_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(
+        framebuffer_rgb565_at(&framebuffer, 0, 0),
+        WHITE565,
+        "clipped transparent framebuffer source pixel should preserve destination"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&framebuffer, 1, 0),
+        BLUE565,
+        "visible framebuffer destination pixel should sample the advanced source coordinate"
+    );
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 0), RED565);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 3, 0), GREEN565);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 4, 0), MAGENTA565);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 5, 0), BLUE565);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_mirrors_negative_extents_between_selected_dibs() -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
 
