@@ -13778,6 +13778,8 @@ fn fsdmgr_get_registry_string_raw<M: CoredllGuestMemory>(
 ) -> bool {
     let status = if disk_ptr == 0 {
         ERROR_GEN_FAILURE
+    } else if value_out_ptr == 0 || value_chars == 0 {
+        ERROR_GEN_FAILURE
     } else if value_out_ptr != 0 && value_chars != 0 && memory.write_u16(value_out_ptr, 0).is_err()
     {
         ERROR_GEN_FAILURE

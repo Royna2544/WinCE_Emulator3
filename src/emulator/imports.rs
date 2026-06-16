@@ -5636,6 +5636,8 @@ mod tests {
 
     #[test]
     fn fsdmgr_registry_imports_read_configured_logical_disk_roots() {
+        const ERROR_GEN_FAILURE: u32 = 31;
+
         let imports = vec![ImportDescriptor {
             module_name: "fsdmgr.dll".to_owned(),
             original_first_thunk: 0x2000,
@@ -5711,6 +5713,17 @@ mod tests {
         );
         kernel.registry.set_value(
             r"HKLM\System\StorageManager\Profiles\Profiled\FATFS",
+            "MountNames",
+            RegistryValue {
+                ty: crate::ce::registry::RegistryType::RegMultiSz,
+                data: crate::ce::registry::RegistryData::MultiString(vec![
+                    r"\Profiled Disk".to_owned(),
+                    "DSK9:".to_owned(),
+                ]),
+            },
+        );
+        kernel.registry.set_value(
+            r"HKLM\System\StorageManager\Profiles\Profiled\FATFS",
             "EnableFileCache",
             RegistryValue::dword(1),
         );
@@ -5731,10 +5744,14 @@ mod tests {
         let value_name_ptr = 0x1000_7000;
         let dword_out_ptr = 0x1000_8000;
         let string_out_ptr = 0x1000_9000;
+        let small_string_out_ptr = 0x1000_9800;
+        let multi_string_out_ptr = 0x1000_9a00;
         let flag_out_ptr = 0x1000_a000;
         memory.map_wide_z(mount_name_ptr, r"\Profiled Disk");
         memory.map_word(dword_out_ptr, 0);
         memory.map_wide_buffer(string_out_ptr, 32);
+        memory.map_wide_z(small_string_out_ptr, "unchanged");
+        memory.map_wide_buffer(multi_string_out_ptr, 32);
         memory.map_word(flag_out_ptr, 0x0000_00f0);
 
         let volume = table
@@ -5775,6 +5792,68 @@ mod tests {
             Some(1)
         );
         assert_eq!(memory.read_wide_z(string_out_ptr, 32), "profilecache.dll");
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        memory.map_wide_z(string_out_ptr, "unchanged");
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [disk_ptr, value_name_ptr, string_out_ptr, 17],
+            ),
+            Some(1)
+        );
+        assert_eq!(memory.read_wide_z(string_out_ptr, 17), "profilecache.dll");
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [disk_ptr, value_name_ptr, small_string_out_ptr, 16],
+            ),
+            Some(0)
+        );
+        assert_eq!(memory.read_wide_z(small_string_out_ptr, 16), "");
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_FILE_NOT_FOUND
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [disk_ptr, value_name_ptr, 0, 0],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_GEN_FAILURE);
+
+        memory.map_wide_z(value_name_ptr, "MountNames");
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [disk_ptr, value_name_ptr, multi_string_out_ptr, 32],
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            memory.read_wide_z(multi_string_out_ptr, 32),
+            r"\Profiled Disk"
+        );
+        let second_mount_name_ptr =
+            multi_string_out_ptr + ((r"\Profiled Disk".encode_utf16().count() as u32 + 1) * 2);
+        assert_eq!(memory.read_wide_z(second_mount_name_ptr, 16), "DSK9:");
         assert_eq!(kernel.threads.get_last_error(11), 0);
 
         memory.map_wide_z(value_name_ptr, "EnableFileCache");
