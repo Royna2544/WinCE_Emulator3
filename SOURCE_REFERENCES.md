@@ -499,7 +499,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     accepting delete-sector, secure-wipe, or set-secure-wipe-flag requests.
     v3 now traps the direct ordinals, persists
     direct/cache/Ex writes in sparse synthetic 512-byte sectors, reads unwritten
-    sectors as zero-filled data, writes synthetic `DISK_INFO`, persists
+    sectors as zero-filled data, writes synthetic `DISK_INFO`, handles both
+    legacy `DISK_IOCTL_GETINFO` and new `IOCTL_DISK_GETINFO`, persists
     validated SETINFO metadata for later GETINFO calls, writes disk name,
     device info, and storage-id metadata, fills Ex result sector counts, handles
     direct disk SG read/write, validates `GET_SECTOR_ADDR` caller buffers before

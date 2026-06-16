@@ -5115,3 +5115,18 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored, and Cargo still emits the existing unused-code
   warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: `FSDMGR_DiskIoControl @12`
+  now names the CE `IOCTL_DISK_GETINFO` alias from `diskio.h` alongside legacy
+  `DISK_IOCTL_GETINFO`. The import regression covers the new output-buffer
+  `DISK_INFO` call shape after `IOCTL_DISK_SETINFO` persistence.
+- Validation after the FSDMGR `IOCTL_DISK_GETINFO` alias slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info --
+  --nocapture`, `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored, and Cargo still emits the existing unused-code
+  warnings.

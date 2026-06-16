@@ -2413,6 +2413,7 @@ mod tests {
         const IOCTL_DISK_FORMAT_VOLUME: u32 = 0x0007_0220;
         const IOCTL_DISK_SCAN_VOLUME: u32 = 0x0007_0224;
         const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
+        const IOCTL_DISK_GETINFO: u32 = 0x0007_1c00;
         const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
         const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
         const IOCTL_DISK_SET_STANDBY_TIMER: u32 = 0x0007_1c18;
@@ -2589,6 +2590,38 @@ mod tests {
                     24,
                     0,
                     0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(disk_info_ptr), 0x4444);
+        assert_eq!(memory.word(disk_info_ptr + 4), 1024);
+        assert_eq!(memory.word(disk_info_ptr + 8), 4);
+        assert_eq!(memory.word(disk_info_ptr + 12), 8);
+        assert_eq!(memory.word(disk_info_ptr + 16), 16);
+        assert_eq!(memory.word(disk_info_ptr + 20), 0x0000_0008);
+        assert_eq!(memory.word(bytes_returned_ptr), 24);
+
+        for offset in (0..24).step_by(4) {
+            memory.map_word(disk_info_ptr + offset, 0xfeed_cafe);
+        }
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_DISK_GETINFO,
+                    0,
+                    0,
+                    disk_info_ptr,
+                    24,
                     bytes_returned_ptr,
                     0,
                 ],

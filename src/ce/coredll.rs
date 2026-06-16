@@ -109,6 +109,7 @@ const FSCTL_SET_FILE_CACHE: u32 = 0x0009_0090;
 const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
 const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
+const DISK_IOCTL_GETINFO: u32 = 1;
 const DISK_IOCTL_SETINFO: u32 = 5;
 const DISK_IOCTL_INITIALIZED: u32 = 4;
 const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
@@ -116,6 +117,7 @@ const DISK_IOCTL_GETNAME: u32 = 9;
 const IOCTL_DISK_FORMAT_VOLUME: u32 = 0x0007_0220;
 const IOCTL_DISK_SCAN_VOLUME: u32 = 0x0007_0224;
 const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
+const IOCTL_DISK_GETINFO: u32 = 0x0007_1c00;
 const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
 const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
 const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
@@ -13024,7 +13026,7 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
         let _ = memory.write_u32(bytes_returned_ptr, 0);
     }
     let ok = match ioctl {
-        1 | 0x0007_1c00 => fsdmgr_disk_info_raw(
+        DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO => fsdmgr_disk_info_raw(
             kernel,
             memory,
             thread_id,
