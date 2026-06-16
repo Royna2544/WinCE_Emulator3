@@ -2441,6 +2441,8 @@ mod tests {
         const IOCTL_FMD_UNLOCK_BLOCKS: u32 = 0x0007_1f88;
         const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
         const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
+        const IOCTL_FMD_SET_SECTORSIZE: u32 = 0x0007_1fa4;
+        const IOCTL_FMD_RAW_WRITE_BLOCKS: u32 = 0x0007_1fa8;
         const IOCTL_FMD_GET_RAW_BLOCK_SIZE: u32 = 0x0007_1fac;
         const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
         const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
@@ -2502,6 +2504,9 @@ mod tests {
         let fmd_reserved_out_ptr = 0x1001_5000;
         let fmd_xip_mode_ptr = 0x1001_6000;
         let fmd_block_lock_ptr = 0x1001_7000;
+        let fmd_sector_size_ptr = 0x1001_8000;
+        let fmd_raw_write_req_ptr = 0x1001_9000;
+        let fmd_raw_write_buffer_ptr = 0x1001_a000;
 
         let mut sector_bytes = vec![0; 512];
         sector_bytes[..17].copy_from_slice(b"direct-disk-write");
@@ -2903,6 +2908,51 @@ mod tests {
         assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
         assert_eq!(kernel.fsdmgr_fmd_block_locked(disk_ptr, 7), Some(false));
 
+        memory.map_word(fmd_sector_size_ptr, 2048);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_SET_SECTORSIZE,
+                    fmd_sector_size_ptr,
+                    4,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(kernel.fsdmgr_fmd_sector_size(disk_ptr), Some(2048));
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_SET_SECTORSIZE,
+                    fmd_sector_size_ptr,
+                    3,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(kernel.fsdmgr_fmd_sector_size(disk_ptr), Some(2048));
+
         memory.map_word(fmd_reserved_out_ptr, 0xfeed_cafe);
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
         assert_eq!(
@@ -2977,6 +3027,87 @@ mod tests {
         assert_eq!(kernel.threads.get_last_error(11), 0);
         assert_eq!(memory.word(fmd_reserved_out_ptr), 1024);
         assert_eq!(memory.word(bytes_returned_ptr), 4);
+
+        let mut raw_block = vec![0; 1024];
+        raw_block[..18].copy_from_slice(b"raw-fmd-block-data");
+        memory.map_bytes(fmd_raw_write_buffer_ptr, &raw_block);
+        memory.map_word(fmd_raw_write_req_ptr, 15);
+        memory.map_word(fmd_raw_write_req_ptr + 4, 1);
+        memory.map_word(fmd_raw_write_req_ptr + 8, fmd_raw_write_buffer_ptr);
+        memory.map_word(fmd_raw_write_req_ptr + 12, 1024);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_RAW_WRITE_BLOCKS,
+                    fmd_raw_write_req_ptr,
+                    16,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        memory.map_bytes(read_sector_ptr, &vec![0x5a; 512]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 15, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert_eq!(&read_back[..18], b"raw-fmd-block-data");
+
+        memory.map_word(fmd_raw_write_req_ptr, 16);
+        memory.map_word(fmd_raw_write_req_ptr + 12, 1023);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_RAW_WRITE_BLOCKS,
+                    fmd_raw_write_req_ptr,
+                    16,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        memory.map_bytes(read_sector_ptr, &vec![0x5a; 512]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 16, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert!(read_back.iter().all(|byte| *byte == 0));
 
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
         assert_eq!(

@@ -147,11 +147,14 @@ const IOCTL_FMD_LOCK_BLOCKS: u32 = 0x0007_1f84;
 const IOCTL_FMD_UNLOCK_BLOCKS: u32 = 0x0007_1f88;
 const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
 const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
+const IOCTL_FMD_SET_SECTORSIZE: u32 = 0x0007_1fa4;
+const IOCTL_FMD_RAW_WRITE_BLOCKS: u32 = 0x0007_1fa8;
 const IOCTL_FMD_GET_RAW_BLOCK_SIZE: u32 = 0x0007_1fac;
 const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
 const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+const FMD_RAW_WRITE_BLOCKS_REQ_SIZE: u32 = 16;
 const FMD_INFO_SIZE: u32 = 20;
 const ERROR_GEN_FAILURE: u32 = 31;
 const ERROR_DEVICE_REMOVED: u32 = 1617;
@@ -13555,6 +13558,12 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
         IOCTL_FMD_UNLOCK_BLOCKS => fsdmgr_fmd_set_block_lock_raw(
             kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, false,
         ),
+        IOCTL_FMD_SET_SECTORSIZE => {
+            fsdmgr_fmd_set_sector_size_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
+        }
+        IOCTL_FMD_RAW_WRITE_BLOCKS => {
+            fsdmgr_fmd_raw_write_blocks_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
+        }
         IOCTL_FMD_GET_RESERVED_TABLE => fsdmgr_fmd_get_reserved_table_raw(
             kernel,
             memory,
@@ -13876,6 +13885,104 @@ fn fsdmgr_fmd_set_block_lock_raw<M: CoredllGuestMemory>(
         return false;
     };
     let status = kernel.fsdmgr_set_fmd_block_lock(disk_ptr, start_block, block_count, locked);
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
+}
+
+fn fsdmgr_fmd_set_sector_size_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    disk_ptr: u32,
+    sector_size_ptr: u32,
+    sector_size_bytes: u32,
+) -> bool {
+    if sector_size_ptr == 0 || sector_size_bytes < 4 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(sector_size) = memory.read_u32(sector_size_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let status = kernel.fsdmgr_set_fmd_sector_size(disk_ptr, sector_size);
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
+}
+
+fn fsdmgr_fmd_raw_write_blocks_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    disk_ptr: u32,
+    request_ptr: u32,
+    request_bytes: u32,
+) -> bool {
+    let Some(info) = kernel.fsdmgr_disk_info(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if request_ptr == 0 || request_bytes < FMD_RAW_WRITE_BLOCKS_REQ_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(start_block) = memory.read_u32(request_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(block_count) = memory.read_u32(request_ptr.wrapping_add(4)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(buffer_ptr) = memory.read_u32(request_ptr.wrapping_add(8)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(buffer_bytes) = memory.read_u32(request_ptr.wrapping_add(12)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(required_bytes) = block_count.checked_mul(info[1]) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if block_count == 0
+        || info[1] == 0
+        || buffer_ptr == 0
+        || buffer_bytes < required_bytes
+        || required_bytes as usize > isize::MAX as usize
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let mut bytes = vec![0; required_bytes as usize];
+    if memory.read_bytes(buffer_ptr, &mut bytes).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let status = kernel.fsdmgr_write_fmd_raw_blocks(disk_ptr, start_block, block_count, &bytes);
     kernel.threads.set_last_error(thread_id, status);
     status == 0
 }

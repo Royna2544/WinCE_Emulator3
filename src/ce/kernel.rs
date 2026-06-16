@@ -240,6 +240,7 @@ pub struct CeKernel {
     fsdmgr_disk_info_overrides: BTreeMap<u32, [u32; 6]>,
     fsdmgr_fmd_xip_modes: BTreeMap<u32, bool>,
     fsdmgr_fmd_block_locks: BTreeMap<u32, Vec<FsdmgrFmdBlockLockRange>>,
+    fsdmgr_fmd_sector_sizes: BTreeMap<u32, u32>,
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
     next_fsdmgr_volume_lock: u32,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -991,6 +992,7 @@ impl CeKernel {
             fsdmgr_disk_info_overrides: BTreeMap::new(),
             fsdmgr_fmd_xip_modes: BTreeMap::new(),
             fsdmgr_fmd_block_locks: BTreeMap::new(),
+            fsdmgr_fmd_sector_sizes: BTreeMap::new(),
             fsdmgr_volume_locks: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             modal_dialog_results: BTreeMap::new(),
@@ -2877,6 +2879,50 @@ impl CeKernel {
                     })
                 }),
         )
+    }
+
+    pub fn fsdmgr_set_fmd_sector_size(&mut self, disk_ptr: u32, sector_size: u32) -> u32 {
+        if self.fsdmgr_disk_info(disk_ptr).is_none() {
+            return ERROR_INVALID_PARAMETER;
+        }
+        self.fsdmgr_fmd_sector_sizes.insert(disk_ptr, sector_size);
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_fmd_sector_size(&self, disk_ptr: u32) -> Option<u32> {
+        self.fsdmgr_disk_info(disk_ptr)?;
+        Some(
+            self.fsdmgr_fmd_sector_sizes
+                .get(&disk_ptr)
+                .copied()
+                .unwrap_or(FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE),
+        )
+    }
+
+    pub fn fsdmgr_write_fmd_raw_blocks(
+        &mut self,
+        disk_ptr: u32,
+        start_block: u32,
+        block_count: u32,
+        bytes: &[u8],
+    ) -> u32 {
+        let Some(info) = self.fsdmgr_disk_info(disk_ptr) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        let block_size = info[1];
+        if block_count == 0 || block_size == 0 {
+            return ERROR_INVALID_PARAMETER;
+        }
+        let Some(required_bytes) = block_count
+            .checked_mul(block_size)
+            .map(|required| required as usize)
+        else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if bytes.len() < required_bytes {
+            return ERROR_INVALID_PARAMETER;
+        }
+        self.fsdmgr_write_disk(disk_ptr, start_block, block_count, block_size, bytes)
     }
 
     pub fn fsdmgr_disk_io_control_status(&mut self, disk_ptr: u32, ioctl: u32) -> u32 {
