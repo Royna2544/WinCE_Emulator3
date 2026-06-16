@@ -15,6 +15,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`,
+  `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw
+  `KernExtractIcons` now mirrors the CE `resource.cpp` distinction between
+  absent integer `RT_GROUP_ICON` resources and missing selected `RT_ICON`
+  payloads. The raw path resolves the group first without touching outputs on
+  absent-group failure, then extracts requested large/small slots
+  independently so a missing peer icon does not prevent a requested success;
+  failed requested slots are assigned NULL and leave
+  `ERROR_RESOURCE_NAME_NOT_FOUND` visible when another slot succeeds.
+- Validation after the raw `KernExtractIcons` partial-output slice: focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel
+  coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads --
+  --nocapture` passed.
 - `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
   `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `MapVirtualKeyW` now
   follows the CE PC keyboard driver split between public scan-code modes:

@@ -7445,6 +7445,16 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
         pe32_with_sparse_multi_size_icon_group_id(),
     )
     .unwrap();
+    fs::write(
+        root.join("Docs").join("missing-first-kern-icon.exe"),
+        pe32_with_missing_small_icon_resource(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("missing-second-kern-icon.exe"),
+        pe32_with_missing_second_icon_resource(),
+    )
+    .unwrap();
     let sparse_bytes = fs::read(root.join("Docs").join("sparse-group-icon.exe")).unwrap();
     let sparse_pe =
         wince_emulation_v3::pe::PeImage::parse_bytes("sparse-group-icon.exe", &sparse_bytes)?;
@@ -7572,6 +7582,87 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_ne!(memory.read_u32(large_out)?, 0xdead_beef);
     assert_ne!(memory.read_u32(small_out)?, 0xfeed_face);
+
+    memory.write_wide_z(path_ptr, r"\Docs\missing-first-kern-icon.exe");
+    memory.write_u32(small_out, 0xfeed_face)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [path_ptr, 1, 0, small_out, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let small_only_ptr = memory.read_u32(small_out)?;
+    assert_ne!(
+        small_only_ptr, 0xfeed_face,
+        "small-only KernExtractIcons should not require entry 0's missing RT_ICON"
+    );
+    let small_only_header = memory.read_bytes(small_only_ptr, 16);
+    assert_eq!(
+        i32::from_le_bytes(small_only_header[4..8].try_into().unwrap()),
+        32
+    );
+
+    memory.write_u32(large_out, 0xdead_beef)?;
+    memory.write_u32(small_out, 0xfeed_face)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [path_ptr, 1, large_out, small_out, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND,
+        "CE leaves the resource error visible when one requested icon fails"
+    );
+    assert_eq!(
+        memory.read_u32(large_out)?,
+        0,
+        "CE assigns NULL to the failed requested large icon pointer"
+    );
+    assert_ne!(memory.read_u32(small_out)?, 0xfeed_face);
+
+    memory.write_wide_z(path_ptr, r"\Docs\missing-second-kern-icon.exe");
+    memory.write_u32(large_out, 0xdead_beef)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [path_ptr, 1, large_out, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let large_only_ptr = memory.read_u32(large_out)?;
+    assert_ne!(
+        large_only_ptr, 0xdead_beef,
+        "large-only KernExtractIcons should not require entry 1's missing RT_ICON"
+    );
+    let large_only_header = memory.read_bytes(large_only_ptr, 16);
+    assert_eq!(
+        i32::from_le_bytes(large_only_header[4..8].try_into().unwrap()),
+        16
+    );
 
     memory.write_wide_z(path_ptr, r"\Docs\multi-size-icons.exe");
     memory.write_word(large_out, 0xdead_beef);
@@ -7707,6 +7798,12 @@ fn pe32_with_missing_icon_resource() -> Vec<u8> {
 fn pe32_with_missing_small_icon_resource() -> Vec<u8> {
     let mut bytes = pe32_with_multi_size_icon_group();
     put_test_u16(&mut bytes, 0x200 + 0x500 + 18, 999);
+    bytes
+}
+
+fn pe32_with_missing_second_icon_resource() -> Vec<u8> {
+    let mut bytes = pe32_with_multi_size_icon_group();
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 32, 999);
     bytes
 }
 

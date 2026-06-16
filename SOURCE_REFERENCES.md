@@ -1401,10 +1401,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `DestroyIcon` releases the owned color and mask bitmap heap storage created
     from those icon resources. Raw `KernExtractIcons` now follows that integer
     group-resource lookup and copies selected `RT_ICON` payload bytes into
-    guest heap outputs, rejects zero-based group enumeration when no matching
-    integer `RT_GROUP_ICON` resource ID exists, and reports
-    `ERROR_RESOURCE_NAME_NOT_FOUND` when neither large nor small output pointer
-    is supplied; the non-Unicorn raw path uses the default `{0, 1}`
+    guest heap outputs, extracts requested large/small outputs independently
+    when the peer selected `RT_ICON` resource is missing, assigns NULL to
+    failed requested output slots, rejects zero-based group enumeration when no
+    matching integer `RT_GROUP_ICON` resource ID exists without touching those
+    output slots, and reports `ERROR_RESOURCE_NAME_NOT_FOUND` when neither
+    large nor small output pointer is supplied; the non-Unicorn raw path uses
+    the default `{0, 1}`
     group-entry selection because it cannot execute the CE callback.
     Missing paths fail with `ERROR_FILE_NOT_FOUND`; broader PE format variants
     and broader non-PE fallback edges remain queued.

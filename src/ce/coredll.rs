@@ -28181,36 +28181,69 @@ fn kern_extract_icons_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
         return 0;
     }
-    let Ok((large, small)) = kern_extract_icon_resource_bytes(kernel, &path, icon_index as u32)
-    else {
+    let Ok(entry_ids) = kern_extract_icon_group_entry_ids(kernel, &path, icon_index as u32) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
         return 0;
     };
-
     let mut extracted = 0;
+    let mut missing_requested_resource = false;
     if large_out != 0 {
-        let Some(ptr) = copy_resource_bytes_to_guest_heap(kernel, memory, thread_id, &large) else {
-            return extracted;
-        };
-        if !write_guest_u32(kernel, memory, thread_id, large_out, ptr) {
-            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
-            return 0;
+        let icon_id = entry_ids.first().copied().unwrap_or(0);
+        match kern_extract_icon_resource_bytes_by_id(kernel, &path, icon_id) {
+            Ok(large) => {
+                let Some(ptr) =
+                    copy_resource_bytes_to_guest_heap(kernel, memory, thread_id, &large)
+                else {
+                    return extracted;
+                };
+                if !write_guest_u32(kernel, memory, thread_id, large_out, ptr) {
+                    let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+                    return 0;
+                }
+                extracted += 1;
+            }
+            Err(_) => {
+                missing_requested_resource = true;
+                if !write_guest_u32(kernel, memory, thread_id, large_out, 0) {
+                    return 0;
+                }
+            }
         }
-        extracted += 1;
     }
     if small_out != 0 {
-        let Some(ptr) = copy_resource_bytes_to_guest_heap(kernel, memory, thread_id, &small) else {
-            return extracted;
-        };
-        if !write_guest_u32(kernel, memory, thread_id, small_out, ptr) {
-            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
-            return 0;
+        let icon_id = entry_ids
+            .get(1)
+            .or_else(|| entry_ids.first())
+            .copied()
+            .unwrap_or(0);
+        match kern_extract_icon_resource_bytes_by_id(kernel, &path, icon_id) {
+            Ok(small) => {
+                let Some(ptr) =
+                    copy_resource_bytes_to_guest_heap(kernel, memory, thread_id, &small)
+                else {
+                    return extracted;
+                };
+                if !write_guest_u32(kernel, memory, thread_id, small_out, ptr) {
+                    let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+                    return 0;
+                }
+                extracted += 1;
+            }
+            Err(_) => {
+                missing_requested_resource = true;
+                if !write_guest_u32(kernel, memory, thread_id, small_out, 0) {
+                    return 0;
+                }
+            }
         }
-        extracted += 1;
     }
     if extracted == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+    } else if missing_requested_resource {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
@@ -28220,11 +28253,11 @@ fn kern_extract_icons_raw<M: CoredllGuestMemory>(
     extracted
 }
 
-fn kern_extract_icon_resource_bytes(
+fn kern_extract_icon_group_entry_ids(
     kernel: &mut CeKernel,
     path: &str,
     icon_index: u32,
-) -> std::result::Result<(Vec<u8>, Vec<u8>), PeIconExtractError> {
+) -> std::result::Result<Vec<u16>, PeIconExtractError> {
     use crate::pe::PeImage;
 
     let bytes = kernel
@@ -28239,15 +28272,24 @@ fn kern_extract_icon_resource_bytes(
         .find(|resource| resource.name_string.is_none() && resource.name == icon_index)
         .ok_or(PeIconExtractError::Unavailable)?;
     let entries = pe_icon_group_entries(&pe, &bytes, group)?;
-    let large_id = entries.first().ok_or(PeIconExtractError::Malformed)?.id;
-    let small_id = entries.get(1).unwrap_or(&entries[0]).id;
-    let large = pe_icon_resource_bytes_by_id(&pe, &bytes, &resources, large_id)?;
-    let small = if small_id == large_id {
-        large.clone()
-    } else {
-        pe_icon_resource_bytes_by_id(&pe, &bytes, &resources, small_id)?
-    };
-    Ok((large, small))
+    Ok(entries.into_iter().map(|entry| entry.id).collect())
+}
+
+fn kern_extract_icon_resource_bytes_by_id(
+    kernel: &mut CeKernel,
+    path: &str,
+    icon_id: u16,
+) -> std::result::Result<Vec<u8>, PeIconExtractError> {
+    use crate::pe::PeImage;
+
+    let bytes = kernel
+        .read_guest_file(path)
+        .map_err(|_| PeIconExtractError::Unavailable)?;
+    let pe = PeImage::parse_bytes(path, &bytes).map_err(|_| PeIconExtractError::Unavailable)?;
+    let resources = pe
+        .resource_data_entries()
+        .map_err(|_| PeIconExtractError::Malformed)?;
+    pe_icon_resource_bytes_by_id(&pe, &bytes, &resources, icon_id)
 }
 
 fn copy_resource_bytes_to_guest_heap<M: CoredllGuestMemory>(
