@@ -42600,6 +42600,79 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn thread_exit_cleanup_removes_only_matching_displaced_get_message_waits() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let exiting_thread = 5;
+        let exiting_handle = 0x0000_0500;
+        let other_thread = 6;
+        let other_handle = 0x0000_0600;
+        let exiting_wait = kernel.register_blocked_waiter(
+            exiting_thread,
+            exiting_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let other_wait = kernel.register_blocked_waiter(
+            other_thread,
+            other_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let displaced = Rc::new(RefCell::new(vec![
+            super::BlockedGuestThread {
+                wait_id: exiting_wait,
+                thread_id: exiting_thread,
+                thread_handle: exiting_handle,
+                regs: super::MipsGuestContext::zero(),
+                import_pc: 0,
+                return_pc: 0x0040_5000,
+                msg_ptr: 0x3000_0500,
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            super::BlockedGuestThread {
+                wait_id: other_wait,
+                thread_id: other_thread,
+                thread_handle: other_handle,
+                regs: super::MipsGuestContext::zero(),
+                import_pc: 0,
+                return_pc: 0x0040_6000,
+                msg_ptr: 0x3000_0600,
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+        ]));
+
+        super::remove_stale_displaced_get_messages_for_thread(
+            &mut kernel,
+            &displaced,
+            exiting_thread,
+        );
+
+        assert!(kernel.blocked_waiter(exiting_wait).is_none());
+        assert!(kernel.blocked_waiter(other_wait).is_some());
+        let displaced = displaced.borrow();
+        assert_eq!(displaced.len(), 1);
+        assert_eq!(displaced[0].thread_id, other_thread);
+        assert_eq!(displaced[0].wait_id, other_wait);
+    }
+
+    #[test]
     fn get_message_block_yields_to_timed_out_worker_sleep() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
