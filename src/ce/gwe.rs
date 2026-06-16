@@ -4485,6 +4485,125 @@ impl Gwe {
         out
     }
 
+    pub fn queue_debug_text(&self) -> String {
+        use std::fmt::Write as _;
+
+        const QS_DEBUG_ALLINPUT: u32 = QS_KEY
+            | QS_MOUSEMOVE
+            | QS_MOUSEBUTTON
+            | QS_POSTMESSAGE
+            | QS_TIMER
+            | QS_PAINT
+            | QS_SENDMESSAGE;
+        const MAX_MESSAGES_PER_THREAD: usize = 64;
+
+        let mut out = String::new();
+        let _ = writeln!(
+            &mut out,
+            "  posted queues: threads={} sent_queue_threads={}",
+            self.queues.len(),
+            self.sent_queues.len()
+        );
+        if self.queues.is_empty() {
+            out.push_str("    posted: none\n");
+        } else {
+            for (thread_id, queue) in &self.queues {
+                let visible_count = queue
+                    .iter()
+                    .filter(|message| self.message_targets_visible_window(message))
+                    .count();
+                let status = self.peek_queue_status(*thread_id, QS_DEBUG_ALLINPUT);
+                let _ = writeln!(
+                    &mut out,
+                    "    thread={thread_id} posted={} visible={} status=0x{status:08x}",
+                    queue.len(),
+                    visible_count
+                );
+                for (index, message) in queue.iter().take(MAX_MESSAGES_PER_THREAD).enumerate() {
+                    self.write_queue_message_line(&mut out, index, message);
+                }
+                if queue.len() > MAX_MESSAGES_PER_THREAD {
+                    let _ = writeln!(
+                        &mut out,
+                        "      ... {} more posted messages",
+                        queue.len() - MAX_MESSAGES_PER_THREAD
+                    );
+                }
+            }
+        }
+
+        if self.sent_queues.is_empty() {
+            out.push_str("  sent queues: none\n");
+        } else {
+            out.push_str("  sent queues:\n");
+            for (thread_id, queue) in &self.sent_queues {
+                let messages = queue
+                    .iter()
+                    .filter_map(|id| self.sent_messages.get(id).map(|sent| (*id, sent)));
+                let collected: Vec<_> = messages.collect();
+                let visible_count = collected
+                    .iter()
+                    .filter(|(_, sent)| self.message_targets_visible_window(&sent.message))
+                    .count();
+                let _ = writeln!(
+                    &mut out,
+                    "    thread={thread_id} sent={} visible={visible_count}",
+                    collected.len()
+                );
+                for (index, (id, sent)) in
+                    collected.iter().take(MAX_MESSAGES_PER_THREAD).enumerate()
+                {
+                    let _ = write!(&mut out, "      id={id} ");
+                    self.write_queue_message_line(&mut out, index, &sent.message);
+                }
+                if collected.len() > MAX_MESSAGES_PER_THREAD {
+                    let _ = writeln!(
+                        &mut out,
+                        "      ... {} more sent messages",
+                        collected.len() - MAX_MESSAGES_PER_THREAD
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    fn write_queue_message_line(&self, out: &mut String, index: usize, message: &Message) {
+        use std::fmt::Write as _;
+
+        let visible = self.message_targets_visible_window(message);
+        let window_detail = self
+            .windows
+            .get(&message.hwnd)
+            .map(|window| {
+                format!(
+                    "class=`{}` title=`{}` vis={} dead={} parent={} owner={} rect={},{}-{},{}",
+                    window.class_name,
+                    window.title,
+                    window.visible,
+                    window.destroyed,
+                    format_debug_hwnd(window.parent),
+                    format_debug_hwnd(window.owner),
+                    window.rect.left,
+                    window.rect.top,
+                    window.rect.right,
+                    window.rect.bottom
+                )
+            })
+            .unwrap_or_else(|| "window=<missing>".to_owned());
+        let _ = writeln!(
+            out,
+            "      #{index} hwnd=0x{:08x} msg=0x{:04x} w=0x{:08x} l=0x{:08x} source={} visible={} {}",
+            message.hwnd,
+            message.msg,
+            message.wparam,
+            message.lparam,
+            message.source,
+            visible,
+            window_detail
+        );
+    }
+
     pub fn get_message_source(&self, thread_id: u32) -> u32 {
         self.last_message_source_by_thread
             .get(&thread_id)
@@ -5625,6 +5744,11 @@ fn message_matches(message: &Message, hwnd: Option<u32>, min_msg: u32, max_msg: 
     message_id_matches(message.msg, min_msg, max_msg)
 }
 
+fn format_debug_hwnd(hwnd: Option<u32>) -> String {
+    hwnd.map(|value| format!("0x{value:08x}"))
+        .unwrap_or_else(|| "none".to_owned())
+}
+
 fn message_id_matches(msg: u32, min_msg: u32, max_msg: u32) -> bool {
     if min_msg == 0 && max_msg == 0 {
         return true;
@@ -6104,6 +6228,24 @@ mod tests {
         assert!(gwe.validate_window(visible));
         gwe.post_message(thread_id, Message::new(visible, WM_USER + 3, 0, 0, 12));
         assert!(gwe.has_visible_window_message_filtered(thread_id, None, 0, 0));
+    }
+
+    #[test]
+    fn queue_debug_text_marks_visible_and_hidden_window_messages() {
+        let mut gwe = Gwe::default();
+        let thread_id = 7;
+        let hidden = gwe.create_window(thread_id, "hidden", "");
+        let visible = gwe.create_window_ex(thread_id, "visible", "", None, 0, WS_VISIBLE, 0);
+
+        gwe.post_message(thread_id, Message::new(hidden, WM_USER + 1, 0, 0, 10));
+        gwe.post_message(thread_id, Message::new(visible, WM_USER + 2, 0, 0, 11));
+
+        let debug = gwe.queue_debug_text();
+        assert!(debug.contains("thread=7 posted=2 visible=1"));
+        assert!(debug.contains("class=`hidden`"));
+        assert!(debug.contains("visible=false"));
+        assert!(debug.contains("class=`visible`"));
+        assert!(debug.contains("visible=true"));
     }
 
     #[test]

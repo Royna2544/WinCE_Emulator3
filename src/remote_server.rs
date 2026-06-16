@@ -24,6 +24,7 @@
 // - GET /api/v1/debug/summary.txt returns the latest emulator debug summary.
 // - GET /api/v1/debug/windows.txt returns the latest GWE window snapshot text.
 // - GET /api/v1/debug/messages.txt returns the latest GWE/message trace text.
+// - GET /api/v1/debug/queues.txt returns current GWE posted/sent queues.
 // - GET /api/v1/debug/message-boxes.txt returns live MessageBoxW records.
 // - GET /api/v1/debug/processes.txt returns recent process/thread ops.
 // - GET /api/v1/debug/processes-live.txt returns live process/thread ops.
@@ -481,6 +482,7 @@ impl RemoteServer {
             ("GET", "/api/v1/debug/summary.txt") => self.latest_debug_text("summary").into(),
             ("GET", "/api/v1/debug/windows.txt") => self.latest_debug_text("windows").into(),
             ("GET", "/api/v1/debug/messages.txt") => self.latest_debug_text("messages").into(),
+            ("GET", "/api/v1/debug/queues.txt") => self.latest_debug_text("queues").into(),
             ("GET", "/api/v1/debug/message-boxes.txt") => {
                 self.latest_debug_text("message-boxes").into()
             }

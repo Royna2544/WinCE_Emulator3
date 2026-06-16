@@ -1532,6 +1532,7 @@ fn publish_remote_endpoint(
         }
         server.publish_debug_text("windows", live_kernel_windows_text(kernel));
         server.publish_debug_text("messages", live_kernel_messages_text(kernel));
+        server.publish_debug_text("queues", kernel.gwe.queue_debug_text());
         server.publish_debug_text("processes-live", live_kernel_processes_text(kernel));
         server.publish_debug_text("message-boxes", live_kernel_message_boxes_text(kernel));
         server.publish_debug_text("devices", live_kernel_devices_text(kernel));
