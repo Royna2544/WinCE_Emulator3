@@ -15,6 +15,21 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: Unicorn `SendMessageTimeout` direct import
+  re-entry now clears an expired parked send without tripping the blocked-state
+  `RefCell` borrow, restores the sender MIPS context to the saved return PC,
+  reports `ERROR_TIMEOUT`, leaves `lpdwResult` untouched, consumes the timeout
+  completion record, and removes the receiver's stale queued delivery.
+- Focused validation after the Unicorn parked `SendMessageTimeout` timeout
+  re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
+  --features unicorn,trace,win32-desktop
+  send_message_timeout_block_reentry_expires_without_receiver_delivery` passed;
+  full validation then passed with `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test -j
+  1 --features unicorn,trace,win32-desktop`. Cargo still emits the existing
+  unused-code warnings, plus an unused `CpuBackend` import warning in heavily
+  filtered focused tests.
 - `tests/coredll_raw_gwe.rs`: raw `SendMessageTimeout` coverage now verifies
   `SMTO_ABORTIFHUNG` by itself queues normally while the receiver is just below
   the CE 5-second hung threshold, leaves the caller result pointer untouched,

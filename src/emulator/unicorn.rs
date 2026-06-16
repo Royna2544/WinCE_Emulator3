@@ -12968,7 +12968,8 @@ fn try_block_for_send_message_timeout_wait<D>(
     }
 
     // Re-entry: check if the result arrived or the timeout elapsed.
-    if let Some(blocked) = blocked_smt.borrow().clone() {
+    let blocked_state = { blocked_smt.borrow().clone() };
+    if let Some(blocked) = blocked_state {
         if blocked.thread_id != thread_id {
             return false;
         }
@@ -40821,6 +40822,103 @@ mod unicorn_tests {
             .unwrap();
         assert_eq!(u32::from_le_bytes(result_bytes), 0x2468_ace0);
         assert!(kernel.take_completed_send_message_result(send_id).is_none());
+    }
+
+    #[test]
+    fn send_message_timeout_block_reentry_expires_without_receiver_delivery() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sender_thread = 61;
+        let receiver_thread = 62;
+        let sender_handle = 0x0000_0610;
+        let result_ptr = 0x0001_0040;
+        let return_pc = 0x0040_6100;
+        uc.mem_map(0x0001_0000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(result_ptr), &0xfeed_cafe_u32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0x6161_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_6100).unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_6100).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+
+        let hwnd = kernel
+            .gwe
+            .create_window(receiver_thread, "SendTimeoutBlock", "timeout");
+        let blocked_smt = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
+        let args = [
+            hwnd,
+            crate::ce::gwe::WM_USER + 214,
+            0x61,
+            0x62,
+            0,
+            25,
+            result_ptr,
+        ];
+
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            sender_thread,
+            &blocked_smt,
+            &running_thread,
+        ));
+        let blocked = blocked_smt
+            .borrow()
+            .as_ref()
+            .expect("blocked send timeout")
+            .clone();
+        assert_eq!(blocked.thread_id, sender_thread);
+        assert_eq!(blocked.thread_handle, sender_handle);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_some());
+        assert!(
+            kernel
+                .gwe
+                .sent_message(blocked.block_state.send_id)
+                .is_some()
+        );
+        assert!(kernel.thread_has_pending_sent_message(receiver_thread));
+
+        kernel.timers.sleep_ms(25);
+        uc.reg_write(RegisterMIPS::S0, 0x9999_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_6101).unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_6104).unwrap();
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            sender_thread,
+            &blocked_smt,
+            &running_thread,
+        ));
+
+        assert!(blocked_smt.borrow().is_none());
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+        assert_eq!(
+            kernel.take_completed_send_message_result(blocked.block_state.send_id),
+            None
+        );
+        assert_eq!(kernel.gwe.stats().send_transaction_timeout_count, 1);
+        assert_eq!(kernel.gwe.get_message(receiver_thread), None);
+        assert_eq!(
+            kernel.threads.get_last_error(sender_thread),
+            crate::ce::coredll::ERROR_TIMEOUT_LOCAL
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x6161_0001);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        let mut result_bytes = [0; 4];
+        uc.mem_read(u64::from(result_ptr), &mut result_bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0xfeed_cafe);
     }
 
     #[test]
