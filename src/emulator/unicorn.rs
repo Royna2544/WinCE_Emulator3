@@ -40959,6 +40959,99 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn send_message_timeout_block_reentry_writes_ready_result_without_timeout() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sender_thread = 69;
+        let receiver_thread = 70;
+        let sender_handle = 0x0000_0690;
+        let result_ptr = 0x0001_3040;
+        let return_pc = 0x0040_6900;
+        uc.mem_map(0x0001_3000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(result_ptr), &0xfeed_babe_u32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0x6969_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_6900).unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_6900).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+
+        let hwnd = kernel
+            .gwe
+            .create_window(receiver_thread, "SendTimeoutBlockReady", "ready");
+        let blocked_smt = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
+        let args = [
+            hwnd,
+            crate::ce::gwe::WM_USER + 217,
+            0x69,
+            0x70,
+            0,
+            1000,
+            result_ptr,
+        ];
+
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            sender_thread,
+            &blocked_smt,
+            &running_thread,
+        ));
+        let blocked = blocked_smt
+            .borrow()
+            .as_ref()
+            .expect("blocked send timeout")
+            .clone();
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_thread, blocked.block_state.send_id)
+        );
+        assert_eq!(
+            kernel.complete_active_sent_message(receiver_thread, 0x1122_3344),
+            Some(blocked.block_state.send_id)
+        );
+        assert!(kernel.sent_message_result_ready(blocked.block_state.send_id));
+
+        uc.reg_write(RegisterMIPS::S0, 0x9999_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_6901).unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_6904).unwrap();
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            sender_thread,
+            &blocked_smt,
+            &running_thread,
+        ));
+
+        assert!(blocked_smt.borrow().is_none());
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+        assert_eq!(
+            kernel.take_completed_send_message_result(blocked.block_state.send_id),
+            None
+        );
+        assert_eq!(kernel.gwe.stats().send_transaction_timeout_count, 0);
+        assert_eq!(kernel.gwe.get_message(receiver_thread), None);
+        assert_eq!(kernel.threads.get_last_error(sender_thread), 0);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x6969_0001);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        let mut result_bytes = [0; 4];
+        uc.mem_read(u64::from(result_ptr), &mut result_bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0x1122_3344);
+    }
+
+    #[test]
     fn send_message_timeout_scheduler_resume_expires_and_suspends_active_thread() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);

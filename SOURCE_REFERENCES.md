@@ -2181,10 +2181,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     parked `SendMessageTimeout` reaches its timeout before a receiver result,
     the Unicorn resume path now marks the same sent-message transaction timed
     out and consumes it before returning `ERROR_TIMEOUT`, so the receiver cannot
-    dispatch stale work after the sender has resumed. A focused Unicorn
-    regression now covers the direct import re-entry path as well, including
+    dispatch stale work after the sender has resumed. Focused Unicorn
+    regressions now cover the direct import re-entry path as well, including
     clearing the parked state without a lingering `RefCell` borrow, preserving
-    the caller's result pointer, and removing receiver delivery after timeout.
+    the caller's result pointer and removing receiver delivery after timeout,
+    plus the direct `smfResultReady` replay path that writes `lpdwResult`,
+    consumes the completed send state, and resumes the original sender context
+    with success.
     Scheduler-driven `SendMessageTimeout` wake/resume now has matching coverage
     for the timeout branch, including clearing the parked state without a
     lingering borrow, preserving the interrupted active thread in suspended

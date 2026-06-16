@@ -34,6 +34,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `RefCell` borrow, restores the sender MIPS context to the saved return PC,
   reports `ERROR_TIMEOUT`, leaves `lpdwResult` untouched, consumes the timeout
   completion record, and removes the receiver's stale queued delivery.
+- `src/emulator/unicorn.rs`: Unicorn `SendMessageTimeout` direct import
+  re-entry now also covers the CE `smfResultReady` success path: an already
+  completed receiver result writes `lpdwResult`, consumes the completed send
+  state, restores the saved sender context, returns `TRUE`, and leaves last
+  error clear without incrementing timeout statistics.
 - `src/emulator/unicorn.rs`: the scheduler-driven blocked
   `SendMessageTimeout` resume path now has the same borrow-safe timeout cleanup
   and a regression that proves the interrupted active thread is suspended while
