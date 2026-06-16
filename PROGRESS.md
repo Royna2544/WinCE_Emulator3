@@ -85,9 +85,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   CE `FlashLayoutSector` image with reserved-entry and `FlashRegion` byte
   counts/tables in synthetic sector zero, returns a 56-byte `FMDInterface` ABI
   skeleton with null callback slots, returns the current synthetic block size,
-  and fills deterministic NOR-style `FMDInfo` metadata including the stored
-  region count while leaving hardware flash interface, hardware-backed FLS
-  discovery/forwarding, and callable FMD interface thunks queued.
+  and fills deterministic NOR-style `FMDInfo` metadata including stored region
+  and reserved-entry counts while leaving hardware flash interface,
+  hardware-backed FLS discovery/forwarding, and callable FMD interface thunks
+  queued.
+- Validation after the FMD reserved-count metadata slice: `cargo fmt --check`,
+  `git diff --check`, focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --lib
+  emulator::imports::tests::fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info`,
+  `cargo check --features unicorn,trace,win32-desktop`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Logs are
+  under `target/`.
 - Validation after the FMD synthetic FLS sector slice: `cargo fmt --check`,
   `git diff --check`, focused
   `cargo test -j 1 --features unicorn,trace,win32-desktop

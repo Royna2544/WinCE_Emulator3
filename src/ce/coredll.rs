@@ -14699,6 +14699,12 @@ fn fsdmgr_fmd_get_info_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
+    let Some(reserved_count) = kernel.fsdmgr_fmd_reserved_count(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
     if info_ptr == 0 || info_bytes < FMD_INFO_SIZE {
         kernel
             .threads
@@ -14713,7 +14719,9 @@ fn fsdmgr_fmd_get_info_raw<M: CoredllGuestMemory>(
         || memory
             .write_u32(info_ptr.wrapping_add(12), region_count)
             .is_err()
-        || memory.write_u32(info_ptr.wrapping_add(16), 0).is_err()
+        || memory
+            .write_u32(info_ptr.wrapping_add(16), reserved_count)
+            .is_err()
         || (bytes_returned_ptr != 0 && memory.write_u32(bytes_returned_ptr, FMD_INFO_SIZE).is_err())
     {
         kernel

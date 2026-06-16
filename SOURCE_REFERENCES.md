@@ -550,7 +550,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     reserved-entry byte count/table, and region-entry byte count/table, a
     `GET_INTERFACE` ABI skeleton with `cbSize == sizeof(FMDInterface)` and null
     unsupported callback slots, raw-block-size, and deterministic NOR-style
-    `FMDInfo` metadata with the stored region count for the FMD controls;
+    `FMDInfo` metadata with stored region and reserved-entry counts for the FMD controls;
     hardware-backed FLS discovery/forwarding, hardware flash media, and
     callable FMD callback thunks remain open.
     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`

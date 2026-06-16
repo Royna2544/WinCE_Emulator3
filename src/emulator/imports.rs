@@ -4470,7 +4470,7 @@ mod tests {
         assert_eq!(memory.word(fmd_info_ptr + 4), 1);
         assert_eq!(memory.word(fmd_info_ptr + 8), 0);
         assert_eq!(memory.word(fmd_info_ptr + 12), 2);
-        assert_eq!(memory.word(fmd_info_ptr + 16), 0);
+        assert_eq!(memory.word(fmd_info_ptr + 16), 1);
         assert_eq!(memory.word(bytes_returned_ptr), 20);
 
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);

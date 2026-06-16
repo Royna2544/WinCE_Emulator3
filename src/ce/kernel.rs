@@ -3005,6 +3005,16 @@ impl CeKernel {
         Some(entries)
     }
 
+    pub fn fsdmgr_fmd_reserved_count(&self, disk_ptr: u32) -> Option<u32> {
+        self.fsdmgr_disk_info(disk_ptr)?;
+        Some(
+            self.fsdmgr_fmd_reserved_regions
+                .keys()
+                .filter(|(stored_disk, _)| *stored_disk == disk_ptr)
+                .count() as u32,
+        )
+    }
+
     fn fsdmgr_sync_fmd_flash_layout_sector(&mut self, disk_ptr: u32) -> u32 {
         let Some(reserved_entries) = self.fsdmgr_fmd_reserved_entries(disk_ptr) else {
             return ERROR_INVALID_PARAMETER;
