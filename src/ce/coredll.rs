@@ -14769,7 +14769,7 @@ pub(crate) fn dispatch_fsdmgr_fmd_callback_raw<M: CoredllGuestMemory>(
                 }
             };
             kernel.threads.set_last_error(thread_id, status);
-            u32::from(status == 0)
+            0
         }
         FsdmgrFmdCallback::GetInfoEx => {
             let disk_ptr = disk_ptr?;
