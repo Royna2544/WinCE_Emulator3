@@ -51061,8 +51061,8 @@ fn map_virtual_key_w_raw(kernel: &mut CeKernel, thread_id: u32, code: u32, map_t
     match map_type {
         MAPVK_VK_TO_CHAR => vkey_to_unshifted_char_for_layout(kernel, code),
         MAPVK_VK_TO_VSC => vkey_to_scan_code(code) & 0xff,
-        MAPVK_VSC_TO_VK => map_lr_vkey_to_common_vkey(scan_code_to_vkey(code, false)),
-        MAPVK_VSC_TO_VK_EX => scan_code_to_vkey(code, true),
+        MAPVK_VSC_TO_VK => map_lr_vkey_to_common_vkey(scan_code_to_vkey(code)),
+        MAPVK_VSC_TO_VK_EX => scan_code_to_vkey(code),
         _ => {
             kernel
                 .threads
@@ -51224,9 +51224,11 @@ fn vkey_to_scan_code(vkey: u32) -> u32 {
     }
 }
 
-fn scan_code_to_vkey(scan: u32, extended: bool) -> u32 {
+fn scan_code_to_vkey(scan: u32) -> u32 {
     // Standard PC AT scan code set 1 to VK mapping.
-    // Extended prefix (0xe0) distinguishes some keys when extended=true.
+    // CE's layout manager selects the E0 table only when the scan code itself
+    // carries the 0xe000 prefix.
+    let extended = (scan & 0xff00) == 0xe000;
     match (scan & 0x7f, extended) {
         (0x01, _) => 0x1b,     // Escape
         (0x02, _) => 0x31,     // '1'
