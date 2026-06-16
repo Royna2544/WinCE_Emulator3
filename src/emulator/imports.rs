@@ -213,6 +213,17 @@ impl ImportTrapTable {
         let trap = if let Some(trap) = self.trap_at(address) {
             trap
         } else {
+            if crate::ce::coredll::is_fsdmgr_fmd_callback_trap(address) {
+                return Some(ImportTrapReturn::v0(
+                    crate::ce::coredll::dispatch_fsdmgr_fmd_callback_raw(
+                        kernel,
+                        memory,
+                        context.thread_id,
+                        address,
+                        args,
+                    )?,
+                ));
+            }
             dynamic_trap = dynamic_coredll_proc_trap(address)?;
             &dynamic_trap
         };
@@ -682,6 +693,22 @@ pub fn import_trap_code_page(table: &ImportTrapTable) -> Vec<u8> {
         page[offset..offset + 4].copy_from_slice(&0x03e0_0008u32.to_le_bytes());
         page[offset + 4..offset + 8].copy_from_slice(&0u32.to_le_bytes());
     }
+    for index in 0..crate::ce::coredll::FSDMGR_FMD_CALLBACK_TRAP_COUNT {
+        let Some(address) = crate::ce::coredll::FSDMGR_FMD_CALLBACK_TRAP_BASE
+            .checked_add(index * crate::ce::coredll::FSDMGR_FMD_CALLBACK_TRAP_STRIDE)
+        else {
+            continue;
+        };
+        let Some(offset) = address.checked_sub(IMPORT_TRAP_BASE) else {
+            continue;
+        };
+        let offset = offset as usize;
+        if offset + 8 > page.len() {
+            continue;
+        }
+        page[offset..offset + 4].copy_from_slice(&0x03e0_0008u32.to_le_bytes());
+        page[offset + 4..offset + 8].copy_from_slice(&0u32.to_le_bytes());
+    }
     page
 }
 
@@ -894,6 +921,10 @@ mod tests {
 
         fn map_halfword(&mut self, addr: u32, value: u16) {
             self.halfwords.insert(addr, value);
+        }
+
+        fn halfword(&self, addr: u32) -> u16 {
+            self.halfwords.get(&addr).copied().unwrap_or(0)
         }
 
         fn word(&self, addr: u32) -> u32 {
@@ -3405,6 +3436,7 @@ mod tests {
         let fmd_reserved_buffer_ptr = 0x1001_c000;
         let fmd_region_table_ptr = 0x1001_d000;
         let fmd_interface_ptr = 0x1001_e000;
+        let fmd_flash_info_ptr = 0x1001_f000;
 
         let mut sector_bytes = vec![0; 512];
         sector_bytes[..17].copy_from_slice(b"direct-disk-write");
@@ -3899,8 +3931,12 @@ mod tests {
         );
         assert_eq!(kernel.threads.get_last_error(11), 0);
         assert_eq!(memory.word(fmd_interface_ptr), 56);
-        for offset in (4..56).step_by(4) {
-            assert_eq!(memory.word(fmd_interface_ptr + offset), 0);
+        for (callback_index, offset) in (4..56).step_by(4).enumerate() {
+            assert_eq!(
+                memory.word(fmd_interface_ptr + offset),
+                crate::ce::coredll::FSDMGR_FMD_CALLBACK_TRAP_BASE
+                    + callback_index as u32 * crate::ce::coredll::FSDMGR_FMD_CALLBACK_TRAP_STRIDE
+            );
         }
         assert_eq!(memory.word(bytes_returned_ptr), 0);
 
@@ -4472,6 +4508,86 @@ mod tests {
         assert_eq!(memory.word(fmd_info_ptr + 12), 2);
         assert_eq!(memory.word(fmd_info_ptr + 16), 1);
         assert_eq!(memory.word(bytes_returned_ptr), 20);
+
+        let fmd_get_info_callback = memory.word(fmd_interface_ptr + 12);
+        let fmd_read_sector_callback = memory.word(fmd_interface_ptr + 24);
+        let fmd_write_sector_callback = memory.word(fmd_interface_ptr + 28);
+        let fmd_oem_io_control_callback = memory.word(fmd_interface_ptr + 52);
+        for offset in (0..12).step_by(4) {
+            memory.map_word(fmd_flash_info_ptr + offset, 0xfeed_cafe);
+        }
+        memory.map_halfword(fmd_flash_info_ptr + 12, 0xbeef);
+        memory.map_halfword(fmd_flash_info_ptr + 14, 0xbeef);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_info_callback,
+                [fmd_flash_info_ptr],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(fmd_flash_info_ptr), 1);
+        assert_eq!(memory.word(fmd_flash_info_ptr + 4), 0x4444);
+        assert_eq!(memory.word(fmd_flash_info_ptr + 8), 1024);
+        assert_eq!(memory.halfword(fmd_flash_info_ptr + 12), 1);
+        assert_eq!(memory.halfword(fmd_flash_info_ptr + 14), 1024);
+
+        memory.map_bytes(write_sector_ptr, &vec![0x7c; 1024]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_write_sector_callback,
+                [31, write_sector_ptr, 0, 1],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        memory.map_bytes(read_sector_ptr, &vec![0; 1024]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_read_sector_callback,
+                [31, read_sector_ptr, 0, 1],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        let mut callback_read = vec![0; 1024];
+        memory
+            .read_bytes(read_sector_ptr, &mut callback_read)
+            .unwrap();
+        assert!(callback_read[..512].iter().all(|byte| *byte == 0x7c));
+        assert!(callback_read[512..].iter().all(|byte| *byte == 0));
+
+        memory.map_word(fmd_reserved_out_ptr, 0xfeed_cafe);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_oem_io_control_callback,
+                [
+                    IOCTL_FMD_GET_RAW_BLOCK_SIZE,
+                    0,
+                    0,
+                    fmd_reserved_out_ptr,
+                    4,
+                    bytes_returned_ptr,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(fmd_reserved_out_ptr), 1024);
+        assert_eq!(memory.word(bytes_returned_ptr), 4);
 
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
         assert_eq!(

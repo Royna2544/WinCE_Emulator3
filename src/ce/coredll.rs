@@ -165,6 +165,11 @@ const FMD_RESERVED_NAME_LEN: u32 = 8;
 const FMD_RESERVED_REQ_SIZE: u32 = 20;
 const FMD_RAW_WRITE_BLOCKS_REQ_SIZE: u32 = 16;
 const FMD_INFO_SIZE: u32 = 20;
+pub const FSDMGR_FMD_CALLBACK_TRAP_STRIDE: u32 = 0x10;
+pub const FSDMGR_FMD_CALLBACK_TRAP_COUNT: u32 = 13;
+pub const FSDMGR_FMD_CALLBACK_TRAP_BASE: u32 = 0x7fff_4f30;
+const BLOCK_STATUS_UNKNOWN: u32 = 0x01;
+const BLOCK_STATUS_READONLY: u32 = 0x04;
 const ERROR_GEN_FAILURE: u32 = 31;
 const ERROR_DEVICE_REMOVED: u32 = 1617;
 const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
@@ -14434,17 +14439,305 @@ fn fsdmgr_fmd_get_interface_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
+    let status = kernel.fsdmgr_set_fmd_interface_disk(disk_ptr);
+    if status != 0 {
+        kernel.threads.set_last_error(thread_id, status);
+        return false;
+    }
     if memory.write_u32(interface_ptr, FMD_INTERFACE_SIZE).is_err() {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    for offset in (4..FMD_INTERFACE_SIZE).step_by(4) {
+    for (callback_index, offset) in (4..FMD_INTERFACE_SIZE).step_by(4).enumerate() {
         if memory
-            .write_u32(interface_ptr.wrapping_add(offset), 0)
+            .write_u32(
+                interface_ptr.wrapping_add(offset),
+                fsdmgr_fmd_callback_address(callback_index as u32),
+            )
             .is_err()
         {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FsdmgrFmdCallback {
+    Init,
+    DeInit,
+    GetInfo,
+    GetBlockStatus,
+    SetBlockStatus,
+    ReadSector,
+    WriteSector,
+    EraseBlock,
+    PowerUp,
+    PowerDown,
+    GetPhysSectorAddr,
+    GetInfoEx,
+    OEMIoControl,
+}
+
+fn fsdmgr_fmd_callback_address(index: u32) -> u32 {
+    FSDMGR_FMD_CALLBACK_TRAP_BASE.wrapping_add(index.wrapping_mul(FSDMGR_FMD_CALLBACK_TRAP_STRIDE))
+}
+
+fn fsdmgr_fmd_callback_from_address(address: u32) -> Option<FsdmgrFmdCallback> {
+    let offset = address.checked_sub(FSDMGR_FMD_CALLBACK_TRAP_BASE)?;
+    if offset % FSDMGR_FMD_CALLBACK_TRAP_STRIDE != 0 {
+        return None;
+    }
+    match offset / FSDMGR_FMD_CALLBACK_TRAP_STRIDE {
+        0 => Some(FsdmgrFmdCallback::Init),
+        1 => Some(FsdmgrFmdCallback::DeInit),
+        2 => Some(FsdmgrFmdCallback::GetInfo),
+        3 => Some(FsdmgrFmdCallback::GetBlockStatus),
+        4 => Some(FsdmgrFmdCallback::SetBlockStatus),
+        5 => Some(FsdmgrFmdCallback::ReadSector),
+        6 => Some(FsdmgrFmdCallback::WriteSector),
+        7 => Some(FsdmgrFmdCallback::EraseBlock),
+        8 => Some(FsdmgrFmdCallback::PowerUp),
+        9 => Some(FsdmgrFmdCallback::PowerDown),
+        10 => Some(FsdmgrFmdCallback::GetPhysSectorAddr),
+        11 => Some(FsdmgrFmdCallback::GetInfoEx),
+        12 => Some(FsdmgrFmdCallback::OEMIoControl),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_fsdmgr_fmd_callback_trap(address: u32) -> bool {
+    fsdmgr_fmd_callback_from_address(address).is_some()
+}
+
+pub(crate) fn dispatch_fsdmgr_fmd_callback_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    address: u32,
+    args: &[u32],
+) -> Option<u32> {
+    let callback = fsdmgr_fmd_callback_from_address(address)?;
+    let disk_ptr = kernel.fsdmgr_fmd_interface_disk();
+    let result = match callback {
+        FsdmgrFmdCallback::Init => disk_ptr.unwrap_or(1),
+        FsdmgrFmdCallback::DeInit => 1,
+        FsdmgrFmdCallback::GetInfo => {
+            let disk_ptr = disk_ptr?;
+            u32::from(fsdmgr_fmd_callback_get_info_raw(
+                kernel,
+                memory,
+                thread_id,
+                disk_ptr,
+                raw_arg(args, 0),
+            ))
+        }
+        FsdmgrFmdCallback::GetBlockStatus => {
+            let disk_ptr = disk_ptr?;
+            let block = raw_arg(args, 0);
+            match kernel.fsdmgr_fmd_block_locked(disk_ptr, block) {
+                Some(true) => BLOCK_STATUS_READONLY,
+                Some(false) => 0,
+                None => BLOCK_STATUS_UNKNOWN,
+            }
+        }
+        FsdmgrFmdCallback::SetBlockStatus => u32::from(disk_ptr.is_some()),
+        FsdmgrFmdCallback::ReadSector => {
+            let disk_ptr = disk_ptr?;
+            u32::from(fsdmgr_fmd_callback_sector_io_raw(
+                kernel,
+                memory,
+                thread_id,
+                disk_ptr,
+                raw_arg(args, 0),
+                raw_arg(args, 3),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+                true,
+            ))
+        }
+        FsdmgrFmdCallback::WriteSector => {
+            let disk_ptr = disk_ptr?;
+            u32::from(fsdmgr_fmd_callback_sector_io_raw(
+                kernel,
+                memory,
+                thread_id,
+                disk_ptr,
+                raw_arg(args, 0),
+                raw_arg(args, 3),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+                false,
+            ))
+        }
+        FsdmgrFmdCallback::EraseBlock => {
+            let disk_ptr = disk_ptr?;
+            let Some(info) = kernel.fsdmgr_disk_info(disk_ptr) else {
+                return Some(0);
+            };
+            let bytes_per_sector = info[1].max(1);
+            let sectors_per_block = (kernel
+                .fsdmgr_fmd_sector_size(disk_ptr)
+                .unwrap_or(bytes_per_sector)
+                .max(bytes_per_sector)
+                / bytes_per_sector)
+                .max(1);
+            let start_sector = raw_arg(args, 0).saturating_mul(sectors_per_block);
+            let status =
+                kernel.fsdmgr_delete_disk_sectors(disk_ptr, start_sector, sectors_per_block);
+            kernel.threads.set_last_error(thread_id, status);
+            u32::from(status == 0)
+        }
+        FsdmgrFmdCallback::PowerUp | FsdmgrFmdCallback::PowerDown => 0,
+        FsdmgrFmdCallback::GetPhysSectorAddr => {
+            let out_ptr = raw_arg(args, 1);
+            if out_ptr != 0 && memory.write_u32(out_ptr, raw_arg(args, 0)).is_ok() {
+                1
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                0
+            }
+        }
+        FsdmgrFmdCallback::GetInfoEx => 0,
+        FsdmgrFmdCallback::OEMIoControl => {
+            let disk_ptr = disk_ptr?;
+            fsdmgr_disk_io_control_raw(
+                kernel,
+                memory,
+                thread_id,
+                disk_ptr,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+                raw_arg(args, 3),
+                raw_arg(args, 4),
+                raw_arg(args, 5),
+            )
+        }
+    };
+    Some(result)
+}
+
+fn fsdmgr_fmd_callback_get_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    info_ptr: u32,
+) -> bool {
+    let Some(info) = kernel.fsdmgr_disk_info(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    const FLASH_TYPE_NOR: u32 = 1;
+    let data_bytes = info[1].min(u32::from(u16::MAX)) as u16;
+    if memory.write_u32(info_ptr, FLASH_TYPE_NOR).is_err()
+        || memory.write_u32(info_ptr.wrapping_add(4), info[0]).is_err()
+        || memory.write_u32(info_ptr.wrapping_add(8), info[1]).is_err()
+        || memory.write_u16(info_ptr.wrapping_add(12), 1).is_err()
+        || memory
+            .write_u16(info_ptr.wrapping_add(14), data_bytes)
+            .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn fsdmgr_fmd_callback_sector_io_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    start_sector: u32,
+    sector_count: u32,
+    sector_buffer_ptr: u32,
+    sector_info_ptr: u32,
+    read: bool,
+) -> bool {
+    let Some(info) = kernel.fsdmgr_disk_info(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if sector_count == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let bytes_per_sector = info[1].max(1);
+    let Some(byte_count) = sector_count.checked_mul(bytes_per_sector) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if sector_buffer_ptr != 0 {
+        if read {
+            let bytes = match kernel.fsdmgr_read_disk(
+                disk_ptr,
+                start_sector,
+                sector_count,
+                bytes_per_sector,
+            ) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    return false;
+                }
+            };
+            if memory.write_bytes(sector_buffer_ptr, &bytes).is_err() {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+        } else {
+            let mut bytes = vec![0; byte_count as usize];
+            if memory.read_bytes(sector_buffer_ptr, &mut bytes).is_err() {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+            let status = kernel.fsdmgr_write_disk(
+                disk_ptr,
+                start_sector,
+                sector_count,
+                bytes_per_sector,
+                &bytes,
+            );
+            if status != 0 {
+                kernel.threads.set_last_error(thread_id, status);
+                return false;
+            }
+        }
+    }
+    if sector_info_ptr != 0 {
+        let zero_info = vec![0; (sector_count as usize).saturating_mul(8)];
+        if memory.write_bytes(sector_info_ptr, &zero_info).is_err() {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);

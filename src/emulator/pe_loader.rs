@@ -61,8 +61,8 @@ pub(crate) const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
 pub(crate) const EXTERNAL_TRAMPOLINE_BASE: u32 = 0x7000_0000;
 
-pub(crate) const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 =
-    crate::emulator::imports::IMPORT_TRAP_STRIDE * 6;
+pub(crate) const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE
+    * (6 + crate::ce::coredll::FSDMGR_FMD_CALLBACK_TRAP_COUNT);
 
 // ── PeLoadResult ─────────────────────────────────────────────────────────────
 
