@@ -29873,10 +29873,31 @@ fn create_icon_from_image_list_bitmap_entry<M: CoredllGuestMemory>(
     if let Some(mask) = kernel.resources.bitmap_mut(mask_bitmap) {
         mask.color_table = vec![[0x00, 0x00, 0x00, 0x00], [0xff, 0xff, 0xff, 0x00]];
     }
+    let mask_white = bitmap_byte_count(width, height, 1)
+        .zip(
+            kernel
+                .resources
+                .bitmap(mask_bitmap)
+                .map(|bitmap| bitmap.bits_ptr),
+        )
+        .is_some_and(|(byte_count, bits_ptr)| {
+            write_guest_bytes(
+                kernel,
+                memory,
+                thread_id,
+                bits_ptr,
+                &vec![0xff; byte_count as usize],
+            )
+        });
+    if !mask_white {
+        delete_owned_bitmap(kernel, mask_bitmap);
+        delete_owned_bitmap(kernel, color_bitmap);
+        return None;
+    }
 
     let hdc = kernel.resources.create_compatible_dc();
     let _ = kernel.resources.select_object(hdc, mask_bitmap);
-    let mask_draw = ImageListDraw {
+    let base_draw = ImageListDraw {
         image_list: handle,
         index,
         hdc,
@@ -29892,12 +29913,17 @@ fn create_icon_from_image_list_bitmap_entry<M: CoredllGuestMemory>(
         rop: 0,
         overlay_image: None,
     };
-    let mask_ok = render_image_list_draw_bitmap(kernel, memory, mask_draw);
+    let mask_ok = kernel
+        .resources
+        .image_list(handle)
+        .and_then(|list| list.images.get(index as usize))
+        .is_some_and(|image| image.mask == 0)
+        || render_image_list_draw_bitmap(kernel, memory, base_draw);
 
     let _ = kernel.resources.select_object(hdc, color_bitmap);
     let color_draw = ImageListDraw {
         flags: ILD_TRANSPARENT | flags,
-        ..mask_draw
+        ..base_draw
     };
     let color_ok = render_image_list_draw_bitmap(kernel, memory, color_draw);
     let _ = kernel.resources.delete_dc(hdc);

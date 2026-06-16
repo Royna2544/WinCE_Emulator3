@@ -1177,7 +1177,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     image-list entry once with `ILD_MASK | flags` and once with
     `ILD_TRANSPARENT | flags`, then creates an icon from those bitmaps. Raw
     `ImageList_GetIcon` now does the same for bitmap-backed entries with real
-    backing storage while preserving local pseudo handles for synthetic entries.
+    backing storage while preserving local pseudo handles for synthetic entries;
+    it also mirrors CE's `PatBlt_I(..., WHITENESS)` initialization for the
+    temporary mono mask so unmasked source lists return an all-white icon mask.
     CE `pcommctr.h::OVERLAYMASKTOINDEX` and `imagelist.cpp::DrawIndirect`
     limit overlay-mask drawing to `NUM_OVERLAY_IMAGES` entries, so synthetic
     shell/system image-list pseudo handles and pseudo rendering now ignore

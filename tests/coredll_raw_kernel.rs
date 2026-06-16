@@ -10211,6 +10211,58 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         &[0x26, 0x9b],
         "ImageList_LoadImage should blit RT_BITMAP DIB rows, not the DIB header bytes"
     );
+    let unmasked_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_ICON,
+        [resource_loaded, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_GetIcon(unmasked) did not return an icon: {other:?}"),
+    };
+    let unmasked_icon_info_ptr = 0x2030_3900;
+    memory.map_words(unmasked_icon_info_ptr, 5);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ICON_INFO,
+            [unmasked_icon, unmasked_icon_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let unmasked_icon_mask = memory.read_u32(unmasked_icon_info_ptr + 12)?;
+    assert_ne!(unmasked_icon_mask, 0);
+    let unmasked_icon_mask_bitmap = kernel
+        .resources
+        .bitmap(unmasked_icon_mask)
+        .expect("unmasked ImageList_GetIcon should create a mask bitmap");
+    assert_eq!(
+        memory.read_u8(unmasked_icon_mask_bitmap.bits_ptr)? & 0x80,
+        0x80,
+        "CE ImageList_GetIcon initializes unmasked icon masks to white"
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DESTROY_ICON,
+            [unmasked_icon],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
 
     memory.write_wide_z(bitmap_path_ptr, r"\Images\masked.bmp");
     assert!(matches!(

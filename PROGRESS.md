@@ -15,6 +15,21 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`,
+  `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: bitmap-backed
+  `ImageList_GetIcon` now mirrors CE `imagelist.cpp::GetIcon` by initializing
+  its temporary mono mask bitmap to white before drawing, so unmasked image
+  lists produce an all-white returned icon mask instead of deriving mask bits
+  from the color image.
+- Focused validation after the unmasked `ImageList_GetIcon` mask slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons --
+  --nocapture` passed.
+- Full validation after the unmasked `ImageList_GetIcon` mask slice:
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_kernel`, and `cargo test -j
+  1 --features unicorn,trace,win32-desktop` passed.
 - `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`,
   and `SOURCE_REFERENCES.md`: raw bitmap-backed `ImageList_GetIcon` now has a
   `GetIconInfo` consumer regression. The returned `ICONINFO` reports `fIcon`,
