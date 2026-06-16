@@ -9967,7 +9967,7 @@ fn map_kernel_memory_allocations<D>(
                 allocation.size,
                 virtual_allocation_perms(allocation.protect),
                 "virtual allocation",
-                false,
+                true,
             )?;
             mapped.virtual_pages.extend(newly_mapped.iter().copied());
             if !newly_mapped.is_empty() && !allocation.initial_bytes.is_empty() {
@@ -10040,11 +10040,30 @@ fn reclaim_stale_virtual_memory_pages<D>(
             Error::Backend(format!("unmap stale virtual page 0x{page:08x}: {err:?}"))
         })?;
         mapped.virtual_pages.remove(&page);
-        mapped
-            .ranges
-            .retain(|(base, size)| *base != page || *size != 0x1000);
+        remove_mapped_guest_page(mapped, page);
     }
     Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn remove_mapped_guest_page(mapped: &mut KernelMemoryMappings, page: u32) {
+    let page = page & !0xfff;
+    let Some(index) = mapped
+        .ranges
+        .iter()
+        .position(|(base, size)| page >= *base && page < base.saturating_add(*size))
+    else {
+        return;
+    };
+    let (base, size) = mapped.ranges.remove(index);
+    let end = base.saturating_add(size);
+    if page > base {
+        mapped.ranges.push((base, page - base));
+    }
+    let next = page.saturating_add(0x1000);
+    if next < end {
+        mapped.ranges.push((next, end - next));
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -25409,6 +25428,26 @@ mod guest_thread_stack_tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn mapped_guest_page_removal_splits_contiguous_spans() {
+        let mut mapped = KernelMemoryMappings::new(&[]);
+        mapped.ranges.push((0x4000_0000, 0x4000));
+
+        remove_mapped_guest_page(&mut mapped, 0x4000_1000);
+
+        assert!(mapped.ranges.contains(&(0x4000_0000, 0x1000)));
+        assert!(mapped.ranges.contains(&(0x4000_2000, 0x2000)));
+        assert!(!is_guest_page_mapped(&mapped, 0x4000_1000));
+        assert!(is_guest_page_mapped(&mapped, 0x4000_0000));
+        assert!(is_guest_page_mapped(&mapped, 0x4000_3000));
+
+        remove_mapped_guest_page(&mut mapped, 0x4000_2000);
+
+        assert!(mapped.ranges.contains(&(0x4000_0000, 0x1000)));
+        assert!(mapped.ranges.contains(&(0x4000_3000, 0x1000)));
+        assert!(!is_guest_page_mapped(&mapped, 0x4000_2000));
     }
 
     #[test]
