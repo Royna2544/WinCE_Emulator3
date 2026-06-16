@@ -34974,13 +34974,13 @@ fn wndproc_return_frame_matches(record: &UnicornWndProcReturn, current_fp: u32) 
 }
 
 #[cfg(feature = "unicorn")]
-fn orphaned_call_window_proc_return_can_recover_without_frame<D>(
+fn orphaned_paint_return_can_recover_without_frame<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     record: &UnicornWndProcReturn,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    record.source == "CallWindowProcW"
+    matches!(record.source, "CallWindowProcW" | "OrphanedVisibleMessage")
         && record.msg == crate::ce::gwe::WM_PAINT
         && record.caller_fp.is_none()
         && read_mips_reg(uc, RegisterMIPS::PC) == WNDPROC_RETURN_STUB_ADDR
@@ -35022,10 +35022,7 @@ fn recover_orphaned_wndproc_return_stub<D>(
         else {
             return false;
         };
-        if orphaned_call_window_proc_return_can_recover_without_frame(
-            uc,
-            &returns[newest_valid_index],
-        ) {
+        if orphaned_paint_return_can_recover_without_frame(uc, &returns[newest_valid_index]) {
             returns.remove(newest_valid_index)
         } else {
             let newest_valid = &returns[newest_valid_index];
@@ -38628,6 +38625,42 @@ mod unicorn_tests {
             &mut uc,
             &returns,
             &trampoline_jumps
+        ));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
+    }
+
+    #[test]
+    fn orphaned_visible_paint_return_stub_recovers_without_caller_frame() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let return_pc = 0x0034_26d4;
+        let returns = Rc::new(RefCell::new(vec![super::UnicornWndProcReturn {
+            source: "OrphanedVisibleMessage",
+            hwnd: 0x0002_0000,
+            msg: crate::ce::gwe::WM_PAINT,
+            wparam: 0,
+            lparam: 0,
+            wndproc: 0x6004_f2b8,
+            return_pc,
+            return_pc_trampoline_origin: None,
+            result: 0,
+            live_fp: None,
+            caller_fp: None,
+            send_thread_id: None,
+            class_name: Some("wce_solution_inavi".to_owned()),
+        }]));
+        uc.reg_write(RegisterMIPS::FP, 0x3332_587b).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(super::WNDPROC_RETURN_STUB_ADDR))
+            .unwrap();
+
+        assert!(super::recover_orphaned_wndproc_return_stub(
+            &mut uc,
+            &returns,
+            &[]
         ));
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);

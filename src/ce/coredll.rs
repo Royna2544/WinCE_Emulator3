@@ -11217,18 +11217,28 @@ fn create_file_w_raw<M: CoredllGuestMemory>(
     };
     match kernel.create_file_w(&path, raw_arg(args, 1), raw_arg(args, 4)) {
         Ok(handle) => handle,
-        Err(Error::AccessDenied(_)) => {
+        Err(err) => {
             kernel
                 .threads
-                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+                .set_last_error(thread_id, create_file_w_last_error(&err));
             u32::MAX
         }
-        Err(_) => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-            u32::MAX
+    }
+}
+
+fn create_file_w_last_error(err: &Error) -> u32 {
+    match err {
+        Error::AccessDenied(_) => ERROR_ACCESS_DENIED,
+        Error::InvalidArgument(message) if message.contains("file does not exist") => {
+            ERROR_FILE_NOT_FOUND
         }
+        Error::InvalidArgument(message)
+            if message.contains("empty guest path") || message.contains("path escapes root") =>
+        {
+            ERROR_PATH_NOT_FOUND
+        }
+        Error::InvalidArgument(_) => ERROR_INVALID_PARAMETER,
+        _ => ERROR_INVALID_PARAMETER,
     }
 }
 

@@ -15,6 +15,32 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/config.rs`, `src/ce/file.rs`, and `tests/basic_subsystems.rs`:
+  configured mounted-storage `IClass` entries now support CE devcore-style
+  `%b` bus-name advertisements when the mount supplies `bus_name`. `%b` entries
+  remain skipped without bus metadata, matching the CE `devpnp.c` guard, while
+  real device-manager `fsdev_t` interface handles remain queued.
+- `src/emulator/unicorn.rs`: orphaned visible `WM_PAINT` return stubs now share
+  the caller-frame-free recovery path used by `CallWindowProcW`, with a focused
+  regression proving the stub restores `PC`/`RA` to the archived return address.
+- `src/ce/coredll.rs` and `tests/coredll_raw_memory_file.rs`: raw
+  `CreateFileW` now maps missing files to `ERROR_FILE_NOT_FOUND`, empty or
+  root-escaping paths to `ERROR_PATH_NOT_FOUND`, access denial to
+  `ERROR_ACCESS_DENIED`, and other invalid arguments to
+  `ERROR_INVALID_PARAMETER` instead of collapsing all non-access failures to an
+  invalid handle status.
+- Validation after the configured `%b` IClass and orphaned visible-paint slice:
+  `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, `$env:CARGO_INCREMENTAL='0'; cargo test -j 1
+  --features unicorn,trace,win32-desktop mount_iclass`,
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  orphaned_visible_paint_return_stub_recovers_without_caller_frame`, and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. Cargo still emits the existing
+  unused-code warnings, plus an unused `CpuBackend` import warning in the
+  heavily filtered focused test.
 - `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct
   `FSDMGR_FormatVolume @15` and `FSDMGR_ScanVolume @31` now use the configured
   logical-disk registry profile to probe the CE `Util` value before reporting
@@ -5009,8 +5035,9 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   `GUID=name` entries in addition to the FSDMGR plain-GUID form. Plain GUIDs
   still publish `\StoreMgr\<device>`, explicit names publish the supplied
   address, `%d` publishes `$device\<device>`, `%l` publishes the legacy device
-  name, empty explicit names are skipped, and `%b` remains unsupported for
-  configured mounts because no bus namespace/open callback is modeled there.
+  name, empty explicit names are skipped, and a later `bus_name` follow-up covers
+  configured `%b` advertisements while real `fsdev_t` bus/open-callback scoping
+  remains queued.
 - Focused validation after the mounted `IClass` name-parsing slice:
   `cargo fmt` and `cargo test -j 1 --features unicorn,trace,win32-desktop
   mount_iclass -- --nocapture` passed. Cargo still emits the existing

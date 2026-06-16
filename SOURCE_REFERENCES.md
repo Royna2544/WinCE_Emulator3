@@ -3051,10 +3051,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     while `mountedvolume.cpp` uses the same wrapper for mounted-volume add/remove
     publication. `storemgr.h`, `cedrv_guid.h`, and `pm.h` define the block-driver
     and power-manageable block-device class strings used by the platform
-    registries. Rust mount configuration now carries optional `device_name` and
-    `interface_classes` metadata, parses CE text GUIDs into in-memory GUID
-    layout, publishes configured `\StoreMgr\<device>` advertisements at boot,
-    and removes them on unmount. `devapi.c::DM_EnumDeviceInterfaces` enumerates
+    registries. Rust mount configuration now carries optional `device_name`,
+    `bus_name`, and `interface_classes` metadata, parses CE text GUIDs into
+    in-memory GUID layout, publishes configured `\StoreMgr\<device>` and
+    CE devcore `%d`/`%l`/configured `%b` advertisements at boot, skips `%b`
+    entries when no configured bus name exists, and removes them on unmount.
+    `devapi.c::DM_EnumDeviceInterfaces` enumerates
     a device's advertised interface list by index, writes the class GUID, writes
     the required name byte count, returns `ERROR_INSUFFICIENT_BUFFER` for small
     buffers, and returns `ERROR_NO_MORE_ITEMS` at list end. Rust now exposes
@@ -3671,6 +3673,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   shared advertisement is detached only when the final owner withdraws. The
   configured-mount parser also accepts CE devcore-style `GUID=name` entries:
   plain GUIDs keep the FSDMGR `\\StoreMgr\\<device>` address, explicit names
-  publish as supplied, `%d` maps to `$device\\<device>`, and `%l` maps to the
-  legacy device name. Real device-manager `fsdev_t` handles and bus-backed
-  `%b` interface names remain unsupported.
+  publish as supplied, `%d` maps to `$device\\<device>`, `%b` maps to
+  `$bus\\<bus_name>` when the mount supplies bus metadata and is skipped
+  otherwise, and `%l` maps to the legacy device name. Real device-manager
+  `fsdev_t` handles remain unsupported.

@@ -93,6 +93,8 @@ use wince_emulation_v3::{
 mod support;
 use support::{TestGuestMemory, unique_test_root};
 
+const ERROR_PATH_NOT_FOUND: u32 = 3;
+
 #[test]
 fn coredll_raw_string_conversion_ordinals_round_trip_ascii() -> Result<()> {
     let table = CoredllExportTable::default();
@@ -3035,6 +3037,46 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
 
+    let missing_path_ptr = 0x1_0c00;
+    memory.write_wide_z(missing_path_ptr, "\\ResidentFlash\\missing-file.bin");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_FILE_W,
+            [missing_path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    let empty_path_ptr = 0x1_0d00;
+    memory.write_wide_z(empty_path_ptr, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_FILE_W,
+            [empty_path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_PATH_NOT_FOUND
+    );
+
     let path_ptr = 0x1_1000;
     let write_buffer = 0x1_2000;
     let read_buffer = 0x1_3000;
@@ -3679,6 +3721,7 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
     kernel.files.mount(MountConfig {
         name: Some("ResidentFlash".to_owned()),
         device_name: None,
+        bus_name: None,
         guest_root: "\\ResidentFlash".to_owned(),
         host_root: Some(system_root.clone()),
         total_mbytes: 64,
@@ -3694,6 +3737,7 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
     kernel.files.mount(MountConfig {
         name: Some("HiddenStore".to_owned()),
         device_name: None,
+        bus_name: None,
         guest_root: "\\HiddenStore".to_owned(),
         host_root: Some(hidden_root.clone()),
         total_mbytes: 16,
@@ -3910,6 +3954,7 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
     kernel.files.mount(MountConfig {
         name: Some("ReadOnlyCard".to_owned()),
         device_name: None,
+        bus_name: None,
         guest_root: "\\ReadOnlyCard".to_owned(),
         host_root: Some(readonly_root.clone()),
         total_mbytes: 32,
@@ -4728,6 +4773,7 @@ fn coredll_raw_cross_volume_move_from_readonly_source_copies_without_delete() ->
     kernel.files.mount(MountConfig {
         name: None,
         device_name: None,
+        bus_name: None,
         guest_root: "\\ReadOnly".to_owned(),
         host_root: Some(readonly.clone()),
         total_mbytes: 8,
@@ -4955,6 +5001,7 @@ fn coredll_raw_readonly_mount_reports_access_denied_for_mutations() -> Result<()
     kernel.files.mount(MountConfig {
         name: None,
         device_name: None,
+        bus_name: None,
         guest_root: "\\ReadOnly".to_owned(),
         host_root: Some(readonly_root.clone()),
         total_mbytes: 8,

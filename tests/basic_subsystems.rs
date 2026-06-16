@@ -3135,6 +3135,7 @@ fn object_store_config_and_mount_config_total_and_free_bytes_convert_mbytes() {
     let mount = MountConfig {
         name: None,
         device_name: None,
+        bus_name: None,
         guest_root: "/Storage Card".to_owned(),
         host_root: None,
         total_mbytes: 1,
@@ -3159,6 +3160,7 @@ fn kernel_boot_publishes_mount_iclass_interfaces_and_unmount_removes_them() -> R
     config.storage.mounts.push(MountConfig {
         name: Some("sdmmc".to_owned()),
         device_name: Some("DSK5:".to_owned()),
+        bus_name: None,
         guest_root: "\\SDMMC Disk".to_owned(),
         host_root: Some(root.clone()),
         total_mbytes: 128,
@@ -3169,6 +3171,7 @@ fn kernel_boot_publishes_mount_iclass_interfaces_and_unmount_removes_them() -> R
         hidden: false,
         interface_classes: vec![
             "{A4E7EDDA-E575-4252-9D6B-4195D48BB865}".to_owned(),
+            "{A4E7EDDA-E575-4252-9D6B-4195D48BB865}=%b".to_owned(),
             "not-a-guid".to_owned(),
         ],
         registry_roots: Vec::new(),
@@ -3216,6 +3219,7 @@ fn mount_iclass_entries_parse_explicit_and_namespace_names() -> Result<()> {
     config.storage.mounts.push(MountConfig {
         name: Some("sdmmc".to_owned()),
         device_name: Some("DSK5:".to_owned()),
+        bus_name: Some("SDHC5".to_owned()),
         guest_root: "\\SDMMC Disk".to_owned(),
         host_root: Some(root.clone()),
         total_mbytes: 128,
@@ -3242,6 +3246,7 @@ fn mount_iclass_entries_parse_explicit_and_namespace_names() -> Result<()> {
         "\\StoreMgr\\DSK5:",
         "\\Custom\\Card",
         "$device\\DSK5:",
+        "$bus\\SDHC5",
         "DSK5:",
     ];
     assert_eq!(
@@ -3288,6 +3293,7 @@ fn mount_iclass_duplicate_advertisements_are_owner_scoped() -> Result<()> {
         config.storage.mounts.push(MountConfig {
             name: None,
             device_name: Some("DSK5:".to_owned()),
+            bus_name: None,
             guest_root: guest_root.to_owned(),
             host_root: Some(host_root),
             total_mbytes: 128,

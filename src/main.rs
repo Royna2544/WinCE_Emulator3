@@ -3744,6 +3744,7 @@ mod tests {
             .push(wince_emulation_v3::config::MountConfig {
                 name: Some("sdmmc".to_owned()),
                 device_name: None,
+                bus_name: None,
                 guest_root: "\\SDMMC Disk".to_owned(),
                 host_root: Some(PathBuf::from(r"D:\INAVI_Emulator\INAVI")),
                 total_mbytes: 8192,

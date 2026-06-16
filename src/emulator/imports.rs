@@ -1903,6 +1903,7 @@ mod tests {
         kernel.files.mount(MountConfig {
             name: Some("Resident Flash Store".to_owned()),
             device_name: None,
+            bus_name: None,
             guest_root: r"\ResidentFlash".to_owned(),
             host_root: Some(root.clone()),
             total_mbytes: 128,
@@ -3539,6 +3540,7 @@ mod tests {
         kernel.files.mount(MountConfig {
             name: Some("Profiled Store".to_owned()),
             device_name: Some("DSK9:".to_owned()),
+            bus_name: None,
             guest_root: r"\Profiled Disk".to_owned(),
             host_root: None,
             total_mbytes: 128,
@@ -3747,6 +3749,7 @@ mod tests {
         kernel.files.mount(MountConfig {
             name: Some("Utility Store".to_owned()),
             device_name: Some("DSK8:".to_owned()),
+            bus_name: None,
             guest_root: mount_root.to_owned(),
             host_root: None,
             total_mbytes: 128,

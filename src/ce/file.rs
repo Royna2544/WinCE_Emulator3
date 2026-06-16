@@ -53,6 +53,7 @@ pub struct HostFileSystem {
 pub struct FileMount {
     pub name: Option<String>,
     pub device_name: Option<String>,
+    pub bus_name: Option<String>,
     pub guest_root: String,
     pub host_root: Option<PathBuf>,
     pub total_bytes: u64,
@@ -386,6 +387,7 @@ impl HostFileSystem {
         self.mount(MountConfig {
             name: None,
             device_name: None,
+            bus_name: None,
             guest_root: guest_root.to_owned(),
             host_root: Some(host_root.into()),
             total_mbytes: 8192,
@@ -415,6 +417,7 @@ impl HostFileSystem {
             self.mount(MountConfig {
                 name: None,
                 device_name: None,
+                bus_name: None,
                 guest_root: guest_root.clone(),
                 host_root: None,
                 total_mbytes: 8192,
@@ -512,6 +515,7 @@ impl HostFileSystem {
             FileMount {
                 name: mount.name,
                 device_name: mount.device_name,
+                bus_name: mount.bus_name,
                 guest_root,
                 host_root,
                 total_bytes,
@@ -1617,12 +1621,23 @@ fn device_interface_advertisement_spec(
         .map(str::to_owned)
         .unwrap_or_else(|| volume_name_from_guest_root(&mount.guest_root));
     let legacy_name = device_name.trim_matches(['\\', '/']).to_owned();
+    let bus_name = mount
+        .bus_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.trim_matches(['\\', '/']).to_owned());
     let default_device_path = format!("\\StoreMgr\\{legacy_name}");
     let interfaces: Vec<_> = mount
         .interface_classes
         .iter()
         .filter_map(|entry| {
-            device_interface_class_advertisement_spec(entry, &default_device_path, &legacy_name)
+            device_interface_class_advertisement_spec(
+                entry,
+                &default_device_path,
+                &legacy_name,
+                bus_name.as_deref(),
+            )
         })
         .collect();
     if interfaces.is_empty() {
@@ -1638,6 +1653,7 @@ fn device_interface_class_advertisement_spec(
     entry: &str,
     default_device_path: &str,
     legacy_name: &str,
+    bus_name: Option<&str>,
 ) -> Option<DeviceInterfaceClassAdvertisementSpec> {
     let entry = entry.trim();
     if entry.is_empty() {
@@ -1654,7 +1670,7 @@ fn device_interface_class_advertisement_spec(
         } else if explicit_name.eq_ignore_ascii_case("%l") {
             legacy_name.to_owned()
         } else if explicit_name.eq_ignore_ascii_case("%b") {
-            return None;
+            format!("$bus\\{}", bus_name?)
         } else {
             explicit_name.to_owned()
         };
@@ -2007,6 +2023,7 @@ mod tests {
         fs.mount(MountConfig {
             name: Some("sdmmc".to_owned()),
             device_name: None,
+            bus_name: None,
             guest_root: "\\SDMMC Disk".to_owned(),
             host_root: None,
             total_mbytes: 8192,
@@ -2022,6 +2039,7 @@ mod tests {
         fs.mount(MountConfig {
             name: Some("resident_flash".to_owned()),
             device_name: None,
+            bus_name: None,
             guest_root: "\\ResidentFlash".to_owned(),
             host_root: None,
             total_mbytes: 2048,
@@ -2319,6 +2337,7 @@ mod tests {
         fs.mount(MountConfig {
             name: Some("windows".to_owned()),
             device_name: None,
+            bus_name: None,
             guest_root: "\\Windows".to_owned(),
             host_root: None,
             total_mbytes: 2048,
@@ -2373,6 +2392,7 @@ mod tests {
         fs.mount(MountConfig {
             name: Some("sdmmc".to_owned()),
             device_name: None,
+            bus_name: None,
             guest_root: "\\SDMMC Disk".to_owned(),
             host_root: Some(override_root.clone()),
             total_mbytes: 8192,
