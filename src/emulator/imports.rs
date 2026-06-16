@@ -4520,6 +4520,7 @@ mod tests {
         let fmd_read_sector_callback = memory.word(fmd_interface_ptr + 24);
         let fmd_write_sector_callback = memory.word(fmd_interface_ptr + 28);
         let fmd_erase_block_callback = memory.word(fmd_interface_ptr + 32);
+        let fmd_get_phys_sector_addr_callback = memory.word(fmd_interface_ptr + 44);
         let fmd_get_info_ex_callback = memory.word(fmd_interface_ptr + 48);
         let fmd_oem_io_control_callback = memory.word(fmd_interface_ptr + 52);
         for offset in (0..12).step_by(4) {
@@ -4739,6 +4740,44 @@ mod tests {
                 11,
                 fmd_erase_block_callback,
                 [0xffff_ffff],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        memory.map_word(sector_addr_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_phys_sector_addr_callback,
+                [32, sector_addr_ptr],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(sector_addr_ptr), 8 * 1024);
+        memory.map_word(sector_addr_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_phys_sector_addr_callback,
+                [64, sector_addr_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(memory.word(sector_addr_ptr), 0xffff_ffff);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_phys_sector_addr_callback,
+                [32, 0],
             ),
             Some(0)
         );

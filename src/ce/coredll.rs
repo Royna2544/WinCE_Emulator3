@@ -14606,15 +14606,29 @@ pub(crate) fn dispatch_fsdmgr_fmd_callback_raw<M: CoredllGuestMemory>(
         }
         FsdmgrFmdCallback::PowerUp | FsdmgrFmdCallback::PowerDown => 0,
         FsdmgrFmdCallback::GetPhysSectorAddr => {
+            const INVALID_SECTOR_ADDR: u32 = 0xffff_ffff;
+            let disk_ptr = disk_ptr?;
+            let sector = raw_arg(args, 0);
             let out_ptr = raw_arg(args, 1);
-            if out_ptr != 0 && memory.write_u32(out_ptr, raw_arg(args, 0)).is_ok() {
-                1
-            } else {
+            if out_ptr == 0 {
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                0
+                return Some(0);
             }
+            let status = match kernel.fsdmgr_fmd_physical_sector_addr(disk_ptr, sector) {
+                Some(Ok(addr)) if memory.write_u32(out_ptr, addr).is_ok() => 0,
+                Some(Ok(_)) | None => ERROR_INVALID_PARAMETER,
+                Some(Err(status)) => {
+                    if memory.write_u32(out_ptr, INVALID_SECTOR_ADDR).is_err() {
+                        ERROR_INVALID_PARAMETER
+                    } else {
+                        status
+                    }
+                }
+            };
+            kernel.threads.set_last_error(thread_id, status);
+            u32::from(status == 0)
         }
         FsdmgrFmdCallback::GetInfoEx => {
             let disk_ptr = disk_ptr?;

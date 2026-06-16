@@ -3074,6 +3074,72 @@ impl CeKernel {
         Some(Ok((start_sector, sectors_per_block)))
     }
 
+    pub fn fsdmgr_fmd_physical_sector_addr(
+        &self,
+        disk_ptr: u32,
+        sector: u32,
+    ) -> Option<std::result::Result<u32, u32>> {
+        let info = self.fsdmgr_disk_info(disk_ptr)?;
+        let regions = self
+            .fsdmgr_fmd_region_tables
+            .get(&disk_ptr)
+            .cloned()
+            .unwrap_or_default();
+        if regions.is_empty() {
+            if sector >= info[0] {
+                return Some(Err(ERROR_INVALID_PARAMETER));
+            }
+            return Some(Ok(sector));
+        }
+
+        let data_bytes_per_sector = info[1].max(1);
+        let mut region_start_sector = 0u32;
+        for region in regions {
+            let start_phys_block = region[1];
+            let num_phys_blocks = region[2];
+            let sectors_per_block = region[4];
+            if sectors_per_block == 0 || num_phys_blocks == 0 {
+                return Some(Err(ERROR_INVALID_PARAMETER));
+            }
+            let bytes_per_block = if region[5] != 0 {
+                region[5]
+            } else {
+                let Some(bytes_per_block) = sectors_per_block.checked_mul(data_bytes_per_sector)
+                else {
+                    return Some(Err(ERROR_INVALID_PARAMETER));
+                };
+                bytes_per_block
+            };
+            let Some(region_sectors) = num_phys_blocks.checked_mul(sectors_per_block) else {
+                return Some(Err(ERROR_INVALID_PARAMETER));
+            };
+            let Some(region_end_sector) = region_start_sector.checked_add(region_sectors) else {
+                return Some(Err(ERROR_INVALID_PARAMETER));
+            };
+            if sector >= region_start_sector && sector < region_end_sector {
+                let sector_offset_in_region = sector - region_start_sector;
+                let block_offset = sector_offset_in_region / sectors_per_block;
+                let sector_offset_in_block = sector_offset_in_region % sectors_per_block;
+                let Some(block_id) = start_phys_block.checked_add(block_offset) else {
+                    return Some(Err(ERROR_INVALID_PARAMETER));
+                };
+                let Some(block_addr) = block_id.checked_mul(bytes_per_block) else {
+                    return Some(Err(ERROR_INVALID_PARAMETER));
+                };
+                let Some(sector_offset) = sector_offset_in_block.checked_mul(data_bytes_per_sector)
+                else {
+                    return Some(Err(ERROR_INVALID_PARAMETER));
+                };
+                let Some(sector_addr) = block_addr.checked_add(sector_offset) else {
+                    return Some(Err(ERROR_INVALID_PARAMETER));
+                };
+                return Some(Ok(sector_addr));
+            }
+            region_start_sector = region_end_sector;
+        }
+        Some(Err(ERROR_INVALID_PARAMETER))
+    }
+
     pub fn fsdmgr_read_fmd_reserved_region(
         &mut self,
         disk_ptr: u32,
