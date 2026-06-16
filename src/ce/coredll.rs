@@ -145,6 +145,7 @@ const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
 const IOCTL_FMD_SET_XIPMODE: u32 = 0x0007_1f80;
 const IOCTL_FMD_LOCK_BLOCKS: u32 = 0x0007_1f84;
 const IOCTL_FMD_UNLOCK_BLOCKS: u32 = 0x0007_1f88;
+const IOCTL_FMD_GET_INTERFACE: u32 = 0x0007_1f8c;
 const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
 const IOCTL_FMD_READ_RESERVED: u32 = 0x0007_1f94;
 const IOCTL_FMD_WRITE_RESERVED: u32 = 0x0007_1f98;
@@ -157,6 +158,7 @@ const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
 const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+const FMD_INTERFACE_SIZE: u32 = 56;
 const FMD_FLASH_REGION_SIZE: u32 = 28;
 const FMD_RESERVED_NAME_LEN: u32 = 8;
 const FMD_RESERVED_REQ_SIZE: u32 = 20;
@@ -13564,6 +13566,9 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
         IOCTL_FMD_UNLOCK_BLOCKS => fsdmgr_fmd_set_block_lock_raw(
             kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, false,
         ),
+        IOCTL_FMD_GET_INTERFACE => {
+            fsdmgr_fmd_get_interface_raw(kernel, memory, thread_id, disk_ptr, out_ptr, out_bytes)
+        }
         IOCTL_FMD_SET_SECTORSIZE => {
             fsdmgr_fmd_set_sector_size_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
         }
@@ -13974,6 +13979,47 @@ fn fsdmgr_fmd_set_region_table_raw<M: CoredllGuestMemory>(
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn fsdmgr_fmd_get_interface_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    interface_ptr: u32,
+    interface_bytes: u32,
+) -> bool {
+    if kernel.fsdmgr_disk_info(disk_ptr).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if interface_ptr == 0 || interface_bytes < FMD_INTERFACE_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if memory.write_u32(interface_ptr, FMD_INTERFACE_SIZE).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    for offset in (4..FMD_INTERFACE_SIZE).step_by(4) {
+        if memory
+            .write_u32(interface_ptr.wrapping_add(offset), 0)
+            .is_err()
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true

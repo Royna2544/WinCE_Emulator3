@@ -498,7 +498,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `falmain.cpp` requires exactly `sizeof(DELETE_SECTOR_INFO)` before
     accepting delete-sector, secure-wipe, or set-secure-wipe-flag requests.
     `C:\WINCE600\PUBLIC\COMMON\OAK\INC\fmd.h` defines the disk-user
-    `IOCTL_FMD_*` flash-media controls plus `FMDInfo`; MSFLASH
+    `IOCTL_FMD_*` flash-media controls plus the 56-byte `FMDInterface`
+    callback table and `FMDInfo`; DeviceEmulator SmartMedia `FMD\fmd.cpp` and
+    MSFLASH `STRATA\fmd.cpp` validate `IOCTL_FMD_GET_INTERFACE` output buffers
+    before filling `cbSize` and callback pointers, while the FMD hook libraries
+    copy only interfaces whose `cbSize` matches `sizeof(FMDInterface)` before
+    replacing selected non-null callbacks. MSFLASH
     `STRATA\fmd.cpp` and `HOOK\FLSNAND\flsnand.cpp` show OEMIoControl
     validation for `SET_XIPMODE`, `GET_XIPMODE`, `LOCK_BLOCKS`,
     `UNLOCK_BLOCKS`, `SET_SECTORSIZE`, `RAW_WRITE_BLOCKS`,
@@ -535,9 +540,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     flush-cache as successful basic disk IOCTLs, and now exposes synthetic XIP
     mode, block-lock ranges, sector-size state, raw block writes into sparse
     disk backing, CE `ReservedReq` validation against the empty reserved table,
-    `FlashRegion` table validation/storage, raw-block-size, and deterministic
-    NOR-style `FMDInfo` metadata with the stored region count for the FMD
-    controls.
+    `FlashRegion` table validation/storage, a `GET_INTERFACE` ABI skeleton
+    with `cbSize == sizeof(FMDInterface)` and null unsupported callback slots,
+    raw-block-size, and deterministic NOR-style `FMDInfo` metadata with the
+    stored region count for the FMD controls.
     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`
     defines `FSCTL_COPY_EXTERNAL_START`, `FSCTL_COPY_EXTERNAL_COMPLETE`, and
     the 536-byte `FILE_COPY_EXTERNAL` header; UDF's
@@ -594,7 +600,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for
     refresh/flush no-ops and host-backed unsupported-FSCTL no-touch failure.
     Remaining storage fidelity is physical block-driver backing, external
-    cache/filter DLL behavior, remaining hardware-flash/FMD interface/actual reserved-region storage/FLS region-table forwarding and specialized disk IOCTLs, real FATFS
+    cache/filter DLL behavior, remaining hardware-flash/callable FMD interface thunks/actual reserved-region storage/FLS region-table forwarding and specialized disk IOCTLs, real FATFS
     volume format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume
     behavior, hardware power-state timing, and
@@ -3335,7 +3341,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
-    for FSDMGR cache imports. Physical block-driver backing, remaining hardware-flash/FMD interface/actual reserved-region storage/FLS region-table forwarding and disk IOCTL
+    for FSDMGR cache imports. Physical block-driver backing, remaining hardware-flash/callable FMD interface thunks/actual reserved-region storage/FLS region-table forwarding and disk IOCTL
     forwarding, real cache DLL/filter behavior, real CE mounted-volume
     availability, powerdown, and thread-exit
     wait reference behavior, broader file-security ACL storage and

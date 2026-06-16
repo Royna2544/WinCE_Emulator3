@@ -2439,6 +2439,7 @@ mod tests {
         const IOCTL_FMD_SET_XIPMODE: u32 = 0x0007_1f80;
         const IOCTL_FMD_LOCK_BLOCKS: u32 = 0x0007_1f84;
         const IOCTL_FMD_UNLOCK_BLOCKS: u32 = 0x0007_1f88;
+        const IOCTL_FMD_GET_INTERFACE: u32 = 0x0007_1f8c;
         const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
         const IOCTL_FMD_READ_RESERVED: u32 = 0x0007_1f94;
         const IOCTL_FMD_WRITE_RESERVED: u32 = 0x0007_1f98;
@@ -2513,6 +2514,7 @@ mod tests {
         let fmd_reserved_req_ptr = 0x1001_b000;
         let fmd_reserved_buffer_ptr = 0x1001_c000;
         let fmd_region_table_ptr = 0x1001_d000;
+        let fmd_interface_ptr = 0x1001_e000;
 
         let mut sector_bytes = vec![0; 512];
         sector_bytes[..17].copy_from_slice(b"direct-disk-write");
@@ -2913,6 +2915,59 @@ mod tests {
         );
         assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
         assert_eq!(kernel.fsdmgr_fmd_block_locked(disk_ptr, 7), Some(false));
+
+        for offset in (0..56).step_by(4) {
+            memory.map_word(fmd_interface_ptr + offset, 0xfeed_cafe);
+        }
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_GET_INTERFACE,
+                    0,
+                    0,
+                    fmd_interface_ptr,
+                    55,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(memory.word(fmd_interface_ptr), 0xfeed_cafe);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_GET_INTERFACE,
+                    0,
+                    0,
+                    fmd_interface_ptr,
+                    56,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(fmd_interface_ptr), 56);
+        for offset in (4..56).step_by(4) {
+            assert_eq!(memory.word(fmd_interface_ptr + offset), 0);
+        }
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
 
         memory.map_word(fmd_sector_size_ptr, 2048);
         assert_eq!(
