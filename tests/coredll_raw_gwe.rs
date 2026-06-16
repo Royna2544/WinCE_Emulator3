@@ -13052,6 +13052,132 @@ fn coredll_raw_transparent_image_copies_between_framebuffer_hdc_with_color_key()
 }
 
 #[test]
+fn coredll_raw_transparent_image_near_miss_keys_remain_opaque() -> Result<()> {
+    const BLACKNESS: u32 = 0x0000_0042;
+    const SOURCE_COLORREF: u32 = 0x0020_4080;
+    const NEAR_MISS_KEYS: [u32; 6] = [
+        0x0000_0080,
+        0x0000_4000,
+        0x0020_0000,
+        0x0000_4080,
+        0x0020_4000,
+        0x0020_0080,
+    ];
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let mut framebuffer = VirtualFramebuffer::new(4, 2, PixelFormat::Rgb565)?;
+
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let source_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [SOURCE_COLORREF],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    assert_ne!(source_brush, 0);
+
+    let rect_ptr = 0x1_0100;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 2);
+    memory.write_word(rect_ptr + 12, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_FILL_RECT,
+            [screen_dc, rect_ptr, source_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let expected = framebuffer_rgb565_at(&framebuffer, 0, 0);
+    assert_ne!(expected, 0);
+
+    for transparent_color in NEAR_MISS_KEYS {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer(
+                &mut kernel,
+                &mut memory,
+                Some(&mut framebuffer),
+                thread_id,
+                ORD_PAT_BLT,
+                [screen_dc, 2, 0, 2, 2, BLACKNESS],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer(
+                &mut kernel,
+                &mut memory,
+                Some(&mut framebuffer),
+                thread_id,
+                ORD_TRANSPARENT_IMAGE,
+                [
+                    screen_dc,
+                    2,
+                    0,
+                    2,
+                    2,
+                    screen_dc,
+                    0,
+                    0,
+                    2,
+                    2,
+                    transparent_color,
+                ],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        for y in 0..2 {
+            for x in 2..4 {
+                assert_eq!(
+                    framebuffer_rgb565_at(&framebuffer, x, y),
+                    expected,
+                    "transparent key {transparent_color:#08x} should not match source color"
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_mirrors_negative_extents_on_framebuffer_hdc() -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
     const RED565: u16 = 0xf800;

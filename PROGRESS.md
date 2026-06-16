@@ -36,6 +36,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `CreateBitmap` bit depths (`1`, `2`, `4`, `8`, `16`, `24`, and `32` bpp).
   The test memory backend now keeps repeated halfword writes visible through
   byte snapshots, matching the `TransparentImage` source-bitmap read path.
+- `tests/coredll_raw_gwe.rs`: raw same-framebuffer `TransparentImage` now covers
+  CE `draw.cpp::TransparentBltErrorTest` near-miss transparent keys. A solid
+  nonzero RGB source remains opaque when the transparent key matches only one
+  or two color channels, preserving the CE screen-half comparison behavior.
+- Validation after the transparent near-miss slice: focused
+  `coredll_raw_transparent_image_near_miss_keys_remain_opaque`, `cargo fmt
+  --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test -j
+  1 --features unicorn,trace,win32-desktop` passed. Full-test logs are under
+  `target/cargo-test-full-transparent-nearmiss.20260616-131840.*.log`.
 - `src/emulator/unicorn.rs`: escaped cross-thread visible-message WNDPROC
   callouts that already reached their saved import PC now restore the captured
   `ResumeImportAfterWndProc` thread/register context instead of being archived
