@@ -54842,6 +54842,98 @@ mod tests {
     }
 
     #[test]
+    fn send_message_timeout_block_prepare_accepts_abortifhung_below_threshold() {
+        let config = RuntimeConfig::load_default().expect("load default config");
+        let mut kernel = CeKernel::boot(config);
+        let sender_thread = 1203;
+        let receiver_thread = 1204;
+        let result_ptr = 0x0001_2300;
+        let hwnd = kernel.create_window_ex_w(
+            receiver_thread,
+            "SMTO_ABORTIFHUNG_BLOCK_PREP",
+            "",
+            None,
+            0,
+            0,
+            0,
+        );
+        kernel.gwe.record_thread_dispatched(receiver_thread, 0);
+        kernel.timers.sleep_ms(4999);
+
+        let prepared = send_message_timeout_block_prepare(
+            &mut kernel,
+            sender_thread,
+            &[
+                hwnd,
+                crate::ce::gwe::WM_USER + 2,
+                0x1203,
+                0x1204,
+                SMTO_BLOCK | SMTO_ABORTIFHUNG,
+                250,
+                result_ptr,
+            ],
+        )
+        .expect("below-threshold abort-if-hung send should prepare");
+
+        assert_eq!(prepared.send_id, 1);
+        assert_eq!(prepared.result_ptr, result_ptr);
+        assert_eq!(prepared.timeout_ms, 250);
+        assert_eq!(prepared.start_ms, kernel.timers.tick_count());
+        let sent = kernel
+            .gwe
+            .sent_message(prepared.send_id)
+            .expect("prepared sent message");
+        assert_eq!(sent.sender_thread_id, Some(sender_thread));
+        assert_eq!(sent.receiver_thread_id, receiver_thread);
+        assert_eq!(sent.message.msg, crate::ce::gwe::WM_USER + 2);
+        assert_eq!(sent.send_timeout_flags, SMTO_BLOCK | SMTO_ABORTIFHUNG);
+        assert_eq!(sent.result_ptr, Some(result_ptr));
+        assert_eq!(kernel.threads.get_last_error(sender_thread), 0);
+        assert!(kernel.thread_has_pending_sent_message(receiver_thread));
+    }
+
+    #[test]
+    fn send_message_timeout_block_prepare_rejects_abortifhung_hung_receiver() {
+        let config = RuntimeConfig::load_default().expect("load default config");
+        let mut kernel = CeKernel::boot(config);
+        let sender_thread = 1205;
+        let receiver_thread = 1206;
+        let hwnd = kernel.create_window_ex_w(
+            receiver_thread,
+            "SMTO_ABORTIFHUNG_BLOCK_PREP_HUNG",
+            "",
+            None,
+            0,
+            0,
+            0,
+        );
+        kernel.gwe.record_thread_dispatched(receiver_thread, 0);
+        kernel.timers.sleep_ms(5001);
+
+        let prepared = send_message_timeout_block_prepare(
+            &mut kernel,
+            sender_thread,
+            &[
+                hwnd,
+                crate::ce::gwe::WM_USER + 3,
+                0,
+                0,
+                SMTO_BLOCK | SMTO_ABORTIFHUNG,
+                250,
+                0,
+            ],
+        );
+
+        assert!(prepared.is_none());
+        assert!(kernel.gwe.sent_message(1).is_none());
+        assert!(kernel.gwe.get_message(receiver_thread).is_none());
+        assert_eq!(
+            kernel.threads.get_last_error(sender_thread),
+            ERROR_TIMEOUT_LOCAL
+        );
+    }
+
+    #[test]
     fn popup_menu_cascading_child_position_flips_and_clamps_to_screen() {
         let (x, y) = popup_menu_cascading_child_position(120, 40, 90, 0, 220, 40, 260, 180);
 
