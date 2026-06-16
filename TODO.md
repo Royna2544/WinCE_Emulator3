@@ -88,10 +88,11 @@ Regenerated on 2026-06-11 from current source and test coverage.
   then hides many map child windows, and leaves the owned splash popup visible
   with no observed hide/demote trace.
   Determine whether a pending custom transition message, hidden-window state, or
-  owner-popup/z-order edge is preventing the normal map reveal. On the next
-  rebuilt/relaunched run, sample `/api/v1/debug/timers.txt` while the splash is
-  visible to determine whether a transition timer is pending, already posted, or
-  absent.
+  owner-popup/z-order edge is preventing the normal map reveal. Timer sampling
+  while the splash is visible showed `count=0`, so the next diagnostic step is
+  to follow the app-side splash owner object around `iNavi.exe+0x4d7a0` and the
+  `0x48e998` show-window wrapper call sites, looking for the missing hide,
+  destroy, or z-order demotion path.
 - Continue the Happyway hidden-child scheduling investigation: modal dismissal
   and framebuffer restoration are fixed, and the active-process self-park
   duplicate is filtered, but `happyway_win.exe` can still remain parked with

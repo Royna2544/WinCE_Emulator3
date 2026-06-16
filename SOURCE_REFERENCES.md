@@ -2629,6 +2629,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     raw selected-DIB and framebuffer `TransparentImage` now preserve the black
     destination under transparent green pixels while copying the nested red
     source pixel from the translated source rectangle.
+    CE `draw.cpp::BltAlphaDIBTest(ETransparentImage)` writes alpha-bearing
+    `COLORREF` DWORDs directly into a top-down 32 bpp DIB section, then copies
+    one pixel with a nonmatching transparent key and compares the destination
+    DWORD. Raw selected-DIB `TransparentImage` now carries the source alpha byte
+    through plain color-key source-copy writes instead of forcing opaque alpha.
     CE `wingdi.h` declares `TransparentImage` with a generic `HANDLE hSrc`,
     and `draw.cpp::TransparentBltBitmapTest` passes an `HBITMAP` directly as
     that source handle after drawing into compatible bitmap backing. Raw

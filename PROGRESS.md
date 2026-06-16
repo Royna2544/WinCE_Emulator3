@@ -165,6 +165,31 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   -j 1 --features unicorn,trace,win32-desktop`. Test logs are under
   `target/cargo-test-coredll-raw-gwe-transparent-simple-source-offset.20260616-144131.*.log`
   and `target/cargo-test-full-transparent-simple-source-offset.20260616-144139.*.log`.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw selected-DIB
+  `TransparentImage` now covers CE `draw.cpp::BltAlphaDIBTest(ETransparentImage)`
+  for top-down 32 bpp DIB sections. Plain color-key copies now preserve the
+  source alpha byte in the destination DWORD when no ROP/blend/brush transform
+  is active instead of forcing opaque alpha.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `src/emulator/unicorn.rs`,
+  and `tests/coredll_dispatch.rs`: raw import-trap context plumbing now
+  compiles with the restored raw caller PC, stack pointer, and stack-word audit
+  fields; the Unicorn trap path precomputes stack words before passing mutable
+  memory into the coredll dispatcher.
+- Validation after the `TransparentImage` alpha-DIB and raw import stack-context
+  slices: `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_transparent_image_preserves_alpha_dib_pixel_dword -- --nocapture`,
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_dispatch
+  raw_stub_audit_keeps_import_trap_context -- --nocapture`, `cargo fmt
+  --check`, `cargo check --features unicorn,trace,win32-desktop`, and `cargo
+  build --release --features unicorn,trace,win32-desktop` passed with existing
+  warnings.
+- Live iNavi trace after `trace: include raw import stack context`: the owned
+  splash `ShowWindow(SW_SHOW)` still enters through the MFC wrapper
+  `caller_pc=0x6002ab5c`, but the stack snapshot exposes app-side candidates
+  `0x0005e864`, `0x0005e810`, and `0x0005895c`. Disassembly shows the app
+  routine around `iNavi.exe+0x4d7a0` creates/configures the full-screen splash
+  and calls wrapper `0x48e998` with `cmd=5`; no matching hide/destroy/demote
+  for `0x00020008` was observed yet.
 - Validation after the transparent all-edge clipping and active visible-receiver
   rotation slice: focused
   `remote_input_rotates_to_active_visible_receiver_thread`, focused
