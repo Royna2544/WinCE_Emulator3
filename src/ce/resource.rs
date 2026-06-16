@@ -1321,9 +1321,11 @@ impl ResourceSystem {
         const ILC_VIRTUAL: u32 = 0x8000;
         const ILC_VALID: u32 =
             ILC_MASK | ILC_COLORMASK | ILC_SHARED | ILC_PALETTE | ILC_MIRROR | ILC_VIRTUAL;
+        const ILC_WIN95: u32 = ILC_MASK | ILC_COLORMASK | ILC_SHARED | ILC_PALETTE;
         if width <= 0 || height <= 0 {
             return None;
         }
+        let flags = if flags == u32::MAX { ILC_WIN95 } else { flags };
         if flags & !ILC_VALID != 0 {
             return None;
         }

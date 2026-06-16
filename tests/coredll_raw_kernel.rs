@@ -9105,6 +9105,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     const ILC_PALETTE: u32 = 0x0800;
     const ILC_MIRROR: u32 = 0x2000;
     const ILC_VIRTUAL: u32 = 0x8000;
+    const ILC_WIN95: u32 = ILC_MASK | ILC_COLORDDB | ILC_SHARED | ILC_PALETTE;
     const ILD_IMAGE: u32 = 0x0020;
 
     let table = CoredllExportTable::default();
@@ -9224,6 +9225,42 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             thread_id,
             ORD_IMAGE_LIST_DESTROY,
             [valid_private_list],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let win95_compat_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, 0xffff_ffff, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create rejected CE -1 compatibility flags: {other:?}"),
+    };
+    assert_ne!(win95_compat_list, 0);
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(win95_compat_list)
+            .unwrap()
+            .flags,
+        ILC_WIN95
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DESTROY,
+            [win95_compat_list],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
