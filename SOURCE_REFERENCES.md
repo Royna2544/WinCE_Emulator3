@@ -3173,10 +3173,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     create/remove-directory, get/set-attributes, create-file, delete,
     move/presto-chango rename, find-first, and first-change-notification
     ordinals. Rust routes full guest paths through the existing CE namespace
-    and now traps direct `fsdmgr.dll` path ordinals `@54`-`@67` for
+    and now traps direct `fsdmgr.dll` path ordinals `@54`-`@67` and
+    `@76`-`@79` for
     create/remove directory, attributes, delete, move, and
     delete-and-rename, disk-free-space, find-first, create-file, and
-    system-file checks, while the security-manager exports remain queued.
+    system-file checks plus no-security-manager get/set file-security routing.
     `fsioctl.h` defines
     `FSCTL_GET_VOLUME_INFO`, `storemgr.h`
     defines `CE_VOLUME_INFO` and its store/RAMFS/removable flags, FSDMGR
@@ -3298,6 +3299,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and copies that DWORD back even when the internal call fails.
     `fsdacl.h::VolumeSecurityManager` returns `ERROR_NOT_SUPPORTED` for
     get/set file security when no ACL DLL/security handle is active.
+    Rust now exposes the paired `FSINT_*`/`FSEXT_*` file-security wrappers
+    through direct `fsdmgr.dll` imports `@76`-`@79`, using the same mounted
+    no-security-manager routing as the public coredll/AFS wrappers.
     `FSDMGR_CreateFileHandle` and `FSDMGR_CreateSearchHandle` ignore the HVOL
     and originating process handle in this CE 6 source and simply return the
     caller-supplied FSD file/search context pointer reinterpreted as a handle.

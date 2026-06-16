@@ -804,8 +804,8 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 36
                     | 37
                     | 44
-                    | 54..=67
-                    | 68..=75 | 80..=82
+                    | 54..=79
+                    | 80..=82
             )
         }
         ImportBy::Name { name, .. } => crate::ce::coredll::is_fsdmgr_import(name),
@@ -2299,6 +2299,148 @@ mod tests {
         let _ = kernel.close_handle(internal_find_handle);
         let _ = kernel.close_handle(opened);
         let _ = kernel.close_handle(created);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fsdmgr_file_security_imports_route_mounted_no_security_manager_path() {
+        const ERROR_NOT_SUPPORTED: u32 = 50;
+        const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
+        const OWNER_SECURITY_INFORMATION: u32 = 0x0000_0001;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Ordinal(76),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_GetFileSecurityW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSINT_SetFileSecurityW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Ordinal(79),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        assert_eq!(table.len(), 4);
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "wince_fsdmgr_file_security_imports_{}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("secured.bin"), b"payload").unwrap();
+        kernel.mount_guest_root("\\ResidentFlash", root.clone());
+
+        let mut memory = TestMemory::default();
+        let path = 0x1000_0000;
+        let missing_path = 0x1000_0200;
+        let descriptor = 0x1000_0400;
+        let length_needed = 0x1000_0500;
+        memory.map_wide_z(path, "\\ResidentFlash\\secured.bin");
+        memory.map_wide_z(missing_path, "\\NotMounted\\missing.bin");
+        memory.map_bytes(descriptor, &[0x5a; 16]);
+        memory.map_word(length_needed, 0xfeed_cafe);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [
+                    path,
+                    OWNER_SECURITY_INFORMATION,
+                    descriptor,
+                    16,
+                    length_needed,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(memory.word(length_needed), 0);
+        assert_eq!(memory.bytes.get(&descriptor).copied(), Some(0x5a));
+
+        memory.map_word(length_needed, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [
+                    missing_path,
+                    OWNER_SECURITY_INFORMATION,
+                    0,
+                    0,
+                    length_needed,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(memory.word(length_needed), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [path, OWNER_SECURITY_INFORMATION, descriptor, 16],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+                [path, OWNER_SECURITY_INFORMATION, 0, 16],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_ENOUGH_MEMORY);
+
         let _ = fs::remove_dir_all(root);
     }
 

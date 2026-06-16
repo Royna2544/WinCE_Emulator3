@@ -47,6 +47,24 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   cargo check --features unicorn,trace,win32-desktop`, and
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop` passed. Logs are under `target/`.
+- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
+  file-security path imports now include `FSINT_GetFileSecurityW @76`,
+  `FSEXT_GetFileSecurityW @77`, `FSINT_SetFileSecurityW @78`, and
+  `FSEXT_SetFileSecurityW @79`. These imports reuse the mounted
+  no-security-manager coredll/AFS file-security helpers, including caller
+  buffer probing, zero `LengthNeeded` writeback for get failures, and
+  `ERROR_NOT_SUPPORTED` when no ACL DLL/security handle is active.
+- Focused validation after the FSDMGR file-security import slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_file_security_imports_route_mounted_no_security_manager_path`
+  passed. Logs are under `target/`.
+- Full validation after the FSDMGR file-security import slice:
+  `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. Logs are under
+  `target/`.
 - `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `src/emulator/imports.rs`:
   direct `FSDMGR_DiskIoControl @12` now recognizes CE `fmd.h`
   `IOCTL_FMD_SET_XIPMODE`, `IOCTL_FMD_GET_XIPMODE`,

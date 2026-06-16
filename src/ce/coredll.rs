@@ -12157,6 +12157,10 @@ enum FsdmgrImport {
     FsextFindCloseChangeNotification,
     FsintGetFileNotificationInfoW,
     FsextGetFileNotificationInfoW,
+    FsintGetFileSecurityW,
+    FsextGetFileSecurityW,
+    FsintSetFileSecurityW,
+    FsextSetFileSecurityW,
 }
 
 pub(crate) fn is_fsdmgr_import(name: &str) -> bool {
@@ -12474,6 +12478,27 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         FsdmgrImport::FsextGetFileNotificationInfoW => u32::from(
             ce_get_file_notification_info_raw_impl(kernel, memory, thread_id, args, false),
         ),
+        FsdmgrImport::FsintGetFileSecurityW | FsdmgrImport::FsextGetFileSecurityW => {
+            u32::from(get_file_security_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 2),
+                raw_arg(args, 3),
+                raw_arg(args, 4),
+            ))
+        }
+        FsdmgrImport::FsintSetFileSecurityW | FsdmgrImport::FsextSetFileSecurityW => {
+            u32::from(set_file_security_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 2),
+                raw_arg(args, 3),
+            ))
+        }
     };
     Some(result)
 }
@@ -12533,6 +12558,10 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         73 => Some(FsdmgrImport::FsextFindCloseChangeNotification),
         74 => Some(FsdmgrImport::FsintGetFileNotificationInfoW),
         75 => Some(FsdmgrImport::FsextGetFileNotificationInfoW),
+        76 => Some(FsdmgrImport::FsintGetFileSecurityW),
+        77 => Some(FsdmgrImport::FsextGetFileSecurityW),
+        78 => Some(FsdmgrImport::FsintSetFileSecurityW),
+        79 => Some(FsdmgrImport::FsextSetFileSecurityW),
         80 => Some(FsdmgrImport::FsdmgrAsyncEnterVolume),
         81 => Some(FsdmgrImport::FsdmgrAsyncExitVolume),
         82 => Some(FsdmgrImport::FsdmgrParseSecurityDescriptor),
@@ -12602,6 +12631,10 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsext_findclosechangenotification" => Some(FsdmgrImport::FsextFindCloseChangeNotification),
         "fsint_getfilenotificationinfow" => Some(FsdmgrImport::FsintGetFileNotificationInfoW),
         "fsext_getfilenotificationinfow" => Some(FsdmgrImport::FsextGetFileNotificationInfoW),
+        "fsint_getfilesecurityw" => Some(FsdmgrImport::FsintGetFileSecurityW),
+        "fsext_getfilesecurityw" => Some(FsdmgrImport::FsextGetFileSecurityW),
+        "fsint_setfilesecurityw" => Some(FsdmgrImport::FsintSetFileSecurityW),
+        "fsext_setfilesecurityw" => Some(FsdmgrImport::FsextSetFileSecurityW),
         _ => None,
     }
 }
