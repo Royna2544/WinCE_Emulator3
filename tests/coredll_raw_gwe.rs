@@ -38540,6 +38540,12 @@ fn coredll_raw_in_region_reports_ce_handle_and_rect_errors() -> Result<()> {
     );
     assert_bool_call!(ORD_RECT_IN_REGION, [region, rect_ptr], true, 0);
 
+    memory.write_word(rect_ptr, 14);
+    memory.write_word(rect_ptr + 4, 24);
+    memory.write_word(rect_ptr + 8, 12);
+    memory.write_word(rect_ptr + 12, 22);
+    assert_bool_call!(ORD_RECT_IN_REGION, [region, rect_ptr], true, 0);
+
     memory.write_word(rect_ptr, 0);
     memory.write_word(rect_ptr + 4, 0);
     memory.write_word(rect_ptr + 8, 1);

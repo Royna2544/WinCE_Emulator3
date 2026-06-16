@@ -49973,7 +49973,8 @@ fn rect_in_region_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
-    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr).map(normalize_rect)
+    else {
         return false;
     };
     kernel.threads.set_last_error(thread_id, 0);
