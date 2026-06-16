@@ -3173,11 +3173,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     create/remove-directory, get/set-attributes, create-file, delete,
     move/presto-chango rename, find-first, and first-change-notification
     ordinals. Rust routes full guest paths through the existing CE namespace
-    and now traps direct `fsdmgr.dll` path ordinals `@54`-`@61` for
+    and now traps direct `fsdmgr.dll` path ordinals `@54`-`@67` for
     create/remove directory, attributes, delete, move, and
-    delete-and-rename, while `FS_GetDiskFreeSpaceExW @62`, find/create-file
-    forwarding at `@63`-`@66`, `FS_IsSystemFileW @67`, and the
-    security-manager exports remain queued. `fsioctl.h` defines
+    delete-and-rename, disk-free-space, find-first, create-file, and
+    system-file checks, while the security-manager exports remain queued.
+    `fsioctl.h` defines
     `FSCTL_GET_VOLUME_INFO`, `storemgr.h`
     defines `CE_VOLUME_INFO` and its store/RAMFS/removable flags, FSDMGR
     `volumeapi.cpp` validates the info-level input and fixed output size

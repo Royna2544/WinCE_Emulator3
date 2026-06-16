@@ -15,8 +15,8 @@ use crate::{
         devices::{CommDcb, CommTimeouts, DeviceIoControlResult},
         file::{
             CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
-            FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FileLockStatus, FindData, GENERIC_WRITE,
-            VolumeInfo,
+            FILE_ATTRIBUTE_SYSTEM, FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FileLockStatus,
+            FindData, GENERIC_WRITE, VolumeInfo,
         },
         framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, PixelFormat},
         gwe::{
@@ -9747,6 +9747,60 @@ fn get_disk_free_space_ex_w_raw<M: CoredllGuestMemory>(
     true
 }
 
+const ERROR_DIRECTORY: u32 = 267;
+
+fn fs_get_disk_free_space_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(directory) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let directory = directory.replace('/', "\\");
+    let attributes = match kernel.file_attributes_w(&directory) {
+        Ok(data) => data.attributes,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_PATH_NOT_FOUND);
+            return false;
+        }
+    };
+    if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        kernel.threads.set_last_error(thread_id, ERROR_DIRECTORY);
+        return false;
+    }
+    let disk_space = kernel.files.disk_space_for_path(Some(&directory));
+    if !write_optional_u64(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 1),
+        disk_space.free_bytes,
+    ) || !write_optional_u64(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 2),
+        disk_space.total_bytes,
+    ) || !write_optional_u64(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 3),
+        disk_space.free_bytes,
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn afs_get_disk_free_space_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -12089,6 +12143,12 @@ enum FsdmgrImport {
     FsDeleteFileW,
     FsMoveFileW,
     FsDeleteAndRenameFileW,
+    FsGetDiskFreeSpaceExW,
+    FsextFindFirstFileW,
+    FsintFindFirstFileW,
+    FsextCreateFileW,
+    FsintCreateFileW,
+    FsIsSystemFileW,
     FsintFindFirstChangeNotificationW,
     FsextFindFirstChangeNotificationW,
     FsintFindNextChangeNotification,
@@ -12357,6 +12417,27 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         )),
+        FsdmgrImport::FsGetDiskFreeSpaceExW => u32::from(fs_get_disk_free_space_ex_w_raw(
+            kernel, memory, thread_id, args,
+        )),
+        FsdmgrImport::FsextFindFirstFileW | FsdmgrImport::FsintFindFirstFileW => {
+            find_first_file_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+            )
+        }
+        FsdmgrImport::FsextCreateFileW | FsdmgrImport::FsintCreateFileW => {
+            create_file_w_raw(kernel, memory, thread_id, args)
+        }
+        FsdmgrImport::FsIsSystemFileW => u32::from(fs_is_system_file_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        )),
         FsdmgrImport::FsintFindFirstChangeNotificationW => find_first_change_notification_w_raw(
             kernel,
             memory,
@@ -12438,6 +12519,12 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         59 => Some(FsdmgrImport::FsDeleteFileW),
         60 => Some(FsdmgrImport::FsMoveFileW),
         61 => Some(FsdmgrImport::FsDeleteAndRenameFileW),
+        62 => Some(FsdmgrImport::FsGetDiskFreeSpaceExW),
+        63 => Some(FsdmgrImport::FsextFindFirstFileW),
+        64 => Some(FsdmgrImport::FsintFindFirstFileW),
+        65 => Some(FsdmgrImport::FsextCreateFileW),
+        66 => Some(FsdmgrImport::FsintCreateFileW),
+        67 => Some(FsdmgrImport::FsIsSystemFileW),
         68 => Some(FsdmgrImport::FsintFindFirstChangeNotificationW),
         69 => Some(FsdmgrImport::FsextFindFirstChangeNotificationW),
         70 => Some(FsdmgrImport::FsintFindNextChangeNotification),
@@ -12497,6 +12584,12 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fs_deletefilew" => Some(FsdmgrImport::FsDeleteFileW),
         "fs_movefilew" => Some(FsdmgrImport::FsMoveFileW),
         "fs_deleteandrenamefilew" => Some(FsdmgrImport::FsDeleteAndRenameFileW),
+        "fs_getdiskfreespaceexw" => Some(FsdmgrImport::FsGetDiskFreeSpaceExW),
+        "fsext_findfirstfilew" => Some(FsdmgrImport::FsextFindFirstFileW),
+        "fsint_findfirstfilew" => Some(FsdmgrImport::FsintFindFirstFileW),
+        "fsext_createfilew" => Some(FsdmgrImport::FsextCreateFileW),
+        "fsint_createfilew" => Some(FsdmgrImport::FsintCreateFileW),
+        "fs_issystemfilew" => Some(FsdmgrImport::FsIsSystemFileW),
         "fsint_findfirstchangenotificationw" => {
             Some(FsdmgrImport::FsintFindFirstChangeNotificationW)
         }
@@ -17650,6 +17743,32 @@ fn get_file_attributes_w_raw<M: CoredllGuestMemory>(
                 .threads
                 .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
             u32::MAX
+        }
+    }
+}
+
+fn fs_is_system_file_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    path_ptr: u32,
+) -> bool {
+    let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    match kernel.file_attributes_w(&path) {
+        Ok(data) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            data.attributes & FILE_ATTRIBUTE_SYSTEM != 0
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            false
         }
     }
 }

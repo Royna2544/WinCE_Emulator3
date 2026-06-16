@@ -804,7 +804,7 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 36
                     | 37
                     | 44
-                    | 54..=61
+                    | 54..=67
                     | 68..=75 | 80..=82
             )
         }
@@ -2066,6 +2066,239 @@ mod tests {
         let mut perms = fs::metadata(root.join("attrs.txt")).unwrap().permissions();
         perms.set_readonly(false);
         fs::set_permissions(root.join("attrs.txt"), perms).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fsdmgr_path_query_imports_route_capacity_find_create_and_system_flags() {
+        const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
+        const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const GENERIC_WRITE: u32 = 0x4000_0000;
+        const CREATE_ALWAYS: u32 = 2;
+        const OPEN_EXISTING: u32 = 3;
+        const ERROR_DIRECTORY: u32 = 267;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Ordinal(62),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_FindFirstFileW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Ordinal(64),
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_CreateFileW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2010,
+                    iat_rva: 0x3010,
+                    import: ImportBy::Ordinal(66),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2014,
+                    iat_rva: 0x3014,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FS_IsSystemFileW".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "wince_fsdmgr_path_query_imports_{}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("payload.bin"), b"payload").unwrap();
+        fs::write(root.join("system.bin"), b"system").unwrap();
+        kernel.files.mount(MountConfig {
+            name: Some("Resident Flash".to_owned()),
+            device_name: None,
+            bus_name: None,
+            guest_root: r"\ResidentFlash".to_owned(),
+            host_root: Some(root.clone()),
+            total_mbytes: 128,
+            free_mbytes: 64,
+            writable: true,
+            removable: false,
+            system: true,
+            hidden: false,
+            interface_classes: Vec::new(),
+            registry_roots: Vec::new(),
+            registry_subkey: None,
+        });
+
+        let mut memory = TestMemory::default();
+        let dir_path = 0x1000_0000;
+        let payload_path = 0x1000_0100;
+        let system_path = 0x1000_0200;
+        let pattern_path = 0x1000_0300;
+        let created_path = 0x1000_0400;
+        let internal_created_path = 0x1000_0500;
+        let free_available = 0x1000_1000;
+        let total_bytes = 0x1000_1010;
+        let total_free = 0x1000_1020;
+        let find_data = 0x1000_2000;
+        memory.map_wide_z(dir_path, "\\ResidentFlash");
+        memory.map_wide_z(payload_path, "\\ResidentFlash\\payload.bin");
+        memory.map_wide_z(system_path, "\\ResidentFlash\\system.bin");
+        memory.map_wide_z(pattern_path, "\\ResidentFlash\\payload.bin");
+        memory.map_wide_z(created_path, "\\ResidentFlash\\created.bin");
+        memory.map_wide_z(
+            internal_created_path,
+            "\\ResidentFlash\\internal-created.bin",
+        );
+        for ptr in [free_available, total_bytes, total_free] {
+            memory.map_word(ptr, 0);
+            memory.map_word(ptr + 4, 0);
+        }
+        for offset in (0..=36).step_by(4) {
+            memory.map_word(find_data + offset, 0);
+        }
+        memory.map_wide_buffer(find_data + 40, 260);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [dir_path, free_available, total_bytes, total_free],
+            ),
+            Some(1)
+        );
+        assert_eq!(memory.word(free_available), 64 * 1024 * 1024);
+        assert_eq!(memory.word(free_available + 4), 0);
+        assert_eq!(memory.word(total_bytes), 128 * 1024 * 1024);
+        assert_eq!(memory.word(total_bytes + 4), 0);
+        assert_eq!(memory.word(total_free), 64 * 1024 * 1024);
+        assert_eq!(memory.word(total_free + 4), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [payload_path, free_available, total_bytes, total_free],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_DIRECTORY);
+
+        let find_handle = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [pattern_path, find_data, 560],
+            )
+            .unwrap();
+        assert_ne!(find_handle, u32::MAX);
+        assert_eq!(
+            memory.word(find_data),
+            FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_SYSTEM
+        );
+        assert_eq!(memory.word(find_data + 32), 7);
+        assert_eq!(memory.read_wide_z(find_data + 40, 260), "payload.bin");
+
+        let internal_find_handle = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [system_path, find_data, 560],
+            )
+            .unwrap();
+        assert_ne!(internal_find_handle, u32::MAX);
+        assert_eq!(memory.read_wide_z(find_data + 40, 260), "system.bin");
+
+        let opened = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+                [payload_path, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+            )
+            .unwrap();
+        assert_ne!(opened, u32::MAX);
+
+        let created = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 4,
+                [
+                    internal_created_path,
+                    GENERIC_WRITE,
+                    0,
+                    0,
+                    CREATE_ALWAYS,
+                    0,
+                    0,
+                ],
+            )
+            .unwrap();
+        assert_ne!(created, u32::MAX);
+        assert!(root.join("internal-created.bin").exists());
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 5,
+                [system_path],
+            ),
+            Some(1)
+        );
+
+        let _ = kernel.close_handle(find_handle);
+        let _ = kernel.close_handle(internal_find_handle);
+        let _ = kernel.close_handle(opened);
+        let _ = kernel.close_handle(created);
         let _ = fs::remove_dir_all(root);
     }
 

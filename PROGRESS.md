@@ -31,6 +31,22 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   --check`, `$env:CARGO_INCREMENTAL='0'; cargo check --features
   unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test -j
   1 --features unicorn,trace,win32-desktop` passed. Logs are under `target/`.
+- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
+  path-query imports now include `FS_GetDiskFreeSpaceExW @62`,
+  `FSEXT_FindFirstFileW @63`, `FSINT_FindFirstFileW @64`,
+  `FSEXT_CreateFileW @65`, `FSINT_CreateFileW @66`, and
+  `FS_IsSystemFileW @67`. The disk-free-space import follows CE
+  `pathapi.cpp` by requiring an existing directory before writing
+  `ULARGE_INTEGER` capacity outputs, find/create-file imports share the
+  mounted coredll path helpers, and system-file checks use the mounted
+  `FILE_ATTRIBUTE_SYSTEM` surface.
+- Validation after the FSDMGR path-query import slice: focused `cargo test
+  -j 1 --features unicorn,trace,win32-desktop
+  fsdmgr_path_query_imports_route_capacity_find_create_and_system_flags`,
+  `cargo fmt --check`, `git diff --check`, `$env:CARGO_INCREMENTAL='0';
+  cargo check --features unicorn,trace,win32-desktop`, and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. Logs are under `target/`.
 - `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `src/emulator/imports.rs`:
   direct `FSDMGR_DiskIoControl @12` now recognizes CE `fmd.h`
   `IOCTL_FMD_SET_XIPMODE`, `IOCTL_FMD_GET_XIPMODE`,
