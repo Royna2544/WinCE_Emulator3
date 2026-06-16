@@ -5820,6 +5820,22 @@ impl UnicornMips {
                 ) {
                     scheduler_timeslice_pending_hook.set(true);
                 }
+                if !scheduler_timeslice_pending_hook.get()
+                    && !Self::thread_has_visible_receiver_work(active_thread_id, kernel_ref)
+                    && suspended_guest_thread_matching(
+                        &suspended_guest_thread_timeslice_hook,
+                        &suspended_guest_thread_queue_timeslice_hook,
+                        |thread| {
+                            thread.thread_id != active_thread_id
+                                && Self::thread_has_visible_receiver_work(
+                                    thread.thread_id,
+                                    kernel_ref,
+                                )
+                        },
+                    )
+                {
+                    scheduler_timeslice_pending_hook.set(true);
+                }
             }
             let pc = address as u32;
             let previous_pc = scheduler_timeslice_last_pc_hook.replace(Some(pc));
@@ -22867,6 +22883,36 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn suspended_guest_thread_matching_finds_queued_visible_receiver() {
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let visible_thread_id = 7;
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
+            thread_id: 6,
+            thread_handle: Some(0x106),
+            regs: super::MipsGuestContext::zero(),
+            pc: 0x6666_0000,
+        })));
+        let queue = std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+        queue.borrow_mut().push_back(super::SuspendedGuestThread {
+            thread_id: visible_thread_id,
+            thread_handle: Some(0x107),
+            regs: super::MipsGuestContext::zero(),
+            pc: 0x7777_0000,
+        });
+
+        assert!(super::suspended_guest_thread_matching(
+            &slot,
+            &queue,
+            |thread| thread.thread_id != active_thread_id && thread.thread_id == visible_thread_id,
+        ));
+        assert!(!super::suspended_guest_thread_matching(
+            &slot,
+            &queue,
+            |thread| thread.thread_id == active_thread_id,
+        ));
+    }
+
+    #[test]
     fn timeslice_returns_pending_create_thread_creator_with_visible_work() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -25079,6 +25125,18 @@ fn pop_suspended_guest_thread_matching(
     let mut queue_ref = queue.borrow_mut();
     let index = queue_ref.iter().position(predicate)?;
     queue_ref.remove(index)
+}
+
+#[cfg(feature = "unicorn")]
+fn suspended_guest_thread_matching(
+    slot: &SuspendedGuestThreadSlot,
+    queue: &SuspendedGuestThreadQueue,
+    mut predicate: impl FnMut(&SuspendedGuestThread) -> bool,
+) -> bool {
+    if slot.borrow().as_ref().is_some_and(&mut predicate) {
+        return true;
+    }
+    queue.borrow().iter().any(predicate)
 }
 
 #[cfg(feature = "unicorn")]
