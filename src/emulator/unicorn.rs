@@ -13439,11 +13439,8 @@ fn scheduler_timeslice_context_pc(
     trampoline_jumps: &[MipsTrampolineJump],
     read_word: impl Fn(u32) -> Option<u32>,
 ) -> Option<u32> {
-    if let Some(origin) = mips_trampoline_origin_for_pc(pc, trampoline_jumps) {
-        return Some(origin);
-    }
     if target_in_ranges(pc, trampoline_ranges) {
-        return None;
+        return mips_trampoline_origin_for_pc(pc, trampoline_jumps);
     }
     if is_control_transfer_target(previous_pc, pc)
         || is_mips_delay_slot_pc(read_word, previous_pc, pc)
@@ -13464,13 +13461,10 @@ fn live_wall_clock_block_stop_pc(
     if pc >= IMPORT_TRAP_BASE {
         return None;
     }
-    if let Some(restart_pc) =
-        wall_clock_restart_pc_for_mips_trampoline(pc, trampoline_jumps, &read_word)
-    {
-        return Some(restart_pc);
+    if target_in_ranges(pc, trampoline_ranges) {
+        return wall_clock_restart_pc_for_mips_trampoline(pc, trampoline_jumps, &read_word);
     }
-    if target_in_ranges(pc, trampoline_ranges)
-        || is_control_transfer_target(previous_pc, pc)
+    if is_control_transfer_target(previous_pc, pc)
         || is_mips_delay_slot_pc(read_word, previous_pc, pc)
     {
         return None;
