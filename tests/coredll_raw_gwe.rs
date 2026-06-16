@@ -50342,6 +50342,8 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
     const VK_LMENU: u32 = 0xA4;
     const VK_RMENU: u32 = 0xA5;
     const VK_NUMPAD4: u32 = 0x64;
+    const VK_PAUSE: u32 = 0x13;
+    const VK_CANCEL: u32 = 0x03;
     const VK_LEFT: u32 = 0x25;
     const VK_RIGHT: u32 = 0x27;
 
@@ -50393,6 +50395,10 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
         returned(mvk(&mut kernel, &mut memory, VK_RMENU, MAPVK_VK_TO_VSC)),
         0x38
     );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, VK_PAUSE, MAPVK_VK_TO_VSC)),
+        0x45
+    );
 
     assert_eq!(
         returned(mvk(&mut kernel, &mut memory, 0x2A, MAPVK_VSC_TO_VK)),
@@ -50426,6 +50432,14 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
         returned(mvk(&mut kernel, &mut memory, 0xE04B, MAPVK_VSC_TO_VK)),
         VK_LEFT
     );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xE07E, MAPVK_VSC_TO_VK)),
+        VK_CANCEL
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xE11477, MAPVK_VSC_TO_VK)),
+        VK_PAUSE
+    );
 
     assert_eq!(
         returned(mvk(&mut kernel, &mut memory, 0x1D, MAPVK_VSC_TO_VK_EX)),
@@ -50450,6 +50464,14 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
     assert_eq!(
         returned(mvk(&mut kernel, &mut memory, 0xE04D, MAPVK_VSC_TO_VK_EX)),
         VK_RIGHT
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xE045, MAPVK_VSC_TO_VK_EX)),
+        0
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xE11477, MAPVK_VSC_TO_VK_EX)),
+        VK_PAUSE
     );
 
     assert_eq!(returned(mvk(&mut kernel, &mut memory, 0x41, 99)), 0);
