@@ -37283,7 +37283,7 @@ fn imm_get_composition_string_w_raw<M: CoredllGuestMemory>(
 
 fn imm_set_composition_string_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
@@ -37323,9 +37323,12 @@ fn imm_set_composition_string_w_raw<M: CoredllGuestMemory>(
             context.conversion_status & (TESTIME_IME_CMODE_ROMAN | TESTIME_IME_CMODE_NATIVE) != 0
         }))
     .then(|| testime_candidates_for_reading(kernel, &composition))
-    .flatten();
+    .unwrap_or(TestimeCandidateSearch::Skipped);
     if let Some(hwnd) = kernel.gwe.set_ime_composition_string(himc, composition) {
-        refresh_testime_candidate_list(kernel, thread_id, himc, testime_candidates);
+        refresh_testime_candidate_list(kernel, thread_id, himc, testime_candidates.candidates());
+        if matches!(testime_candidates, TestimeCandidateSearch::NoCandidates) {
+            make_testime_no_dictionary_entry_guideline(kernel, memory, thread_id, himc);
+        }
         // Notify the target window that the composition string changed.
         let _ = kernel.send_message_w(hwnd, crate::ce::gwe::WM_IME_COMPOSITION, 0, lp_flags);
     }
@@ -37333,7 +37336,24 @@ fn imm_set_composition_string_w_raw<M: CoredllGuestMemory>(
     true
 }
 
-fn testime_candidates_for_reading(kernel: &CeKernel, reading: &[u16]) -> Option<Vec<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TestimeCandidateSearch {
+    Skipped,
+    NoCandidates,
+    TooMany,
+    Candidates(Vec<String>),
+}
+
+impl TestimeCandidateSearch {
+    fn candidates(&self) -> Option<Vec<String>> {
+        match self {
+            Self::Candidates(candidates) => Some(candidates.clone()),
+            Self::Skipped | Self::NoCandidates | Self::TooMany => None,
+        }
+    }
+}
+
+fn testime_candidates_for_reading(kernel: &CeKernel, reading: &[u16]) -> TestimeCandidateSearch {
     const TESTIME_MAX_CANDIDATE_STRINGS: usize = 32;
 
     let reading_text = String::from_utf16_lossy(reading);
@@ -37352,9 +37372,13 @@ fn testime_candidates_for_reading(kernel: &CeKernel, reading: &[u16]) -> Option<
     candidates.extend(testime_private_profile_candidates(kernel, &reading_text));
     candidates.extend(kernel.gwe.ime_registered_words_for_reading(&reading_text));
     if candidates.len() > TESTIME_MAX_CANDIDATE_STRINGS {
-        return None;
+        return TestimeCandidateSearch::TooMany;
     }
-    (!candidates.is_empty()).then_some(candidates)
+    if candidates.is_empty() {
+        TestimeCandidateSearch::NoCandidates
+    } else {
+        TestimeCandidateSearch::Candidates(candidates)
+    }
 }
 
 fn testime_private_profile_candidates(kernel: &CeKernel, reading: &str) -> Vec<String> {
@@ -37457,6 +37481,131 @@ fn refresh_testime_candidate_list(
             CANDIDATE_MASK,
         );
     }
+}
+
+fn make_testime_no_dictionary_entry_guideline<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    himc: u32,
+) {
+    const GUIDELINE_SIZE: u32 = 28;
+    const TESTIME_MAX_GUIDELINE_CHARS: usize = 32;
+    const GL_LEVEL_ERROR: u32 = 0x0000_0002;
+    const GL_ID_NODICTIONARY: u32 = 0x0000_0010;
+    const IMN_GUIDELINE: u32 = 0x000d;
+    const TESTIME_NODICENTRY: &str = "Can not find data entry in dictionary";
+
+    let text: String = TESTIME_NODICENTRY
+        .chars()
+        .take(TESTIME_MAX_GUIDELINE_CHARS.saturating_sub(1))
+        .collect();
+    let text_units: Vec<u16> = text.encode_utf16().collect();
+    let total_size = GUIDELINE_SIZE + (TESTIME_MAX_GUIDELINE_CHARS as u32 * 2) + 2;
+    let old_handle = kernel
+        .gwe
+        .ime_context(himc)
+        .map(|context| context.h_guide_line)
+        .unwrap_or(0);
+    let handle = if old_handle == 0 {
+        match allocate_ime_component(
+            kernel,
+            thread_id,
+            crate::ce::gwe::ImeComponentKind::GuideLine,
+            total_size,
+        ) {
+            Some(handle) => handle,
+            None => return,
+        }
+    } else {
+        match kernel.memory.heap_re_alloc(
+            PROCESS_HEAP_HANDLE,
+            HEAP_ZERO_MEMORY,
+            old_handle,
+            total_size,
+        ) {
+            Some(handle) => {
+                if handle != old_handle {
+                    kernel.gwe.unregister_ime_component(old_handle);
+                }
+                kernel.gwe.register_ime_component(
+                    handle,
+                    crate::ce::gwe::ImeComponentKind::GuideLine,
+                    total_size,
+                );
+                handle
+            }
+            None => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+                return;
+            }
+        }
+    };
+
+    if !write_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        handle,
+        &vec![0u8; total_size as usize],
+    ) || !write_guest_u32(kernel, memory, thread_id, handle, total_size)
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            handle.wrapping_add(4),
+            GL_LEVEL_ERROR,
+        )
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            handle.wrapping_add(8),
+            GL_ID_NODICTIONARY,
+        )
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            handle.wrapping_add(12),
+            text_units.len() as u32,
+        )
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            handle.wrapping_add(16),
+            GUIDELINE_SIZE,
+        )
+        || !text_units.into_iter().enumerate().all(|(index, unit)| {
+            write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                handle
+                    .wrapping_add(GUIDELINE_SIZE)
+                    .wrapping_add(index as u32 * 2),
+                unit,
+            )
+        })
+    {
+        return;
+    }
+    if let Some(context) = kernel.gwe.ime_context_mut(himc) {
+        context.h_guide_line = handle;
+        if let Some(hwnd) = context.hwnd {
+            let _ = kernel.post_message_w_for_thread(
+                thread_id,
+                hwnd,
+                crate::ce::gwe::WM_IME_NOTIFY,
+                IMN_GUIDELINE,
+                0,
+            );
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
 }
 
 fn imm_get_composition_window_raw<M: CoredllGuestMemory>(

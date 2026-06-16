@@ -93,6 +93,10 @@ impl UnicornMips {
         false
     }
 
+    pub fn current_thread_has_visible_receiver_work(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
     pub fn active_process_has_receiver_work(&self, _kernel: &CeKernel) -> bool {
         false
     }

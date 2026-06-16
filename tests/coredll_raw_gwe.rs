@@ -32025,7 +32025,7 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
     memory.map_words(hot_key_modifiers_ptr, 1);
     memory.map_words(hot_key_vkey_ptr, 1);
     memory.map_words(hot_key_hkl_ptr, 1);
-    memory.map_halfwords(guideline_string_ptr, 8);
+    memory.map_halfwords(guideline_string_ptr, 40);
     memory.map_words(ime_escape_data_ptr, 1);
     memory.map_words(register_word_style_ptr, 1);
     memory.map_halfwords(register_word_style_ptr + 4, 32);
@@ -32713,7 +32713,9 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
     const GGL_LEVEL: u32 = 0x0000_0001;
     const GGL_INDEX: u32 = 0x0000_0002;
     const GGL_STRING: u32 = 0x0000_0003;
+    const GL_LEVEL_ERROR: u32 = 0x0000_0002;
     const GL_LEVEL_WARNING: u32 = 0x0000_0003;
+    const GL_ID_NODICTIONARY: u32 = 0x0000_0010;
     const GL_ID_NOCONVERT: u32 = 0x0000_0020;
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -33578,6 +33580,74 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
         }
     ));
     assert_eq!(memory.read_u32(candidate_list_count_ptr)?, 0);
+    const IMN_GUIDELINE: u32 = 0x000d;
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        notify_msg_ptr,
+        hwnd,
+        WM_IME_NOTIFY,
+        IMN_GUIDELINE,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_GET_GUIDE_LINE_W,
+            [himc, GGL_LEVEL, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(GL_LEVEL_ERROR),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_GET_GUIDE_LINE_W,
+            [himc, GGL_INDEX, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(GL_ID_NODICTIONARY),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_GET_GUIDE_LINE_W,
+            [himc, GGL_STRING, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(62),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_GET_GUIDE_LINE_W,
+            [himc, GGL_STRING, guideline_string_ptr, 80],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(62),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_wide_z(guideline_string_ptr, 40),
+        "Can not find data entry in dict"
+    );
 
     const CFS_POINT: u32 = 0x0002;
     const CFS_CANDIDATEPOS: u32 = 0x0040;
@@ -33921,9 +33991,10 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
     assert_eq!(memory.read_u32(input_context_ptr + 236)?, 44);
     let h_comp_str = memory.read_u32(input_context_ptr + 288)?;
     let h_cand_info = memory.read_u32(input_context_ptr + 292)?;
+    let h_guide_line = memory.read_u32(input_context_ptr + 296)?;
     assert_ne!(h_comp_str, 0);
     assert_ne!(h_cand_info, 0);
-    assert_eq!(memory.read_u32(input_context_ptr + 296)?, 0);
+    assert_ne!(h_guide_line, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -33934,6 +34005,19 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(102),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_GET_IMCCSIZE,
+            [h_guide_line],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(94),
             ..
         }
     ));
