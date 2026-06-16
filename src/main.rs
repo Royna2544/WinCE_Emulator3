@@ -723,6 +723,10 @@ fn run_cpu_loop(
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
+            if cpu.prepare_cross_thread_visible_message_callout(kernel) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
             continue;
         }
         if !kernel_has_unreturned_parked_process(kernel)

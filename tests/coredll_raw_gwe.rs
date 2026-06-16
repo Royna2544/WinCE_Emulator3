@@ -49944,6 +49944,102 @@ fn coredll_raw_map_virtual_key_vk_to_char_honors_active_layout() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> {
+    // CE's KeybdDriverMapVirtualKey collapses LR modifier keys only for
+    // MAPVK_VSC_TO_VK; the EX path preserves the side-specific VK.
+    const MAPVK_VK_TO_VSC: u32 = 0;
+    const MAPVK_VSC_TO_VK: u32 = 1;
+    const MAPVK_VSC_TO_VK_EX: u32 = 3;
+    const VK_RSHIFT: u32 = 0xA1;
+    const VK_RCONTROL: u32 = 0xA3;
+    const VK_LMENU: u32 = 0xA4;
+    const VK_RMENU: u32 = 0xA5;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 44;
+
+    let mvk = |kernel: &mut CeKernel, memory: &mut TestGuestMemory, code: u32, mode: u32| {
+        table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_MAP_VIRTUAL_KEY_W,
+            [code, mode],
+        )
+    };
+
+    let returned = |result: CoredllDispatch| match result {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } => value,
+        other => panic!("unexpected dispatch result: {other:?}"),
+    };
+
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, VK_LSHIFT, MAPVK_VK_TO_VSC)),
+        0x2A
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, VK_RSHIFT, MAPVK_VK_TO_VSC)),
+        0x36
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, VK_LCONTROL, MAPVK_VK_TO_VSC)),
+        0x1D
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, VK_RCONTROL, MAPVK_VK_TO_VSC)),
+        0x1D
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, VK_LMENU, MAPVK_VK_TO_VSC)),
+        0x38
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, VK_RMENU, MAPVK_VK_TO_VSC)),
+        0x38
+    );
+
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0x2A, MAPVK_VSC_TO_VK)),
+        VK_SHIFT
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0x36, MAPVK_VSC_TO_VK)),
+        VK_SHIFT
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0x1D, MAPVK_VSC_TO_VK)),
+        VK_CONTROL
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0x38, MAPVK_VSC_TO_VK)),
+        VK_MENU
+    );
+
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0x1D, MAPVK_VSC_TO_VK_EX)),
+        VK_RCONTROL
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0x38, MAPVK_VSC_TO_VK_EX)),
+        VK_RMENU
+    );
+
+    assert_eq!(returned(mvk(&mut kernel, &mut memory, 0x41, 99)), 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_translate_accelerator_wm_keydown_uses_active_layout() -> Result<()> {
     // Non-FVIRTKEY character accelerators matched against WM_KEYDOWN must use the
     // active keyboard layout to translate VK → char before comparing.

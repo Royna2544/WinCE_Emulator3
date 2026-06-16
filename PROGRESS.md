@@ -15,6 +15,27 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `MapVirtualKeyW` now
+  follows the CE PC keyboard driver split between public scan-code modes:
+  `MAPVK_VK_TO_VSC` masks side-specific right Ctrl/Alt scans to the low byte,
+  `MAPVK_VSC_TO_VK` collapses LR modifier VKs back to common
+  `VK_SHIFT`/`VK_CONTROL`/`VK_MENU`, `MAPVK_VSC_TO_VK_EX` preserves
+  side-specific VKs, and unsupported map types set `ERROR_INVALID_PARAMETER`.
+- Validation after the CE `MapVirtualKeyW` scan-code slice: `cargo fmt`,
+  focused default-feature `cargo test --test coredll_raw_gwe
+  coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver --
+  --nocapture`, and focused `cargo test --features unicorn --test
+  coredll_raw_gwe coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver
+  -- --nocapture` passed. Full-feature `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test
+  -j 1 --features unicorn,trace,win32-desktop` also passed. Logs are under
+  `target/map_virtual_key_scan_modes_default.*.log`,
+  `target/map_virtual_key_scan_modes_unicorn.*.log`,
+  `target/cargo-check-features-mapvirtualkey-20260616-154631.*.log`,
+  `target/cargo-test-coredll-raw-gwe-mapvirtualkey-20260616-154648.*.log`,
+  and `target/cargo-test-full-features-mapvirtualkey-20260616-154701.*.log`.
 - `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
   `SOURCE_REFERENCES.md`: raw `MsgWaitForMultipleObjectsEx` coverage now locks
   CE invalid handle-array shapes for `nCount > MAXIMUM_WAIT_OBJECTS` and

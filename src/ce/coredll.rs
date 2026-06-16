@@ -7493,6 +7493,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_MAP_VIRTUAL_KEY_W => Some(CoredllValue::U32(map_virtual_key_w_raw(
             kernel,
+            thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
@@ -49351,18 +49352,31 @@ fn translate_virtual_key_to_char_with_state(vkey: u32, shift: bool, caps: bool) 
     }
 }
 
-fn map_virtual_key_w_raw(kernel: &CeKernel, code: u32, map_type: u32) -> u32 {
+fn map_virtual_key_w_raw(kernel: &mut CeKernel, thread_id: u32, code: u32, map_type: u32) -> u32 {
     const MAPVK_VK_TO_VSC: u32 = 0;
     const MAPVK_VSC_TO_VK: u32 = 1;
     const MAPVK_VK_TO_CHAR: u32 = 2;
     const MAPVK_VSC_TO_VK_EX: u32 = 3;
     match map_type {
         MAPVK_VK_TO_CHAR => vkey_to_unshifted_char_for_layout(kernel, code),
-        MAPVK_VK_TO_VSC => vkey_to_scan_code(code),
-        MAPVK_VSC_TO_VK | MAPVK_VSC_TO_VK_EX => {
-            scan_code_to_vkey(code, map_type == MAPVK_VSC_TO_VK_EX)
+        MAPVK_VK_TO_VSC => vkey_to_scan_code(code) & 0xff,
+        MAPVK_VSC_TO_VK => map_lr_vkey_to_common_vkey(scan_code_to_vkey(code, false)),
+        MAPVK_VSC_TO_VK_EX => scan_code_to_vkey(code, true),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
         }
-        _ => 0,
+    }
+}
+
+fn map_lr_vkey_to_common_vkey(vkey: u32) -> u32 {
+    match vkey {
+        0xa0 | 0xa1 => 0x10, // VK_SHIFT
+        0xa2 | 0xa3 => 0x11, // VK_CONTROL
+        0xa4 | 0xa5 => 0x12, // VK_MENU
+        _ => vkey,
     }
 }
 

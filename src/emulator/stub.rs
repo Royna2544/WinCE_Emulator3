@@ -24,6 +24,7 @@ pub struct UnicornMips {
     entry_image_base: Option<u32>,
     resource_strings: Vec<MappedResourceString>,
     resources: Vec<MappedResource>,
+    initial_thread_id: u32,
 }
 
 impl UnicornMips {
@@ -51,6 +52,174 @@ impl UnicornMips {
     pub fn pending_wndproc_debug_text(&self) -> String {
         "  pending wndproc returns: 0\n    none\n".to_owned()
     }
+
+    pub fn set_initial_thread_id(&mut self, thread_id: u32) {
+        self.initial_thread_id = thread_id;
+    }
+
+    pub fn current_thread_id(&self) -> u32 {
+        self.initial_thread_id
+    }
+
+    pub fn has_saved_context(&self) -> bool {
+        false
+    }
+
+    pub fn saved_context_at_import(
+        &self,
+        _module_kind: crate::emulator::imports::ImportModuleKind,
+        _ordinal: u32,
+    ) -> bool {
+        false
+    }
+
+    pub fn active_thread_ids(&self) -> Vec<u32> {
+        vec![self.initial_thread_id]
+    }
+
+    pub fn contains_thread(&self, thread_ids: &[u32]) -> bool {
+        thread_ids.contains(&self.initial_thread_id)
+    }
+
+    pub fn saved_context_debug_text(&self) -> String {
+        "none".to_owned()
+    }
+
+    pub fn trampoline_debug_text(&self) -> String {
+        "  trampoline jumps: unavailable\n".to_owned()
+    }
+
+    pub fn active_process_has_visible_receiver_work(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
+    pub fn active_process_has_receiver_work(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
+    pub fn has_runnable_parked_process(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
+    pub fn parked_child_process_count_for_kernel(&self, _kernel: &CeKernel) -> usize {
+        0
+    }
+
+    pub fn preserve_current_on_process_handoff(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
+    pub fn prune_active_process_from_parked(&mut self, _kernel: &CeKernel) {}
+
+    pub fn prune_exited_and_active_processes_from_parked_with_framebuffer(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) {
+    }
+
+    pub fn complete_escaped_saved_get_message_sent_callout(
+        &mut self,
+        _kernel: &mut CeKernel,
+    ) -> bool {
+        false
+    }
+
+    pub fn complete_escaped_direct_send_message_callout(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
+    pub fn clear_escaped_visible_message_callouts(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
+    pub fn clear_orphaned_send_depths(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
+    pub fn clear_orphaned_direct_send_callouts(&mut self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
+    pub fn complete_orphaned_active_send_wait(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
+    pub fn complete_orphaned_parked_send_wait(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
+    pub fn complete_ready_active_modal_message_box_with_framebuffer(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        false
+    }
+
+    pub fn complete_active_process_thread_exit_with_framebuffer(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        false
+    }
+
+    pub fn prepare_active_orphaned_visible_message_callout(
+        &mut self,
+        _kernel: &mut CeKernel,
+    ) -> bool {
+        false
+    }
+
+    pub fn prepare_cross_thread_visible_message_callout(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
+    pub fn prepare_active_sent_message_callout(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
+    pub fn rotate_to_ready_parked_threads_with_framebuffer(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _thread_ids: &[u32],
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        false
+    }
+
+    pub fn rotate_to_ready_parked_wait_with_framebuffer(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        false
+    }
+
+    pub fn rotate_to_receiver_parked_process_with_framebuffer(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        false
+    }
+
+    pub fn rotate_to_runnable_parked_threads(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _thread_ids: &[u32],
+    ) -> bool {
+        false
+    }
+
+    pub fn rotate_to_active_visible_receiver_thread(
+        &mut self,
+        _kernel: &CeKernel,
+        _target_thread_ids: &[u32],
+    ) -> bool {
+        false
+    }
 }
 
 impl CpuBackend for UnicornMips {
@@ -66,6 +235,7 @@ impl CpuBackend for UnicornMips {
             entry_image_base: None,
             resource_strings: Vec::new(),
             resources: Vec::new(),
+            initial_thread_id: 1,
         })
     }
 

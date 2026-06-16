@@ -634,7 +634,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 - Keyboard translation APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`, and
-  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\main.cpp`
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\main.cpp`,
+  `C:\WINCE600\PLATFORM\CEPC\SRC\DRIVERS\KBDMOUSE\VKCHENGUS1\vkchengus1.cpp`,
+  `C:\WINCE600\PLATFORM\CEPC\SRC\DRIVERS\KBDMOUSE\SCVKENGUS1\scvkengus1.cpp`,
+  and `C:\WINCE600\PLATFORM\CEPC\SRC\DRIVERS\KBDMOUSE\INC\keybddr.h`
   plus CE input-method samples under
   `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\MULTIBOX`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\MBOXKOR`,
@@ -658,6 +661,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `ImmDisableIME`; the CE GDI tests call `ImmDisableIME(0)` before drawing
     work so IME UI does not interfere. v3 now keeps an explicit GWE keyboard
     layout/KLID and minimal HIMC state for those raw probes. The CE
+    `KeybdDriverMapVirtualKey` implementation maps common modifier VKs to left
+    VKs for `MAPVK_VK_TO_VSC`, masks the resulting scan code to one byte,
+    collapses LR-specific VKs back to common VKs for `MAPVK_VSC_TO_VK`,
+    preserves LR-specific VKs for `MAPVK_VSC_TO_VK_EX`, and sets
+    `ERROR_INVALID_PARAMETER` for unsupported modes. The CEPC scan/VK tables
+    encode right Ctrl/Alt as `0xe01d`/`0xe038`, so the public non-EX scan-code
+    path still reports `0x1d`/`0x38`. v3 now mirrors those public
+    `MapVirtualKeyW` scan-code mode edges. The CE
     input-method samples frequently pass `NULL` for the active HIMC when
     querying or setting open/conversion status; v3 now resolves those
     `ImmGetOpenStatus(NULL)`, `ImmSetOpenStatus(NULL, ...)`,
