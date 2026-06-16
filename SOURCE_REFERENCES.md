@@ -2418,6 +2418,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `GetRgnBox(validRegion, NULL)` to fail with `ERROR_INVALID_PARAMETER`, and
     invalid `CombineRgn` modes such as `-1` to fail with
     `ERROR_INVALID_PARAMETER` before changing destination geometry.
+  - `region.cpp::GetRegionDataCheckReturn` and `passNull2Region(EGetRegionData)`
+    expect `GetRegionData(region, 0, NULL)` to return the required byte count,
+    a full-sized caller buffer to receive `RGNDATAHEADER` plus RECT payloads,
+    and null/bad/wrong-type region handles to fail with `ERROR_INVALID_HANDLE`.
+    Raw `GetRegionData` now also fails caller-buffer write faults through the
+    same invalid-parameter guest-memory path used by other GWE output APIs.
 
 - GDI DIB/color-table and DIB brush surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and

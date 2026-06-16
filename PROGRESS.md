@@ -74,6 +74,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `CombineRgn` now follow the remaining CE
   `region.cpp::passNull2Region(EGetRgnBox/ECombineRgn)` parameter edges for
   null output rectangles on valid regions and invalid combine modes.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `GetRegionData`
+  now covers CE `region.cpp::GetRegionDataCheckReturn` and
+  `passNull2Region(EGetRegionData)` size-query, `RGNDATAHEADER`/RECT payload,
+  invalid-handle, and caller-buffer write-fault behavior; `CreateRectRgnIndirect(NULL)`
+  is also covered for CE invalid-parameter reporting.
 - Focused validation after the Unicorn parked `SendMessageTimeout` timeout
   re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop send_message_timeout_ --lib`

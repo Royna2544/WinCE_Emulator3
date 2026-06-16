@@ -47954,22 +47954,27 @@ fn get_region_data_raw<M: CoredllGuestMemory>(
         return total;
     }
     // Write RGNDATAHEADER.
-    let _ = write_guest_u32(kernel, memory, thread_id, buf_ptr, 32); // dwSize
-    let _ = write_guest_u32(kernel, memory, thread_id, buf_ptr + 4, 1); // iType = RDH_RECTANGLES
-    let _ = write_guest_u32(kernel, memory, thread_id, buf_ptr + 8, n); // nCount
-    let _ = write_guest_u32(kernel, memory, thread_id, buf_ptr + 12, rgn_size); // nRgnSize
-    // rcBound
-    let _ = write_guest_i32(kernel, memory, thread_id, buf_ptr + 16, bound.left);
-    let _ = write_guest_i32(kernel, memory, thread_id, buf_ptr + 20, bound.top);
-    let _ = write_guest_i32(kernel, memory, thread_id, buf_ptr + 24, bound.right);
-    let _ = write_guest_i32(kernel, memory, thread_id, buf_ptr + 28, bound.bottom);
+    if !write_guest_u32(kernel, memory, thread_id, buf_ptr, 32)
+        || !write_guest_u32(kernel, memory, thread_id, buf_ptr + 4, 1)
+        || !write_guest_u32(kernel, memory, thread_id, buf_ptr + 8, n)
+        || !write_guest_u32(kernel, memory, thread_id, buf_ptr + 12, rgn_size)
+        || !write_guest_i32(kernel, memory, thread_id, buf_ptr + 16, bound.left)
+        || !write_guest_i32(kernel, memory, thread_id, buf_ptr + 20, bound.top)
+        || !write_guest_i32(kernel, memory, thread_id, buf_ptr + 24, bound.right)
+        || !write_guest_i32(kernel, memory, thread_id, buf_ptr + 28, bound.bottom)
+    {
+        return 0;
+    }
     // Write each RECT.
     for (i, r) in rects.iter().enumerate() {
         let base = buf_ptr + 32 + i as u32 * 16;
-        let _ = write_guest_i32(kernel, memory, thread_id, base, r.left);
-        let _ = write_guest_i32(kernel, memory, thread_id, base + 4, r.top);
-        let _ = write_guest_i32(kernel, memory, thread_id, base + 8, r.right);
-        let _ = write_guest_i32(kernel, memory, thread_id, base + 12, r.bottom);
+        if !write_guest_i32(kernel, memory, thread_id, base, r.left)
+            || !write_guest_i32(kernel, memory, thread_id, base + 4, r.top)
+            || !write_guest_i32(kernel, memory, thread_id, base + 8, r.right)
+            || !write_guest_i32(kernel, memory, thread_id, base + 12, r.bottom)
+        {
+            return 0;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     total
