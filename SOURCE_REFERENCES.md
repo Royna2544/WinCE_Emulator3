@@ -1327,7 +1327,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     Raw `GetIconInfo` now reads that stored icon object back out, including
     `fIcon`, hotspot, mask bitmap, and color bitmap fields, while stock cursor
     pseudo handles report `fIcon == FALSE` and stock icon pseudo handles report
-    `TRUE`.
+    `TRUE`. The raw regression also confirms those returned bitmap handles are
+    the cloned `CreateIconIndirect` backing, so deleting caller-owned source
+    bitmaps does not invalidate later icon drawing.
     Raw `DrawIconEx` also validates the HDC/icon handle pair, paints a
     deterministic pseudo-icon into attached window framebuffers and selected
     memory DIBs for shell pseudo-icons, and draws bitmap-backed icons through

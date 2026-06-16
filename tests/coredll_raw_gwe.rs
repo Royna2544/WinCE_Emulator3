@@ -2110,6 +2110,132 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
         .bits_ptr;
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
+    let (caller_mask_bitmap, _caller_mask_bits, _caller_mask_stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let (caller_color_bitmap, caller_color_bits, caller_color_stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    write_rgb565(
+        &mut memory,
+        caller_color_bits,
+        caller_color_stride,
+        0,
+        0,
+        0xf800,
+    );
+    write_rgb565(
+        &mut memory,
+        caller_color_bits,
+        caller_color_stride,
+        1,
+        0,
+        0x07e0,
+    );
+    memory.write_word(icon_info + 12, caller_mask_bitmap);
+    memory.write_word(icon_info + 16, caller_color_bitmap);
+    let caller_lifetime_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_ICON_INDIRECT,
+        [icon_info],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(icon),
+            ..
+        } => icon,
+        other => panic!("CreateIconIndirect(caller lifetime) did not return a handle: {other:?}"),
+    };
+    let get_info_ptr = 0x1_5200;
+    memory.map_words(get_info_ptr, 5);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ICON_INFO,
+            [caller_lifetime_icon, get_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let returned_mask_bitmap = memory.read_u32(get_info_ptr + 12)?;
+    let returned_color_bitmap = memory.read_u32(get_info_ptr + 16)?;
+    assert_ne!(
+        returned_mask_bitmap, caller_mask_bitmap,
+        "GetIconInfo should return CreateIconIndirect's cloned mask bitmap"
+    );
+    assert_ne!(
+        returned_color_bitmap, caller_color_bitmap,
+        "GetIconInfo should return CreateIconIndirect's cloned color bitmap"
+    );
+    assert!(kernel.resources.bitmap(returned_mask_bitmap).is_some());
+    assert!(kernel.resources.bitmap(returned_color_bitmap).is_some());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [caller_mask_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [caller_color_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.bitmap(caller_mask_bitmap).is_none());
+    assert!(kernel.resources.bitmap(caller_color_bitmap).is_none());
+    let (caller_dst_dc, caller_dst_bits, caller_dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [
+                caller_dst_dc,
+                1,
+                1,
+                caller_lifetime_icon,
+                2,
+                2,
+                0,
+                0,
+                0x0003
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, caller_dst_bits, caller_dst_stride, 1, 1),
+        0xf800,
+        "CreateIconIndirect clones must keep drawing after the caller deletes the source bitmaps"
+    );
+    assert_eq!(
+        rgb565_at(&memory, caller_dst_bits, caller_dst_stride, 2, 1),
+        0x07e0,
+        "CreateIconIndirect cloned color bitmap should preserve the caller's second source pixel"
+    );
+
     let (pattern_dst_dc, pattern_dst_bits, pattern_dst_stride) =
         create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 6, 6);
     let (_, pattern_mask_bitmap, pattern_mask_bits, pattern_mask_stride) =
@@ -3456,6 +3582,48 @@ fn create_selected_rgb565_dib(
     let (mem_dc, _bitmap, bits_ptr, stride) =
         create_selected_rgb565_dib_with_bitmap(table, kernel, memory, thread_id, width, height);
     (mem_dc, bits_ptr, stride)
+}
+
+fn create_rgb565_dib_bitmap(
+    table: &CoredllExportTable,
+    kernel: &mut CeKernel,
+    memory: &mut TestGuestMemory,
+    thread_id: u32,
+    width: i32,
+    height: i32,
+) -> (u32, u32, u32) {
+    let info = 0x1_0400;
+    let bits_out = 0x1_0500;
+    memory.map_bytes(info, 40);
+    memory.map_words(bits_out, 1);
+    let mut header = [0u8; 40];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&width.to_le_bytes());
+    header[8..12].copy_from_slice(&(-height).to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&16u16.to_le_bytes());
+    memory.write_bytes(info, &header);
+    memory.write_word(info, 40);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        kernel,
+        memory,
+        thread_id,
+        ORD_CREATE_DIBSECTION,
+        [0, info, 0, bits_out, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateDIBSection(NULL) did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(bitmap, 0);
+    let bits_ptr = memory
+        .read_u32(bits_out)
+        .expect("CreateDIBSection should write bits pointer");
+    let stride = (((width as u32 * 16) + 31) / 32) * 4;
+    (bitmap, bits_ptr, stride)
 }
 
 fn create_selected_rgb565_dib_with_bitmap(

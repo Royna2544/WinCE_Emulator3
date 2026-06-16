@@ -15,6 +15,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`,
+  and `SOURCE_REFERENCES.md`: raw `GetIconInfo` lifetime coverage now verifies
+  that `CreateIconIndirect` returns cloned mask/color bitmap handles through
+  `ICONINFO`, caller-owned source bitmaps can be deleted, and the icon still
+  draws from its cloned backing afterward.
+- Focused validation after the raw `GetIconInfo` caller-bitmap lifetime slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_destroy_icon_accepts_loaded_icon_handles --
+  --nocapture` passed.
+- Full validation after the raw `GetIconInfo` caller-bitmap lifetime slice:
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and `cargo test -j
+  1 --features unicorn,trace,win32-desktop` passed.
 - `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`,
   `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw
   `GetIconInfo` now reports CE `ICONINFO` cursor/icon state from real tracked
