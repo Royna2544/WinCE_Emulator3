@@ -53,6 +53,14 @@ Regenerated on 2026-06-11 from current source and test coverage.
   shrinkable-stream packet paths; byte-for-byte private `CECompress`/
   `CEDecompress` engine parity remains open if the missing engine body is found.
 - Continue iNavi route-flow work from the current process/window/shell readiness point into destination search and map interaction.
+- Continue the post-thread-exit-cleanup iNavi live run from the current state:
+  the active CPU no longer wedges at `THREAD_EXIT_STUB_ADDR`, but the app-owned
+  splash popup `0x00020008` remains visible above the already-created map child
+  windows. Trace the real hide/destroy/z-order transition and the readiness
+  condition that should trigger it, keeping the investigation generic rather
+  than naming iNavi-specific behavior in emulator policy. In parallel, trace
+  why remote GPS/serial posts signal (`sersig`/`serevsig`) but produce no ready
+  serial wait candidates while `COM7:` is open.
 - Continue the iNavi splash dismissal investigation after the large read-only
   backing fix: startup disk I/O is no longer the dominant blocker in the fast
   live run, and only the main `GetMessage` waiter remains. The owned splash

@@ -15,6 +15,31 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: raw thread-exit-stub handling now recognizes the
+  case where a real non-main guest thread reaches `THREAD_EXIT_STUB_ADDR` while
+  no guest thread is currently running. The hook removes that thread's stale
+  blocked waits, blocked `GetMessage` entries, displaced `GetMessage` entries,
+  and suspended-thread records, marks the kernel thread handle exited with the
+  guest `V0` exit code, releases the thread stack slot, and then tries the
+  normal blocked-wait/message resume paths before stopping the emulator. This
+  is generic CE scheduler cleanup; it does not special-case iNavi or splash
+  behavior.
+- Validation for the raw thread-exit cleanup: `rustfmt --edition 2024 --check
+  src\emulator\unicorn.rs`, focused `cargo test --features
+  unicorn,trace,win32-desktop parked_process_return_stubs_are_not_resumable_work
+  -- --nocapture`, and `cargo build --release --features
+  unicorn,trace,win32-desktop --bin wince_emulation_v3` passed.
+- Live validation on `192.168.0.39:8765` after the cleanup: the previous
+  post-drive state with the active PC parked at
+  `0x7fffffe0(ce-import-traps+0xffe0)` and stale waits for threads 6, 16, and
+  17 no longer reproduces. After a 75-second remote-drive loop, the current PC
+  stays in real `iNavi.exe` code (`iNavi.exe+0x333d28` in the latest sample),
+  only the hidden `iSearch.exe` `GetMessage` wait remains, and the captured
+  frame shows the real iNavi SE splash artwork rather than a black frame.
+  The remaining UI blocker is unchanged: app-owned popup `0x00020008`
+  (`afx:10000:3:0:b5000:0`) stays above the created map child windows and
+  consumes remote taps. GPS/serial posts are also still not drained by the guest:
+  `sersig`/`serevsig` reached 75 while `sercand`/`serevcand` stayed at 0.
 - `src/ce/file.rs`: read-only host files up to 128 MiB now use the existing
   shared memory-backed open path. This keeps large map/search bundles out of
   the repeated host-file reopen/read path without naming iNavi paths or files,

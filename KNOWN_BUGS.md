@@ -30,6 +30,12 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   delivered to the real popup window, so the remaining risk is a missing CE UI
   state transition, timer/message behavior, or app-side readiness signal rather
   than a synthetic dialog or SD-card read-only failure.
+- The latest live scheduler cleanup prevents a real guest thread exit from
+  leaving stale waits behind at `THREAD_EXIT_STUB_ADDR`, but it does not prove
+  the post-splash route flow complete. The current run still shows the splash
+  popup above hidden map children, and serial/GPS delivery remains suspicious:
+  remote sensor posts increment the serial signal counters while no serial wait
+  candidates are selected for guest consumption.
 - Direct CE `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
   `FSDMGR_GetRegistryValue @20` imports are covered for the missing-registry
   fail-closed path and output clearing; real logical-disk registry-root lookup

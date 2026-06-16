@@ -6075,6 +6075,75 @@ impl UnicornMips {
                     let active_thread_id = *current_thread_id_hook.borrow();
                     let no_running_thread = running_guest_thread_hook.borrow().is_none();
                     if no_running_thread
+                        && active_thread_id != MAIN_GUEST_THREAD_ID
+                        && let Some(thread_handle) =
+                            unsafe { &*kernel_ptr }.guest_thread_handle_by_id(active_thread_id)
+                    {
+                        let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
+                        remove_stale_blocked_waits_for_thread(
+                            unsafe { &mut *kernel_ptr },
+                            &blocked_wait_threads_hook,
+                            active_thread_id,
+                        );
+                        remove_stale_blocked_get_message_for_thread(
+                            unsafe { &mut *kernel_ptr },
+                            &blocked_guest_thread_hook,
+                            active_thread_id,
+                        );
+                        remove_stale_displaced_get_messages_for_thread(
+                            unsafe { &mut *kernel_ptr },
+                            &displaced_blocked_get_messages_hook,
+                            active_thread_id,
+                        );
+                        remove_suspended_guest_threads_for_thread(
+                            &suspended_guest_thread_hook,
+                            Some(&suspended_guest_thread_queue_hook),
+                            active_thread_id,
+                        );
+                        unsafe { &mut *kernel_ptr }
+                            .mark_guest_thread_exited(thread_handle, exit_code);
+                        release_guest_thread_stack_slot(
+                            &guest_thread_stack_slots_hook,
+                            active_thread_id,
+                        );
+                        tracing::debug!(
+                            target: "ce.imports",
+                            thread_id = active_thread_id,
+                            handle = format_args!("0x{thread_handle:08x}"),
+                            exit_code = format_args!("0x{exit_code:08x}"),
+                            "guest thread exited through raw thread-exit stub"
+                        );
+                        if try_wait_and_resume_blocked_wait(
+                            unsafe { &mut *kernel_ptr },
+                            uc,
+                            active_thread_id,
+                            &current_thread_id_hook,
+                            &blocked_wait_threads_hook,
+                            &suspended_guest_thread_hook,
+                            &running_guest_thread_hook,
+                            host_wall_clock_started,
+                            host_wall_clock_limit,
+                            live_pump,
+                        ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
+                            unsafe { &mut *kernel_ptr },
+                            uc,
+                            active_thread_id,
+                            &current_thread_id_hook,
+                            &blocked_guest_thread_hook,
+                            &displaced_blocked_get_messages_hook,
+                            &suspended_guest_thread_hook,
+                            &running_guest_thread_hook,
+                            &pending_wndproc_returns_hook,
+                            host_wall_clock_started,
+                            host_wall_clock_limit,
+                            live_pump,
+                        ) {
+                            return;
+                        }
+                        let _ = uc.emu_stop();
+                        return;
+                    }
+                    if no_running_thread
                         && (try_wait_and_resume_blocked_wait(
                             unsafe { &mut *kernel_ptr },
                             uc,
@@ -17443,6 +17512,25 @@ fn remove_stale_blocked_get_message_for_thread(
     };
     if let Some(stale) = stale {
         let _ = kernel.remove_blocked_waiter(stale.wait_id);
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn remove_stale_displaced_get_messages_for_thread(
+    kernel: &mut CeKernel,
+    displaced_threads: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
+    thread_id: u32,
+) {
+    let mut removed_wait_ids = Vec::new();
+    displaced_threads.borrow_mut().retain(|blocked| {
+        let keep = blocked.thread_id != thread_id;
+        if !keep {
+            removed_wait_ids.push(blocked.wait_id);
+        }
+        keep
+    });
+    for wait_id in removed_wait_ids {
+        let _ = kernel.remove_blocked_waiter(wait_id);
     }
 }
 
