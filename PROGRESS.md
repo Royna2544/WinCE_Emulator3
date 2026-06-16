@@ -15,6 +15,23 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `src/emulator/unicorn.rs`, `tests/support/mod.rs`, and
+  `tests/coredll_raw_gwe.rs`: DeviceEmulator `GETRAWFRAMEBUFFER` now maps the
+  returned `IMAGE_FRAMEBUFFER_UA_BASE` range when needed and writes a
+  guest-readable RGB565 snapshot behind `pFramePointer`. The raw regression
+  checks the CE `RawFrameBufferInfo` metadata and then reads the live framebuffer
+  bytes back from the returned pointer.
+- Validation after the raw framebuffer pointer slice: `cargo fmt`, focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe
+  coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges -- --nocapture`,
+  `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Logs are
+  under `target/cargo-test-extescape-rawfb-20260616-151318.*.log`,
+  `target/cargo-check-features-20260616-151359.*.log`,
+  `target/cargo-test-coredll-raw-gwe-20260616-151407.*.log`, and
+  `target/cargo-test-full-features-20260616-151416.*.log`.
 - `src/emulator/unicorn.rs`: the direct-send WNDPROC orphan cleanup now avoids
   mapped-blob module lookups unless the current frame is already a plausible
   nested WNDPROC frame, and it skips those lookups entirely for the existing

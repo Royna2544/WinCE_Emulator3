@@ -169,6 +169,11 @@ impl CoredllGuestMemory for TestGuestMemory {
             )))
         }
     }
+
+    fn ensure_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
+        self.map_bytes(addr, len);
+        Ok(())
+    }
 }
 
 fn is_test_heap_address(addr: u32) -> bool {

@@ -583,6 +583,10 @@ pub trait CoredllGuestMemory {
         }
         Ok(())
     }
+
+    fn ensure_mapped(&mut self, _addr: u32, _len: u32) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37878,6 +37882,30 @@ fn get_raw_framebuffer_raw<M: CoredllGuestMemory>(
     bytes.extend_from_slice(&(info.height as i32).to_le_bytes());
 
     if !write_guest_bytes(kernel, memory, thread_id, output_ptr, &bytes) {
+        return EXTESC_ERROR;
+    }
+    let framebuffer_bytes = if let Some(framebuffer) = framebuffer.as_deref() {
+        framebuffer.pixels().to_vec()
+    } else {
+        vec![0; info.stride.saturating_mul(info.height as usize)]
+    };
+    let Ok(framebuffer_len) = u32::try_from(framebuffer_bytes.len()) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return EXTESC_ERROR;
+    };
+    if memory
+        .ensure_mapped(DEVICEEMULATOR_FRAMEBUFFER_UA_BASE, framebuffer_len)
+        .is_err()
+        || !write_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            DEVICEEMULATOR_FRAMEBUFFER_UA_BASE,
+            &framebuffer_bytes,
+        )
+    {
         return EXTESC_ERROR;
     }
     kernel.threads.set_last_error(thread_id, 0);

@@ -3724,7 +3724,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     LCDCON3 high-nibble/backlight-bit coupling, DeviceEmulator
     `GETRAWFRAMEBUFFER` metadata from `gxdma.h`/`image_cfg.h` with the
     28-byte `RawFrameBufferInfo` output, RGB565 format, 16 bpp, uncached
-    framebuffer base, byte/pitch strides, and screen dimensions, and the
+    framebuffer base, byte/pitch strides, screen dimensions, and
+    guest-readable RGB565 bytes behind the returned `pFramePointer`, and the
     CE-sized
     `DISPPERF_EXTESC_GETSIZE`/`GETTIMING`/`CLEARTIMING`/`GETUNHANDLED` payload
     contract for raw `ExtEscape`, including local nonzero GPE timing rows for
@@ -3753,9 +3754,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `PARAM_DESTINVIDMEM`, and `PARAM_TRANSPARENT` counters for the
     `DrvTransparentBlt`/`AnyBlt` path. Framebuffer-destination
     `AlphaBlend` records `PARAM_DESTINVIDMEM` while preserving the
-    `BLT_STRETCH` counter from `DrvAlphaBlend`/`AnyBlt`. Real video-protection,
-    guest-readable direct framebuffer memory behind the returned
-    `pFramePointer`, and broader DISPPERF payload execution outside those raw
+    `BLT_STRETCH` counter from `DrvAlphaBlend`/`AnyBlt`. Real
+    video-protection and broader DISPPERF payload execution outside those raw
     draw paths remains unsupported.
 
 ## Device Interface Advertisement Ownership

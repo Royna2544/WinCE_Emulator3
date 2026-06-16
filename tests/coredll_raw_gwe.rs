@@ -1619,6 +1619,58 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
     assert_eq!(info_i32(20), 320);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
+    let mut live_framebuffer = VirtualFramebuffer::new(3, 2, PixelFormat::Rgb565)?;
+    live_framebuffer.pixels_mut().copy_from_slice(&[
+        0x00, 0xf8, 0xe0, 0x07, 0x1f, 0x00, 0xff, 0xff, 0x00, 0x00, 0x1f, 0xf8,
+    ]);
+    memory.write_bytes(
+        raw_framebuffer_out,
+        &[0xee; RAW_FRAMEBUFFER_INFO_SIZE as usize],
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut live_framebuffer),
+            thread_id,
+            ORD_EXT_ESCAPE,
+            [
+                hdc,
+                DRVESC_GETRAWFRAMEBUFFER,
+                0,
+                0,
+                RAW_FRAMEBUFFER_INFO_SIZE,
+                raw_framebuffer_out
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let live_raw_framebuffer_info =
+        memory.read_bytes(raw_framebuffer_out, RAW_FRAMEBUFFER_INFO_SIZE as usize);
+    let live_info_u32 = |offset: usize| {
+        u32::from_le_bytes(
+            live_raw_framebuffer_info[offset..offset + 4]
+                .try_into()
+                .unwrap(),
+        )
+    };
+    assert_eq!(live_info_u32(4), DEVICEEMULATOR_FRAMEBUFFER_UA_BASE);
+    assert_eq!(live_info_u32(12), live_framebuffer.stride() as u32);
+    assert_eq!(live_info_u32(16), 3);
+    assert_eq!(live_info_u32(20), 2);
+    assert_eq!(
+        memory.read_bytes(
+            DEVICEEMULATOR_FRAMEBUFFER_UA_BASE,
+            live_framebuffer.pixels().len()
+        ),
+        live_framebuffer.pixels(),
+        "GETRAWFRAMEBUFFER pFramePointer must expose the live framebuffer bytes"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     memory.write_bytes(
         raw_framebuffer_out,
         &[0xee; RAW_FRAMEBUFFER_INFO_SIZE as usize],

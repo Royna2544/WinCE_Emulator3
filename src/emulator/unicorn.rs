@@ -38180,6 +38180,33 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         Ok(())
     }
 
+    fn ensure_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+        let start = addr & !0xfff;
+        let end = addr
+            .checked_add(len)
+            .and_then(|value| value.checked_add(0xfff))
+            .map(|value| value & !0xfff)
+            .ok_or_else(|| Error::InvalidArgument("guest mapping range overflow".to_owned()))?;
+        let mut page = start;
+        while page < end {
+            let mut probe = [0u8; 1];
+            if self.uc.mem_read(u64::from(page), &mut probe).is_err() {
+                self.uc
+                    .mem_map(u64::from(page), 0x1000, unicorn_engine::Prot::ALL)
+                    .map_err(|err| {
+                        Error::Backend(format!("map guest page 0x{page:08x}: {err:?}"))
+                    })?;
+            }
+            page = page
+                .checked_add(0x1000)
+                .ok_or_else(|| Error::InvalidArgument("guest mapping page overflow".to_owned()))?;
+        }
+        Ok(())
+    }
+
     fn fill_bytes(&mut self, addr: u32, value: u8, len: u32) -> Result<()> {
         const FILL_CHUNK: usize = 4096;
 
