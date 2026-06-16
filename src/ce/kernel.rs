@@ -244,6 +244,7 @@ pub struct CeKernel {
     fsdmgr_disk_info_overrides: BTreeMap<u32, [u32; 6]>,
     fsdmgr_fmd_xip_modes: BTreeMap<u32, bool>,
     fsdmgr_fmd_block_locks: BTreeMap<u32, Vec<FsdmgrFmdBlockLockRange>>,
+    fsdmgr_fmd_block_statuses: BTreeMap<(u32, u32), u32>,
     fsdmgr_fmd_sector_sizes: BTreeMap<u32, u32>,
     fsdmgr_fmd_region_tables: BTreeMap<u32, Vec<[u32; 7]>>,
     fsdmgr_fmd_reserved_regions: BTreeMap<(u32, [u8; 8]), Vec<u8>>,
@@ -999,6 +1000,7 @@ impl CeKernel {
             fsdmgr_disk_info_overrides: BTreeMap::new(),
             fsdmgr_fmd_xip_modes: BTreeMap::new(),
             fsdmgr_fmd_block_locks: BTreeMap::new(),
+            fsdmgr_fmd_block_statuses: BTreeMap::new(),
             fsdmgr_fmd_sector_sizes: BTreeMap::new(),
             fsdmgr_fmd_region_tables: BTreeMap::new(),
             fsdmgr_fmd_reserved_regions: BTreeMap::new(),
@@ -2889,6 +2891,51 @@ impl CeKernel {
                     })
                 }),
         )
+    }
+
+    pub fn fsdmgr_fmd_block_status(&self, disk_ptr: u32, block: u32) -> Option<u32> {
+        const BLOCK_STATUS_UNKNOWN: u32 = 0x01;
+        const BLOCK_STATUS_READONLY: u32 = 0x04;
+
+        let info = self.fsdmgr_disk_info(disk_ptr)?;
+        if block >= info[0] {
+            return Some(BLOCK_STATUS_UNKNOWN);
+        }
+        let mut status = self
+            .fsdmgr_fmd_block_statuses
+            .get(&(disk_ptr, block))
+            .copied()
+            .unwrap_or(0);
+        if self
+            .fsdmgr_fmd_block_locked(disk_ptr, block)
+            .unwrap_or(false)
+        {
+            status |= BLOCK_STATUS_READONLY;
+        }
+        Some(status)
+    }
+
+    pub fn fsdmgr_set_fmd_block_status(&mut self, disk_ptr: u32, block: u32, status: u32) -> u32 {
+        const BLOCK_STATUS_BAD: u32 = 0x02;
+        const BLOCK_STATUS_READONLY: u32 = 0x04;
+        const BLOCK_STATUS_RESERVED: u32 = 0x08;
+        const BLOCK_STATUS_XIP: u32 = 0x10;
+
+        let Some(info) = self.fsdmgr_disk_info(disk_ptr) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if block >= info[0] {
+            return ERROR_INVALID_PARAMETER;
+        }
+        let status = status
+            & (BLOCK_STATUS_BAD | BLOCK_STATUS_READONLY | BLOCK_STATUS_RESERVED | BLOCK_STATUS_XIP);
+        if status != 0 {
+            *self
+                .fsdmgr_fmd_block_statuses
+                .entry((disk_ptr, block))
+                .or_default() |= status;
+        }
+        ERROR_SUCCESS
     }
 
     pub fn fsdmgr_set_fmd_sector_size(&mut self, disk_ptr: u32, sector_size: u32) -> u32 {

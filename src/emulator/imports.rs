@@ -3374,6 +3374,9 @@ mod tests {
         const DISK_POWER_TIMINGS_SIZE: u32 = 68;
         const ERROR_INVALID_PARAMETER: u32 = 87;
         const ERROR_NOT_SUPPORTED: u32 = 50;
+        const BLOCK_STATUS_UNKNOWN: u32 = 0x01;
+        const BLOCK_STATUS_READONLY: u32 = 0x04;
+        const BLOCK_STATUS_RESERVED: u32 = 0x08;
 
         let imports = vec![ImportDescriptor {
             module_name: "fsdmgr.dll".to_owned(),
@@ -4512,6 +4515,8 @@ mod tests {
         assert_eq!(memory.word(bytes_returned_ptr), 20);
 
         let fmd_get_info_callback = memory.word(fmd_interface_ptr + 12);
+        let fmd_get_block_status_callback = memory.word(fmd_interface_ptr + 16);
+        let fmd_set_block_status_callback = memory.word(fmd_interface_ptr + 20);
         let fmd_read_sector_callback = memory.word(fmd_interface_ptr + 24);
         let fmd_write_sector_callback = memory.word(fmd_interface_ptr + 28);
         let fmd_get_info_ex_callback = memory.word(fmd_interface_ptr + 48);
@@ -4537,6 +4542,59 @@ mod tests {
         assert_eq!(memory.word(fmd_flash_info_ptr + 8), 1024);
         assert_eq!(memory.halfword(fmd_flash_info_ptr + 12), 1);
         assert_eq!(memory.halfword(fmd_flash_info_ptr + 14), 1024);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_block_status_callback,
+                [32],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_set_block_status_callback,
+                [32, BLOCK_STATUS_READONLY | BLOCK_STATUS_RESERVED],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_block_status_callback,
+                [32],
+            ),
+            Some(BLOCK_STATUS_READONLY | BLOCK_STATUS_RESERVED)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_set_block_status_callback,
+                [0xffff_ffff, BLOCK_STATUS_READONLY],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_block_status_callback,
+                [0xffff_ffff],
+            ),
+            Some(BLOCK_STATUS_UNKNOWN)
+        );
 
         memory.map_word(fmd_region_count_ptr, 0xfeed_cafe);
         assert_eq!(

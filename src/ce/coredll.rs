@@ -171,7 +171,10 @@ pub const FSDMGR_FMD_CALLBACK_TRAP_STRIDE: u32 = 0x10;
 pub const FSDMGR_FMD_CALLBACK_TRAP_COUNT: u32 = 13;
 pub const FSDMGR_FMD_CALLBACK_TRAP_BASE: u32 = 0x7fff_4f30;
 const BLOCK_STATUS_UNKNOWN: u32 = 0x01;
+const BLOCK_STATUS_BAD: u32 = 0x02;
 const BLOCK_STATUS_READONLY: u32 = 0x04;
+const BLOCK_STATUS_RESERVED: u32 = 0x08;
+const BLOCK_STATUS_XIP: u32 = 0x10;
 const ERROR_GEN_FAILURE: u32 = 31;
 const ERROR_DEVICE_REMOVED: u32 = 1617;
 const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
@@ -14543,13 +14546,24 @@ pub(crate) fn dispatch_fsdmgr_fmd_callback_raw<M: CoredllGuestMemory>(
         FsdmgrFmdCallback::GetBlockStatus => {
             let disk_ptr = disk_ptr?;
             let block = raw_arg(args, 0);
-            match kernel.fsdmgr_fmd_block_locked(disk_ptr, block) {
-                Some(true) => BLOCK_STATUS_READONLY,
-                Some(false) => 0,
-                None => BLOCK_STATUS_UNKNOWN,
-            }
+            kernel
+                .fsdmgr_fmd_block_status(disk_ptr, block)
+                .unwrap_or(BLOCK_STATUS_UNKNOWN)
         }
-        FsdmgrFmdCallback::SetBlockStatus => u32::from(disk_ptr.is_some()),
+        FsdmgrFmdCallback::SetBlockStatus => {
+            let disk_ptr = disk_ptr?;
+            let status = kernel.fsdmgr_set_fmd_block_status(
+                disk_ptr,
+                raw_arg(args, 0),
+                raw_arg(args, 1)
+                    & (BLOCK_STATUS_BAD
+                        | BLOCK_STATUS_READONLY
+                        | BLOCK_STATUS_RESERVED
+                        | BLOCK_STATUS_XIP),
+            );
+            kernel.threads.set_last_error(thread_id, status);
+            u32::from(status == 0)
+        }
         FsdmgrFmdCallback::ReadSector => {
             let disk_ptr = disk_ptr?;
             u32::from(fsdmgr_fmd_callback_sector_io_raw(
