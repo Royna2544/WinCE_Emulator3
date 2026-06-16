@@ -73,11 +73,13 @@ Regenerated on 2026-06-11 from current source and test coverage.
   latest post-import-thunk state: traced live-pump runs now pass the early
   `COREDLL.dll@1047` import-thunk wall stop, clear/recover Happyway WNDPROC
   state, and reach `iNavi.exe+0x329da8` with later resource/file activity while
-  modal/winsock waits remain in the scheduler. The latest trace-mode run also
-  reaches `iNavi.exe+0x2ff8xx`/`+0x2ff9xx` decompression loops while repeatedly
-  reading `resmapi_800x480.bin`; the latest live process now reaches map-layer
-  `.mdc` reads plus `soap.bin`, creates then hides many map child windows, and
-  leaves the owned splash popup visible with no observed hide/demote trace.
+  modal/winsock waits remain in the scheduler. The startup flamegraph after the
+  trampoline index fix reaches the same `iNavi.exe+0x329cxx` resource/map-loading
+  region with several MB of file reads, while the remaining sampled emulator
+  overhead is repeated Unicorn slice teardown plus remote debug publishing. The
+  latest live process reaches map-layer `.mdc` reads plus `soap.bin`, creates
+  then hides many map child windows, and leaves the owned splash popup visible
+  with no observed hide/demote trace.
   Determine whether a pending custom transition message, hidden-window state, or
   owner-popup/z-order edge is preventing the normal map reveal. On the next
   rebuilt/relaunched run, sample `/api/v1/debug/timers.txt` while the splash is
