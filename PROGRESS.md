@@ -63,6 +63,21 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `draw.cpp::ClipBitBlt(ETransparentImage)` right and bottom destination
   clipping edges, proving the visible tail is trimmed while transparent samples
   inside the clipped area still preserve the destination.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and framebuffer
+  `TransparentImage` now cover the CE
+  `draw.cpp::ClipBitBlt(ETransparentImage)` simultaneous top-left corner
+  clipping case. The regressions prove destination clipping advances both the
+  source column and row together while preserving transparent pixels in the
+  clipped-in corner.
+- Focused validation after the `TransparentImage` top-left corner clipping
+  slice: `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_transparent_image_clips_off_top_left -- --nocapture` passed,
+  followed by `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test -j
+  1 --features unicorn,trace,win32-desktop`. Test logs are under
+  `target/cargo-test-coredll-raw-gwe-transparent-corner-clip.20260616-141232.*.log`
+  and `target/cargo-test-full-transparent-corner-clip.20260616-141239.*.log`.
 - Validation after the transparent all-edge clipping and active visible-receiver
   rotation slice: focused
   `remote_input_rotates_to_active_visible_receiver_thread`, focused
