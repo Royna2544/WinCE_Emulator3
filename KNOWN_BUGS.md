@@ -120,8 +120,9 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   region. Timer state is exposed through `/api/v1/debug/timers.txt`, but the
   normal map UI transition is still not observed. The old linear
   trampoline-origin helper no longer appears in the post-`4559d704`
-  Windows-sudo flamegraph; current sampled startup cost is Unicorn TCG
-  translation/execution plus code-hook callbacks. Timer sampling while the
+  Windows-sudo flamegraph, and mapped-code indexing no longer clones every
+  mapped blob byte vector per run slice; current sampled startup cost is Unicorn
+  TCG translation/execution plus code-hook callbacks. Timer sampling while the
   splash is visible shows no pending timers. Raw import stack-context tracing
   now resolves the initial owned splash `ShowWindow(SW_SHOW)` to app-side stack
   candidates around `iNavi.exe+0x4d7a0`, with the concrete show-wrapper call at

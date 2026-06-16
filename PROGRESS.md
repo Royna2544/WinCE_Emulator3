@@ -32,12 +32,19 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   references to mapped blob byte buffers instead of cloning every blob into each
   index. The index still keeps immutable static-code snapshots authoritative
   for image/DLL/trampoline reads while using live Unicorn memory for mutable
-  trap and heap-spillover code.
+  trap and heap-spillover code. The follow-up 30 s Windows-sudo startup
+  flamegraph,
+  `profiles/startup-windows-sudo-wall30-after-mapped-code-borrow-20260616-172221.svg`,
+  shows the expected drop versus
+  `profiles/startup-windows-sudo-wall30-current-20260616-171116.svg`:
+  sampled `MappedBlob` clone cost fell from about 5.8% to 0.2%,
+  `Vec::clone` from 13.4% to 2.4%, and `to_vec` from 16.7% to 5.7%.
 - Validation after the mapped-code index storage slice: focused
   `cargo test -j 1 --features unicorn,trace,win32-desktop mapped_code_index`,
-  `cargo check --features unicorn,trace,win32-desktop`, and full
-  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Logs were
-  kept under `target/`.
+  `cargo check --features unicorn,trace,win32-desktop`, targeted
+  `rustfmt --edition 2024 --check src\emulator\unicorn.rs`, and the bounded
+  Windows-sudo startup flamegraph passed. Repository-wide `cargo fmt --check`
+  remains blocked by pre-existing formatting drift in `src\ce\coredll.rs`.
 - `src/ce/file.rs`, `src/ce/kernel.rs`, `src/ce/coredll.rs`, and
   `tests/coredll_raw_memory_file.rs`: raw coredll `LockFileEx @1968` and
   `UnlockFileEx @1969` now follow the CE `LOCKMGR` range model for host-backed
