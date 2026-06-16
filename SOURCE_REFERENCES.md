@@ -1324,6 +1324,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     Raw `CreateIconIndirect` also validates the CE `ICONINFO` mask/color bitmap
     handles, stores a state-backed synthetic icon object, and lets
     `DestroyIcon` release that tracked object.
+    Raw `GetIconInfo` now reads that stored icon object back out, including
+    `fIcon`, hotspot, mask bitmap, and color bitmap fields, while stock cursor
+    pseudo handles report `fIcon == FALSE` and stock icon pseudo handles report
+    `TRUE`.
     Raw `DrawIconEx` also validates the HDC/icon handle pair, paints a
     deterministic pseudo-icon into attached window framebuffers and selected
     memory DIBs for shell pseudo-icons, and draws bitmap-backed icons through

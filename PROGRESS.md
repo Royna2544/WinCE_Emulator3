@@ -15,6 +15,22 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`,
+  `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw
+  `GetIconInfo` now reports CE `ICONINFO` cursor/icon state from real tracked
+  icon objects, including hotspot and mask/color bitmap handles, treats stock
+  cursor pseudo handles as `fIcon == FALSE`, preserves stock icon pseudo
+  handles as `fIcon == TRUE`, and rejects invalid non-icon handles with
+  `ERROR_INVALID_HANDLE`.
+- Focused validation after the raw `GetIconInfo` cursor/icon slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_def_window_proc_setcursor_uses_class_cursor --
+  --nocapture` passed.
+- Full validation after the raw `GetIconInfo` cursor/icon slice:
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and `cargo test -j
+  1 --features unicorn,trace,win32-desktop` passed.
 - `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`, and
   `SOURCE_REFERENCES.md`: raw `SHGetFileInfoW` now follows the CE
   `CESHELL\API\api.cpp` field-write contract. Requests with `SHGFI_ICON`
