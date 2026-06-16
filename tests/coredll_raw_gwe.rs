@@ -14656,6 +14656,42 @@ fn coredll_raw_transparent_image_simple_source_offset_framebuffer() -> Result<()
 }
 
 #[test]
+fn coredll_raw_transparent_image_preserves_alpha_dib_pixel_dword() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dc, _bitmap, bits, stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let source = 0x7f33_2211u32;
+
+    memory.write_bytes(bits, &[0; 16]);
+    memory.write_bytes(bits, &source.to_le_bytes());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            None,
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [dc, 1, 0, 1, 1, dc, 0, 0, 1, 1, !source & 0x00ff_ffff,],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(memory.read_bytes(bits + 4, 4), source.to_le_bytes());
+    assert_eq!(stride, 8);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_clips_off_left_selected_dib_source_alignment() -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
     const WHITE565: u16 = 0xffff;
