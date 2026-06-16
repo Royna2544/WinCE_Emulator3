@@ -919,28 +919,23 @@ fn heap_spillover_perms() -> MemoryPerms {
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone)]
 struct MappedCodeIndex {
-    blobs: Vec<MappedBlob>,
+    blobs: Vec<MappedCodeBlobRef>,
     page_to_blobs: HashMap<u32, Vec<usize>>,
     static_code_blobs: Vec<bool>,
 }
 
 #[cfg(feature = "unicorn")]
 impl MappedCodeIndex {
-    fn new(blobs: Vec<MappedBlob>) -> Self {
+    fn new(blobs: &[MappedBlob]) -> Self {
+        let blobs: Vec<_> = blobs.iter().map(MappedCodeBlobRef::from_blob).collect();
         let mut page_to_blobs: HashMap<u32, Vec<usize>> = HashMap::new();
-        let static_code_blobs = blobs
-            .iter()
-            .map(|blob| mapped_blob_is_static_code(blob))
-            .collect();
+        let static_code_blobs = blobs.iter().map(|blob| blob.static_code).collect();
         for (index, blob) in blobs.iter().enumerate() {
-            if blob.bytes.is_empty() {
+            if blob.len == 0 {
                 continue;
             }
             let first_page = blob.base >> 12;
-            let last_page = blob
-                .base
-                .saturating_add(blob.bytes.len().saturating_sub(1) as u32)
-                >> 12;
+            let last_page = blob.base.saturating_add(blob.len.saturating_sub(1) as u32) >> 12;
             for page in first_page..=last_page {
                 page_to_blobs.entry(page).or_default().push(index);
             }
@@ -967,7 +962,7 @@ impl MappedCodeIndex {
         let index = self.find_blob_index(address)?;
         let blob = self.blobs.get(index)?;
         let offset = address.checked_sub(blob.base)? as usize;
-        if offset < blob.bytes.len() {
+        if offset < blob.len {
             Some(format!("{}+0x{offset:x}", blob.name))
         } else {
             None
@@ -984,7 +979,7 @@ impl MappedCodeIndex {
                     address
                         .checked_sub(blob.base)
                         .and_then(|offset| usize::try_from(offset).ok())
-                        .is_some_and(|offset| offset < blob.bytes.len())
+                        .is_some_and(|offset| offset < blob.len)
                 })
             })
     }
@@ -993,10 +988,45 @@ impl MappedCodeIndex {
         let blob = self.blobs.get(index)?;
         let offset = address.checked_sub(blob.base)? as usize;
         let end = offset.checked_add(4)?;
-        if end <= blob.bytes.len() {
-            Some(u32::from_le_bytes(blob.bytes[offset..end].try_into().ok()?))
+        if end <= blob.len {
+            let bytes = blob.bytes();
+            Some(u32::from_le_bytes(bytes[offset..end].try_into().ok()?))
         } else {
             None
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone)]
+struct MappedCodeBlobRef {
+    name: String,
+    base: u32,
+    ptr: *const u8,
+    len: usize,
+    static_code: bool,
+}
+
+#[cfg(feature = "unicorn")]
+impl MappedCodeBlobRef {
+    fn from_blob(blob: &MappedBlob) -> Self {
+        Self {
+            name: blob.name.clone(),
+            base: blob.base,
+            ptr: blob.bytes.as_ptr(),
+            len: blob.bytes.len(),
+            static_code: mapped_blob_is_static_code(blob),
+        }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        if self.len == 0 {
+            &[]
+        } else {
+            // MappedCodeIndex is rebuilt for each Unicorn run slice. The mapped
+            // blob byte buffers live in UnicornMips for that whole slice and are
+            // append-only there, so existing buffer pointers remain valid.
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
         }
     }
 }
@@ -4801,7 +4831,7 @@ impl UnicornMips {
         let window_imports_hook = Rc::clone(&window_imports);
         let guest_entry_traces = Rc::new(RefCell::new(Vec::<UnicornGuestEntryTrace>::new()));
         let guest_entry_trace_enabled = std::env::var_os("WINCE_EMU_GUEST_ENTRY_TRACE").is_some();
-        let mapped_code = MappedCodeIndex::new(self.mapped_blobs.clone());
+        let mapped_code = MappedCodeIndex::new(&self.mapped_blobs);
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
         let trampoline_jump_index = MipsTrampolineJumpIndex::new(&trampoline_jumps);
@@ -5220,7 +5250,7 @@ impl UnicornMips {
             .map_err(|err| Error::Backend(format!("install indirect-call probe: {err:?}")))?;
         } else {
             // ── Fast-start code hooks: sparse per-site and per-trampoline-range hooks ──
-            let fast_mapped_code = Rc::new(MappedCodeIndex::new(self.mapped_blobs.clone()));
+            let fast_mapped_code = Rc::new(MappedCodeIndex::new(&self.mapped_blobs));
             let fast_trampoline_ranges = Rc::new(self.trampoline_ranges.clone());
             let fast_trampoline_stub_by_origin = Rc::new(trampoline_stub_by_origin.clone());
             let fast_code_trace_counter = Rc::clone(&code_trace_counter);
@@ -7887,7 +7917,7 @@ impl UnicornMips {
             }
         }
         if host_wall_clock_stop.borrow().is_some() {
-            let post_run_mapped_code = MappedCodeIndex::new(self.mapped_blobs.clone());
+            let post_run_mapped_code = MappedCodeIndex::new(&self.mapped_blobs);
             let restart_pc = {
                 let trampoline_state = live_trampoline_state.borrow();
                 wall_clock_restart_pc_for_mips_trampoline(
@@ -38942,11 +38972,12 @@ mod unicorn_tests {
     fn mapped_code_index_reads_static_code_before_unicorn_memory() {
         let static_code = 0x27bd_ffe0u32;
         let live_code = 0x03e0_0008u32;
-        let mapped_code = super::MappedCodeIndex::new(vec![super::MappedBlob {
+        let blobs = vec![super::MappedBlob {
             name: "image:main.exe".to_owned(),
             base: 0x0004_0000,
             bytes: static_code.to_le_bytes().to_vec(),
-        }]);
+        }];
+        let mapped_code = super::MappedCodeIndex::new(&blobs);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(0x0004_0000, 0x1000, Prot::ALL).unwrap();
         uc.mem_write(0x0004_0000, &live_code.to_le_bytes()).unwrap();
@@ -38963,7 +38994,7 @@ mod unicorn_tests {
         let live_trap = 0x03e0_0008u32;
         let stale_heap = 0x1111_2222u32;
         let live_heap = 0x3333_4444u32;
-        let mapped_code = super::MappedCodeIndex::new(vec![
+        let blobs = vec![
             super::MappedBlob {
                 name: "ce-import-traps".to_owned(),
                 base: crate::emulator::imports::IMPORT_TRAP_BASE,
@@ -38974,7 +39005,8 @@ mod unicorn_tests {
                 base: 0x3100_0000,
                 bytes: stale_heap.to_le_bytes().to_vec(),
             },
-        ]);
+        ];
+        let mapped_code = super::MappedCodeIndex::new(&blobs);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(
             crate::emulator::imports::IMPORT_TRAP_BASE.into(),

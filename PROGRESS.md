@@ -15,6 +15,29 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct
+  `FSDMGR_DiskIoControl @12` now recognizes CE `fmd.h`
+  `IOCTL_FMD_GET_RESERVED_TABLE`, `IOCTL_FMD_GET_RAW_BLOCK_SIZE`, and
+  `IOCTL_FMD_GET_INFO` controls. The synthetic disk reports an empty reserved
+  table, returns the current synthetic block size, validates FMD metadata
+  buffers, and fills deterministic NOR-style `FMDInfo` metadata while leaving
+  hardware flash lock/write/reserved-region behavior queued.
+- Validation after the FMD metadata IOCTL slice: focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop
+  emulator::imports::tests::fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info`,
+  `cargo check --features unicorn,trace,win32-desktop`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Logs were
+  kept under `target/`.
+- `src/emulator/unicorn.rs`: mapped-code indexing now keeps lightweight
+  references to mapped blob byte buffers instead of cloning every blob into each
+  index. The index still keeps immutable static-code snapshots authoritative
+  for image/DLL/trampoline reads while using live Unicorn memory for mutable
+  trap and heap-spillover code.
+- Validation after the mapped-code index storage slice: focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop mapped_code_index`,
+  `cargo check --features unicorn,trace,win32-desktop`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Logs were
+  kept under `target/`.
 - `src/ce/file.rs`, `src/ce/kernel.rs`, `src/ce/coredll.rs`, and
   `tests/coredll_raw_memory_file.rs`: raw coredll `LockFileEx @1968` and
   `UnlockFileEx @1969` now follow the CE `LOCKMGR` range model for host-backed

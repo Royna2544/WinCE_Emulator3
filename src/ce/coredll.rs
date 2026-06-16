@@ -142,9 +142,13 @@ const IOCTL_DISK_COPY_EXTERNAL_COMPLETE: u32 = 0x0007_1c5c;
 const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
 const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
 const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
+const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
+const IOCTL_FMD_GET_RAW_BLOCK_SIZE: u32 = 0x0007_1fac;
+const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
 const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+const FMD_INFO_SIZE: u32 = 20;
 const ERROR_GEN_FAILURE: u32 = 31;
 const ERROR_DEVICE_REMOVED: u32 = 1617;
 const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
@@ -13535,6 +13539,33 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
             kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes,
         )
         .is_some(),
+        IOCTL_FMD_GET_RESERVED_TABLE => fsdmgr_fmd_get_reserved_table_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            out_ptr,
+            out_bytes,
+            bytes_returned_ptr,
+        ),
+        IOCTL_FMD_GET_RAW_BLOCK_SIZE => fsdmgr_fmd_get_raw_block_size_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            out_ptr,
+            out_bytes,
+            bytes_returned_ptr,
+        ),
+        IOCTL_FMD_GET_INFO => fsdmgr_fmd_get_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            out_ptr,
+            out_bytes,
+            bytes_returned_ptr,
+        ),
         IOCTL_DISK_SET_STANDBY_TIMER
         | IOCTL_DISK_STANDBY_NOW
         | IOCTL_DISK_DELETE_CLUSTER
@@ -13719,6 +13750,103 @@ fn fsdmgr_disk_copy_external_raw<M: CoredllGuestMemory>(
         .threads
         .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
     false
+}
+
+fn fsdmgr_fmd_get_reserved_table_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    _table_ptr: u32,
+    _table_bytes: u32,
+    bytes_returned_ptr: u32,
+) -> bool {
+    if kernel.fsdmgr_disk_info(disk_ptr).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if bytes_returned_ptr != 0 && memory.write_u32(bytes_returned_ptr, 0).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn fsdmgr_fmd_get_raw_block_size_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    block_size_ptr: u32,
+    block_size_bytes: u32,
+    bytes_returned_ptr: u32,
+) -> bool {
+    let Some(info) = kernel.fsdmgr_disk_info(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if block_size_ptr == 0 || block_size_bytes < 4 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if memory.write_u32(block_size_ptr, info[1]).is_err()
+        || (bytes_returned_ptr != 0 && memory.write_u32(bytes_returned_ptr, 4).is_err())
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn fsdmgr_fmd_get_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    info_ptr: u32,
+    info_bytes: u32,
+    bytes_returned_ptr: u32,
+) -> bool {
+    if kernel.fsdmgr_disk_info(disk_ptr).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if info_ptr == 0 || info_bytes < FMD_INFO_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    const FLASH_TYPE_NOR: u32 = 1;
+    if memory
+        .write_u32(info_ptr.wrapping_add(4), FLASH_TYPE_NOR)
+        .is_err()
+        || memory.write_u32(info_ptr.wrapping_add(8), 0).is_err()
+        || memory.write_u32(info_ptr.wrapping_add(12), 0).is_err()
+        || memory.write_u32(info_ptr.wrapping_add(16), 0).is_err()
+        || (bytes_returned_ptr != 0 && memory.write_u32(bytes_returned_ptr, FMD_INFO_SIZE).is_err())
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn fsdmgr_disk_get_power_timings_raw<M: CoredllGuestMemory>(
@@ -19215,7 +19343,7 @@ fn registry_get_string_raw<M: CoredllGuestMemory>(
 fn registry_set_dword_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
-    thread_id: u32,
+    _thread_id: u32,
     args: &[u32],
 ) -> u32 {
     // RegistrySetDword(hKeyRoot, pszKeyPath, pszValueName, dwValue)
@@ -19247,7 +19375,7 @@ fn registry_set_dword_raw<M: CoredllGuestMemory>(
 fn registry_set_string_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
-    thread_id: u32,
+    _thread_id: u32,
     args: &[u32],
 ) -> u32 {
     // RegistrySetString(hKeyRoot, pszKeyPath, pszValueName, pszValue)
@@ -19288,7 +19416,7 @@ fn registry_set_string_raw<M: CoredllGuestMemory>(
 fn registry_delete_value_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
-    thread_id: u32,
+    _thread_id: u32,
     args: &[u32],
 ) -> u32 {
     // RegistryDeleteValue(hKeyRoot, pszKeyPath, pszValueName)
