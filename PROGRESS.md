@@ -182,6 +182,13 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   coredll_raw_gwe coredll_raw_transparent_image_paletted_dib_duplicate_rgb_keys
   -- --nocapture` passed. Test logs are under
   `target/cargo-test-transparent-pal-dib.20260616-150044.*.log`.
+- Broader validation after the `TransparentImage` paletted-DIB slice:
+  `cargo fmt`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and `cargo test -j 1
+  --features unicorn,trace,win32-desktop` passed. Test logs are under
+  `target/cargo-test-coredll-raw-gwe-transparent-pal-dib.20260616-150425.*.log`
+  and `target/cargo-test-full-transparent-pal-dib.20260616-150448.*.log`.
 - `src/ce/coredll.rs`, `src/emulator/imports.rs`, `src/emulator/unicorn.rs`,
   and `tests/coredll_dispatch.rs`: raw import-trap context plumbing now
   compiles with the restored raw caller PC, stack pointer, and stack-word audit
