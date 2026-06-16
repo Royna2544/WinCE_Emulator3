@@ -8682,6 +8682,8 @@ const RUNTIME_LOAD_LIBRARY_AS_DATAFILE: u32 = 0x0000_0002;
 #[cfg(feature = "unicorn")]
 const RUNTIME_DONT_RESOLVE_DLL_REFERENCES: u32 = 0x0000_0001;
 #[cfg(feature = "unicorn")]
+const RUNTIME_LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x0000_0008;
+#[cfg(feature = "unicorn")]
 const RUNTIME_COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
 #[cfg(feature = "unicorn")]
 const DLL_PROCESS_DETACH: u32 = 0;
@@ -8834,7 +8836,12 @@ fn try_handle_runtime_loader_import<D>(
         ));
     }
     kernel.record_runtime_loader_load_attempt();
-    if flags & !(RUNTIME_DONT_RESOLVE_DLL_REFERENCES | RUNTIME_LOAD_LIBRARY_AS_DATAFILE) != 0 {
+    if flags
+        & !(RUNTIME_DONT_RESOLVE_DLL_REFERENCES
+            | RUNTIME_LOAD_LIBRARY_AS_DATAFILE
+            | RUNTIME_LOAD_WITH_ALTERED_SEARCH_PATH)
+        != 0
+    {
         kernel.record_runtime_loader_loud_failure();
         kernel
             .threads
@@ -38650,10 +38657,11 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 
 #[cfg(all(test, feature = "unicorn"))]
 mod unicorn_tests {
+    use super::{ImportTrapTable, LiveTrampolineState, MemoryMap};
     use crate::{ce::gwe::GWL_WNDPROC, ce::kernel::CeKernel, config::RuntimeConfig};
     use std::{
         cell::RefCell,
-        collections::{BTreeMap, VecDeque},
+        collections::{BTreeMap, HashMap, VecDeque},
         rc::Rc,
     };
     use unicorn_engine::{
@@ -38908,6 +38916,87 @@ mod unicorn_tests {
         let retained = kernel.loaded_module_by_handle(0x7100_0000).unwrap();
         assert_eq!(retained.ref_count, 1);
         assert!(!retained.unload_pending);
+    }
+
+    #[test]
+    fn runtime_loadlibraryex_accepts_altered_search_path_for_loaded_module() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x3000_0000, 0x2000, Prot::ALL).unwrap();
+        let name_ptr = 0x3000_0100u32;
+        let name_bytes = "altered.dll"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        uc.mem_write(u64::from(name_ptr), &name_bytes).unwrap();
+
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        kernel.register_loaded_module_with_metadata(
+            "altered.dll",
+            0x7400_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+
+        let trap = crate::emulator::imports::ImportTrap {
+            address: 0x7fff_4000,
+            module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+            module_name: "coredll.dll".to_owned(),
+            ordinal: Some(crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_EX_W),
+            name: Some("LoadLibraryExW".to_owned()),
+            iat_va: 0,
+        };
+        let mut memory_map = MemoryMap::default();
+        let mut mapped_blobs = Vec::new();
+        let mut loaded_modules = Vec::new();
+        let mut resource_strings = Vec::new();
+        let mut resources = Vec::new();
+        let mut trampoline_ranges = Vec::new();
+        let mut trampoline_jumps = Vec::new();
+        let live_trampoline_state = Rc::new(RefCell::new(LiveTrampolineState::new_with_stub_map(
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+        )));
+        let traps = Rc::new(RefCell::new(ImportTrapTable::new()));
+        let pending = Rc::new(RefCell::new(Vec::new()));
+
+        let result = super::try_handle_runtime_loader_import(
+            &mut uc,
+            &mut kernel,
+            &mut memory_map,
+            &mut mapped_blobs,
+            &mut loaded_modules,
+            &mut resource_strings,
+            &mut resources,
+            &mut trampoline_ranges,
+            &mut trampoline_jumps,
+            &live_trampoline_state,
+            &traps,
+            &[],
+            7,
+            &trap,
+            &[name_ptr, 0, super::RUNTIME_LOAD_WITH_ALTERED_SEARCH_PATH],
+            &pending,
+        );
+
+        assert!(matches!(
+            result,
+            Some(super::RuntimeLoaderImportResult::Complete(0x7400_0000))
+        ));
+        assert_eq!(kernel.threads.get_last_error(7), 0);
+        assert_eq!(
+            kernel
+                .loaded_module_by_handle(0x7400_0000)
+                .unwrap()
+                .ref_count,
+            2
+        );
     }
 
     #[test]
