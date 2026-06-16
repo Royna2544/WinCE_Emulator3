@@ -7,9 +7,8 @@ use super::cpu_mips::{
     decode_jalr_register, decode_jr_register, decode_old_mips_kernel_call,
     decode_trampoline_long_jump_target, decode_trampoline_sentinel_target, is_mips_delay_slot_pc,
     is_patched_trampoline_jump, is_trampoline_sentinel_first_word, mips_gpr_name,
-    mips_trampoline_origin_for_pc, patch_mips_unicorn_trampolines, read_mips_gpr,
-    read_mips_import_args, read_mips_reg, restore_mips_gprs, target_in_ranges,
-    trampoline_stub_by_origin, write_mips_gpr,
+    patch_mips_unicorn_trampolines, read_mips_gpr, read_mips_import_args, read_mips_reg,
+    restore_mips_gprs, target_in_ranges, trampoline_stub_by_origin, write_mips_gpr,
 };
 #[cfg(all(test, feature = "unicorn"))]
 use super::cpu_mips::{
@@ -7333,9 +7332,10 @@ impl UnicornMips {
                     return;
                 }
                 let raw_caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
-                let caller_pc =
-                    mips_trampoline_origin_for_pc(raw_caller_pc, unsafe { &*trampoline_jumps_ptr })
-                        .unwrap_or(raw_caller_pc);
+                let caller_pc = live_trampoline_state_import_hook
+                    .borrow()
+                    .origin_for_pc(raw_caller_pc)
+                    .unwrap_or(raw_caller_pc);
                 let caller_module =
                     mapped_blob_module_for_pc(unsafe { &*mapped_blobs_ptr }, caller_pc);
                 let Some(import_return) = traps
@@ -31905,7 +31905,18 @@ fn try_enter_send_message_callout<D>(
 
 #[cfg(feature = "unicorn")]
 fn import_callout_return_pc(raw_return_pc: u32, trampoline_jumps: &[MipsTrampolineJump]) -> u32 {
-    mips_trampoline_origin_for_pc(raw_return_pc, trampoline_jumps).unwrap_or(raw_return_pc)
+    let trampoline_jump_index = MipsTrampolineJumpIndex::new(trampoline_jumps);
+    import_callout_return_pc_indexed(raw_return_pc, &trampoline_jump_index)
+}
+
+#[cfg(feature = "unicorn")]
+fn import_callout_return_pc_indexed(
+    raw_return_pc: u32,
+    trampoline_jump_index: &MipsTrampolineJumpIndex,
+) -> u32 {
+    trampoline_jump_index
+        .origin_for_pc(raw_return_pc)
+        .unwrap_or(raw_return_pc)
 }
 
 #[cfg(feature = "unicorn")]
@@ -35934,9 +35945,9 @@ fn annotate_wndproc_return_trampolines(
     returns: &mut [UnicornWndProcReturn],
     trampoline_jumps: &[MipsTrampolineJump],
 ) {
+    let trampoline_jump_index = MipsTrampolineJumpIndex::new(trampoline_jumps);
     for record in returns {
-        record.return_pc_trampoline_origin =
-            mips_trampoline_origin_for_pc(record.return_pc, trampoline_jumps);
+        record.return_pc_trampoline_origin = trampoline_jump_index.origin_for_pc(record.return_pc);
     }
 }
 
@@ -35945,9 +35956,9 @@ fn annotate_wndproc_call_trace_trampolines(
     traces: &mut [UnicornWndProcCallTrace],
     trampoline_jumps: &[MipsTrampolineJump],
 ) {
+    let trampoline_jump_index = MipsTrampolineJumpIndex::new(trampoline_jumps);
     for trace in traces {
-        trace.return_pc_trampoline_origin =
-            mips_trampoline_origin_for_pc(trace.return_pc, trampoline_jumps);
+        trace.return_pc_trampoline_origin = trampoline_jump_index.origin_for_pc(trace.return_pc);
     }
 }
 

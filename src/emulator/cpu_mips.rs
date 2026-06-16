@@ -1219,16 +1219,6 @@ pub(crate) fn is_mips_control_transfer_instruction(instruction: u32) -> bool {
     }
 }
 
-pub(crate) fn mips_trampoline_origin_for_pc(
-    pc: u32,
-    trampoline_jumps: &[MipsTrampolineJump],
-) -> Option<u32> {
-    trampoline_jumps.iter().find_map(|trampoline| {
-        let end = trampoline.stub.checked_add(trampoline.byte_len)?;
-        (pc >= trampoline.stub && pc < end).then_some(trampoline.origin)
-    })
-}
-
 pub(crate) fn decode_old_mips_kernel_call(target: u32) -> Option<(u32, u32)> {
     const OLD_FIRST_METHOD: u32 = 0xffff_fc02;
     const API_CALL_SCALE: u32 = 4;
