@@ -129,7 +129,15 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   prove the single surviving destination pixel samples the expected source
   corner and framebuffer dirtiness is restricted to that one pixel.
 - Focused validation after the `TransparentImage` almost fully clipped slice:
-  pending.
+  `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_transparent_image_almost_fully_clipped -- --nocapture`, `cargo
+  fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test -j
+  1 --features unicorn,trace,win32-desktop`. Test logs are under
+  `target/cargo-test-coredll-raw-gwe-transparent-almost-full-clip.20260616-143045.*.log`
+  and
+  `target/cargo-test-full-transparent-almost-full-clip.20260616-143106.*.log`.
 - Validation after the transparent all-edge clipping and active visible-receiver
   rotation slice: focused
   `remote_input_rotates_to_active_visible_receiver_thread`, focused
