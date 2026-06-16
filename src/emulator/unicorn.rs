@@ -1665,8 +1665,8 @@ impl UnicornMips {
                         self.cross_thread_visible_message_is_dispatchable(kernel, &message)
                     })
         });
-        let message_target = paint_thread_id.or_else(|| {
-            candidate_threads.into_iter().find(|thread_id| {
+        let visible_message_thread_id = paint_thread_id.or_else(|| {
+            candidate_threads.iter().copied().find(|thread_id| {
                 *thread_id != active_thread_id
                     && !self.thread_has_blocked_scheduler_context(*thread_id)
                     && kernel
@@ -1676,18 +1676,29 @@ impl UnicornMips {
                         })
             })
         });
+        let message_target = visible_message_thread_id.or_else(|| {
+            candidate_threads.into_iter().find(|thread_id| {
+                *thread_id != active_thread_id
+                    && !self.thread_has_blocked_scheduler_context(*thread_id)
+                    && Self::thread_has_receiver_work(*thread_id, kernel)
+            })
+        });
         let Some(thread_id) = message_target else {
             return false;
         };
+        let visible_only = visible_message_thread_id == Some(thread_id);
         let paint_only = paint_thread_id == Some(thread_id);
         let (min_msg, max_msg) = if paint_only {
             (crate::ce::gwe::WM_PAINT, crate::ce::gwe::WM_PAINT)
         } else {
             (0, 0)
         };
-        let Some(message) =
+        let message = if visible_only {
             kernel.take_ready_visible_message_w_filtered(thread_id, None, min_msg, max_msg)
-        else {
+        } else {
+            kernel.take_ready_message_w_filtered(thread_id, None, min_msg, max_msg)
+        };
+        let Some(message) = message else {
             return false;
         };
         if message.msg == crate::ce::gwe::WM_QUIT {
@@ -1696,7 +1707,7 @@ impl UnicornMips {
         let Some(window) = kernel
             .gwe
             .window(message.hwnd)
-            .filter(|window| !window.destroyed && window.visible)
+            .filter(|window| !window.destroyed)
             .cloned()
         else {
             let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
@@ -23609,6 +23620,70 @@ mod wait_scheduler_tests {
         let restored = scheduler.saved_context.as_ref().unwrap();
         assert_eq!(restored.pc, active_pc);
         assert_eq!(restored.regs, active_regs);
+    }
+
+    #[test]
+    fn cross_thread_message_callout_drains_hidden_window_message_when_no_visible_target() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = 7;
+        let active_thread_handle = 0x107;
+        let receiver_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let process_id = 1;
+        let active_pc = 0x0031_cd98;
+        let return_sp = 0x7ffd_f578;
+        let wndproc = 0x6004_f0f4;
+        let msg = crate::ce::gwe::WM_USER + 0x44;
+
+        scheduler.set_initial_thread_id(receiver_thread_id);
+        scheduler.current_thread_id = active_thread_id;
+        scheduler.running_guest_thread = Some((active_thread_id, active_thread_handle));
+        let mut active_regs = super::MipsGuestContext::zero();
+        active_regs.regs[29] = return_sp;
+        active_regs.regs[31] = active_pc;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: active_regs,
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let hwnd =
+            kernel.create_window_ex_w(receiver_thread_id, "hidden_receiver", "", None, 0, 0, 0);
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        assert!(kernel.post_message_w(hwnd, msg, 0x11, 0x22));
+        assert!(
+            kernel
+                .peek_ready_visible_message_w_filtered(receiver_thread_id, None, 0, 0)
+                .is_none()
+        );
+
+        assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
+        assert_eq!(scheduler.current_thread_id(), receiver_thread_id);
+        assert!(
+            !kernel
+                .gwe
+                .has_message_filtered(receiver_thread_id, Some(hwnd), msg, msg)
+        );
+        let saved = scheduler.saved_context.as_ref().unwrap();
+        assert_eq!(saved.pc, wndproc);
+        assert_eq!(saved.regs.regs[4], hwnd);
+        assert_eq!(saved.regs.regs[5], msg);
+        assert_eq!(saved.regs.regs[6], 0x11);
+        assert_eq!(saved.regs.regs[7], 0x22);
+        assert_eq!(saved.regs.regs[25], wndproc);
+        assert_eq!(
+            saved.regs.regs[29],
+            return_sp - super::WNDPROC_CALL_FRAME_BYTES
+        );
     }
 
     #[test]
