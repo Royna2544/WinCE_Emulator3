@@ -2656,8 +2656,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     copies for that CE source-backed ROP4 shape, generic ROP4
     foreground/background byte evaluation, selected-DIB/framebuffer negative
     destination extent mirroring for masked draws, including a framebuffer HDC
-    negative destination-width regression, off-left selected-DIB/framebuffer
-    clip regressions that preserve source/mask alignment, and the null-mask source-copy
+    negative destination-width regression, all-edge selected-DIB/framebuffer
+    clip regressions that preserve source/mask alignment when destination
+    clipping trims the leading or trailing edge, and the null-mask source-copy
     shortcut through the same signed destination helper as direct `BitBlt`.
   - CE `core\dll\apis.c::SystemParametersInfoW` routes
     `SPI_GETOEMINFO` and related device-info actions through

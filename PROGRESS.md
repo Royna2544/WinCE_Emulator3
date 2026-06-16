@@ -73,6 +73,21 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   and full `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
   Full-test logs are under
   `target/cargo-test-full-transparent-all-edges.20260616-134146.*.log`.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and framebuffer `MaskBlt` now
+  cover CE `draw.cpp::ClipBitBlt(EMaskBlt)` top, right, and bottom destination
+  clipping in addition to the existing off-left cases. The regressions use
+  `MAKEROP4(SRCCOPY, WHITENESS)` and 1 bpp masks to prove source and mask
+  coordinates stay aligned as the leading edge advances or the trailing edge is
+  trimmed.
+- Validation after the `MaskBlt` all-edge clipping slice: focused
+  `coredll_raw_mask_blt_clips_off_top`, focused
+  `coredll_raw_mask_blt_clips_off_right`, focused
+  `coredll_raw_mask_blt_clips_off_bottom`, `cargo fmt --check`, `git diff
+  --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo test
+  -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Full-test
+  logs are under
+  `target/cargo-test-full-maskblt-all-edges.20260616-134932.*.log`.
 - Validation after the transparent off-top clipping slice: focused
   `coredll_raw_transparent_image_clips_off_top`, `cargo fmt --check`, `git
   diff --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo
