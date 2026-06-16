@@ -15,6 +15,21 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `tests/coredll_raw_gwe.rs`: raw `SendMessageTimeout` coverage now verifies
+  `SMTO_ABORTIFHUNG` by itself queues normally while the receiver is just below
+  the CE 5-second hung threshold, leaves the caller result pointer untouched,
+  clears last error, and preserves the exact accepted timeout flag on the
+  queued cross-thread transaction.
+- Validation after the `SMTO_ABORTIFHUNG`-only below-threshold slice:
+  `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, `$env:CARGO_INCREMENTAL='0'; cargo test -j 1
+  --features unicorn,trace,win32-desktop
+  coredll_raw_send_message_timeout_abortifhung_only_queues_below_hung_threshold`,
+  and `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. Cargo still emits the existing
+  unused-code warnings, plus an unused `CpuBackend` import warning in the
+  heavily filtered focused test.
 - `src/emulator/unicorn.rs`: Unicorn blocked `MsgWaitForMultipleObjectsEx`
   resume coverage now verifies CE's message-wake slot after all supplied wait
   handles. A blocked message wait with two unsignaled event handles resumes the

@@ -23161,6 +23161,75 @@ fn coredll_raw_send_message_timeout_block_abortifhung_aborts_when_thread_is_hung
 }
 
 #[test]
+fn coredll_raw_send_message_timeout_abortifhung_only_queues_below_hung_threshold() -> Result<()> {
+    const SMTO_ABORTIFHUNG: u32 = 0x0000_0002;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 58_u32;
+    let receiver_thread = 59_u32;
+    let result_ptr = 0xb308;
+    memory.map_words(result_ptr, 1);
+    memory.write_u32(result_ptr, 0xfeed_cafe)?;
+
+    let hwnd = kernel.create_window_ex_w(
+        receiver_thread,
+        "SMTO_ABORTIFHUNG_BELOW_THRESHOLD",
+        "",
+        None,
+        0,
+        0,
+        0,
+    );
+    kernel.gwe.record_thread_dispatched(receiver_thread, 0);
+    kernel.timers.sleep_ms(4999);
+    assert!(
+        !kernel
+            .gwe
+            .is_thread_hung(receiver_thread, kernel.timers.tick_count(), 5000)
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [
+                hwnd,
+                WM_USER + 72,
+                0x72,
+                0x73,
+                SMTO_ABORTIFHUNG,
+                250,
+                result_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    assert_eq!(kernel.threads.get_last_error(sender_thread), 0);
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed_cafe);
+    let sent = kernel
+        .gwe
+        .sent_message(1)
+        .expect("below-threshold abort-if-hung send should queue");
+    assert_eq!(sent.sender_thread_id, Some(sender_thread));
+    assert_eq!(sent.receiver_thread_id, receiver_thread);
+    assert_eq!(sent.message.msg, WM_USER + 72);
+    assert_ne!(sent.flags & SMF_TIMEOUT, 0);
+    assert_eq!(sent.timeout_ms, Some(250));
+    assert_eq!(sent.send_timeout_flags, SMTO_ABORTIFHUNG);
+    assert_eq!(sent.result_ptr, Some(result_ptr));
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

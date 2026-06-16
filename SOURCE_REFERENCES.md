@@ -2170,6 +2170,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     dispatch even when that thread's last-dispatch timestamp would satisfy the
     CE hung threshold. Cross-thread `SMTO_ABORTIFHUNG` now also covers the CE
     threshold boundary by queueing just below the 5-second hung cutoff,
+    preserving the exact `SMTO_ABORTIFHUNG` flag bit on the queued transaction,
     aborting without queueing once the receiver is considered hung, and
     preserving that hung-abort behavior when callers combine `SMTO_BLOCK` with
     `SMTO_ABORTIFHUNG`. The Unicorn
