@@ -123,6 +123,13 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   1 --features unicorn,trace,win32-desktop`. Test logs are under
   `target/cargo-test-coredll-raw-gwe-transparent-full-clip.20260616-142511.*.log`
   and `target/cargo-test-full-transparent-full-clip.20260616-142535.*.log`.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and framebuffer
+  `TransparentImage` now cover CE `draw.cpp::ClipBitBlt(ETransparentImage)`
+  one-pixel-visible top-left and bottom-right near-full clips. The regressions
+  prove the single surviving destination pixel samples the expected source
+  corner and framebuffer dirtiness is restricted to that one pixel.
+- Focused validation after the `TransparentImage` almost fully clipped slice:
+  pending.
 - Validation after the transparent all-edge clipping and active visible-receiver
   rotation slice: focused
   `remote_input_rotates_to_active_visible_receiver_thread`, focused
@@ -381,12 +388,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   profiling with `sudo --inline cargo flamegraph` showed the iNavi run spending
   scheduler-hook time in a linear MIPS trampoline-origin scan. The scheduler
   and wall-clock stop paths now use a sorted trampoline jump index, and live
-  trampoline state reuses the already-built origin-to-stub map. A no-trace
-  30-second startup flamegraph moved from the early `resmapi_800x480.bin`
-  decompression slice with about 0.44 MB read to the later `iNavi.exe+0x329ce0`
-  resource/map-loading slice with about 3.1 MB read. The remaining visible
-  startup overhead is repeated Unicorn slice teardown (`uc_close`) and remote
-  debug publishing, not the old linear trampoline scan.
+  trampoline state reuses the already-built origin-to-stub map. A follow-up
+  Windows-sudo flamegraph on 2026-06-16 found the remaining raw-import and
+  WNDPROC annotation paths still using the old linear helper; commit `4559d704`
+  switches those paths to the existing trampoline jump index and removes the
+  dead linear helper. The post-fix profile
+  `profiles/startup-windows-sudo-bounded-indexed-20260616-142504.svg` no longer
+  contains `mips_trampoline_origin_for_pc` and reaches the later
+  `iNavi.exe+0x329da4` resource/map-loading slice with about 3.1 MB read. The
+  remaining visible startup overhead is Unicorn TCG execution/translation and
+  code-hook callbacks, not host SD-card file I/O or the old linear trampoline
+  scan.
 - `src/ce/file.rs`, `src/ce/kernel.rs`, and `tests/basic_subsystems.rs`:
   mount-published device-interface advertisements now track owner roots, so two
   mounted volumes advertising the same class/name keep one visible advertisement

@@ -115,9 +115,10 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   decompression at `iNavi.exe+0x2ff8xx`/`+0x2ff9xx`, and post-flamegraph
   no-trace runs now reach the later `iNavi.exe+0x329cxx` resource/map-loading
   region. Timer state is exposed through `/api/v1/debug/timers.txt`, but the
-  normal map UI transition is still not observed. The current practical startup
-  performance cost is repeated Unicorn slice teardown plus remote debug
-  publishing, after fixing the old linear trampoline-origin scan.
+  normal map UI transition is still not observed. The old linear
+  trampoline-origin helper no longer appears in the post-`4559d704`
+  Windows-sudo flamegraph; current sampled startup cost is Unicorn TCG
+  translation/execution plus code-hook callbacks.
 - Hidden Happyway child scheduling remains incomplete. The real modal dialog
   can be dismissed and its framebuffer pixels restore correctly, but
   `happyway_win.exe` may remain parked with stale modal/close state while iNavi

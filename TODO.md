@@ -80,8 +80,10 @@ Regenerated on 2026-06-11 from current source and test coverage.
   state, and reach `iNavi.exe+0x329da8` with later resource/file activity while
   modal/winsock waits remain in the scheduler. The startup flamegraph after the
   trampoline index fix reaches the same `iNavi.exe+0x329cxx` resource/map-loading
-  region with several MB of file reads, while the remaining sampled emulator
-  overhead is repeated Unicorn slice teardown plus remote debug publishing. The
+  region with several MB of file reads. The residual linear trampoline-origin
+  helper was removed in `4559d704`; the follow-up Windows-sudo flamegraph shows
+  the remaining sampled emulator overhead in Unicorn TCG translation/execution
+  and per-instruction code hook callbacks. The
   latest live process reaches map-layer `.mdc` reads plus `soap.bin`, creates
   then hides many map child windows, and leaves the owned splash popup visible
   with no observed hide/demote trace.
