@@ -50446,6 +50446,30 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
         returned(mvk(&mut kernel, &mut memory, VK_PAUSE, MAPVK_VK_TO_VSC)),
         0x45
     );
+    for (vk, scan, label) in [
+        (VK_SHIFT, 0x2A, "VK_SHIFT common -> left scan"),
+        (VK_CONTROL, 0x1D, "VK_CONTROL common -> left scan"),
+        (VK_MENU, 0x38, "VK_MENU common -> left scan"),
+        (VK_CAPITAL, 0x3A, "VK_CAPITAL"),
+        (0x0C, 0x4C, "VK_CLEAR"),
+        (0x2F, 0x63, "VK_HELP"),
+        (0x5B, 0x5B, "VK_LWIN"),
+        (0x5C, 0x5C, "VK_RWIN"),
+        (0x5D, 0x5D, "VK_APPS"),
+        (0x6F, 0x35, "VK_DIVIDE"),
+        (0x7C, 0x64, "VK_F13"),
+        (0x87, 0x76, "VK_F24"),
+        (0xA6, 0x6A, "VK_BROWSER_BACK"),
+        (0xAD, 0x20, "VK_VOLUME_MUTE"),
+        (0xB4, 0x6C, "VK_LAUNCH_MAIL"),
+        (0xDF, 0x5F, "VK_OFF"),
+    ] {
+        assert_eq!(
+            returned(mvk(&mut kernel, &mut memory, vk, MAPVK_VK_TO_VSC)),
+            scan,
+            "{label}"
+        );
+    }
 
     assert_eq!(
         returned(mvk(&mut kernel, &mut memory, 0x2A, MAPVK_VSC_TO_VK)),
