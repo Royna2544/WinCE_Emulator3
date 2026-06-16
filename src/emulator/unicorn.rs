@@ -22,6 +22,7 @@ use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, USER_KDATA_PAGE_BASE, 
 use crate::{
     ce::{
         coredll::CoredllGuestMemory,
+        file::FileLockStatus,
         framebuffer::{Framebuffer, VirtualFramebuffer},
         kernel::{CeKernel, FreeLibraryResult, LoadedModule},
     },
@@ -101,6 +102,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_wave_out_callback_returns: Vec<PendingWaveOutCallbackReturn>,
     #[cfg(feature = "unicorn")]
+    pending_fsdmgr_file_lock_returns: Vec<PendingFsdmgrFileLockReturn>,
+    #[cfg(feature = "unicorn")]
     pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
     #[cfg(feature = "unicorn")]
     pending_create_window_returns: Vec<CreateWindowReturn>,
@@ -175,6 +178,8 @@ struct UnicornRunStateHandles<'a> {
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingImeEnumRegisterWordReturn>>>,
     pending_wave_out_callback_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingWaveOutCallbackReturn>>>,
+    pending_fsdmgr_file_lock_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingFsdmgrFileLockReturn>>>,
     pending_dll_lifecycle_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
@@ -355,6 +360,9 @@ const IME_ENUM_REGISTER_WORD_RETURN_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const WAVE_OUT_CALLBACK_RETURN_STUB_ADDR: u32 =
     IME_ENUM_REGISTER_WORD_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
+const FSDMGR_FILE_LOCK_RETURN_STUB_ADDR: u32 =
+    WAVE_OUT_CALLBACK_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
@@ -661,6 +669,29 @@ struct PendingWaveOutCallbackReturn {
     return_pc: u32,
     return_sp: u32,
     caller_regs: MipsGuestContext,
+    api_result: u32,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FsdmgrFileLockPhase {
+    Acquire,
+    Release,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingFsdmgrFileLockReturn {
+    phase: FsdmgrFileLockPhase,
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    release_callback: u32,
+    file_handle: u32,
+    read: bool,
+    length_low: u32,
+    explicit_offset: Option<(u32, u32)>,
+    file_lock_state_ptr_slot: u32,
     api_result: u32,
 }
 
@@ -1087,6 +1118,8 @@ impl UnicornMips {
             pending_ime_enum_register_word_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_wave_out_callback_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            pending_fsdmgr_file_lock_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_dll_lifecycle_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
@@ -3288,6 +3321,11 @@ impl UnicornMips {
             .borrow_mut()
             .drain(..)
             .collect();
+        self.pending_fsdmgr_file_lock_returns = state
+            .pending_fsdmgr_file_lock_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
         self.pending_enum_font_families_returns = state
             .pending_enum_font_families_returns
             .borrow_mut()
@@ -4356,6 +4394,10 @@ impl UnicornMips {
                 #[cfg(feature = "unicorn")]
                 pending_wave_out_callback_returns: std::mem::take(
                     &mut self.pending_wave_out_callback_returns,
+                ),
+                #[cfg(feature = "unicorn")]
+                pending_fsdmgr_file_lock_returns: std::mem::take(
+                    &mut self.pending_fsdmgr_file_lock_returns,
                 ),
                 #[cfg(feature = "unicorn")]
                 pending_dll_lifecycle_returns: std::mem::take(
@@ -5619,6 +5661,10 @@ impl UnicornMips {
             &mut self.pending_wave_out_callback_returns,
         )));
         let pending_wave_out_callback_returns_hook = Rc::clone(&pending_wave_out_callback_returns);
+        let pending_fsdmgr_file_lock_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_fsdmgr_file_lock_returns,
+        )));
+        let pending_fsdmgr_file_lock_returns_hook = Rc::clone(&pending_fsdmgr_file_lock_returns);
         let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_dll_lifecycle_returns,
         )));
@@ -5675,6 +5721,7 @@ impl UnicornMips {
             pending_locale_enum_returns: &pending_locale_enum_returns,
             pending_ime_enum_register_word_returns: &pending_ime_enum_register_word_returns,
             pending_wave_out_callback_returns: &pending_wave_out_callback_returns,
+            pending_fsdmgr_file_lock_returns: &pending_fsdmgr_file_lock_returns,
             pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
@@ -6607,6 +6654,18 @@ impl UnicornMips {
                     }
                     return;
                 }
+                if address == FSDMGR_FILE_LOCK_RETURN_STUB_ADDR {
+                    let active_thread_id = *current_thread_id_hook.borrow();
+                    if !handle_fsdmgr_file_lock_return_stub(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        active_thread_id,
+                        &pending_fsdmgr_file_lock_returns_hook,
+                    ) {
+                        let _ = uc.emu_stop();
+                    }
+                    return;
+                }
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
                     let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
                     let active_thread_id = *current_thread_id_hook.borrow();
@@ -7502,6 +7561,18 @@ impl UnicornMips {
                 }) {
                     return;
                 }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_fsdmgr_file_lock_callout(
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        trap.name.as_deref(),
+                        &args,
+                        &pending_fsdmgr_file_lock_returns_hook,
+                    )
+                }) {
+                    return;
+                }
                 if let Some(result) = trap.as_ref().and_then(|trap| {
                     try_handle_runtime_loader_import(
                         memory.uc,
@@ -8373,6 +8444,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             pending_locale_enum_returns: Vec::new(),
             pending_ime_enum_register_word_returns: Vec::new(),
             pending_wave_out_callback_returns: Vec::new(),
+            pending_fsdmgr_file_lock_returns: Vec::new(),
             pending_dll_lifecycle_returns: Vec::new(),
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
@@ -33068,6 +33140,284 @@ fn handle_qsort_return_stub<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn is_fsdmgr_test_file_lock_import(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    name: Option<&str>,
+) -> Option<bool> {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Fsdmgr {
+        return None;
+    }
+    match ordinal {
+        Some(33) => Some(false),
+        Some(34) => Some(true),
+        _ => match name {
+            Some(name) if name.eq_ignore_ascii_case("FSDMGR_TestFileLock") => Some(false),
+            Some(name) if name.eq_ignore_ascii_case("FSDMGR_TestFileLockEx") => Some(true),
+            _ => None,
+        },
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_fsdmgr_file_lock_callout<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    name: Option<&str>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingFsdmgrFileLockReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(has_explicit_offset) = is_fsdmgr_test_file_lock_import(module_kind, ordinal, name)
+    else {
+        return false;
+    };
+    let acquire_callback = args.first().copied().unwrap_or(0);
+    let release_callback = args.get(1).copied().unwrap_or(0);
+    if !is_guest_wndproc(acquire_callback) || !is_guest_wndproc(release_callback) {
+        return false;
+    }
+    let file_handle = args.get(2).copied().unwrap_or(0);
+    let read = args.get(3).copied().unwrap_or(0) != 0;
+    let length_low = args.get(4).copied().unwrap_or(0);
+    let explicit_offset = has_explicit_offset.then(|| {
+        (
+            args.get(5).copied().unwrap_or(0),
+            args.get(6).copied().unwrap_or(0),
+        )
+    });
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let caller_regs = capture_mips_gprs(uc);
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    if uc
+        .mem_write(u64::from(call_sp), &0u32.to_le_bytes())
+        .is_err()
+    {
+        return false;
+    }
+
+    let call_callback = normalize_ce_process_slot_callback(uc, acquire_callback);
+    let ok = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(file_handle)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(call_sp)),
+        uc.reg_write(
+            RegisterMIPS::RA,
+            u64::from(FSDMGR_FILE_LOCK_RETURN_STUB_ADDR),
+        ),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok());
+    if !ok {
+        return false;
+    }
+
+    pending_returns
+        .borrow_mut()
+        .push(PendingFsdmgrFileLockReturn {
+            phase: FsdmgrFileLockPhase::Acquire,
+            return_pc,
+            return_sp,
+            caller_regs,
+            release_callback,
+            file_handle,
+            read,
+            length_low,
+            explicit_offset,
+            file_lock_state_ptr_slot: call_sp,
+            api_result: 0,
+        });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn read_unicorn_u32_result<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Option<u32> {
+    let mut bytes = [0u8; 4];
+    uc.mem_read(u64::from(address), &mut bytes).ok()?;
+    Some(u32::from_le_bytes(bytes))
+}
+
+#[cfg(feature = "unicorn")]
+fn fsdmgr_guest_file_lock_test_result<D>(
+    kernel: &mut CeKernel,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    state: &PendingFsdmgrFileLockReturn,
+) -> u32 {
+    const ERROR_INVALID_HANDLE: u32 = 6;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+    const ERROR_LOCK_VIOLATION: u32 = 33;
+    const FILE_LOCK_STATE_POS_LOW_OFFSET: u32 = 0;
+    const FILE_LOCK_STATE_POS_HIGH_OFFSET: u32 = 4;
+    const FILE_LOCK_STATE_LOCK_CONTAINER_OFFSET: u32 = 28;
+
+    let Some(file_lock_state_ptr) = read_unicorn_u32_result(uc, state.file_lock_state_ptr_slot)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if file_lock_state_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(lock_container) = read_unicorn_u32_result(
+        uc,
+        file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_LOCK_CONTAINER_OFFSET),
+    ) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if lock_container == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 1;
+    }
+    let (offset_low, offset_high) = match state.explicit_offset {
+        Some(offset) => offset,
+        None => {
+            let Some(low) = read_unicorn_u32_result(
+                uc,
+                file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_POS_LOW_OFFSET),
+            ) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            };
+            let Some(high) = read_unicorn_u32_result(
+                uc,
+                file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_POS_HIGH_OFFSET),
+            ) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            };
+            (low, high)
+        }
+    };
+    let start = u64::from(offset_low) | (u64::from(offset_high) << 32);
+    match kernel.test_file_lock_range(
+        state.file_handle,
+        start,
+        u64::from(state.length_low),
+        state.read,
+    ) {
+        Ok(FileLockStatus::Success) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            1
+        }
+        Ok(FileLockStatus::Conflict) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_LOCK_VIOLATION);
+            0
+        }
+        Ok(FileLockStatus::InvalidParameter) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn enter_fsdmgr_release_file_lock_state<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    state: &mut PendingFsdmgrFileLockReturn,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    state.phase = FsdmgrFileLockPhase::Release;
+    let call_sp = state.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let call_callback = normalize_ce_process_slot_callback(uc, state.release_callback);
+    [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(state.file_handle)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(state.file_lock_state_ptr_slot)),
+        uc.reg_write(
+            RegisterMIPS::RA,
+            u64::from(FSDMGR_FILE_LOCK_RETURN_STUB_ADDR),
+        ),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn finish_fsdmgr_file_lock_callout<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    state: PendingFsdmgrFileLockReturn,
+    result: u32,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    restore_mips_gprs(uc, &state.caller_regs);
+    [
+        uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp)),
+        uc.reg_write(RegisterMIPS::V0, u64::from(result)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_fsdmgr_file_lock_return_stub<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingFsdmgrFileLockReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let callback_result = read_mips_reg(uc, RegisterMIPS::V0);
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.last_mut() else {
+        return false;
+    };
+    match state.phase {
+        FsdmgrFileLockPhase::Acquire => {
+            if callback_result == 0 {
+                let state = pending.pop().unwrap();
+                return finish_fsdmgr_file_lock_callout(uc, state, 0);
+            }
+            state.api_result = fsdmgr_guest_file_lock_test_result(kernel, uc, thread_id, state);
+            enter_fsdmgr_release_file_lock_state(uc, state)
+        }
+        FsdmgrFileLockPhase::Release => {
+            let result = if callback_result == 0 {
+                0
+            } else {
+                state.api_result
+            };
+            let state = pending.pop().unwrap();
+            finish_fsdmgr_file_lock_callout(uc, state, result)
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_dpa_sort_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
@@ -38795,6 +39145,179 @@ mod unicorn_tests {
         assert_eq!(field(36), 0x1000_0002);
         assert_eq!(field(40), 0x1000_0001);
         assert_eq!(field(44), 0x0000_00a1);
+    }
+
+    #[test]
+    fn fsdmgr_file_lock_callout_enters_acquire_then_release_callbacks() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, Prot::ALL).unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let return_pc = 0x0040_1000;
+        let acquire = 0x0040_2000;
+        let release = 0x0040_3000;
+        let file_handle = 0x55aa;
+        let file_lock_state = 0x3000_0200;
+
+        uc.reg_write(RegisterMIPS::SP, 0x3000_0800).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0x7777_0101).unwrap();
+        assert!(super::try_enter_fsdmgr_file_lock_callout(
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Fsdmgr,
+            Some(34),
+            None,
+            &[acquire, release, file_handle, 1, 4, 8, 0],
+            &pending,
+        ));
+        let slot = 0x3000_0800 - super::WNDPROC_CALL_FRAME_BYTES;
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, acquire);
+        assert_eq!(uc.reg_read(RegisterMIPS::T9).unwrap() as u32, acquire);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, file_handle);
+        assert_eq!(uc.reg_read(RegisterMIPS::A1).unwrap() as u32, slot);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            super::FSDMGR_FILE_LOCK_RETURN_STUB_ADDR
+        );
+
+        write_u32(&mut uc, u64::from(slot), file_lock_state);
+        write_u32(&mut uc, u64::from(file_lock_state + 28), 0);
+        uc.reg_write(RegisterMIPS::V0, 1).unwrap();
+        assert!(super::handle_fsdmgr_file_lock_return_stub(
+            &mut kernel,
+            &mut uc,
+            9,
+            &pending,
+        ));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, release);
+        assert_eq!(uc.reg_read(RegisterMIPS::T9).unwrap() as u32, release);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, file_handle);
+        assert_eq!(uc.reg_read(RegisterMIPS::A1).unwrap() as u32, slot);
+        assert_eq!(
+            pending.borrow()[0].phase,
+            super::FsdmgrFileLockPhase::Release
+        );
+
+        uc.reg_write(RegisterMIPS::V0, 1).unwrap();
+        assert!(super::handle_fsdmgr_file_lock_return_stub(
+            &mut kernel,
+            &mut uc,
+            9,
+            &pending,
+        ));
+        assert!(pending.borrow().is_empty());
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x7777_0101);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        assert_eq!(kernel.threads.get_last_error(9), 0);
+    }
+
+    #[test]
+    fn fsdmgr_file_lock_callout_recognizes_test_lock_import_names_and_ordinals() {
+        use crate::emulator::imports::ImportModuleKind;
+
+        assert_eq!(
+            super::is_fsdmgr_test_file_lock_import(ImportModuleKind::Fsdmgr, Some(33), None),
+            Some(false)
+        );
+        assert_eq!(
+            super::is_fsdmgr_test_file_lock_import(ImportModuleKind::Fsdmgr, Some(34), None),
+            Some(true)
+        );
+        assert_eq!(
+            super::is_fsdmgr_test_file_lock_import(
+                ImportModuleKind::Fsdmgr,
+                None,
+                Some("FSDMGR_TestFileLockEx"),
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            super::is_fsdmgr_test_file_lock_import(
+                ImportModuleKind::Coredll,
+                Some(34),
+                Some("FSDMGR_TestFileLockEx"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn fsdmgr_file_lock_helper_uses_guest_position_for_conflict_checks() {
+        use crate::ce::file::{
+            CREATE_ALWAYS, FileLockStatus, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING,
+        };
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, Prot::ALL).unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "wince_fsdmgr_unicorn_file_lock_{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        kernel.mount_guest_root("\\ResidentFlash", root.clone());
+
+        let file = kernel
+            .create_file_w(
+                "\\ResidentFlash\\locked.bin",
+                GENERIC_READ | GENERIC_WRITE,
+                CREATE_ALWAYS,
+            )
+            .unwrap();
+        let peer = kernel
+            .create_file_w(
+                "\\ResidentFlash\\locked.bin",
+                GENERIC_READ | GENERIC_WRITE,
+                OPEN_EXISTING,
+            )
+            .unwrap();
+        assert_eq!(
+            kernel.lock_file_range(file, 8, 4, true).unwrap(),
+            FileLockStatus::Success
+        );
+
+        let slot = 0x3000_0100;
+        let file_lock_state = 0x3000_0200;
+        write_u32(&mut uc, slot, file_lock_state);
+        write_u32(&mut uc, u64::from(file_lock_state), 8);
+        write_u32(&mut uc, u64::from(file_lock_state + 4), 0);
+        write_u32(&mut uc, u64::from(file_lock_state + 28), 0x1234_5678);
+        let state = super::PendingFsdmgrFileLockReturn {
+            phase: super::FsdmgrFileLockPhase::Acquire,
+            return_pc: 0x0040_1000,
+            return_sp: 0x3000_0800,
+            caller_regs: super::capture_mips_gprs(&uc),
+            release_callback: 0x0040_3000,
+            file_handle: peer,
+            read: true,
+            length_low: 4,
+            explicit_offset: None,
+            file_lock_state_ptr_slot: slot as u32,
+            api_result: 0,
+        };
+
+        assert_eq!(
+            super::fsdmgr_guest_file_lock_test_result(&mut kernel, &uc, 9, &state),
+            0
+        );
+        assert_eq!(kernel.threads.get_last_error(9), 33);
+
+        write_u32(&mut uc, u64::from(file_lock_state + 28), 0);
+        assert_eq!(
+            super::fsdmgr_guest_file_lock_test_result(&mut kernel, &uc, 9, &state),
+            1
+        );
+        assert_eq!(kernel.threads.get_last_error(9), 0);
+
+        let _ = kernel.close_handle(file);
+        let _ = kernel.close_handle(peer);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
