@@ -6121,27 +6121,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_FILL_RGN => {
-            // FillRgn(hdc, hrgn, hbr) — fill region with brush using bounding rect.
-            let hdc = raw_arg(args, 0);
-            let hrgn = raw_arg(args, 1);
-            let hbr = raw_arg(args, 2);
-            let rect = kernel.resources.region(hrgn).map(|r| r.rect);
-            if let Some(rect) = rect {
-                if let Some(paint) = brush_paint(kernel, hbr) {
-                    let drawn = fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint.clone());
-                    if !drawn {
-                        if let BrushPaint::Solid(color) = paint {
-                            if let Some(fb) = framebuffer {
-                                fill_framebuffer_rect_for_hdc(kernel, fb, hdc, rect, color);
-                            }
-                        }
-                    }
-                }
-            }
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_FILL_RGN => Some(CoredllValue::Bool(fill_rgn_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_INVERT_RECT => Some(CoredllValue::Bool(invert_rect_raw(
             kernel,
             memory,
@@ -42254,6 +42242,51 @@ fn fill_rect_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     1
+}
+
+fn fill_rgn_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    hdc: u32,
+    hrgn: u32,
+    brush: u32,
+) -> bool {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let Some(rect) = kernel.resources.region(hrgn).map(|region| region.rect) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let Some(paint) = brush_paint(kernel, brush) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if let Some(bitmap) = selected_bitmap_object(kernel, hdc)
+        && !bitmap.bits_writable
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint.clone())
+        && let BrushPaint::Solid(color) = paint
+        && let Some(framebuffer) = framebuffer
+    {
+        fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, color);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn fill_bitmap_rect_for_hdc<M: CoredllGuestMemory>(

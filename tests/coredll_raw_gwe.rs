@@ -25,8 +25,8 @@ use wince_emulation_v3::{
             ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W, ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE,
             ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT,
             ORD_ENUM_WINDOWS, ORD_EQUAL_RECT, ORD_EQUAL_RGN, ORD_EXCLUDE_CLIP_RECT, ORD_EXT_ESCAPE,
-            ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE, ORD_FIND_RESOURCE_W,
-            ORD_FIND_WINDOW_W, ORD_FLUSH_VIEW_OF_FILE, ORD_GET_ACTIVE_WINDOW,
+            ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FILL_RGN, ORD_FIND_RESOURCE,
+            ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W, ORD_FLUSH_VIEW_OF_FILE, ORD_GET_ACTIVE_WINDOW,
             ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS,
             ORD_GET_BK_COLOR, ORD_GET_BK_MODE, ORD_GET_CAPTURE, ORD_GET_CARET_BLINK_TIME,
             ORD_GET_CARET_POS, ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_ABCWIDTHS_I,
@@ -3986,6 +3986,108 @@ fn coredll_raw_fill_rect_paints_selected_memory_dib() -> Result<()> {
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 2), 0x07e0);
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 4, 4), 0x07e0);
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_fill_rgn_reports_ce_handle_errors_and_paints() -> Result<()> {
+    const BLACK_PEN: u32 = 7;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 6);
+
+    let region = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [1, 2, 5, 5],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateRectRgn did not return a region: {other:?}"),
+    };
+    let green_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x0000_ff00],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    let stock_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [BLACK_PEN],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(BLACK_PEN) did not return a handle: {other:?}"),
+    };
+
+    macro_rules! assert_fill_rgn {
+        ($args:expr, $expected:expr, $last_error:expr) => {{
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_FILL_RGN,
+                    $args,
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(value),
+                    ..
+                } if value == $expected
+            ));
+            assert_eq!(kernel.threads.get_last_error(thread_id), $last_error);
+        }};
+    }
+
+    assert_fill_rgn!([0, 0, 0], false, ERROR_INVALID_HANDLE);
+    assert_fill_rgn!([0, region, green_brush], false, ERROR_INVALID_HANDLE);
+    assert_fill_rgn!(
+        [0x0000_0bad, region, green_brush],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_fill_rgn!([mem_dc, 0, green_brush], false, ERROR_INVALID_HANDLE);
+    assert_fill_rgn!(
+        [mem_dc, 0x0000_0bad, green_brush],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_fill_rgn!(
+        [mem_dc, stock_pen, green_brush],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_fill_rgn!([mem_dc, region, 0], false, ERROR_INVALID_HANDLE);
+    assert_fill_rgn!([mem_dc, region, 0x0000_0bad], false, ERROR_INVALID_HANDLE);
+    assert_fill_rgn!([mem_dc, region, stock_pen], false, ERROR_INVALID_HANDLE);
+
+    assert_fill_rgn!([mem_dc, region, green_brush], true, 0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 2), 0x07e0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 4, 4), 0x07e0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 5), 0x0000);
 
     Ok(())
 }
