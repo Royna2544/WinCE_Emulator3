@@ -1379,6 +1379,9 @@ fn blocked_remote_input_target(
     cpu: &UnicornMips,
     kernel: &CeKernel,
 ) -> Option<BlockedRemoteInputTarget> {
+    if cpu.active_process_has_visible_receiver_work(kernel) {
+        return None;
+    }
     if let Some(blocked) = cpu
         .last_debug_snapshot()
         .and_then(|snapshot| snapshot.blocked_get_message.clone())
@@ -4091,6 +4094,49 @@ mod tests {
                 hwnd: Some(hwnd),
             })
         );
+    }
+
+    #[test]
+    fn remote_input_target_preserves_active_visible_receiver_work() {
+        let mut kernel = CeKernel::boot(
+            RuntimeConfig::load_default().expect("runtime config loads for active receiver test"),
+        );
+        let mut cpu = UnicornMips::new().expect("unicorn initializes for active receiver test");
+        cpu.set_initial_thread_id(1);
+        let active = kernel.create_window_ex_w(
+            1,
+            "ACTIVE_REMOTE_INPUT_TARGET",
+            "",
+            None,
+            0,
+            wince_emulation_v3::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert!(kernel.post_message_w(active, wince_emulation_v3::ce::gwe::WM_LBUTTONDOWN, 1, 0));
+
+        let parked = kernel.create_window_ex_w(
+            6,
+            "PARKED_REMOTE_INPUT_TARGET",
+            "",
+            None,
+            0,
+            wince_emulation_v3::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        kernel.register_blocked_waiter(
+            6,
+            0x606,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: Some(parked),
+                min_msg: 0,
+                max_msg: 0,
+            },
+            10,
+            u32::MAX,
+        );
+
+        assert_eq!(blocked_remote_input_target(&cpu, &kernel), None);
     }
 
     #[test]
