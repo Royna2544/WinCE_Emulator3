@@ -14594,19 +14594,13 @@ pub(crate) fn dispatch_fsdmgr_fmd_callback_raw<M: CoredllGuestMemory>(
         }
         FsdmgrFmdCallback::EraseBlock => {
             let disk_ptr = disk_ptr?;
-            let Some(info) = kernel.fsdmgr_disk_info(disk_ptr) else {
-                return Some(0);
+            let status = match kernel.fsdmgr_fmd_block_sector_span(disk_ptr, raw_arg(args, 0)) {
+                Some(Ok((start_sector, sectors_per_block))) => {
+                    kernel.fsdmgr_delete_disk_sectors(disk_ptr, start_sector, sectors_per_block)
+                }
+                Some(Err(status)) => status,
+                None => ERROR_INVALID_PARAMETER,
             };
-            let bytes_per_sector = info[1].max(1);
-            let sectors_per_block = (kernel
-                .fsdmgr_fmd_sector_size(disk_ptr)
-                .unwrap_or(bytes_per_sector)
-                .max(bytes_per_sector)
-                / bytes_per_sector)
-                .max(1);
-            let start_sector = raw_arg(args, 0).saturating_mul(sectors_per_block);
-            let status =
-                kernel.fsdmgr_delete_disk_sectors(disk_ptr, start_sector, sectors_per_block);
             kernel.threads.set_last_error(thread_id, status);
             u32::from(status == 0)
         }

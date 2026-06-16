@@ -4519,6 +4519,7 @@ mod tests {
         let fmd_set_block_status_callback = memory.word(fmd_interface_ptr + 20);
         let fmd_read_sector_callback = memory.word(fmd_interface_ptr + 24);
         let fmd_write_sector_callback = memory.word(fmd_interface_ptr + 28);
+        let fmd_erase_block_callback = memory.word(fmd_interface_ptr + 32);
         let fmd_get_info_ex_callback = memory.word(fmd_interface_ptr + 48);
         let fmd_oem_io_control_callback = memory.word(fmd_interface_ptr + 52);
         for offset in (0..12).step_by(4) {
@@ -4686,6 +4687,62 @@ mod tests {
             .unwrap();
         assert!(callback_read[..512].iter().all(|byte| *byte == 0x7c));
         assert!(callback_read[512..].iter().all(|byte| *byte == 0));
+
+        memory.map_bytes(write_sector_ptr, &vec![0x91; 5 * 1024]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_write_sector_callback,
+                [32, write_sector_ptr, 0, 5],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 11, fmd_erase_block_callback, [8],),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        memory.map_bytes(read_sector_ptr, &vec![0; 5 * 1024]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_read_sector_callback,
+                [32, read_sector_ptr, 0, 5],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        let mut erased_block_read = vec![0; 5 * 1024];
+        memory
+            .read_bytes(read_sector_ptr, &mut erased_block_read)
+            .unwrap();
+        assert!(erased_block_read[..4 * 1024].iter().all(|byte| *byte == 0));
+        assert!(
+            erased_block_read[4 * 1024..4 * 1024 + 512]
+                .iter()
+                .all(|byte| *byte == 0x91)
+        );
+        assert!(
+            erased_block_read[4 * 1024 + 512..]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_erase_block_callback,
+                [0xffff_ffff],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
 
         memory.map_word(fmd_reserved_out_ptr, 0xfeed_cafe);
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
