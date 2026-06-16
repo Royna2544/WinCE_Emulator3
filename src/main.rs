@@ -51,7 +51,7 @@ use wince_emulation_v3::{
 const FAST_START_RUN_SLICE_INSTRUCTIONS: usize = 250_000;
 const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
 const HOST_IDLE_MESSAGE_POLL_SLICE_MS: u64 = 100;
-const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 5_000;
+const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 30_000;
 // Long busy slices: the in-run code hook already drains remote control
 // messages and ticks the framebuffer while the guest executes, and a fully
 // blocked guest exits the run on its own, so short forced exits only paid the
@@ -1158,14 +1158,14 @@ fn effective_wall_clock_limit_ms(
         }
         if explicit_limit_ms == 0 {
             let live_slice = if remote_server_enabled {
-                HOST_REMOTE_BUSY_RUN_SLICE_MS
+                remote_live_run_slice_ms()
             } else {
                 HOST_LIVE_RUN_SLICE_MS
             };
             return (live_slice, true);
         }
         let live_slice = if remote_server_enabled {
-            HOST_REMOTE_BUSY_RUN_SLICE_MS
+            remote_live_run_slice_ms()
         } else {
             HOST_LIVE_RUN_SLICE_MS
         };
@@ -3722,6 +3722,8 @@ mod tests {
                 system: false,
                 hidden: false,
                 interface_classes: Vec::new(),
+                registry_roots: Vec::new(),
+                registry_subkey: None,
             });
         let kernel = CeKernel::boot(config);
         let path = ce_module_path_for_image(&kernel, r"D:\INAVI_Emulator\INAVI\INavi\INavi.exe");
