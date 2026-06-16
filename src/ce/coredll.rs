@@ -146,6 +146,8 @@ const IOCTL_FMD_SET_XIPMODE: u32 = 0x0007_1f80;
 const IOCTL_FMD_LOCK_BLOCKS: u32 = 0x0007_1f84;
 const IOCTL_FMD_UNLOCK_BLOCKS: u32 = 0x0007_1f88;
 const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
+const IOCTL_FMD_READ_RESERVED: u32 = 0x0007_1f94;
+const IOCTL_FMD_WRITE_RESERVED: u32 = 0x0007_1f98;
 const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
 const IOCTL_FMD_SET_SECTORSIZE: u32 = 0x0007_1fa4;
 const IOCTL_FMD_RAW_WRITE_BLOCKS: u32 = 0x0007_1fa8;
@@ -154,6 +156,8 @@ const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
 const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+const FMD_RESERVED_NAME_LEN: u32 = 8;
+const FMD_RESERVED_REQ_SIZE: u32 = 20;
 const FMD_RAW_WRITE_BLOCKS_REQ_SIZE: u32 = 16;
 const FMD_INFO_SIZE: u32 = 20;
 const ERROR_GEN_FAILURE: u32 = 31;
@@ -13564,6 +13568,12 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
         IOCTL_FMD_RAW_WRITE_BLOCKS => {
             fsdmgr_fmd_raw_write_blocks_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
         }
+        IOCTL_FMD_READ_RESERVED => fsdmgr_fmd_reserved_request_raw(
+            kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, true,
+        ),
+        IOCTL_FMD_WRITE_RESERVED => fsdmgr_fmd_reserved_request_raw(
+            kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, false,
+        ),
         IOCTL_FMD_GET_RESERVED_TABLE => fsdmgr_fmd_get_reserved_table_raw(
             kernel,
             memory,
@@ -13800,6 +13810,99 @@ fn fsdmgr_fmd_get_reserved_table_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn fsdmgr_fmd_reserved_request_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    request_ptr: u32,
+    request_bytes: u32,
+    read_reserved: bool,
+) -> bool {
+    if kernel.fsdmgr_disk_info(disk_ptr).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if request_ptr == 0 || request_bytes < FMD_RESERVED_REQ_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let mut name = [0; FMD_RESERVED_NAME_LEN as usize];
+    if memory.read_bytes(request_ptr, &mut name).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(_start) = memory.read_u32(request_ptr.wrapping_add(8)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(buffer_len) = memory.read_u32(request_ptr.wrapping_add(12)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(buffer_ptr) = memory.read_u32(request_ptr.wrapping_add(16)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if buffer_len != 0 {
+        if buffer_ptr == 0 {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        let Some(last_ptr) = buffer_ptr.checked_add(buffer_len - 1) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        if read_reserved {
+            let Ok(first) = memory.read_u8(buffer_ptr) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            };
+            let Ok(last) = memory.read_u8(last_ptr) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            };
+            if memory.write_u8(buffer_ptr, first).is_err()
+                || memory.write_u8(last_ptr, last).is_err()
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+        } else if memory.read_u8(buffer_ptr).is_err() || memory.read_u8(last_ptr).is_err() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
 }
 
 fn fsdmgr_fmd_set_xip_mode_raw<M: CoredllGuestMemory>(

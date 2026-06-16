@@ -2440,6 +2440,8 @@ mod tests {
         const IOCTL_FMD_LOCK_BLOCKS: u32 = 0x0007_1f84;
         const IOCTL_FMD_UNLOCK_BLOCKS: u32 = 0x0007_1f88;
         const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
+        const IOCTL_FMD_READ_RESERVED: u32 = 0x0007_1f94;
+        const IOCTL_FMD_WRITE_RESERVED: u32 = 0x0007_1f98;
         const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
         const IOCTL_FMD_SET_SECTORSIZE: u32 = 0x0007_1fa4;
         const IOCTL_FMD_RAW_WRITE_BLOCKS: u32 = 0x0007_1fa8;
@@ -2507,6 +2509,8 @@ mod tests {
         let fmd_sector_size_ptr = 0x1001_8000;
         let fmd_raw_write_req_ptr = 0x1001_9000;
         let fmd_raw_write_buffer_ptr = 0x1001_a000;
+        let fmd_reserved_req_ptr = 0x1001_b000;
+        let fmd_reserved_buffer_ptr = 0x1001_c000;
 
         let mut sector_bytes = vec![0; 512];
         sector_bytes[..17].copy_from_slice(b"direct-disk-write");
@@ -2977,6 +2981,110 @@ mod tests {
         assert_eq!(kernel.threads.get_last_error(11), 0);
         assert_eq!(memory.word(bytes_returned_ptr), 0);
         assert_eq!(memory.word(fmd_reserved_out_ptr), 0xfeed_cafe);
+
+        memory.map_bytes(fmd_reserved_req_ptr, b"BOOT\0\0\0\0");
+        memory.map_word(fmd_reserved_req_ptr + 8, 0);
+        memory.map_word(fmd_reserved_req_ptr + 12, 4);
+        memory.map_word(fmd_reserved_req_ptr + 16, fmd_reserved_buffer_ptr);
+        memory.map_bytes(fmd_reserved_buffer_ptr, &[0x11, 0x22, 0x33, 0x44]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_READ_RESERVED,
+                    fmd_reserved_req_ptr,
+                    19,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        let mut reserved_bytes = [0; 4];
+        memory
+            .read_bytes(fmd_reserved_buffer_ptr, &mut reserved_bytes)
+            .unwrap();
+        assert_eq!(reserved_bytes, [0x11, 0x22, 0x33, 0x44]);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_READ_RESERVED,
+                    fmd_reserved_req_ptr,
+                    20,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        memory
+            .read_bytes(fmd_reserved_buffer_ptr, &mut reserved_bytes)
+            .unwrap();
+        assert_eq!(reserved_bytes, [0x11, 0x22, 0x33, 0x44]);
+
+        memory.map_word(fmd_reserved_req_ptr + 16, 0x1001_d000);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_WRITE_RESERVED,
+                    fmd_reserved_req_ptr,
+                    20,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        memory.map_word(fmd_reserved_req_ptr + 16, fmd_reserved_buffer_ptr);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_WRITE_RESERVED,
+                    fmd_reserved_req_ptr,
+                    20,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        memory
+            .read_bytes(fmd_reserved_buffer_ptr, &mut reserved_bytes)
+            .unwrap();
+        assert_eq!(reserved_bytes, [0x11, 0x22, 0x33, 0x44]);
 
         memory.map_word(fmd_reserved_out_ptr, 0xfeed_cafe);
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);

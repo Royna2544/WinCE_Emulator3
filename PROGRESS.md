@@ -20,14 +20,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `IOCTL_FMD_SET_XIPMODE`, `IOCTL_FMD_GET_XIPMODE`,
   `IOCTL_FMD_LOCK_BLOCKS`, `IOCTL_FMD_UNLOCK_BLOCKS`,
   `IOCTL_FMD_SET_SECTORSIZE`, `IOCTL_FMD_RAW_WRITE_BLOCKS`,
+  `IOCTL_FMD_READ_RESERVED`, `IOCTL_FMD_WRITE_RESERVED`,
   `IOCTL_FMD_GET_RESERVED_TABLE`, `IOCTL_FMD_GET_RAW_BLOCK_SIZE`, and
   `IOCTL_FMD_GET_INFO` controls. The synthetic disk tracks XIP mode,
   block-lock ranges, and FMD sector-size state, validates raw block-write
   buffers, writes raw block payloads into sparse synthetic disk backing,
-  reports an empty reserved table, returns the current synthetic block size,
+  validates CE `ReservedReq` caller buffers before reporting unsupported
+  against the empty reserved table, returns the current synthetic block size,
   and fills deterministic NOR-style `FMDInfo` metadata while leaving hardware
-  flash interface, reserved-region, and region-table behavior queued.
-- Validation after the FMD XIP/block-lock/sector-size/raw-write IOCTL slice: focused
+  flash interface, actual reserved-region storage, and region-table behavior
+  queued.
+- Validation after the FMD XIP/block-lock/sector-size/raw-write/reserved-request IOCTL slice: focused
   `cargo test -j 1 --features unicorn,trace,win32-desktop
   emulator::imports::tests::fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info`,
   `cargo fmt --check`, `git diff --check`,

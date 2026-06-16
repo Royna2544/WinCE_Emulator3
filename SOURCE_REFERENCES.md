@@ -502,12 +502,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `STRATA\fmd.cpp` and `HOOK\FLSNAND\flsnand.cpp` show OEMIoControl
     validation for `SET_XIPMODE`, `GET_XIPMODE`, `LOCK_BLOCKS`,
     `UNLOCK_BLOCKS`, `SET_SECTORSIZE`, `RAW_WRITE_BLOCKS`,
-    `GET_RESERVED_TABLE`, `GET_RAW_BLOCK_SIZE`, and `GET_INFO`, storing a
-    BOOLEAN XIP flag, consuming the 8-byte `BlockLockInfo` range payload,
-    accepting a DWORD sector-size state, validating the 16-byte
-    `RawWriteBlocksReq` buffer-size contract before block writes, returning an
-    empty table size when no reserved table exists, a DWORD raw block size, and
-    flash type/base/region/reserved-count metadata.
+    `READ_RESERVED`, `WRITE_RESERVED`, `GET_RESERVED_TABLE`,
+    `GET_RAW_BLOCK_SIZE`, and `GET_INFO`, storing a BOOLEAN XIP flag,
+    consuming the 8-byte `BlockLockInfo` range payload, accepting a DWORD
+    sector-size state, validating the 16-byte `RawWriteBlocksReq` buffer-size
+    contract before block writes, validating the 20-byte `ReservedReq` plus
+    caller buffer before scanning the reserved table, returning an empty table
+    size when no reserved table exists, a DWORD raw block size, and flash
+    type/base/region/reserved-count metadata.
     v3 now traps the direct ordinals, persists
     direct/cache/Ex writes in sparse synthetic 512-byte sectors, reads unwritten
     sectors as zero-filled data, writes synthetic `DISK_INFO`, handles both
@@ -527,8 +529,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     CD-ROM controls without touching caller buffers, treats initialized and
     flush-cache as successful basic disk IOCTLs, and now exposes synthetic XIP
     mode, block-lock ranges, sector-size state, raw block writes into sparse
-    disk backing, empty reserved-table, raw-block-size, and deterministic
-    NOR-style `FMDInfo` metadata for the FMD controls.
+    disk backing, CE `ReservedReq` validation against the empty reserved table,
+    raw-block-size, and deterministic NOR-style `FMDInfo` metadata for the FMD
+    controls.
     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`
     defines `FSCTL_COPY_EXTERNAL_START`, `FSCTL_COPY_EXTERNAL_COMPLETE`, and
     the 536-byte `FILE_COPY_EXTERNAL` header; UDF's
@@ -585,7 +588,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for
     refresh/flush no-ops and host-backed unsupported-FSCTL no-touch failure.
     Remaining storage fidelity is physical block-driver backing, external
-    cache/filter DLL behavior, remaining hardware-flash/FMD interface/reserved-region/region-table and specialized disk IOCTLs, real FATFS
+    cache/filter DLL behavior, remaining hardware-flash/FMD interface/actual reserved-region storage/region-table and specialized disk IOCTLs, real FATFS
     volume format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume
     behavior, hardware power-state timing, and
@@ -3326,7 +3329,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
-    for FSDMGR cache imports. Physical block-driver backing, remaining hardware-flash/FMD interface/reserved-region/region-table and disk IOCTL
+    for FSDMGR cache imports. Physical block-driver backing, remaining hardware-flash/FMD interface/actual reserved-region storage/region-table and disk IOCTL
     forwarding, real cache DLL/filter behavior, real CE mounted-volume
     availability, powerdown, and thread-exit
     wait reference behavior, broader file-security ACL storage and
