@@ -523,7 +523,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the cached region table and flash-layout-sector region area.
     v3 now traps the direct ordinals, persists
     direct/cache/Ex writes in sparse synthetic 512-byte sectors, reads unwritten
-    sectors as zero-filled data, writes synthetic `DISK_INFO`, handles both
+    sectors as zero-filled data, accepts zero-sector direct `ReadDisk`/`WriteDisk`
+    calls without touching null caller buffers after validating the disk token,
+    writes synthetic `DISK_INFO`, handles both
     legacy `DISK_IOCTL_GETINFO` and new `IOCTL_DISK_GETINFO`, persists
     validated SETINFO metadata for later GETINFO calls, writes disk name,
     device info, and storage-id metadata, fills Ex result sector counts, handles

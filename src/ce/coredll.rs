@@ -13108,6 +13108,9 @@ fn fsdmgr_read_disk_raw<M: CoredllGuestMemory>(
             return fsdmgr_cache_status_raw(kernel, thread_id, ERROR_INVALID_PARAMETER);
         }
     };
+    if bytes.is_empty() {
+        return fsdmgr_cache_status_raw(kernel, thread_id, 0);
+    }
     if buffer_bytes < bytes.len() as u32
         || buffer_ptr == 0
         || memory.write_bytes(buffer_ptr, &bytes).is_err()
@@ -13130,6 +13133,10 @@ fn fsdmgr_write_disk_raw<M: CoredllGuestMemory>(
     let Some(expected_len) = sectors.checked_mul(512).map(|len| len as usize) else {
         return fsdmgr_cache_status_raw(kernel, thread_id, ERROR_INVALID_PARAMETER);
     };
+    if expected_len == 0 {
+        let status = kernel.fsdmgr_write_disk(disk_ptr, sector, sectors, 512, &[]);
+        return fsdmgr_cache_status_raw(kernel, thread_id, status);
+    }
     if buffer_bytes < expected_len as u32 || buffer_ptr == 0 {
         return fsdmgr_cache_status_raw(kernel, thread_id, ERROR_INVALID_PARAMETER);
     }

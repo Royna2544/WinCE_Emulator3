@@ -5938,3 +5938,19 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   and `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains
   ignored, and Cargo still emits the existing unused-code warnings.
+- `src/ce/coredll.rs`, `src/emulator/imports.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: direct CE
+  `FSDMGR_ReadDisk @25`/`FSDMGR_WriteDisk @35` now follow the
+  `fsdmgrapi.cpp` wrapper edge for zero-sector calls by validating the disk
+  token and returning success without dereferencing null caller buffers. The
+  import regression covers zero-sector read/write success on a valid synthetic
+  disk and invalid-parameter failure for a null disk token.
+- Validation after the FSDMGR zero-sector direct read/write slice:
+  `cargo fmt`, `git diff --check`, `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop
+  fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored, and Cargo still emits the existing unused-code
+  warnings.

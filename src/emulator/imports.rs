@@ -2555,6 +2555,51 @@ mod tests {
                 &mut kernel,
                 &mut memory,
                 11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 99, 0, 0, 0],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, 99, 0, 0, 0],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [0, 99, 0, 0, 0],
+            ),
+            Some(ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [0, 99, 0, 0, 0],
+            ),
+            Some(ERROR_INVALID_PARAMETER)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
                 [
                     disk_ptr,
