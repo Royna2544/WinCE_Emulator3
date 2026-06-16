@@ -64,6 +64,12 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   operands (`ERROR_INVALID_PARAMETER`) from bad or wrong-type GDI handles
   (`ERROR_INVALID_HANDLE`) while preserving clear-last-error equal/unequal
   comparisons for valid regions.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `PtInRegion` and
+  `RectInRegion` now follow CE
+  `region.cpp::passNull2Region(EPtInRegion/ERectInRegion)`, including
+  invalid-handle reporting for null, bad, and wrong-type region handles,
+  `RectInRegion(validRegion, NULL)` invalid-parameter reporting, and
+  clear-last-error valid inside/outside tests.
 - Focused validation after the Unicorn parked `SendMessageTimeout` timeout
   re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop send_message_timeout_ --lib`

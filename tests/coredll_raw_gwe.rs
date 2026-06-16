@@ -34176,6 +34176,132 @@ fn coredll_raw_equal_rgn_reports_ce_null_and_wrong_handle_errors() -> Result<()>
 }
 
 #[test]
+fn coredll_raw_in_region_reports_ce_handle_and_rect_errors() -> Result<()> {
+    const WHITE_BRUSH: u32 = 0;
+    const BLACK_PEN: u32 = 7;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+    let rect_ptr = 0x3000_1000;
+
+    let region = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [10, 20, 50, 70],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn did not return a region: {other:?}"),
+    };
+    let stock_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [WHITE_BRUSH],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(WHITE_BRUSH) did not return a handle: {other:?}"),
+    };
+    let stock_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [BLACK_PEN],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(BLACK_PEN) did not return a handle: {other:?}"),
+    };
+
+    macro_rules! assert_bool_call {
+        ($ordinal:expr, $args:expr, $expected:expr, $last_error:expr) => {{
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    $ordinal,
+                    $args,
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(value),
+                    ..
+                } if value == $expected
+            ));
+            assert_eq!(kernel.threads.get_last_error(thread_id), $last_error);
+        }};
+    }
+
+    assert_bool_call!(ORD_PT_IN_REGION, [0, 12, 22], false, ERROR_INVALID_HANDLE);
+    assert_bool_call!(
+        ORD_PT_IN_REGION,
+        [0x0000_0bad, 12, 22],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_bool_call!(
+        ORD_PT_IN_REGION,
+        [stock_pen, 12, 22],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_bool_call!(ORD_PT_IN_REGION, [region, 12, 22], true, 0);
+    assert_bool_call!(ORD_PT_IN_REGION, [region, 50, 70], false, 0);
+
+    memory.write_word(rect_ptr, 12);
+    memory.write_word(rect_ptr + 4, 22);
+    memory.write_word(rect_ptr + 8, 14);
+    memory.write_word(rect_ptr + 12, 24);
+    assert_bool_call!(
+        ORD_RECT_IN_REGION,
+        [0, rect_ptr],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_bool_call!(
+        ORD_RECT_IN_REGION,
+        [0x0000_0bad, rect_ptr],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_bool_call!(
+        ORD_RECT_IN_REGION,
+        [stock_brush, rect_ptr],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_bool_call!(ORD_RECT_IN_REGION, [region, rect_ptr], true, 0);
+
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 1);
+    memory.write_word(rect_ptr + 12, 1);
+    assert_bool_call!(ORD_RECT_IN_REGION, [region, rect_ptr], false, 0);
+    assert_bool_call!(
+        ORD_RECT_IN_REGION,
+        [region, 0],
+        false,
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_region_or_incrementally_merges_scanline_rects() -> Result<()> {
     const SIMPLEREGION: u32 = 2;
     const RGN_OR: u32 = 2;

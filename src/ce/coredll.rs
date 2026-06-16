@@ -6502,6 +6502,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_PT_IN_REGION => Some(CoredllValue::Bool(pt_in_region_raw(
             kernel,
+            thread_id,
             raw_arg(args, 0),
             raw_i32_arg(args, 1),
             raw_i32_arg(args, 2),
@@ -47968,11 +47969,15 @@ fn get_region_data_raw<M: CoredllGuestMemory>(
     total
 }
 
-fn pt_in_region_raw(kernel: &CeKernel, region: u32, x: i32, y: i32) -> bool {
-    kernel
-        .resources
-        .region(region)
-        .is_some_and(|region| region.rects.iter().any(|rect| point_in_rect(*rect, x, y)))
+fn pt_in_region_raw(kernel: &mut CeKernel, thread_id: u32, region: u32, x: i32, y: i32) -> bool {
+    let Some(region) = kernel.resources.region(region) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    region.rects.iter().any(|rect| point_in_rect(*rect, x, y))
 }
 
 fn rect_in_region_raw<M: CoredllGuestMemory>(
@@ -47982,15 +47987,23 @@ fn rect_in_region_raw<M: CoredllGuestMemory>(
     region: u32,
     rect_ptr: u32,
 ) -> bool {
+    let Some(region_rects) = kernel
+        .resources
+        .region(region)
+        .map(|region| region.rects.clone())
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
     let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
         return false;
     };
-    kernel.resources.region(region).is_some_and(|region| {
-        region
-            .rects
-            .iter()
-            .any(|region_rect| rects_intersect(*region_rect, rect))
-    })
+    kernel.threads.set_last_error(thread_id, 0);
+    region_rects
+        .iter()
+        .any(|region_rect| rects_intersect(*region_rect, rect))
 }
 
 fn set_window_rgn_raw(

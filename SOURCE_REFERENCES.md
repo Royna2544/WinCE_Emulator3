@@ -2409,6 +2409,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     fail with `ERROR_INVALID_HANDLE`. Raw `EqualRgn` now follows that error
     split before comparing valid region geometry, including stock pen/palette
     wrong-handle cases from the CE fixture.
+  - `region.cpp::passNull2Region(EPtInRegion/ERectInRegion)` expects null,
+    unknown, and wrong-type region handles to fail with `ERROR_INVALID_HANDLE`,
+    while `RectInRegion(validRegion, NULL)` fails with
+    `ERROR_INVALID_PARAMETER`. Raw `PtInRegion`/`RectInRegion` now follows
+    that order before running valid inside/outside geometry tests.
 
 - GDI DIB/color-table and DIB brush surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
