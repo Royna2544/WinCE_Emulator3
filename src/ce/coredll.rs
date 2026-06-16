@@ -51124,6 +51124,7 @@ fn vkey_to_unshifted_char(vkey: u32) -> u32 {
 
 fn vkey_to_scan_code(vkey: u32) -> u32 {
     match vkey {
+        0x03 => 0xe046,   // Cancel (extended)
         0x08 => 0x0e,     // Backspace
         0x09 => 0x0f,     // Tab
         0x0d => 0x1c,     // Return
