@@ -48,6 +48,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `draw.cpp::ClipBitBlt(ETransparentImage)` off-left source-alignment case now
   covers same-framebuffer HDC copies, proving the framebuffer fallback snapshots
   source pixels before writing and preserves non-overlapped source pixels.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and same-framebuffer
+  `TransparentImage` now cover CE `draw.cpp::ClipBitBlt(ETransparentImage)`
+  off-top source alignment, proving top-edge destination clipping advances
+  source rows and transparent sampled rows preserve the destination.
+- Validation after the transparent off-top clipping slice: focused
+  `coredll_raw_transparent_image_clips_off_top`, `cargo fmt --check`, `git
+  diff --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  and full `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
+  Full-test logs are under
+  `target/cargo-test-full-transparent-offtop-clip.20260616-133448.*.log`.
 - Validation after the framebuffer transparent off-left clipping slice: focused
   `coredll_raw_transparent_image_clips_off_left_framebuffer_source_alignment`,
   `cargo fmt --check`, `git diff --check`, `cargo check --features
