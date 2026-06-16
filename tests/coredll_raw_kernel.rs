@@ -14928,6 +14928,40 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(record.duration_cs, 0);
     assert_eq!(record.expires_at_ms, Some(record.added_at_ms));
 
+    memory.write_word(data + 12, 9);
+    memory.write_word(data + 16, 0x000b_9003);
+    memory.write_word(data + 20, SHNUM_TITLE | SHNUM_HTML);
+    memory.write_wide_z(title, "Duplicate iconic");
+    memory.write_wide_z(html, "<p>Duplicate</p>");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_ADD_I,
+            [data, SHNOTIFICATIONDATA_SIZE, title, html],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_DATA),
+            ..
+        }
+    ));
+    let record = kernel.shell.notification(clsid, 301).expect("notification");
+    assert_eq!(record.priority, SHNP_ICONIC);
+    assert_eq!(record.duration_cs, 0);
+    assert_eq!(record.icon, 0x000b_9002);
+    assert_eq!(record.title, "Route changed");
+    assert_eq!(record.html, "<i>Later</i>");
+    assert_eq!(
+        kernel
+            .shell
+            .destroyed_notify_icons()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![0x000b_9001],
+        "duplicate iconic add should not replace or destroy the existing CE tray icon"
+    );
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

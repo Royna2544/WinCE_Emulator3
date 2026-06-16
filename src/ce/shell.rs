@@ -239,6 +239,14 @@ impl ShellSystem {
             return NotificationResult::InvalidParameter;
         }
         let key = (data.clsid, data.id);
+        if data.priority == SHNP_ICONIC
+            && self
+                .notifications
+                .get(&key)
+                .is_some_and(|record| record.priority == SHNP_ICONIC)
+        {
+            return NotificationResult::InvalidData;
+        }
         self.remove_notification_from_priority_lists(key);
         self.add_notification_to_priority_list(key, data.priority);
         self.notifications
