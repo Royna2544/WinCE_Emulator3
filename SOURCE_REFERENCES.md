@@ -1470,8 +1470,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and `lParam` carrying the shell event, tracks the registered taskbar HWND,
     posts successful `Shell_NotifyIcon` operations to that taskbar with a
     heap-backed copied `NOTIFYICONDATAW` payload, releases the copied payload
-    after `DispatchMessageW` handles `WM_HANDLESHELLNOTIFYICON`, and still
-    reports success after mutating shell state when the registered taskbar
+    after `DispatchMessageW` handles `WM_HANDLESHELLNOTIFYICON`, verifies that
+    failed duplicate-add and missing-record modify calls do not post copied
+    payloads, verifies that successful live modify/delete calls still copy and
+    post CE taskbar messages, and still reports success after mutating shell state when the registered taskbar
     HWND has gone stale and no private taskbar post can be queued, matching
     the sample callback's state-copy-before-taskbar-processing shape. Existing
     `NIM_DELETE` records may also be removed after their owner `hWnd` is stale,

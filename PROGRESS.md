@@ -54,6 +54,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   the owner was enabled before the modal box. A raw regression covers the
   default-result fallback path restoring focus to an owner child after the
   transient dialog is destroyed.
+- `tests/coredll_raw_kernel.rs`: registered-taskbar `Shell_NotifyIcon`
+  coverage now proves duplicate `NIM_ADD` and missing-record `NIM_MODIFY`
+  failures do not post copied `NOTIFYICONDATAW` payloads, while successful live
+  `NIM_MODIFY` and `NIM_DELETE` calls still post CE-style taskbar copies and
+  release private payloads.
 - Focused validation after the Unicorn parked `SendMessageTimeout` timeout
   re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop send_message_timeout_ --lib`

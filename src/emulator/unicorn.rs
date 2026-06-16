@@ -5999,7 +5999,7 @@ impl UnicornMips {
                         let _ = unsafe { &mut *kernel_ptr }
                             .release_message_pointer_payload(callout.lparam);
                     }
-                    let _ = finish_orphaned_visible_paint_after_wndproc_return(
+                    let _ = finish_guest_paint_after_wndproc_return(
                         unsafe { &mut *kernel_ptr },
                         &callout,
                     );
@@ -35118,11 +35118,15 @@ fn orphaned_paint_return_can_recover_without_frame<D>(
 }
 
 #[cfg(feature = "unicorn")]
-fn finish_orphaned_visible_paint_after_wndproc_return(
+fn finish_guest_paint_after_wndproc_return(
     kernel: &mut CeKernel,
     callout: &PendingWndProcReturn,
 ) -> bool {
-    if callout.source != "OrphanedVisibleMessage" || callout.msg != crate::ce::gwe::WM_PAINT {
+    if !matches!(
+        callout.source,
+        "DispatchMessageW" | "OrphanedVisibleMessage" | "UpdateWindow/WM_PAINT"
+    ) || callout.msg != crate::ce::gwe::WM_PAINT
+    {
         return false;
     }
     if kernel.gwe.update_rect(callout.hwnd).is_none() {
@@ -38812,7 +38816,7 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn orphaned_visible_paint_wndproc_return_validates_remaining_update_region() {
+    fn guest_paint_wndproc_return_validates_remaining_update_region() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let thread_id = 1;
@@ -38856,7 +38860,23 @@ mod unicorn_tests {
             resume_import: None,
             clear_focus_after_return: None,
         };
-        assert!(super::finish_orphaned_visible_paint_after_wndproc_return(
+        assert!(super::finish_guest_paint_after_wndproc_return(
+            &mut kernel,
+            &callout
+        ));
+        assert!(kernel.gwe.update_rect(hwnd).is_none());
+
+        assert!(kernel.gwe.invalidate_window(hwnd, None, true));
+        callout.source = "DispatchMessageW";
+        assert!(super::finish_guest_paint_after_wndproc_return(
+            &mut kernel,
+            &callout
+        ));
+        assert!(kernel.gwe.update_rect(hwnd).is_none());
+
+        assert!(kernel.gwe.invalidate_window(hwnd, None, true));
+        callout.source = "UpdateWindow/WM_PAINT";
+        assert!(super::finish_guest_paint_after_wndproc_return(
             &mut kernel,
             &callout
         ));
@@ -38864,7 +38884,7 @@ mod unicorn_tests {
 
         assert!(kernel.gwe.invalidate_window(hwnd, None, true));
         callout.source = "SendMessageW";
-        assert!(!super::finish_orphaned_visible_paint_after_wndproc_return(
+        assert!(!super::finish_guest_paint_after_wndproc_return(
             &mut kernel,
             &callout
         ));
