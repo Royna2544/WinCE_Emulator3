@@ -7332,12 +7332,14 @@ impl UnicornMips {
                     return;
                 }
                 let raw_caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+                let sp = read_mips_reg(memory.uc, RegisterMIPS::SP);
                 let caller_pc = live_trampoline_state_import_hook
                     .borrow()
                     .origin_for_pc(raw_caller_pc)
                     .unwrap_or(raw_caller_pc);
                 let caller_module =
                     mapped_blob_module_for_pc(unsafe { &*mapped_blobs_ptr }, caller_pc);
+                let stack_words = read_unicorn_stack_words(memory.uc, sp, 0x30);
                 let Some(import_return) = traps
                     .borrow()
                     .dispatch_trap_registers_with_framebuffer_and_context(
@@ -7347,7 +7349,10 @@ impl UnicornMips {
                     crate::ce::coredll::CoredllRawContext {
                         thread_id: active_thread_id,
                         caller_pc: Some(caller_pc),
+                        raw_caller_pc: Some(raw_caller_pc),
                         trap_pc: Some(address),
+                        sp: Some(sp),
+                        stack_words,
                         caller_module,
                     },
                     address,

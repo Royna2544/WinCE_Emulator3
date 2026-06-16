@@ -622,7 +622,10 @@ pub struct CoredllStubResult {
 pub struct CoredllRawContext {
     pub thread_id: u32,
     pub caller_pc: Option<u32>,
+    pub raw_caller_pc: Option<u32>,
     pub trap_pc: Option<u32>,
+    pub sp: Option<u32>,
+    pub stack_words: Vec<(u32, Option<u32>)>,
     pub caller_module: Option<String>,
 }
 
@@ -813,6 +816,7 @@ impl CoredllExportTable {
                 caller_pc: None,
                 trap_pc: None,
                 caller_module: None,
+                ..Default::default()
             },
             ordinal,
             &args,
@@ -864,6 +868,7 @@ impl CoredllExportTable {
                 caller_pc: None,
                 trap_pc: None,
                 caller_module: None,
+                ..Default::default()
             },
             ordinal,
             args,
@@ -969,12 +974,37 @@ fn raw_context_trace_detail(context: &CoredllRawContext) -> String {
         .caller_pc
         .map(|pc| format!("0x{pc:08x}"))
         .unwrap_or_else(|| "none".to_owned());
+    let raw_caller_pc = context
+        .raw_caller_pc
+        .map(|pc| format!("0x{pc:08x}"))
+        .unwrap_or_else(|| "none".to_owned());
     let trap_pc = context
         .trap_pc
         .map(|pc| format!("0x{pc:08x}"))
         .unwrap_or_else(|| "none".to_owned());
+    let sp = context
+        .sp
+        .map(|sp| format!("0x{sp:08x}"))
+        .unwrap_or_else(|| "none".to_owned());
     let caller_module = context.caller_module.as_deref().unwrap_or("none");
-    format!("caller_pc={caller_pc}/trap_pc={trap_pc}/caller_module={caller_module}")
+    let mut detail = format!(
+        "caller_pc={caller_pc}/raw_caller_pc={raw_caller_pc}/trap_pc={trap_pc}/sp={sp}/caller_module={caller_module}"
+    );
+    if !context.stack_words.is_empty() {
+        let stack = context
+            .stack_words
+            .iter()
+            .take(12)
+            .map(|(offset, value)| match value {
+                Some(value) => format!("+0x{offset:02x}:0x{value:08x}"),
+                None => format!("+0x{offset:02x}:unreadable"),
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        detail.push_str("/stack=");
+        detail.push_str(&stack);
+    }
+    detail
 }
 
 fn record_raw_window_call_trace(

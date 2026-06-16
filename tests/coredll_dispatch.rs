@@ -802,7 +802,10 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
         CoredllRawContext {
             thread_id: 7,
             caller_pc: Some(0x0040_1234),
+            raw_caller_pc: None,
             trap_pc: Some(0x7fff_4000),
+            sp: None,
+            stack_words: Vec::new(),
             caller_module: Some("dll:mfcce400.dll".to_owned()),
         },
         1016, // "_fpieee_flt" — CRT export without ORD_* constant; always stubbed
@@ -820,7 +823,10 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
                 && stub.context == Some(CoredllRawContext {
                     thread_id: 7,
                     caller_pc: Some(0x0040_1234),
+                    raw_caller_pc: None,
                     trap_pc: Some(0x7fff_4000),
+                    sp: None,
+                    stack_words: Vec::new(),
                     caller_module: Some("dll:mfcce400.dll".to_owned()),
                 })
                 && stub.last_error == None

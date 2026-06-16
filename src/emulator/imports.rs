@@ -189,6 +189,7 @@ impl ImportTrapTable {
                 caller_pc: None,
                 trap_pc: Some(address),
                 caller_module: None,
+                ..Default::default()
             },
             address,
             args,
