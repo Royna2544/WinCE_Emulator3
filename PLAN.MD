@@ -32,7 +32,7 @@ Regenerated on 2026-06-11 from the current `src/` and `tests/` implementation st
 5. Harden mounted storage behavior.
    - Extend file-change notifications across mount roots, volume handles, rename churn, and FSDMGR-style ownership semantics.
    - Direct `fsdmgr.dll` path imports for create/remove directory, get/set attributes, delete, move, delete-and-rename, disk-free-space, find-first, create-file, system-file checks, and no-security-manager get/set file-security wrappers now route through mounted guest paths; remaining path/security gap is deeper ACL behavior.
-   - Validate remaining live iNavi behavior against the mounted SD-card layout; raw writable vs read-only host-directory semantics and CE volume attributes are now covered.
+   - Validate remaining live iNavi behavior against the mounted SD-card layout; raw writable vs read-only host-directory semantics, CE volume attributes, and shared read-only memory backing for medium host files with write/rename/delete invalidation are now covered.
 
 6. Expand input, text, and GDI fidelity.
    - Add coverage for IME-facing keyboard input, caret timing, glyph metrics, font fallback, text clipping, palette selection, alpha/mask behavior, and device-context state restoration.
