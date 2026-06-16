@@ -556,12 +556,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp` shows the
     external wrapper safely copying a 20-byte `OVERLAPPED` before entering the
     internal FSD path and returning `ERROR_INVALID_PARAMETER` when that copy
-    fails. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\LOCKMGR\lockmgr.cpp`
-    then delegates real byte-range ownership and conflict decisions through the
-    FSD-acquired lock container. v3 now exposes the public coredll ordinals and
-    covers the wrapper-visible file-handle/readable-`OVERLAPPED` validation;
-    actual byte-range conflict enforcement remains queued with the host-backed
-    FSD lock-container work.
+    fails. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\LOCKMGR\range.cpp`,
+    `lockmgrapi.cpp`, and `lockmgr.cpp` show the inclusive
+    `start + length - 1` range model, zero/wrapping range rejection,
+    shared-vs-exclusive conflict checks, exact owner/range unlock, and
+    close-handle lock cleanup through `LXX_UnlockLocksOwnedByHandle`. v3 now
+    exposes the public coredll ordinals, validates wrapper-visible inputs, and
+    enforces host-backed byte-range owner/conflict state for immediate callers;
+    remaining parity is CE-style wait queues for non-immediate conflicts plus
+    lower-FSD/filter forwarding.
     `volumeapi.cpp` handles
     `FSCTL_GET_VOLUME_INFO` before forwarding other controls to the mounted
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for

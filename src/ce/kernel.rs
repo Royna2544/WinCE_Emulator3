@@ -6,8 +6,8 @@ use crate::{
         devices::{DeviceIoControlResult, DeviceNamespace, PURGE_RXCLEAR},
         file::{
             CREATE_ALWAYS, CREATE_NEW, DeviceInterfaceAdvertisementSpec, FILE_ATTRIBUTE_DIRECTORY,
-            FileIoResult, FileIoStats, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem,
-            OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
+            FileIoResult, FileIoStats, FileLockStatus, FindData, GENERIC_READ, GENERIC_WRITE,
+            HostFileSystem, OPEN_ALWAYS, OPEN_EXISTING, TRUNCATE_EXISTING,
         },
         framebuffer::{Framebuffer, FramebufferBackingStore, FramebufferInfo, FramebufferRect},
         gwe::{
@@ -4280,6 +4280,32 @@ impl CeKernel {
 
     pub fn is_file_handle(&self, handle: u32) -> Result<bool> {
         Ok(matches!(self.handles.get(handle)?, KernelObject::File(_)))
+    }
+
+    pub fn lock_file_range(
+        &mut self,
+        handle: u32,
+        start: u64,
+        length: u64,
+        exclusive: bool,
+    ) -> Result<FileLockStatus> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.files
+            .lock_file_range(file.file_id, start, length, exclusive)
+    }
+
+    pub fn unlock_file_range(
+        &mut self,
+        handle: u32,
+        start: u64,
+        length: u64,
+    ) -> Result<FileLockStatus> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.files.unlock_file_range(file.file_id, start, length)
     }
 
     pub fn close_handle(&mut self, handle: u32) -> Result<bool> {

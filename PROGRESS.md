@@ -15,21 +15,24 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
-- `src/ce/coredll.rs`, `src/ce/coredll_ordinals.rs`, and
-  `tests/coredll_raw_memory_file.rs`: raw coredll now exposes CE
-  `LockFileEx @1968`/`UnlockFileEx @1969` and validates the CE wrapper-visible
-  file-lock inputs. Valid file handles with readable 20-byte `OVERLAPPED`
-  payloads keep the host-backed non-enforcing success behavior, unreadable
-  `OVERLAPPED*` values fail with `ERROR_INVALID_PARAMETER`, and non-file
-  handles fail with `ERROR_INVALID_HANDLE`. Remaining file-lock parity is the
-  real FSD lock-container/range-conflict implementation.
-- Validation after the CE file-lock wrapper slice: `cargo fmt --check`,
-  `git diff --check`, `cargo check --features unicorn,trace,win32-desktop`,
-  focused `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+- `src/ce/file.rs`, `src/ce/kernel.rs`, `src/ce/coredll.rs`, and
+  `tests/coredll_raw_memory_file.rs`: raw coredll `LockFileEx @1968` and
+  `UnlockFileEx @1969` now follow the CE `LOCKMGR` range model for host-backed
+  files. The emulator validates non-null/readable 20-byte `OVERLAPPED`
+  payloads, rejects zero or wrapping ranges, allows overlapping shared locks,
+  rejects overlapping exclusive/shared conflicts with `ERROR_LOCK_VIOLATION`,
+  requires exact owner/range unlock, and drops a handle's owned locks on close.
+  Remaining file-lock parity is CE-style blocking wait queues for non-immediate
+  conflicts plus lower-FSD/filter forwarding.
+- Validation after the CE file-lock range slice: `cargo fmt --check`, `cargo
+  check --features unicorn,trace,win32-desktop`, `git diff --check`, focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
   coredll_raw_memory_file
-  coredll_raw_lock_file_ex_validates_file_handle_and_overlapped`, full
-  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and the full
-  `coredll_raw_memory_file` test target. Logs were kept under `target/`.
+  coredll_raw_lock_file_ex_validates_file_handle_and_overlapped`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_memory_file`, followed by full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`. Logs were kept
+  under `target/`.
 - `src/emulator/unicorn.rs`: Unicorn mapped-code fallback now indexes every
   mapped blob on a page instead of the first one only, prefers immutable
   static-code snapshots for image/DLL/trampoline instruction reads, and keeps

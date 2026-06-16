@@ -8,6 +8,7 @@ pub const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
 pub const ERROR_INVALID_ACCESS: u32 = 12;
 pub const ERROR_NOT_SAME_DEVICE: u32 = 17;
 pub const ERROR_NO_MORE_FILES: u32 = 18;
+pub const ERROR_LOCK_VIOLATION: u32 = 33;
 pub const ERROR_NOT_SUPPORTED: u32 = 50;
 pub const ERROR_OUT_OF_STRUCTURES: u32 = 84;
 pub const ERROR_INVALID_PARAMETER: u32 = 87;

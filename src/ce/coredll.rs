@@ -15,7 +15,8 @@ use crate::{
         devices::{CommDcb, CommTimeouts, DeviceIoControlResult},
         file::{
             CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
-            FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FindData, GENERIC_WRITE, VolumeInfo,
+            FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FileLockStatus, FindData, GENERIC_WRITE,
+            VolumeInfo,
         },
         framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, PixelFormat},
         gwe::{
@@ -49,9 +50,10 @@ use crate::{
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
             ERROR_FILE_NOT_FOUND, ERROR_INVALID_ACCESS, ERROR_INVALID_HANDLE,
-            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NO_MORE_FILES,
-            ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_OWNER, ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
-            ERROR_OUT_OF_STRUCTURES, ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
+            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_LOCK_VIOLATION,
+            ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_OWNER, ERROR_NOT_SAME_DEVICE,
+            ERROR_NOT_SUPPORTED, ERROR_OUT_OF_STRUCTURES, ERROR_RESOURCE_NAME_NOT_FOUND,
+            ERROR_SIGNAL_REFUSED,
         },
     },
     error::{Error, Result},
@@ -73,6 +75,7 @@ const CTYPE_CONTROL: u32 = 0x0020;
 const CTYPE_BLANK: u32 = 0x0040;
 const CTYPE_HEX: u32 = 0x0080;
 const CTYPE_ALPHA: u32 = 0x0100;
+const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
 const SPI_GETWORKAREA: u32 = 0x0030;
 const SPI_GETWHEELSCROLLLINES: u32 = 0x0068;
 const SPI_SETWHEELSCROLLLINES: u32 = 0x0069;
@@ -3235,7 +3238,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 memory,
                 thread_id,
                 raw_arg(args, 0),
+                raw_arg(args, 1),
+                raw_arg(args, 3),
+                raw_arg(args, 4),
                 raw_arg(args, 5),
+                true,
             )))
         }
         ORD_UNLOCK_FILE_EX => {
@@ -3245,7 +3252,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 memory,
                 thread_id,
                 raw_arg(args, 0),
+                0,
+                raw_arg(args, 2),
+                raw_arg(args, 3),
                 raw_arg(args, 4),
+                false,
             )))
         }
         ORD_SET_FILE_ATTRIBUTES_W => Some(CoredllValue::Bool(set_file_attributes_w_raw(
@@ -11467,16 +11478,25 @@ fn file_lock_ex_raw<M: CoredllGuestMemory>(
     memory: &M,
     thread_id: u32,
     file_handle: u32,
+    flags: u32,
+    length_low: u32,
+    length_high: u32,
     overlapped_ptr: u32,
+    lock: bool,
 ) -> bool {
-    if overlapped_ptr != 0 {
-        let mut overlapped = [0u8; 20];
-        if memory.read_bytes(overlapped_ptr, &mut overlapped).is_err() {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-            return false;
-        }
+    if overlapped_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let mut overlapped = [0u8; 20];
+    if memory.read_bytes(overlapped_ptr, &mut overlapped).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
     }
 
     match kernel.is_file_handle(file_handle) {
@@ -11489,11 +11509,44 @@ fn file_lock_ex_raw<M: CoredllGuestMemory>(
         }
     }
 
-    // CE delegates byte-range arbitration to the mounted FSD. The host-backed
-    // emulator FSD has no lock container yet, so keep non-enforcing success
-    // after the CE-visible wrapper validation above.
-    kernel.threads.set_last_error(thread_id, 0);
-    true
+    let start_low = u32::from_le_bytes(overlapped[8..12].try_into().unwrap());
+    let start_high = u32::from_le_bytes(overlapped[12..16].try_into().unwrap());
+    let start = u64::from(start_low) | (u64::from(start_high) << 32);
+    let length = u64::from(length_low) | (u64::from(length_high) << 32);
+    let status = if lock {
+        kernel.lock_file_range(
+            file_handle,
+            start,
+            length,
+            flags & LOCKFILE_EXCLUSIVE_LOCK != 0,
+        )
+    } else {
+        kernel.unlock_file_range(file_handle, start, length)
+    };
+    match status {
+        Ok(FileLockStatus::Success) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Ok(FileLockStatus::Conflict) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_LOCK_VIOLATION);
+            false
+        }
+        Ok(FileLockStatus::InvalidParameter) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
 }
 
 fn iswctype_raw(wch: u32, ctype: u32) -> u32 {

@@ -83,8 +83,8 @@ use wince_emulation_v3::{
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
-            ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, ERROR_NOT_SAME_DEVICE,
-            ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_PARAMETER, ERROR_LOCK_VIOLATION, ERROR_NO_MORE_FILES,
+            ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
         },
         timer::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -3710,12 +3710,17 @@ fn coredll_raw_lock_file_ex_validates_file_handle_and_overlapped() -> Result<()>
     let find_pattern_ptr = 0x1_0100;
     let find_data_ptr = 0x1_0200;
     let overlapped_ptr = 0x1_1000;
+    let overlapped2_ptr = 0x1_1040;
     memory.write_wide_z(path_ptr, "\\ResidentFlash\\locked.bin");
     memory.write_wide_z(find_pattern_ptr, "\\ResidentFlash\\*.bin");
     memory.map_words(find_data_ptr, 11);
     memory.map_halfwords(find_data_ptr + 40, 260);
     memory.map_bytes(overlapped_ptr, 20);
+    memory.map_bytes(overlapped2_ptr, 20);
     memory.write_word(overlapped_ptr + 8, 3);
+    memory.write_bytes(overlapped_ptr + 8, &3u32.to_le_bytes());
+    memory.write_word(overlapped2_ptr + 8, 5);
+    memory.write_bytes(overlapped2_ptr + 8, &5u32.to_le_bytes());
 
     let file = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -3739,6 +3744,28 @@ fn coredll_raw_lock_file_ex_validates_file_handle_and_overlapped() -> Result<()>
         other => panic!("CreateFileW did not return a file handle: {other:?}"),
     };
     assert_ne!(file, u32::MAX);
+    let peer_file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("second CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert_ne!(peer_file, u32::MAX);
 
     match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -3764,8 +3791,238 @@ fn coredll_raw_lock_file_ex_validates_file_handle_and_overlapped() -> Result<()>
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_LOCK_FILE_EX,
+            [peer_file, 0, 0, 2, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [peer_file, 0x0000_0003, 0, 2, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_LOCK_VIOLATION
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNLOCK_FILE_EX,
+            [peer_file, 0, 7, 0, overlapped_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_UNLOCK_FILE_EX,
             [file, 0, 7, 0, overlapped_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNLOCK_FILE_EX,
+            [peer_file, 0, 2, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNLOCK_FILE_EX,
+            [peer_file, 0, 2, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [file, 0, 0, 1, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [file, 0, 0, 0, 0, overlapped_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(overlapped2_ptr + 8, u32::MAX);
+    memory.write_word(overlapped2_ptr + 12, u32::MAX);
+    memory.write_bytes(overlapped2_ptr + 8, &u32::MAX.to_le_bytes());
+    memory.write_bytes(overlapped2_ptr + 12, &u32::MAX.to_le_bytes());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [file, 0, 0, 1, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNLOCK_FILE_EX,
+            [file, 0, 1, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [file, 0, 0, 2, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(overlapped2_ptr + 8, 100);
+    memory.write_word(overlapped2_ptr + 12, 0);
+    memory.write_bytes(overlapped2_ptr + 8, &100u32.to_le_bytes());
+    memory.write_bytes(overlapped2_ptr + 12, &0u32.to_le_bytes());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [file, 0x0000_0002, 0, 4, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCK_FILE_EX,
+            [peer_file, 0x0000_0002, 0, 4, 0, overlapped2_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNLOCK_FILE_EX,
+            [peer_file, 0, 4, 0, overlapped2_ptr],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -3829,8 +4086,8 @@ fn coredll_raw_lock_file_ex_validates_file_handle_and_overlapped() -> Result<()>
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_FIND_CLOSE,
-            [find],
+            ORD_CLOSE_HANDLE,
+            [peer_file],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -3842,8 +4099,8 @@ fn coredll_raw_lock_file_ex_validates_file_handle_and_overlapped() -> Result<()>
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_CLOSE_HANDLE,
-            [file],
+            ORD_FIND_CLOSE,
+            [find],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
