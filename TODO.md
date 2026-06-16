@@ -108,7 +108,12 @@ Regenerated on 2026-06-11 from current source and test coverage.
   `THREAD_EXIT_STUB_ADDR` active-thread wedge is fixed; continue from the
   current live state where touch dispatch is consumed by `0x00020008`, resource
   decoding is still advancing, and serial GPS bytes queue until the guest reads
-  `COM7:`.
+  `COM7:`. After the bounded writable memory-backing change, the previous
+  read/write search-DB host-read churn is no longer the active bottleneck:
+  repeated live drive posts left `host_file_read_bytes` flat at about 2.0 MiB
+  while memory-backed opens continued rising. The current UI block is still the
+  owned `afx:10000:3:0:b5000:0` splash popup (`0x00020008`) staying visible
+  above the created map child windows and consuming touch.
 - Continue the Happyway hidden-child scheduling investigation: modal dismissal
   and framebuffer restoration are fixed, and the active-process self-park
   duplicate is filtered, but `happyway_win.exe` can still remain parked with

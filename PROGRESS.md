@@ -6092,3 +6092,23 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored, and Cargo still emits the existing unused-code
   warnings.
+- `src/ce/file.rs`: existing host files opened with write access now use the
+  same bounded memory-backing policy as large read-only files, but as a private
+  dirty-tracked copy instead of the shared read-only cache. The open path first
+  proves the host file can really be opened writable, so read-only host files
+  still fall back to a non-writable host handle. This is a generic storage
+  optimization for existing 1 MiB..128 MiB files, not a special case for any
+  iNavi database.
+- Validation after the bounded writable backing slice:
+  `cargo test --features unicorn,trace,win32-desktop readwrite_existing_ --
+  --nocapture`, `cargo test --features unicorn,trace,win32-desktop
+  read_only_medium_host_files_use_shared_memory_backing -- --nocapture`,
+  `cargo test --features unicorn,trace,win32-desktop
+  host_file_read_file_into_chunks_large_requests -- --nocapture`,
+  `rustfmt --edition 2024 --check src\ce\file.rs`, and
+  `cargo build --release --features unicorn,trace,win32-desktop --bin
+  wince_emulation_v3` passed. A fresh hidden live run was launched as PID 5424;
+  after repeated GPS posts and taps, `host_file_read_bytes` stayed flat at about
+  2.0 MiB while `memory_backed_open_count` rose from 106 to 188, confirming the
+  previous read/write large-file host-read churn is gone in the current startup
+  slice.
