@@ -1693,6 +1693,20 @@ impl UnicornMips {
             || self.blocked_send_message_timeout.is_some()
             || self.blocked_clipboard_data.is_some()
         {
+            kernel.record_window_lifecycle_trace(
+                "skip_cross_thread_visible_message",
+                self.current_thread_id(),
+                None,
+                Some(0),
+                Some(format!(
+                    "reason=pending_or_modal_context/pending_wndproc={}/modal={}/popup={}/send_timeout={}/clipboard={}",
+                    self.pending_wndproc_returns.len(),
+                    self.blocked_modal_message_box.is_some(),
+                    self.blocked_popup_menu_modal.is_some(),
+                    self.blocked_send_message_timeout.is_some(),
+                    self.blocked_clipboard_data.is_some()
+                )),
+            );
             return false;
         }
         let active_thread_id = self.current_thread_id();
@@ -1701,12 +1715,36 @@ impl UnicornMips {
             .as_ref()
             .is_some_and(|blocked| blocked.thread_id != active_thread_id)
         {
+            kernel.record_window_lifecycle_trace(
+                "skip_cross_thread_visible_message",
+                active_thread_id,
+                None,
+                Some(0),
+                Some("reason=other_thread_blocked_get_message".to_owned()),
+            );
             return false;
         }
         let Some(active_saved) = self.saved_context.as_ref().cloned() else {
+            kernel.record_window_lifecycle_trace(
+                "skip_cross_thread_visible_message",
+                active_thread_id,
+                None,
+                Some(0),
+                Some("reason=no_saved_context".to_owned()),
+            );
             return false;
         };
         if !Self::saved_cpu_context_is_resumable(&active_saved) {
+            kernel.record_window_lifecycle_trace(
+                "skip_cross_thread_visible_message",
+                active_thread_id,
+                None,
+                Some(0),
+                Some(format!(
+                    "reason=non_resumable_saved_pc/pc=0x{:08x}",
+                    active_saved.pc
+                )),
+            );
             return false;
         }
         let tracked_threads = self.tracked_thread_ids();
@@ -1754,6 +1792,20 @@ impl UnicornMips {
             })
         });
         let Some(thread_id) = message_target else {
+            let active_threads = tracked_threads
+                .iter()
+                .map(|thread_id| thread_id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            kernel.record_window_lifecycle_trace(
+                "skip_cross_thread_visible_message",
+                active_thread_id,
+                None,
+                Some(0),
+                Some(format!(
+                    "reason=no_dispatchable_target/tracked=[{active_threads}]"
+                )),
+            );
             return false;
         };
         let visible_only = visible_message_thread_id == Some(thread_id);
