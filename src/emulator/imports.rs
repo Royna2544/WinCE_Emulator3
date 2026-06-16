@@ -5888,7 +5888,6 @@ mod tests {
     #[test]
     fn fsdmgr_device_handle_and_util_imports_match_ce_helper_shape() {
         const ERROR_GEN_FAILURE: u32 = 31;
-        const ERROR_MOD_NOT_FOUND: u32 = 126;
 
         let imports = vec![ImportDescriptor {
             module_name: "fsdmgr.dll".to_owned(),
@@ -6006,9 +6005,12 @@ mod tests {
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
                 [disk_handle, 0],
             ),
-            Some(ERROR_MOD_NOT_FOUND)
+            Some(crate::ce::thread::ERROR_FILE_NOT_FOUND)
         );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_MOD_NOT_FOUND);
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_FILE_NOT_FOUND
+        );
 
         assert_eq!(
             table.dispatch_trap(
@@ -6018,9 +6020,12 @@ mod tests {
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
                 [disk_handle, 0],
             ),
-            Some(ERROR_MOD_NOT_FOUND)
+            Some(crate::ce::thread::ERROR_FILE_NOT_FOUND)
         );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_MOD_NOT_FOUND);
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_FILE_NOT_FOUND
+        );
     }
 
     #[test]

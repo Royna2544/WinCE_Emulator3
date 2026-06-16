@@ -13381,7 +13381,7 @@ fn fsdmgr_volume_util_status_raw(kernel: &mut CeKernel, thread_id: u32, disk_ptr
         .and_then(fsdmgr_registry_string_units)
         .is_some()
     {
-        ERROR_MOD_NOT_FOUND_LOCAL
+        ERROR_FILE_NOT_FOUND
     } else {
         ERROR_FILE_NOT_FOUND
     };
