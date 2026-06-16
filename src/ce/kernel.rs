@@ -2952,6 +2952,16 @@ impl CeKernel {
         )
     }
 
+    pub fn fsdmgr_fmd_region_table(&self, disk_ptr: u32) -> Option<Vec<[u32; 7]>> {
+        self.fsdmgr_disk_info(disk_ptr)?;
+        Some(
+            self.fsdmgr_fmd_region_tables
+                .get(&disk_ptr)
+                .cloned()
+                .unwrap_or_default(),
+        )
+    }
+
     pub fn fsdmgr_read_fmd_reserved_region(
         &mut self,
         disk_ptr: u32,

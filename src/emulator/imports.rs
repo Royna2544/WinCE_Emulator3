@@ -3437,6 +3437,8 @@ mod tests {
         let fmd_region_table_ptr = 0x1001_d000;
         let fmd_interface_ptr = 0x1001_e000;
         let fmd_flash_info_ptr = 0x1001_f000;
+        let fmd_flash_info_ex_ptr = 0x1002_0000;
+        let fmd_region_count_ptr = 0x1002_1000;
 
         let mut sector_bytes = vec![0; 512];
         sector_bytes[..17].copy_from_slice(b"direct-disk-write");
@@ -4512,6 +4514,7 @@ mod tests {
         let fmd_get_info_callback = memory.word(fmd_interface_ptr + 12);
         let fmd_read_sector_callback = memory.word(fmd_interface_ptr + 24);
         let fmd_write_sector_callback = memory.word(fmd_interface_ptr + 28);
+        let fmd_get_info_ex_callback = memory.word(fmd_interface_ptr + 48);
         let fmd_oem_io_control_callback = memory.word(fmd_interface_ptr + 52);
         for offset in (0..12).step_by(4) {
             memory.map_word(fmd_flash_info_ptr + offset, 0xfeed_cafe);
@@ -4534,6 +4537,66 @@ mod tests {
         assert_eq!(memory.word(fmd_flash_info_ptr + 8), 1024);
         assert_eq!(memory.halfword(fmd_flash_info_ptr + 12), 1);
         assert_eq!(memory.halfword(fmd_flash_info_ptr + 14), 1024);
+
+        memory.map_word(fmd_region_count_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_info_ex_callback,
+                [0, fmd_region_count_ptr],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(fmd_region_count_ptr), 2);
+
+        for offset in (0..76).step_by(4) {
+            memory.map_word(fmd_flash_info_ex_ptr + offset, 0xfeed_cafe);
+        }
+        memory.map_word(fmd_region_count_ptr, 1);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_info_ex_callback,
+                [fmd_flash_info_ex_ptr, fmd_region_count_ptr],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(memory.word(fmd_region_count_ptr), 2);
+        assert_eq!(memory.word(fmd_flash_info_ex_ptr), 0xfeed_cafe);
+
+        memory.map_word(fmd_region_count_ptr, 2);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                fmd_get_info_ex_callback,
+                [fmd_flash_info_ex_ptr, fmd_region_count_ptr],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(fmd_region_count_ptr), 2);
+        assert_eq!(memory.word(fmd_flash_info_ex_ptr), 48);
+        assert_eq!(memory.word(fmd_flash_info_ex_ptr + 4), 1);
+        assert_eq!(memory.word(fmd_flash_info_ex_ptr + 8), 0x4444);
+        assert_eq!(memory.word(fmd_flash_info_ex_ptr + 12), 1024);
+        assert_eq!(memory.word(fmd_flash_info_ex_ptr + 16), 2);
+        for (index, expected) in [0, 0, 8, 8, 4, 1024, 1, 2, 8, 8, 8, 4, 1024, 0]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                memory.word(fmd_flash_info_ex_ptr + 20 + (index as u32 * 4)),
+                expected
+            );
+        }
 
         memory.map_bytes(write_sector_ptr, &vec![0x7c; 1024]);
         assert_eq!(

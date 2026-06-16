@@ -165,6 +165,8 @@ const FMD_RESERVED_NAME_LEN: u32 = 8;
 const FMD_RESERVED_REQ_SIZE: u32 = 20;
 const FMD_RAW_WRITE_BLOCKS_REQ_SIZE: u32 = 16;
 const FMD_INFO_SIZE: u32 = 20;
+const FMD_INFO_EX_SIZE: u32 = 48;
+const FMD_INFO_EX_REGION_OFFSET: u32 = 20;
 pub const FSDMGR_FMD_CALLBACK_TRAP_STRIDE: u32 = 0x10;
 pub const FSDMGR_FMD_CALLBACK_TRAP_COUNT: u32 = 13;
 pub const FSDMGR_FMD_CALLBACK_TRAP_BASE: u32 = 0x7fff_4f30;
@@ -14606,7 +14608,17 @@ pub(crate) fn dispatch_fsdmgr_fmd_callback_raw<M: CoredllGuestMemory>(
                 0
             }
         }
-        FsdmgrFmdCallback::GetInfoEx => 0,
+        FsdmgrFmdCallback::GetInfoEx => {
+            let disk_ptr = disk_ptr?;
+            u32::from(fsdmgr_fmd_callback_get_info_ex_raw(
+                kernel,
+                memory,
+                thread_id,
+                disk_ptr,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+            ))
+        }
         FsdmgrFmdCallback::OEMIoControl => {
             let disk_ptr = disk_ptr?;
             fsdmgr_disk_io_control_raw(
@@ -14659,6 +14671,107 @@ fn fsdmgr_fmd_callback_get_info_raw<M: CoredllGuestMemory>(
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn fsdmgr_fmd_callback_get_info_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    info_ex_ptr: u32,
+    region_count_ptr: u32,
+) -> bool {
+    let Some(info) = kernel.fsdmgr_disk_info(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(regions) = kernel.fsdmgr_fmd_region_table(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let region_count = regions.len() as u32;
+    if region_count_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if info_ex_ptr == 0 {
+        if !write_guest_u32(kernel, memory, thread_id, region_count_ptr, region_count) {
+            return false;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let Some(region_capacity) = read_guest_u32(kernel, memory, thread_id, region_count_ptr) else {
+        return false;
+    };
+    if region_capacity < region_count {
+        if !write_guest_u32(kernel, memory, thread_id, region_count_ptr, region_count) {
+            return false;
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    const FLASH_TYPE_NOR: u32 = 1;
+    if !write_guest_u32(kernel, memory, thread_id, region_count_ptr, region_count)
+        || !write_guest_u32(kernel, memory, thread_id, info_ex_ptr, FMD_INFO_EX_SIZE)
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ex_ptr.wrapping_add(4),
+            FLASH_TYPE_NOR,
+        )
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ex_ptr.wrapping_add(8),
+            info[0],
+        )
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ex_ptr.wrapping_add(12),
+            info[1],
+        )
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ex_ptr.wrapping_add(16),
+            region_count,
+        )
+    {
+        return false;
+    }
+    for (region_index, region) in regions.iter().enumerate() {
+        let region_ptr = info_ex_ptr
+            .wrapping_add(FMD_INFO_EX_REGION_OFFSET)
+            .wrapping_add((region_index as u32).wrapping_mul(FMD_FLASH_REGION_SIZE));
+        for (field_index, field) in region.iter().copied().enumerate() {
+            if !write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                region_ptr.wrapping_add((field_index as u32).wrapping_mul(4)),
+                field,
+            ) {
+                return false;
+            }
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
