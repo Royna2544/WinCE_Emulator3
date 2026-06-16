@@ -4518,9 +4518,9 @@ impl CeKernel {
         if notification.pending_signal_count > 0 {
             notification.pending_signal_count -= 1;
         }
-        if notification.pending_signal_count == 0 {
-            notification.pending.clear();
-        }
+        // CE NotifyReset(h, NULL) consumes one pending signal count but does not
+        // unlink queued NOTFILEINFO detail records. Those records remain hidden
+        // until a later signal lets CeGetFileNotificationInfo drain the list.
         notification.signaled = notification.pending_signal_count > 0;
         Ok(true)
     }
