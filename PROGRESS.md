@@ -5338,3 +5338,17 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored, and Cargo still emits the existing unused-code
   warnings.
+- `src/ce/coredll.rs`, `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw `GetCharABCWidthsI` now
+  shares the CE nonzero-escapement rejection already covered for
+  `GetCharABCWidths`. The regression selects a nonzero-escapement Tahoma font,
+  calls the glyph-index/count `I` variant, expects `ERROR_INVALID_PARAMETER`,
+  and verifies the caller ABC buffer remains untouched.
+- Validation after the `GetCharABCWidthsI` nonzero-escapement slice:
+  `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_get_char_abc_widths_rejects_nonzero_escapement`,
+  and `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains
+  ignored, and Cargo still emits the existing unused-code warnings.

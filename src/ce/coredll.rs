@@ -47172,6 +47172,12 @@ fn get_char_abcwidths_i_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
+    if metrics.escapement != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
     let mut units = Vec::with_capacity(count);
     if glyph_indices_ptr != 0 {
         for index in 0..count {

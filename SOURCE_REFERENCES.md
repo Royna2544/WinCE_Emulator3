@@ -2801,8 +2801,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     fifth argument instead of treating the call as a non-`I` first/last range.
     `font.cpp` defines `ABCWIDTHS_NOESCAPEMENT`, and `abcEscapementTest`
     expects `GetCharABCWidths` on a selected nonzero-escapement TrueType font
-    to fail with `ERROR_INVALID_PARAMETER`; raw `GetCharABCWidths` now carries
-    selected font escapement into the metrics model and rejects that CE case.
+    to fail with `ERROR_INVALID_PARAMETER`; raw `GetCharABCWidths` and
+    `GetCharABCWidthsI` now carry selected font escapement into the metrics
+    model and reject that CE case before writing caller ABC output.
     The same fixture's `fontdata.h` Tahoma-only `NT_ABCWidths` table now feeds
     raw 16px selected Tahoma `GetCharABCWidths` ranges and `GetCharABCWidthsI`
     glyph-index lookups for `!` through `z`.

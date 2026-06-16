@@ -15668,8 +15668,10 @@ fn coredll_raw_get_char_abc_widths_rejects_nonzero_escapement() -> Result<()> {
     let thread_id = 9;
     let logfont_ptr = 0x1_0000;
     let abc_ptr = 0x1_0100;
+    let glyph_indices_ptr = 0x1_0200;
     memory.map_bytes(logfont_ptr, 92);
     memory.map_words(abc_ptr, 3);
+    memory.map_halfwords(glyph_indices_ptr, 1);
 
     let mut logfont = [0u8; 92];
     logfont[0..4].copy_from_slice(&(10i32).to_le_bytes());
@@ -15683,6 +15685,7 @@ fn coredll_raw_get_char_abc_widths_rejects_nonzero_escapement() -> Result<()> {
         logfont[offset..offset + 2].copy_from_slice(&unit.to_le_bytes());
     }
     memory.write_bytes(logfont_ptr, &logfont);
+    memory.write_u16(glyph_indices_ptr, 'A' as u16)?;
 
     let font = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -15744,6 +15747,25 @@ fn coredll_raw_get_char_abc_widths_rejects_nonzero_escapement() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+    memory.write_bytes(abc_ptr, &[0x5a; 12]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CHAR_ABCWIDTHS_I,
+            [hdc, 'A' as u32, 1, glyph_indices_ptr, abc_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_bytes(abc_ptr, 12), vec![0x5a; 12]);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
