@@ -15,6 +15,23 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw `MsgWaitForMultipleObjectsEx` coverage now locks
+  CE invalid handle-array shapes for `nCount > MAXIMUM_WAIT_OBJECTS` and
+  nonzero count with null `pHandles`, preserving `WAIT_FAILED`,
+  `ERROR_INVALID_PARAMETER`, message-wait failure telemetry, and no hidden
+  `WaitForMultipleObjects` probe.
+- Validation after the CE message-wait invalid-array slice: `cargo fmt`,
+  focused `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_msgwait_rejects_invalid_ce_handle_array_shapes
+  -- --nocapture`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`, and full `cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. Logs are under
+  `target/cargo-test-msgwait-invalid-arrays-20260616-153257.*.log`,
+  `target/cargo-check-features-msgwait-20260616-153314.*.log`,
+  `target/cargo-test-coredll-raw-gwe-msgwait-20260616-153321.*.log`, and
+  `target/cargo-test-full-features-msgwait-20260616-153329.*.log`.
 - `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`,
   `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw
   `GetFileVersionInfoSizeW`/`GetFileVersionInfoW` now follow CE

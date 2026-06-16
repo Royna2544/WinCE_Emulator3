@@ -2119,7 +2119,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `PUBLIC\COMMON\OAK\DRIVERS\NETUI\gwes_wrapper.cpp` forwards the return
     code plus `GetLastError`; raw v3 now keeps unreadable caller handle arrays
     on the message-wait failure accounting path while preserving
-    `ERROR_INVALID_PARAMETER`.
+    `ERROR_INVALID_PARAMETER`. CE `winnt.h` caps `MAXIMUM_WAIT_OBJECTS` at 64,
+    and raw v3 now also rejects message-wait calls whose count exceeds that cap
+    or whose nonzero count has a null handle array before probing kernel waits.
   - `cmsgque.h` defines `smfSenderNoWait`,
     `smfSenderNoWaitIfDifferentThread`, and `smfNotifyMessage` for no-wait
     notification sends. Rust raw `SendNotifyMessageW` now preserves that CE

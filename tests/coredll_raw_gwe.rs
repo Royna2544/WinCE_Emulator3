@@ -36654,6 +36654,82 @@ fn coredll_raw_msgwait_ignores_desktop_waitall_flag_bit_on_ce() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_msgwait_rejects_invalid_ce_handle_array_shapes() -> Result<()> {
+    const WAIT_FAILED: u32 = 0xffff_ffff;
+    const MAXIMUM_WAIT_OBJECTS: u32 = 64;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 81;
+    let handles_ptr = 0xa120;
+    memory.map_words(handles_ptr, 1);
+    memory.write_u32(handles_ptr, kernel.create_event_w(None, true, true))?;
+
+    let stats_before = kernel.scheduler.stats();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [MAXIMUM_WAIT_OBJECTS + 1, handles_ptr, 0, QS_TIMER, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_FAILED),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    let stats_after_large_count = kernel.scheduler.stats();
+    assert_eq!(
+        stats_after_large_count.msg_wait_count,
+        stats_before.msg_wait_count + 1
+    );
+    assert_eq!(
+        stats_after_large_count.wait_failed_count,
+        stats_before.wait_failed_count + 1
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [1, 0, 0, QS_TIMER, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_FAILED),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    let stats_after_null_array = kernel.scheduler.stats();
+    assert_eq!(
+        stats_after_null_array.msg_wait_count,
+        stats_before.msg_wait_count + 2
+    );
+    assert_eq!(
+        stats_after_null_array.wait_failed_count,
+        stats_before.wait_failed_count + 2
+    );
+    assert_eq!(
+        stats_after_null_array.wait_multiple_count, stats_before.wait_multiple_count,
+        "invalid CE handle arrays fail before probing the kernel wait path"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_msgwait_qs_sendmessage_tracks_new_and_inputavailable() -> Result<()> {
     const MWMO_INPUTAVAILABLE: u32 = 0x0004;
     const WAIT_TIMEOUT: u32 = 258;
