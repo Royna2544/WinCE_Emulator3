@@ -1599,7 +1599,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `WAIT_OBJECT_0 + idx` for the first ready handle. The first Unicorn
     `MsgWaitForMultipleObjectsEx` parking bridge uses the same handle-wait
     shape, with GWE queue input acting as the extra `WAIT_OBJECT_0 + count`
-    wake slot; source anchors are
+    wake slot; runtime regression coverage now verifies that this message slot
+    is returned after multiple unsignaled handles and that non-inputavailable
+    waits consume the changed-input bit. Source anchors are
     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
     `MsgWaitForMultipleObjectsEx_E`/`_IWrapper`/`_I` and CE SDK
     `winuser.h` `MWMO_INPUTAVAILABLE`/queue-status flags.

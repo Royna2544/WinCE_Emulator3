@@ -15,6 +15,22 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: Unicorn blocked `MsgWaitForMultipleObjectsEx`
+  resume coverage now verifies CE's message-wake slot after all supplied wait
+  handles. A blocked message wait with two unsignaled event handles resumes the
+  guest with `WAIT_OBJECT_0 + 2`, restores the parked MIPS context, removes the
+  scheduler waiter, and clears the changed queue-input bit for the default
+  non-`MWMO_INPUTAVAILABLE` path.
+- Validation after the Unicorn `MsgWaitForMultipleObjectsEx` resume-index
+  slice: `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, `$env:CARGO_INCREMENTAL='0'; cargo test -j 1
+  --features unicorn,trace,win32-desktop
+  blocked_msg_wait_resumes_with_message_index_after_all_handles`, and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. Cargo still emits the existing
+  unused-code warnings, plus an unused `CpuBackend` import warning in the
+  heavily filtered focused test.
 - `src/config.rs`, `src/ce/file.rs`, and `tests/basic_subsystems.rs`:
   configured mounted-storage `IClass` entries now support CE devcore-style
   `%b` bus-name advertisements when the mount supplies `bus_name`. `%b` entries

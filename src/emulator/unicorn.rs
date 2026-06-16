@@ -23596,6 +23596,94 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn blocked_msg_wait_resumes_with_message_index_after_all_handles() {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+
+        let blocked_thread_id = 9;
+        let blocked_thread_handle = 0x209;
+        let return_pc = 0x4040_2020_u32;
+        let first_event = kernel.create_event_w(None, true, false);
+        let second_event = kernel.create_event_w(None, true, false);
+        let wait_id = kernel.register_blocked_waiter(
+            blocked_thread_id,
+            blocked_thread_handle,
+            vec![first_event, second_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::MsgWait {
+                wake_mask: QS_POSTMESSAGE,
+                input_available: false,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[16] = 0x1357_0009;
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id,
+            thread_id: blocked_thread_id,
+            thread_handle: blocked_thread_handle,
+            wait_handles: vec![first_event, second_event],
+            kind: BlockedWaitKind::MsgWait {
+                wake_mask: QS_POSTMESSAGE,
+                input_available: false,
+            },
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs,
+            return_pc,
+        }]));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(1_u32));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        kernel.gwe.post_message(
+            blocked_thread_id,
+            crate::ce::gwe::Message::new(0, crate::ce::gwe::WM_USER + 0x91, 0, 0, 10),
+        );
+        assert!(
+            kernel
+                .gwe
+                .has_new_queue_input(blocked_thread_id, QS_POSTMESSAGE)
+        );
+
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            1,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(blocked_waits.borrow().is_empty());
+        assert_eq!(*current_thread_id.borrow(), blocked_thread_id);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((blocked_thread_id, blocked_thread_handle))
+        );
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::V0).unwrap() as u32,
+            crate::ce::timer::WAIT_OBJECT_0 + 2
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x1357_0009);
+        assert!(
+            !kernel
+                .gwe
+                .has_new_queue_input(blocked_thread_id, QS_POSTMESSAGE)
+        );
+    }
+
+    #[test]
     fn blocked_get_message_visible_work_requests_fast_timeslice() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
