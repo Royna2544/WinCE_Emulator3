@@ -1711,22 +1711,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             args,
         ))),
-        ORD_GET_FILE_VERSION_INFO_SIZE_W => {
-            // GetFileVersionInfoSizeW(lptstrFilename, lpdwHandle) — returns 0 (no version info).
-            let handle_ptr = raw_arg(args, 1);
-            if handle_ptr != 0 {
-                let _ = memory.write_u32(handle_ptr, 0);
-            }
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(0))
-        }
-        ORD_GET_FILE_VERSION_INFO_W => {
-            // GetFileVersionInfoW — retrieve version info block; fails (no version data).
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_GET_FILE_VERSION_INFO_SIZE_W => Some(CoredllValue::U32(
+            get_file_version_info_size_w_raw(kernel, memory, thread_id, args),
+        )),
+        ORD_GET_FILE_VERSION_INFO_W => Some(CoredllValue::Bool(get_file_version_info_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_MOUSE_MOVE_POINTS => {
             // GetMouseMovePoints(pptBuf, nBufPoints, pnPointsRetrieved) — drain the
             // GWES pen point buffer (4x-resolution screen positions collected from
@@ -10027,6 +10017,116 @@ fn append_fixed_wide_field(bytes: &mut Vec<u8>, text: &str, capacity_chars: usiz
     for unit in units {
         bytes.extend_from_slice(&unit.to_le_bytes());
     }
+}
+
+fn get_file_version_info_size_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let file_ptr = raw_arg(args, 0);
+    let handle_ptr = raw_arg(args, 1);
+    if handle_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, handle_ptr, 0) {
+        return 0;
+    }
+    let Some(path) = read_guest_wide_arg(memory, file_ptr).map(|path| path.replace('/', "\\"))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    match version_info_resource_bytes(kernel, &path) {
+        Ok(bytes) => {
+            let Some(total_len) = valid_version_info_total_len(&bytes) else {
+                kernel.threads.set_last_error(thread_id, ERROR_INVALID_DATA);
+                return 0;
+            };
+            kernel.threads.set_last_error(thread_id, 0);
+            u32::from(total_len)
+        }
+        Err(()) => {
+            kernel.threads.set_last_error(thread_id, ERROR_INVALID_DATA);
+            0
+        }
+    }
+}
+
+fn get_file_version_info_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let file_ptr = raw_arg(args, 0);
+    let _handle = raw_arg(args, 1);
+    let output_len = raw_arg(args, 2);
+    let output_ptr = raw_arg(args, 3);
+    let Some(path) = read_guest_wide_arg(memory, file_ptr).map(|path| path.replace('/', "\\"))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(bytes) = version_info_resource_bytes(kernel, &path) else {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_DATA);
+        return false;
+    };
+    let Some(total_len) = valid_version_info_total_len(&bytes) else {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_DATA);
+        return false;
+    };
+    let copy_len_u32 = output_len.min(u32::from(total_len));
+    let copy_len = copy_len_u32 as usize;
+    let mut out = bytes[..copy_len].to_vec();
+    if out.len() < 2 {
+        out.resize(2, 0);
+    }
+    out[0..2].copy_from_slice(&(copy_len_u32.min(u16::MAX as u32) as u16).to_le_bytes());
+    if output_ptr == 0 || !write_guest_bytes(kernel, memory, thread_id, output_ptr, &out) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn version_info_resource_bytes(
+    kernel: &mut CeKernel,
+    path: &str,
+) -> std::result::Result<Vec<u8>, ()> {
+    use crate::pe::PeImage;
+
+    const RT_VERSION: u32 = 16;
+    const VS_VERSION_INFO: u32 = 1;
+
+    let bytes = kernel.read_guest_file(path).map_err(|_| ())?;
+    let pe = PeImage::parse_bytes(path, &bytes).map_err(|_| ())?;
+    let resources = pe.resource_data_entries().map_err(|_| ())?;
+    let entry = resources
+        .iter()
+        .find(|resource| {
+            resource.kind == RT_VERSION
+                && resource.name == VS_VERSION_INFO
+                && resource.name_string.is_none()
+        })
+        .ok_or(())?;
+    let offset = pe.rva_to_file_offset(entry.data_rva).ok_or(())?;
+    let end = offset.checked_add(entry.size as usize).ok_or(())?;
+    bytes.get(offset..end).map(|slice| slice.to_vec()).ok_or(())
+}
+
+fn valid_version_info_total_len(bytes: &[u8]) -> Option<u16> {
+    const VS_FFI_SIGNATURE: u32 = 0xfeef_04bd;
+    const VS_FIXEDFILEINFO_OFFSET: usize = 40;
+
+    let total_len = read_le_u16(bytes, 0)?;
+    if usize::from(total_len) > bytes.len() {
+        return None;
+    }
+    let signature = read_le_u32(bytes, VS_FIXEDFILEINFO_OFFSET)?;
+    (signature == VS_FFI_SIGNATURE).then_some(total_len)
 }
 
 fn write_system_info<M: CoredllGuestMemory>(

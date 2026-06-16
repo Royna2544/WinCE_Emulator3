@@ -18,7 +18,8 @@ use wince_emulation_v3::{
             ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
             ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
             ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
@@ -2972,6 +2973,145 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_file_version_info_reads_ce_version_resource() -> Result<()> {
+    const ERROR_INVALID_DATA: u32 = 13;
+    const VS_FFI_SIGNATURE: u32 = 0xfeef_04bd;
+    const VERSION_INFO_SIZE: u32 = 92;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("file_version_info");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Docs")).unwrap();
+    fs::write(
+        root.join("Docs").join("versioned.exe"),
+        pe32_with_version_info_resource(VS_FFI_SIGNATURE),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("bad-version.exe"),
+        pe32_with_version_info_resource(0x1234_5678),
+    )
+    .unwrap();
+    kernel.set_file_root(&root);
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 164;
+    let path_ptr = 0x2_4000;
+    let handle_ptr = 0x2_4800;
+    let info_ptr = 0x2_5000;
+    memory.map_halfwords(path_ptr, 64);
+    memory.map_words(handle_ptr, 1);
+    memory.map_bytes(info_ptr, 128);
+
+    memory.write_wide_z(path_ptr, r"\Docs\versioned.exe");
+    memory.write_u32(handle_ptr, 0xfeed_beef)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            [path_ptr, handle_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(VERSION_INFO_SIZE),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(handle_ptr)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.fill(info_ptr, 0xcc, 128);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FILE_VERSION_INFO_W,
+            [path_ptr, 0, 48, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let copied_info = memory.read_bytes(info_ptr, 64);
+    assert_eq!(
+        read_test_u16(&copied_info, 0),
+        48,
+        "CE rewrites the copied VERHEAD length to the caller's bounded copy size"
+    );
+    assert_eq!(read_test_u32(&copied_info, 40), VS_FFI_SIGNATURE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.fill(info_ptr, 0xdd, 128);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FILE_VERSION_INFO_W,
+            [path_ptr, 0, 128, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let full_info = memory.read_bytes(info_ptr, VERSION_INFO_SIZE as usize);
+    assert_eq!(read_test_u16(&full_info, 0), VERSION_INFO_SIZE as u16);
+    assert_eq!(read_test_u32(&full_info, 40), VS_FFI_SIGNATURE);
+    assert_eq!(read_test_u32(&full_info, 44), 0x0001_0000);
+    assert_eq!(read_test_u32(&full_info, 48), 0x0006_0001);
+    assert_eq!(read_test_u32(&full_info, 52), 0x0000_0002);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(path_ptr, r"\Docs\bad-version.exe");
+    memory.write_u32(handle_ptr, 0xabcd_1234)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            [path_ptr, handle_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(handle_ptr)?,
+        0,
+        "GetFileVersionInfoSizeW clears lpdwHandle before validating the resource"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_DATA);
+
+    memory.fill(info_ptr, 0xee, 128);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FILE_VERSION_INFO_W,
+            [path_ptr, 0, 128, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(info_ptr, 4), [0xee, 0xee, 0xee, 0xee]);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_DATA);
+
+    let _ = fs::remove_dir_all(root);
     Ok(())
 }
 
@@ -7570,6 +7710,85 @@ fn pe32_with_missing_small_icon_resource() -> Vec<u8> {
     bytes
 }
 
+fn pe32_with_version_info_resource(signature: u32) -> Vec<u8> {
+    let resource_size = 0x1000u32;
+    let mut bytes = vec![0u8; 0x200 + resource_size as usize];
+    put_test_bytes(&mut bytes, 0, b"MZ");
+    put_test_u32(&mut bytes, 0x3c, 0x80);
+    put_test_bytes(&mut bytes, 0x80, b"PE\0\0");
+
+    let coff = 0x84;
+    put_test_u16(&mut bytes, coff, 0x0166);
+    put_test_u16(&mut bytes, coff + 2, 1);
+    put_test_u16(&mut bytes, coff + 16, 0xe0);
+    put_test_u16(&mut bytes, coff + 18, 0x0102);
+
+    let optional = 0x98;
+    put_test_u16(&mut bytes, optional, 0x010b);
+    put_test_u32(&mut bytes, optional + 8, 0x200);
+    put_test_u32(&mut bytes, optional + 24, 0x1000);
+    put_test_u32(&mut bytes, optional + 28, 0x0040_0000);
+    put_test_u32(&mut bytes, optional + 32, 0x1000);
+    put_test_u32(&mut bytes, optional + 36, 0x200);
+    put_test_u32(&mut bytes, optional + 56, 0x1000 + resource_size);
+    put_test_u32(&mut bytes, optional + 60, 0x200);
+    put_test_u16(&mut bytes, optional + 68, 2);
+    put_test_u32(&mut bytes, optional + 72, 0x100000);
+    put_test_u32(&mut bytes, optional + 76, 0x1000);
+    put_test_u32(&mut bytes, optional + 80, 0x100000);
+    put_test_u32(&mut bytes, optional + 84, 0x1000);
+    put_test_u32(&mut bytes, optional + 92, 16);
+    put_test_u32(&mut bytes, optional + 112, 0x1000);
+    put_test_u32(&mut bytes, optional + 116, resource_size);
+
+    let section = 0x178;
+    put_test_bytes(&mut bytes, section, b".rsrc\0\0\0");
+    put_test_u32(&mut bytes, section + 8, resource_size);
+    put_test_u32(&mut bytes, section + 12, 0x1000);
+    put_test_u32(&mut bytes, section + 16, resource_size);
+    put_test_u32(&mut bytes, section + 20, 0x200);
+    put_test_u32(&mut bytes, section + 36, 0x4000_0040);
+
+    let rsrc = 0x200;
+    let type_dir = rsrc + 0x20;
+    let name_dir = rsrc + 0x40;
+    let data_entry = rsrc + 0x60;
+    let version_data_offset = 0x100usize;
+    let version_info = version_info_resource_data(signature);
+    put_test_resource_directory(&mut bytes, rsrc, 1);
+    put_test_u32(&mut bytes, rsrc + 16, 16);
+    put_test_u32(&mut bytes, rsrc + 20, 0x8000_0020);
+    put_test_resource_directory(&mut bytes, type_dir, 1);
+    put_test_u32(&mut bytes, type_dir + 16, 1);
+    put_test_u32(&mut bytes, type_dir + 20, 0x8000_0040);
+    put_test_resource_directory(&mut bytes, name_dir, 1);
+    put_test_u32(&mut bytes, name_dir + 16, 0x0409);
+    put_test_u32(&mut bytes, name_dir + 20, 0x60);
+    put_test_u32(&mut bytes, data_entry, 0x1000 + version_data_offset as u32);
+    put_test_u32(&mut bytes, data_entry + 4, version_info.len() as u32);
+    put_test_bytes(&mut bytes, rsrc + version_data_offset, &version_info);
+    bytes
+}
+
+fn version_info_resource_data(signature: u32) -> Vec<u8> {
+    let mut bytes = vec![0u8; 92];
+    put_test_u16(&mut bytes, 0, 92);
+    put_test_u16(&mut bytes, 2, 52);
+    put_test_u16(&mut bytes, 4, 0);
+    for (index, unit) in "VS_VERSION_INFO"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .enumerate()
+    {
+        put_test_u16(&mut bytes, 6 + index * 2, unit);
+    }
+    put_test_u32(&mut bytes, 40, signature);
+    put_test_u32(&mut bytes, 44, 0x0001_0000);
+    put_test_u32(&mut bytes, 48, 0x0006_0001);
+    put_test_u32(&mut bytes, 52, 0x0000_0002);
+    bytes
+}
+
 fn pe32_with_missing_and_mask_icon() -> Vec<u8> {
     let mut bytes = pe32_with_group_icon_count(1);
     let truncated_icon_size = 44u32; // BITMAPINFOHEADER + one 32bpp XOR pixel, no AND mask.
@@ -8010,6 +8229,19 @@ fn put_test_u8(bytes: &mut [u8], offset: usize, value: u8) {
 
 fn put_test_u32(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn read_test_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn read_test_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
 }
 
 fn bmp_1x1_24bpp() -> Vec<u8> {

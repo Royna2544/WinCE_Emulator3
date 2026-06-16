@@ -47,6 +47,12 @@ impl TestGuestMemory {
         }
     }
 
+    pub fn fill(&mut self, addr: u32, value: u8, len: usize) {
+        for index in 0..len {
+            self.bytes.insert(addr + index as u32, value);
+        }
+    }
+
     pub fn read_bytes(&self, addr: u32, len: usize) -> Vec<u8> {
         (0..len)
             .map(|index| self.bytes.get(&(addr + index as u32)).copied().unwrap_or(0))
