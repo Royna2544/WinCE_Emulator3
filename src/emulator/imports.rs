@@ -804,6 +804,7 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 36
                     | 37
                     | 44
+                    | 54..=61
                     | 68..=75 | 80..=82
             )
         }
@@ -843,7 +844,7 @@ fn write_mapped_u32(mapped: &mut [u8], rva: u32, value: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::BTreeMap, fs};
+    use std::{collections::BTreeMap, fs, path::PathBuf};
 
     use crate::pe::ImportThunk;
     use crate::{
@@ -1855,6 +1856,216 @@ mod tests {
         assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
         assert_eq!(memory.word(bytes_returned), 0xfeed_cafe);
         assert_eq!(memory.bytes.get(&volume_info).copied(), Some(0xa5));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fsdmgr_path_imports_route_mounted_mutations_and_attributes() {
+        const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+        const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Ordinal(54),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSINT_CreateDirectoryW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FS_GetFileAttributesW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Ordinal(58),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2010,
+                    iat_rva: 0x3010,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FS_MoveFileW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2014,
+                    iat_rva: 0x3014,
+                    import: ImportBy::Ordinal(59),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2018,
+                    iat_rva: 0x3018,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FS_DeleteAndRenameFileW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x201c,
+                    iat_rva: 0x301c,
+                    import: ImportBy::Ordinal(56),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("wince_fsdmgr_path_imports_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        kernel.mount_guest_root("\\ResidentFlash", root.clone());
+
+        fs::write(root.join("attrs.txt"), b"attrs").unwrap();
+        fs::write(root.join("move-src.txt"), b"move").unwrap();
+        fs::write(root.join("delete-me.txt"), b"delete").unwrap();
+        fs::write(root.join("old.txt"), b"old").unwrap();
+        fs::write(root.join("replacement.txt"), b"replacement").unwrap();
+
+        let mut memory = TestMemory::default();
+        let ext_dir = 0x1000_0000;
+        let int_dir = 0x1000_0100;
+        let attrs_file = 0x1000_0200;
+        let move_src = 0x1000_0300;
+        let move_dst = 0x1000_0400;
+        let delete_file = 0x1000_0500;
+        let old_file = 0x1000_0600;
+        let replacement_file = 0x1000_0700;
+        memory.map_wide_z(ext_dir, "\\ResidentFlash\\ext-dir");
+        memory.map_wide_z(int_dir, "\\ResidentFlash\\int-dir");
+        memory.map_wide_z(attrs_file, "\\ResidentFlash\\attrs.txt");
+        memory.map_wide_z(move_src, "\\ResidentFlash\\move-src.txt");
+        memory.map_wide_z(move_dst, "\\ResidentFlash\\move-dst.txt");
+        memory.map_wide_z(delete_file, "\\ResidentFlash\\delete-me.txt");
+        memory.map_wide_z(old_file, "\\ResidentFlash\\old.txt");
+        memory.map_wide_z(replacement_file, "\\ResidentFlash\\replacement.txt");
+
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 11, IMPORT_TRAP_BASE, [ext_dir, 0],),
+            Some(1)
+        );
+        assert!(root.join("ext-dir").is_dir());
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [int_dir, 0],
+            ),
+            Some(1)
+        );
+        assert!(root.join("int-dir").is_dir());
+
+        let attrs = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [ext_dir],
+            )
+            .unwrap();
+        assert_eq!(attrs & FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_DIRECTORY);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+                [attrs_file, FILE_ATTRIBUTE_READONLY],
+            ),
+            Some(1)
+        );
+        assert!(
+            fs::metadata(root.join("attrs.txt"))
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 4,
+                [move_src, move_dst],
+            ),
+            Some(1)
+        );
+        assert!(!root.join("move-src.txt").exists());
+        assert_eq!(fs::read(root.join("move-dst.txt")).unwrap(), b"move");
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 5,
+                [delete_file],
+            ),
+            Some(1)
+        );
+        assert!(!root.join("delete-me.txt").exists());
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 6,
+                [old_file, replacement_file],
+            ),
+            Some(1)
+        );
+        assert_eq!(fs::read(root.join("old.txt")).unwrap(), b"replacement");
+        assert!(!root.join("replacement.txt").exists());
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 7,
+                [ext_dir],
+            ),
+            Some(1)
+        );
+        assert!(!root.join("ext-dir").exists());
+
+        let mut perms = fs::metadata(root.join("attrs.txt")).unwrap().permissions();
+        perms.set_readonly(false);
+        fs::set_permissions(root.join("attrs.txt"), perms).unwrap();
         let _ = fs::remove_dir_all(root);
     }
 

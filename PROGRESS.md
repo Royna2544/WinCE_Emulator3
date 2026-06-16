@@ -15,6 +15,22 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
+  path imports now include `FSEXT_CreateDirectoryW @54`,
+  `FSINT_CreateDirectoryW @55`, `FS_RemoveDirectoryW @56`,
+  `FS_GetFileAttributesW @57`, `FS_SetFileAttributesW @58`,
+  `FS_DeleteFileW @59`, `FS_MoveFileW @60`, and
+  `FS_DeleteAndRenameFileW @61`. The traps reuse the existing mounted-path
+  coredll helpers for no-security create-directory, attributes, deletion,
+  rename, and PrestoChango-style delete-and-rename semantics, and the import
+  patcher now accepts the corresponding ordinals.
+- Validation after the FSDMGR path-import slice: `cargo fmt`, `git diff
+  --check`, and focused `cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  fsdmgr_path_imports_route_mounted_mutations_and_attributes`, `cargo fmt
+  --check`, `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test -j
+  1 --features unicorn,trace,win32-desktop` passed. Logs are under `target/`.
 - `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `src/emulator/imports.rs`:
   direct `FSDMGR_DiskIoControl @12` now recognizes CE `fmd.h`
   `IOCTL_FMD_SET_XIPMODE`, `IOCTL_FMD_GET_XIPMODE`,

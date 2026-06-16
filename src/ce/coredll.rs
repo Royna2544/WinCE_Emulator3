@@ -12081,6 +12081,14 @@ enum FsdmgrImport {
     FsdmgrWriteDisk,
     FsdmgrWriteDiskEx,
     StoremgrFsIoControlW,
+    FsextCreateDirectoryW,
+    FsintCreateDirectoryW,
+    FsRemoveDirectoryW,
+    FsGetFileAttributesW,
+    FsSetFileAttributesW,
+    FsDeleteFileW,
+    FsMoveFileW,
+    FsDeleteAndRenameFileW,
     FsintFindFirstChangeNotificationW,
     FsextFindFirstChangeNotificationW,
     FsintFindNextChangeNotification,
@@ -12302,6 +12310,53 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         FsdmgrImport::StoremgrFsIoControlW => u32::from(storemgr_fs_io_control_w_raw(
             kernel, memory, thread_id, args,
         )),
+        FsdmgrImport::FsextCreateDirectoryW | FsdmgrImport::FsintCreateDirectoryW => {
+            u32::from(path_mutating_bool_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                CeKernel::create_directory_w,
+            ))
+        }
+        FsdmgrImport::FsRemoveDirectoryW => u32::from(path_mutating_bool_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            CeKernel::remove_directory_w,
+        )),
+        FsdmgrImport::FsGetFileAttributesW => {
+            get_file_attributes_w_raw(kernel, memory, thread_id, raw_arg(args, 0))
+        }
+        FsdmgrImport::FsSetFileAttributesW => u32::from(set_file_attributes_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        )),
+        FsdmgrImport::FsDeleteFileW => u32::from(path_mutating_bool_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            CeKernel::delete_file_w,
+        )),
+        FsdmgrImport::FsMoveFileW => u32::from(move_file_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        )),
+        FsdmgrImport::FsDeleteAndRenameFileW => u32::from(delete_and_rename_file_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        )),
         FsdmgrImport::FsintFindFirstChangeNotificationW => find_first_change_notification_w_raw(
             kernel,
             memory,
@@ -12375,6 +12430,14 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         35 => Some(FsdmgrImport::FsdmgrWriteDisk),
         36 => Some(FsdmgrImport::FsdmgrWriteDiskEx),
         44 => Some(FsdmgrImport::StoremgrFsIoControlW),
+        54 => Some(FsdmgrImport::FsextCreateDirectoryW),
+        55 => Some(FsdmgrImport::FsintCreateDirectoryW),
+        56 => Some(FsdmgrImport::FsRemoveDirectoryW),
+        57 => Some(FsdmgrImport::FsGetFileAttributesW),
+        58 => Some(FsdmgrImport::FsSetFileAttributesW),
+        59 => Some(FsdmgrImport::FsDeleteFileW),
+        60 => Some(FsdmgrImport::FsMoveFileW),
+        61 => Some(FsdmgrImport::FsDeleteAndRenameFileW),
         68 => Some(FsdmgrImport::FsintFindFirstChangeNotificationW),
         69 => Some(FsdmgrImport::FsextFindFirstChangeNotificationW),
         70 => Some(FsdmgrImport::FsintFindNextChangeNotification),
@@ -12426,6 +12489,14 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsdmgr_writedisk" => Some(FsdmgrImport::FsdmgrWriteDisk),
         "fsdmgr_writediskex" => Some(FsdmgrImport::FsdmgrWriteDiskEx),
         "storemgr_fsiocontrolw" => Some(FsdmgrImport::StoremgrFsIoControlW),
+        "fsext_createdirectoryw" => Some(FsdmgrImport::FsextCreateDirectoryW),
+        "fsint_createdirectoryw" => Some(FsdmgrImport::FsintCreateDirectoryW),
+        "fs_removedirectoryw" => Some(FsdmgrImport::FsRemoveDirectoryW),
+        "fs_getfileattributesw" => Some(FsdmgrImport::FsGetFileAttributesW),
+        "fs_setfileattributesw" => Some(FsdmgrImport::FsSetFileAttributesW),
+        "fs_deletefilew" => Some(FsdmgrImport::FsDeleteFileW),
+        "fs_movefilew" => Some(FsdmgrImport::FsMoveFileW),
+        "fs_deleteandrenamefilew" => Some(FsdmgrImport::FsDeleteAndRenameFileW),
         "fsint_findfirstchangenotificationw" => {
             Some(FsdmgrImport::FsintFindFirstChangeNotificationW)
         }
