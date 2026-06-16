@@ -3542,6 +3542,74 @@ fn create_selected_1bpp_dib_with_bitmap(
     (mem_dc, bitmap, bits_ptr, stride)
 }
 
+fn create_selected_4bpp_dib_with_bitmap(
+    table: &CoredllExportTable,
+    kernel: &mut CeKernel,
+    memory: &mut TestGuestMemory,
+    thread_id: u32,
+    width: i32,
+    height: i32,
+) -> (u32, u32, u32, u32) {
+    let mem_dc = match table.dispatch_raw_ordinal_with_memory(
+        kernel,
+        memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+    let info = 0x1_0400;
+    let bits_out = 0x1_0500;
+    memory.map_bytes(info, 40);
+    memory.map_words(bits_out, 1);
+    let mut header = [0u8; 40];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&width.to_le_bytes());
+    header[8..12].copy_from_slice(&(-height).to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&4u16.to_le_bytes());
+    memory.write_bytes(info, &header);
+    memory.write_word(info, 40);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        kernel,
+        memory,
+        thread_id,
+        ORD_CREATE_DIBSECTION,
+        [mem_dc, info, 0, bits_out, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateDIBSection(4bpp) did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(bitmap, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    let bits_ptr = memory
+        .read_u32(bits_out)
+        .expect("CreateDIBSection should write bits pointer");
+    let stride = (((width as u32 * 4) + 31) / 32) * 4;
+    (mem_dc, bitmap, bits_ptr, stride)
+}
+
 fn create_selected_32bpp_dib_with_bitmap(
     table: &CoredllExportTable,
     kernel: &mut CeKernel,
@@ -14687,6 +14755,112 @@ fn coredll_raw_transparent_image_preserves_alpha_dib_pixel_dword() -> Result<()>
     assert_eq!(memory.read_bytes(bits + 4, 4), source.to_le_bytes());
     assert_eq!(stride, 8);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_transparent_image_paletted_dib_duplicate_rgb_keys() -> Result<()> {
+    const WHITE565: u16 = 0xffff;
+    const RED565: u16 = 0xf800;
+    const TRANSPARENT_COLORREF: u32 = 0x0090_6030;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let mut framebuffer = VirtualFramebuffer::new(4, 1, PixelFormat::Rgb565)?;
+    for pixel in framebuffer.pixels_mut().chunks_exact_mut(2) {
+        pixel.copy_from_slice(&WHITE565.to_le_bytes());
+    }
+    let _ = framebuffer.take_dirty_rects();
+
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let (src_dc, _src_bitmap, src_bits, _src_stride) =
+        create_selected_4bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 1);
+
+    let table_ptr = 0x1_6000;
+    memory.map_bytes(table_ptr, 16 * 4);
+    let mut entries = [[0u8; 4]; 16];
+    entries[1] = [0x90, 0x60, 0x30, 0x00];
+    entries[7] = [0x90, 0x60, 0x30, 0x00];
+    entries[8] = [0x00, 0x00, 0xff, 0x00];
+    let bytes: Vec<u8> = entries
+        .iter()
+        .flat_map(|entry| entry.iter().copied())
+        .collect();
+    memory.write_bytes(table_ptr, &bytes);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DIBCOLOR_TABLE,
+            [src_dc, 0, 16, table_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+
+    memory.write_bytes(src_bits, &[0x17, 0x80, 0x00, 0x00]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                screen_dc,
+                0,
+                0,
+                4,
+                1,
+                src_dc,
+                0,
+                0,
+                4,
+                1,
+                TRANSPARENT_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(
+        framebuffer_rgb565_at(&framebuffer, 0, 0),
+        WHITE565,
+        "first duplicate transparent palette RGB should preserve destination"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&framebuffer, 1, 0),
+        WHITE565,
+        "later duplicate transparent palette RGB should preserve destination"
+    );
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 0), RED565);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 3, 0), 0x0000);
+    assert_eq!(
+        framebuffer.dirty_rects(),
+        &[FramebufferRect::new(0, 0, 4, 1)]
+    );
 
     Ok(())
 }

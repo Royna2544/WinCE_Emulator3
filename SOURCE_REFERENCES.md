@@ -2634,6 +2634,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     one pixel with a nonmatching transparent key and compares the destination
     DWORD. Raw selected-DIB `TransparentImage` now carries the source alpha byte
     through plain color-key source-copy writes instead of forcing opaque alpha.
+    CE `draw.cpp::TransparentImagePalTest(ETransparentImage)` mutates indexed
+    DIB color-table entries so multiple palette indexes realize to the same
+    transparent RGB; the CE test accepts the hardware-driver outcome where all
+    matching realized RGB entries are transparent. Raw framebuffer
+    `TransparentImage` now has 4 bpp selected-DIB coverage for that duplicate
+    palette-RGB branch while still copying a nonmatching red palette entry.
     CE `wingdi.h` declares `TransparentImage` with a generic `HANDLE hSrc`,
     and `draw.cpp::TransparentBltBitmapTest` passes an `HBITMAP` directly as
     that source handle after drawing into compatible bitmap backing. Raw

@@ -170,6 +170,18 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   for top-down 32 bpp DIB sections. Plain color-key copies now preserve the
   source alpha byte in the destination DWORD when no ROP/blend/brush transform
   is active instead of forcing opaque alpha.
+- `tests/coredll_raw_gwe.rs`, `PLAN.MD`, and `SOURCE_REFERENCES.md`: raw
+  framebuffer `TransparentImage` coverage now includes the CE
+  `draw.cpp::TransparentImagePalTest(ETransparentImage)` duplicate palette-RGB
+  branch. A 4 bpp selected-DIB source mutates multiple color-table indexes to
+  the transparent RGB and verifies the CE-accepted hardware-driver behavior
+  where all matching realized RGB entries preserve the destination while a
+  nonmatching red entry still copies.
+- Focused validation after the `TransparentImage` paletted-DIB slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe coredll_raw_transparent_image_paletted_dib_duplicate_rgb_keys
+  -- --nocapture` passed. Test logs are under
+  `target/cargo-test-transparent-pal-dib.20260616-150044.*.log`.
 - `src/ce/coredll.rs`, `src/emulator/imports.rs`, `src/emulator/unicorn.rs`,
   and `tests/coredll_dispatch.rs`: raw import-trap context plumbing now
   compiles with the restored raw caller PC, stack pointer, and stack-word audit
