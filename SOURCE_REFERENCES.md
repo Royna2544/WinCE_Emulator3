@@ -510,8 +510,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `READ_RESERVED`, `WRITE_RESERVED`, `GET_RESERVED_TABLE`,
     `GET_RAW_BLOCK_SIZE`, and `GET_INFO`, storing a BOOLEAN XIP flag,
     consuming the 8-byte `BlockLockInfo` range payload, accepting a DWORD
-    sector-size state, validating the 16-byte `RawWriteBlocksReq` buffer-size
-    contract before block writes, validating the 20-byte `ReservedReq` plus
+    sector-size state, validating the 16-byte `RawWriteBlocksReq` total-block
+    bounds, wraparound, and buffer-size contract before block writes, validating
+    the 20-byte `ReservedReq` plus
     caller buffer before scanning the reserved table, returning an empty table
     size when no reserved table exists, a DWORD raw block size, and flash
     type/base/region/reserved-count metadata.
@@ -538,8 +539,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     no-op, explicitly rejects standby, obsolete delete-cluster, and disk-level
     CD-ROM controls without touching caller buffers, treats initialized and
     flush-cache as successful basic disk IOCTLs, and now exposes synthetic XIP
-    mode, block-lock ranges, sector-size state, raw block writes into sparse
-    disk backing, CE `ReservedReq` validation against the empty reserved table,
+    mode, block-lock ranges, sector-size state, total-block-bounded raw block
+    writes into sparse disk backing, CE `ReservedReq` validation against the empty reserved table,
     `FlashRegion` table validation/storage, a `GET_INTERFACE` ABI skeleton
     with `cbSize == sizeof(FMDInterface)` and null unsupported callback slots,
     raw-block-size, and deterministic NOR-style `FMDInfo` metadata with the

@@ -26,7 +26,9 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `IOCTL_FMD_GET_INFO` controls. The
   synthetic disk tracks XIP mode, block-lock ranges, FMD sector-size state, and
   per-disk `FlashRegion` table entries, validates raw block-write buffers,
-  writes raw block payloads into sparse synthetic disk backing, validates CE
+  rejects wrapping or out-of-range raw block-write spans against the synthetic
+  total block count, writes valid raw block payloads into sparse synthetic disk
+  backing, validates CE
   `ReservedReq` caller buffers before reporting unsupported against the empty
   reserved table, returns a 56-byte `FMDInterface` ABI skeleton with null
   callback slots, returns the current synthetic block size, and fills
@@ -49,6 +51,14 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   -j 1 --features unicorn,trace,win32-desktop` passed. Logs are under
   `target/`.
 - Validation after the FMD interface ABI slice: `cargo fmt --check`,
+  `git diff --check`, focused `cargo test -j 1 --features
+  unicorn,trace,win32-desktop
+  emulator::imports::tests::fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. Logs are under
+  `target/`.
+- Validation after the FMD raw-write bounds slice: `cargo fmt --check`,
   `git diff --check`, focused `cargo test -j 1 --features
   unicorn,trace,win32-desktop
   emulator::imports::tests::fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info`,

@@ -3237,6 +3237,69 @@ mod tests {
         memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
         assert_eq!(&read_back[..18], b"raw-fmd-block-data");
 
+        memory.map_word(fmd_raw_write_req_ptr, 0x4444);
+        memory.map_word(fmd_raw_write_req_ptr + 4, 1);
+        memory.map_word(fmd_raw_write_req_ptr + 12, 1024);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_RAW_WRITE_BLOCKS,
+                    fmd_raw_write_req_ptr,
+                    16,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        memory.map_bytes(read_sector_ptr, &vec![0x5a; 512]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 0x4444, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert!(read_back.iter().all(|byte| *byte == 0));
+
+        memory.map_word(fmd_raw_write_req_ptr, 0xffff_ffff);
+        memory.map_word(fmd_raw_write_req_ptr + 4, 2);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_RAW_WRITE_BLOCKS,
+                    fmd_raw_write_req_ptr,
+                    16,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
         memory.map_word(fmd_raw_write_req_ptr, 16);
         memory.map_word(fmd_raw_write_req_ptr + 12, 1023);
         assert_eq!(

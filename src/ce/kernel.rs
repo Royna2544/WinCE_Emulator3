@@ -2933,6 +2933,15 @@ impl CeKernel {
         if block_count == 0 || block_size == 0 {
             return ERROR_INVALID_PARAMETER;
         }
+        let Some(end_block) = block_count
+            .checked_sub(1)
+            .and_then(|last_offset| start_block.checked_add(last_offset))
+        else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if start_block >= info[0] || end_block >= info[0] {
+            return ERROR_INVALID_PARAMETER;
+        }
         let Some(required_bytes) = block_count
             .checked_mul(block_size)
             .map(|required| required as usize)

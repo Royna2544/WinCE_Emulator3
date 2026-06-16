@@ -14181,6 +14181,15 @@ fn fsdmgr_fmd_raw_write_blocks_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
+    let Some(end_block) = block_count
+        .checked_sub(1)
+        .and_then(|last_offset| start_block.checked_add(last_offset))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
     let Some(required_bytes) = block_count.checked_mul(info[1]) else {
         kernel
             .threads
@@ -14189,6 +14198,8 @@ fn fsdmgr_fmd_raw_write_blocks_raw<M: CoredllGuestMemory>(
     };
     if block_count == 0
         || info[1] == 0
+        || start_block >= info[0]
+        || end_block >= info[0]
         || buffer_ptr == 0
         || buffer_bytes < required_bytes
         || required_bytes as usize > isize::MAX as usize
