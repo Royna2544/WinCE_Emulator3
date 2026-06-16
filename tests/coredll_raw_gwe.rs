@@ -32983,6 +32983,60 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
         )
         .is_some()
     {}
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_SET_CONVERSION_STATUS,
+            [himc, IME_CMODE_FULLSHAPE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    memory.write_bytes(composition_set_ptr, &('b' as u16).to_le_bytes());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_SET_COMPOSITION_STRING_W,
+            [himc, SCS_SETSTR, composition_set_ptr, 2, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_GET_CANDIDATE_LIST_COUNT_W,
+            [himc, candidate_list_count_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(candidate_list_count_ptr)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_SET_CONVERSION_STATUS,
+            [himc, 0x333, 0x444],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
     memory.write_bytes(composition_set_ptr, &('a' as u16).to_le_bytes());
     assert_eq!(kernel.gwe.keyboard_layout(), 0xe001_0412);
     assert!(kernel.gwe.is_ime_layout(kernel.gwe.keyboard_layout()));

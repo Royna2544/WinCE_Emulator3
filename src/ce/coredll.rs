@@ -36190,6 +36190,8 @@ fn imm_get_property_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> 
 
 const TESTIME_FAKEWORD_NOUN: u32 = 0x8000_0000;
 const TESTIME_FAKEWORD_VERB: u32 = 0x8000_0001;
+const TESTIME_IME_CMODE_NATIVE: u32 = 0x0000_0001;
+const TESTIME_IME_CMODE_ROMAN: u32 = 0x0000_0010;
 
 fn is_testime_register_word_style(style: u32) -> bool {
     matches!(style, TESTIME_FAKEWORD_NOUN | TESTIME_FAKEWORD_VERB)
@@ -37310,11 +37312,12 @@ fn imm_set_composition_string_w_raw<M: CoredllGuestMemory>(
     } else {
         crate::ce::gwe::GCS_COMPSTR
     };
-    let testime_candidates = kernel
-        .gwe
-        .is_ime_layout(kernel.gwe.keyboard_layout())
-        .then(|| testime_candidates_for_reading(kernel, &composition))
-        .flatten();
+    let testime_candidates = (kernel.gwe.is_ime_layout(kernel.gwe.keyboard_layout())
+        && kernel.gwe.ime_context(himc).is_some_and(|context| {
+            context.conversion_status & (TESTIME_IME_CMODE_ROMAN | TESTIME_IME_CMODE_NATIVE) != 0
+        }))
+    .then(|| testime_candidates_for_reading(kernel, &composition))
+    .flatten();
     if let Some(hwnd) = kernel.gwe.set_ime_composition_string(himc, composition) {
         refresh_testime_candidate_list(kernel, thread_id, himc, testime_candidates);
         // Notify the target window that the composition string changed.
