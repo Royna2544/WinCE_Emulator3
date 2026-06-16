@@ -15,6 +15,16 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/cpu_mips.rs` and `src/emulator/unicorn.rs`: startup
+  profiling with `sudo --inline cargo flamegraph` showed the iNavi run spending
+  scheduler-hook time in a linear MIPS trampoline-origin scan. The scheduler
+  and wall-clock stop paths now use a sorted trampoline jump index, and live
+  trampoline state reuses the already-built origin-to-stub map. A no-trace
+  30-second startup flamegraph moved from the early `resmapi_800x480.bin`
+  decompression slice with about 0.44 MB read to the later `iNavi.exe+0x329ce0`
+  resource/map-loading slice with about 3.1 MB read. The remaining visible
+  startup overhead is repeated Unicorn slice teardown (`uc_close`) and remote
+  debug publishing, not the old linear trampoline scan.
 - `src/ce/file.rs`, `src/ce/kernel.rs`, and `tests/basic_subsystems.rs`:
   mount-published device-interface advertisements now track owner roots, so two
   mounted volumes advertising the same class/name keep one visible advertisement
@@ -5079,6 +5089,26 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   fsdmgr_register_volume_maps_disk_pointer_to_volume_handle -- --nocapture`
   passed. Cargo still emits the existing unused-code warnings.
 - Full validation after the FSDMGR register-volume suffix slice:
+  `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored, and Cargo still emits the existing unused-code
+  warnings.
+- `src/ce/coredll.rs`, `src/ce/coredll_ordinals.rs`, `src/ce/file.rs`,
+  `tests/coredll_raw_memory_file.rs`, `PLAN.MD`, `TODO.md`,
+  `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: coredll and AFS
+  `GetFileSecurityW`/`SetFileSecurityW` now follow the reviewed CE
+  `pathapi.cpp`/`fsdacl.h` no-security-manager shape. The raw wrappers validate
+  guest path and buffer arguments, route mounted paths before reporting the
+  current no-ACL-DLL `ERROR_NOT_SUPPORTED` result, and copy a zero
+  length-needed value for `GetFileSecurityW` failures like the FSEXT wrapper.
+  Real ACL descriptor storage and enforcement remain queued.
+- Focused validation after the coredll file-security no-security-manager slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test --features
+  unicorn,trace,win32-desktop --test coredll_raw_memory_file file_security --
+  --nocapture` passed. Cargo still emits the existing unused-code warnings.
+- Full validation after the coredll file-security no-security-manager slice:
   `cargo fmt --check`, `git diff --check`,
   `$env:CARGO_INCREMENTAL='0'; cargo check --features
   unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test

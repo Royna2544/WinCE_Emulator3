@@ -1248,6 +1248,21 @@ impl HostFileSystem {
         self.translate_guest_path(guest_path)
     }
 
+    pub fn routes_security_path(&self, guest_path: &str) -> Result<bool> {
+        let normalized = normalize_guest_path(guest_path);
+        if normalized.is_empty() {
+            return if is_root_relative_path(guest_path) {
+                Ok(true)
+            } else {
+                Err(Error::InvalidArgument("empty guest path".to_owned()))
+            };
+        }
+        if self.mount_for_normalized_path(&normalized).is_some() {
+            return Ok(true);
+        }
+        self.translate_guest_path(guest_path).map(|_| true)
+    }
+
     fn open_file_mut(&mut self, id: u32) -> Result<&mut OpenFile> {
         self.open_files.get_mut(&id).ok_or(Error::InvalidHandle(id))
     }

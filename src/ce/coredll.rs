@@ -3232,20 +3232,40 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_AFS_GET_FILE_SECURITY_W | ORD_GET_FILE_SECURITY_W => {
-            // AFS_GetFileSecurityW / GetFileSecurityW — file security not supported in CE emulator.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
-        ORD_AFS_SET_FILE_SECURITY_W | ORD_SET_FILE_SECURITY_W => {
-            // AFS_SetFileSecurityW / SetFileSecurityW — file security not supported in CE emulator.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_GET_FILE_SECURITY_W => Some(CoredllValue::Bool(get_file_security_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+            raw_arg(args, 4),
+        ))),
+        ORD_AFS_GET_FILE_SECURITY_W => Some(CoredllValue::Bool(get_file_security_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            raw_arg(args, 3),
+            raw_arg(args, 4),
+            raw_arg(args, 5),
+        ))),
+        ORD_SET_FILE_SECURITY_W => Some(CoredllValue::Bool(set_file_security_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
+        ORD_AFS_SET_FILE_SECURITY_W => Some(CoredllValue::Bool(set_file_security_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            raw_arg(args, 3),
+            raw_arg(args, 4),
+        ))),
         ORD_LOAD_FSD | ORD_LOAD_FSDEX => {
             kernel
                 .threads
@@ -16549,6 +16569,94 @@ fn get_file_attributes_ex_w_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn get_file_security_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    path_ptr: u32,
+    security_descriptor_ptr: u32,
+    length: u32,
+    length_needed_ptr: u32,
+) -> bool {
+    let path = read_guest_wide_arg(memory, path_ptr);
+    let result = match path {
+        Some(path) => validate_file_security_path(kernel, thread_id, &path),
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+    };
+    if security_descriptor_ptr != 0
+        && length != 0
+        && read_guest_bytes(kernel, memory, thread_id, security_descriptor_ptr, length).is_none()
+    {
+        return false;
+    }
+    if length_needed_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, length_needed_ptr, 0) {
+        return false;
+    }
+    if !result {
+        return false;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
+}
+
+fn set_file_security_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    path_ptr: u32,
+    security_descriptor_ptr: u32,
+    length: u32,
+) -> bool {
+    if length != 0
+        && (security_descriptor_ptr == 0
+            || read_guest_bytes(kernel, memory, thread_id, security_descriptor_ptr, length)
+                .is_none())
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return false;
+    }
+    let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !validate_file_security_path(kernel, thread_id, &path) {
+        return false;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
+}
+
+fn validate_file_security_path(kernel: &mut CeKernel, thread_id: u32, path: &str) -> bool {
+    match kernel.files.routes_security_path(path) {
+        Ok(true) => true,
+        Ok(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_PATH_NOT_FOUND);
+            false
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+    }
 }
 
 fn file_handle_bool_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {

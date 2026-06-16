@@ -3094,6 +3094,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     descriptor pointer, otherwise it returns `ERROR_INVALID_SECURITY_DESCR`.
     `aclpriv.h::SDSize` reports the CE private `SECDESHDR.cbSize` word at
     offset 2.
+    `pathapi.cpp::FSINT_GetFileSecurityW` and `FSINT_SetFileSecurityW`
+    canonicalize the path, resolve it through the mount table, and call the
+    volume security manager. `pathapi.cpp::FSEXT_GetFileSecurityW` duplicates
+    the caller's optional output descriptor, keeps a local length-needed DWORD,
+    and copies that DWORD back even when the internal call fails.
+    `fsdacl.h::VolumeSecurityManager` returns `ERROR_NOT_SUPPORTED` for
+    get/set file security when no ACL DLL/security handle is active.
     `FSDMGR_CreateFileHandle` and `FSDMGR_CreateSearchHandle` ignore the HVOL
     and originating process handle in this CE 6 source and simply return the
     caller-supplied FSD file/search context pointer reinterpreted as a handle.
@@ -3147,7 +3154,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     forwarding, real logical-disk registry-root lookup/cache DLL/filter
     behavior, real CE mounted-volume availability, powerdown, and thread-exit
     wait reference behavior, broader file-security ACL storage and
-    enforcement, real utility DLL
+    enforcement beyond the no-security-manager get/set surface, real utility DLL
     format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume
     behavior, hardware power-state timing, and mounted-FSD `FsIoControl` hook

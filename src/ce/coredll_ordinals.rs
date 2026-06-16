@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 84] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 88] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13815,6 +13815,22 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 84] = &[
     CoredllOrdinalDef {
         name: "AFS_FsIoControlW",
         ordinal: ORD_AFS_FS_IO_CONTROL_W,
+    },
+    CoredllOrdinalDef {
+        name: "AFS_SetFileSecurityW",
+        ordinal: ORD_AFS_SET_FILE_SECURITY_W,
+    },
+    CoredllOrdinalDef {
+        name: "AFS_GetFileSecurityW",
+        ordinal: ORD_AFS_GET_FILE_SECURITY_W,
+    },
+    CoredllOrdinalDef {
+        name: "SetFileSecurityW",
+        ordinal: ORD_SET_FILE_SECURITY_W,
+    },
+    CoredllOrdinalDef {
+        name: "GetFileSecurityW",
+        ordinal: ORD_GET_FILE_SECURITY_W,
     },
     CoredllOrdinalDef {
         name: "CeGetVolumeInfoW",
