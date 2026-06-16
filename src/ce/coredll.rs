@@ -31954,6 +31954,59 @@ fn create_bitmap_raw(
         .create_bitmap(width, height, planes, bits_pixel, bits_ptr)
 }
 
+fn ensure_bitmap_backing_for_memory_dc_select(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hdc: u32,
+    bitmap_handle: u32,
+) -> bool {
+    if !kernel.resources.is_memory_dc(hdc) {
+        return true;
+    }
+    let Some(bitmap) = kernel.resources.bitmap(bitmap_handle).cloned() else {
+        return true;
+    };
+    if bitmap.bits_ptr != 0 {
+        return true;
+    }
+    if bitmap.width <= 0 || bitmap.height <= 0 || bitmap.width_bytes <= 0 {
+        return true;
+    }
+    let Some(storage_size) = u32::try_from(bitmap.width_bytes)
+        .ok()
+        .and_then(|width_bytes| width_bytes.checked_mul(bitmap.height as u32))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(bits_ptr) =
+        kernel
+            .memory
+            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, storage_size)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return false;
+    };
+    let Some(bitmap) = kernel.resources.bitmap_mut(bitmap_handle) else {
+        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if bitmap.bits_ptr == 0 {
+        bitmap.bits_ptr = bits_ptr;
+        bitmap.bits_owned = true;
+    } else {
+        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+    }
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DibHeader {
     width: i32,
@@ -38886,6 +38939,11 @@ fn select_object_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, object: u3
         kernel.resources.select_clip_region(hdc, Some(object));
         kernel.threads.set_last_error(thread_id, 0);
         return status;
+    }
+    if object_kind == "bitmap"
+        && !ensure_bitmap_backing_for_memory_dc_select(kernel, thread_id, hdc, object)
+    {
+        return 0;
     }
     let Some(previous) = kernel.resources.select_object(hdc, object) else {
         kernel
