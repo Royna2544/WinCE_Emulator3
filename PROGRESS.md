@@ -15,6 +15,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`,
+  and `SOURCE_REFERENCES.md`: raw bitmap-backed `ImageList_GetIcon` now has a
+  `GetIconInfo` consumer regression. The returned `ICONINFO` reports `fIcon`,
+  exposes the rendered icon-owned mask/color bitmap handles, and does not leak
+  the source image-list backing handles.
+- Focused validation after the `ImageList_GetIcon`/`GetIconInfo` bridge slice:
+  `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons --
+  --nocapture` passed.
+- Full validation after the `ImageList_GetIcon`/`GetIconInfo` bridge slice:
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_kernel`, and `cargo test -j
+  1 --features unicorn,trace,win32-desktop` passed.
 - `tests/coredll_raw_gwe.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`,
   and `SOURCE_REFERENCES.md`: raw `GetIconInfo` lifetime coverage now verifies
   that `CreateIconIndirect` returns cloned mask/color bitmap handles through

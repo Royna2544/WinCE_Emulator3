@@ -19,7 +19,7 @@ use wince_emulation_v3::{
             ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
             ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
             ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
-            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
@@ -10614,6 +10614,46 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     let extracted_mask_bits_ptr = extracted_mask.bits_ptr;
     assert!(extracted_icon_obj.owns_color_bitmap);
     assert!(extracted_icon_obj.owns_mask_bitmap);
+    let extracted_icon_info_ptr = 0x2030_3a00;
+    memory.map_words(extracted_icon_info_ptr, 5);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ICON_INFO,
+            [extracted_icon, extracted_icon_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(extracted_icon_info_ptr)?,
+        1,
+        "ImageList_GetIcon should return an icon, not a cursor"
+    );
+    assert_eq!(
+        memory.read_u32(extracted_icon_info_ptr + 12)?,
+        extracted_mask_handle,
+        "GetIconInfo should expose ImageList_GetIcon's rendered mask bitmap"
+    );
+    assert_eq!(
+        memory.read_u32(extracted_icon_info_ptr + 16)?,
+        extracted_color_handle,
+        "GetIconInfo should expose ImageList_GetIcon's rendered color bitmap"
+    );
+    assert_ne!(
+        memory.read_u32(extracted_icon_info_ptr + 12)?,
+        mask_image.mask,
+        "GetIconInfo should not leak the source image-list mask handle"
+    );
+    assert_ne!(
+        memory.read_u32(extracted_icon_info_ptr + 16)?,
+        mask_image.bitmap,
+        "GetIconInfo should not leak the source image-list color handle"
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

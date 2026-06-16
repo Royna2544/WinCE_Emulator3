@@ -1329,7 +1329,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     pseudo handles report `fIcon == FALSE` and stock icon pseudo handles report
     `TRUE`. The raw regression also confirms those returned bitmap handles are
     the cloned `CreateIconIndirect` backing, so deleting caller-owned source
-    bitmaps does not invalidate later icon drawing.
+    bitmaps does not invalidate later icon drawing. Bitmap-backed
+    `ImageList_GetIcon` now also has raw `GetIconInfo` coverage proving the
+    returned mask/color handles are the rendered icon-owned bitmaps rather than
+    source image-list backing handles.
     Raw `DrawIconEx` also validates the HDC/icon handle pair, paints a
     deterministic pseudo-icon into attached window framebuffers and selected
     memory DIBs for shell pseudo-icons, and draws bitmap-backed icons through
