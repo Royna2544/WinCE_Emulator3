@@ -34561,6 +34561,122 @@ fn coredll_raw_get_region_data_matches_ce_size_payload_and_errors() -> Result<()
 }
 
 #[test]
+fn coredll_raw_empty_regions_keep_ce_zero_bounds() -> Result<()> {
+    const NULLREGION: u32 = 1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+    let rect_ptr = 0x3000_5000;
+    let out_ptr = 0x3000_5040;
+    memory.map_words(rect_ptr, 4);
+    memory.map_words(out_ptr, 4);
+
+    macro_rules! assert_null_region_bounds {
+        ($region:expr) => {{
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_GET_RGN_BOX,
+                    [$region, out_ptr],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::U32(NULLREGION),
+                    ..
+                }
+            ));
+            assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+            assert_eq!(memory.read_u32(out_ptr)? as i32, 0);
+            assert_eq!(memory.read_u32(out_ptr + 4)? as i32, 0);
+            assert_eq!(memory.read_u32(out_ptr + 8)? as i32, 0);
+            assert_eq!(memory.read_u32(out_ptr + 12)? as i32, 0);
+        }};
+    }
+
+    for args in [[10, 20, 10, 40], [10, 20, 40, 20]] {
+        let region = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_RECT_RGN,
+            args,
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(region),
+                ..
+            } => region,
+            other => panic!("CreateRectRgn(empty) did not return a region: {other:?}"),
+        };
+        assert_ne!(region, 0);
+        assert_null_region_bounds!(region);
+    }
+
+    for rect in [[7, 9, 7, 30], [7, 9, 30, 9]] {
+        memory.write_word(rect_ptr, rect[0] as u32);
+        memory.write_word(rect_ptr + 4, rect[1] as u32);
+        memory.write_word(rect_ptr + 8, rect[2] as u32);
+        memory.write_word(rect_ptr + 12, rect[3] as u32);
+        let region = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_RECT_RGN_INDIRECT,
+            [rect_ptr],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(region),
+                ..
+            } => region,
+            other => panic!("CreateRectRgnIndirect(empty) did not return a region: {other:?}"),
+        };
+        assert_ne!(region, 0);
+        assert_null_region_bounds!(region);
+    }
+
+    let region = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [1, 2, 30, 40],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(non-empty) did not return a region: {other:?}"),
+    };
+
+    for args in [
+        [region, 0, 0, 0, 0],
+        [region, 4, 8, 12, 8],
+        [region, 6, 3, 6, 44],
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_RECT_RGN,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+        assert_null_region_bounds!(region);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_region_or_incrementally_merges_scanline_rects() -> Result<()> {
     const SIMPLEREGION: u32 = 2;
     const RGN_OR: u32 = 2;

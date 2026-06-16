@@ -819,10 +819,10 @@ impl ResourceSystem {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
         let rect = rect.normalized();
-        let rects = if rect.is_empty() {
-            Vec::new()
+        let (rect, rects) = if rect.is_empty() {
+            (Rect::default(), Vec::new())
         } else {
-            vec![rect]
+            (rect, vec![rect])
         };
         self.regions.insert(
             handle,

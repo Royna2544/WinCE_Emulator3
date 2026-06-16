@@ -2424,6 +2424,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and null/bad/wrong-type region handles to fail with `ERROR_INVALID_HANDLE`.
     Raw `GetRegionData` now also fails caller-buffer write faults through the
     same invalid-parameter guest-memory path used by other GWE output APIs.
+  - `region.cpp::CreateNullRegionTest` and `SetRectRgnNULLRgnTest` expect
+    zero-width or zero-height `CreateRectRgn`, `CreateRectRgnIndirect`, and
+    `SetRectRgn` inputs to produce a valid null region whose `GetRgnBox`
+    result is `NULLREGION` with canonical `(0,0,0,0)` bounds.
 
 - GDI DIB/color-table and DIB brush surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and

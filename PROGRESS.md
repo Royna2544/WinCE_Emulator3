@@ -79,6 +79,10 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `passNull2Region(EGetRegionData)` size-query, `RGNDATAHEADER`/RECT payload,
   invalid-handle, and caller-buffer write-fault behavior; `CreateRectRgnIndirect(NULL)`
   is also covered for CE invalid-parameter reporting.
+- `tests/coredll_raw_gwe.rs`: raw region coverage now includes CE
+  `region.cpp::CreateNullRegionTest` and `SetRectRgnNULLRgnTest`, proving
+  zero-width/zero-height create/set inputs keep a valid region handle while
+  `GetRgnBox` reports `NULLREGION` with canonical zero bounds.
 - Focused validation after the Unicorn parked `SendMessageTimeout` timeout
   re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop send_message_timeout_ --lib`
