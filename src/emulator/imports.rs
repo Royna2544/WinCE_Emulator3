@@ -2449,6 +2449,7 @@ mod tests {
         let path = 0x1000_0000;
         let lock_overlapped = 0x1000_0100;
         let peer_overlapped = 0x1000_0200;
+        let lock_state = 0x1000_0300;
         memory.map_wide_z(path, "\\ResidentFlash\\locked.bin");
         map_overlapped(&mut memory, lock_overlapped, 3, 0);
         map_overlapped(&mut memory, peer_overlapped, 5, 0);
@@ -2511,6 +2512,50 @@ mod tests {
             Some(1)
         );
         assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        for offset in (0..32).step_by(4) {
+            memory.map_word(lock_state + offset, 0);
+        }
+        memory.map_word(lock_state + 16, 0);
+        memory.map_word(lock_state + 24, 2);
+        memory.map_word(lock_state + 28, 0x2233_4455);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 6,
+                [lock_state],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            memory.word(lock_state + 16),
+            1,
+            "CE marks FILELOCKSTATE terminal before emptying queued lock containers"
+        );
+        assert_eq!(memory.word(lock_state + 28), 0);
+
+        memory.map_word(lock_state + 16, 0);
+        memory.map_word(lock_state + 24, 4);
+        memory.map_word(lock_state + 28, 0);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 6,
+                [lock_state],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(
+            memory.word(lock_state + 16),
+            0,
+            "CE returns before setting fTerminal when pvLockContainer is null"
+        );
 
         assert_eq!(
             table.dispatch_trap(

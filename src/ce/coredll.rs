@@ -11718,7 +11718,70 @@ fn fsdmgr_test_file_lock_raw(
     }
 }
 
-fn fsdmgr_empty_lock_container_raw(kernel: &mut CeKernel, thread_id: u32) {
+fn fsdmgr_empty_lock_container_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    file_lock_state_ptr: u32,
+) {
+    const FILE_LOCK_STATE_FTERMINAL_OFFSET: u32 = 16;
+    const FILE_LOCK_STATE_CQUEUE_OFFSET: u32 = 24;
+    const FILE_LOCK_STATE_LOCK_CONTAINER_OFFSET: u32 = 28;
+
+    if file_lock_state_ptr == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return;
+    }
+    let lock_container_ptr = match memory
+        .read_u32(file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_LOCK_CONTAINER_OFFSET))
+    {
+        Ok(value) => value,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return;
+        }
+    };
+    if lock_container_ptr == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return;
+    }
+    let queued =
+        match memory.read_u32(file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_CQUEUE_OFFSET)) {
+            Ok(value) => value,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return;
+            }
+        };
+    if queued != 0
+        && memory
+            .write_u32(
+                file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_FTERMINAL_OFFSET),
+                1,
+            )
+            .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return;
+    }
+    if memory
+        .write_u32(
+            file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_LOCK_CONTAINER_OFFSET),
+            0,
+        )
+        .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return;
+    }
     kernel.threads.set_last_error(thread_id, 0);
 }
 
@@ -12351,7 +12414,7 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             raw_arg(args, 6),
         ),
         FsdmgrImport::FsdmgrEmptyLockContainer => {
-            fsdmgr_empty_lock_container_raw(kernel, thread_id);
+            fsdmgr_empty_lock_container_raw(kernel, memory, thread_id, raw_arg(args, 0));
             0
         }
         FsdmgrImport::FsdmgrFlushCache => {
