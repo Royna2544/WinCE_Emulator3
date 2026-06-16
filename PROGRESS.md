@@ -59,6 +59,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   failures do not post copied `NOTIFYICONDATAW` payloads, while successful live
   `NIM_MODIFY` and `NIM_DELETE` calls still post CE-style taskbar copies and
   release private payloads.
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw `EqualRgn` now
+  follows CE `region.cpp::passNull2Region(EEqualRgn)` by splitting null-region
+  operands (`ERROR_INVALID_PARAMETER`) from bad or wrong-type GDI handles
+  (`ERROR_INVALID_HANDLE`) while preserving clear-last-error equal/unequal
+  comparisons for valid regions.
 - Focused validation after the Unicorn parked `SendMessageTimeout` timeout
   re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop send_message_timeout_ --lib`

@@ -6516,10 +6516,22 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_EQUAL_RGN => {
             let hrgn1 = raw_arg(args, 0);
             let hrgn2 = raw_arg(args, 1);
+            if hrgn1 == 0 || hrgn2 == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return Some(CoredllValue::Bool(false));
+            }
             let r1 = kernel.resources.region(hrgn1).map(|r| r.rects.clone());
             let r2 = kernel.resources.region(hrgn2).map(|r| r.rects.clone());
+            if r1.is_none() || r2.is_none() {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return Some(CoredllValue::Bool(false));
+            }
             kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(r1.is_some() && r1 == r2))
+            Some(CoredllValue::Bool(r1 == r2))
         }
         ORD_EXCLUDE_CLIP_RECT => Some(CoredllValue::U32(exclude_clip_rect_raw(
             kernel,

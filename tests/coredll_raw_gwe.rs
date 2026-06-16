@@ -24,7 +24,7 @@ use wince_emulation_v3::{
             ORD_DRAW_EDGE, ORD_DRAW_FOCUS_RECT, ORD_DRAW_FRAME_CONTROL, ORD_DRAW_ICON_EX,
             ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W, ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE,
             ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT,
-            ORD_ENUM_WINDOWS, ORD_EQUAL_RECT, ORD_EXCLUDE_CLIP_RECT, ORD_EXT_ESCAPE,
+            ORD_ENUM_WINDOWS, ORD_EQUAL_RECT, ORD_EQUAL_RGN, ORD_EXCLUDE_CLIP_RECT, ORD_EXT_ESCAPE,
             ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE, ORD_FIND_RESOURCE_W,
             ORD_FIND_WINDOW_W, ORD_FLUSH_VIEW_OF_FILE, ORD_GET_ACTIVE_WINDOW,
             ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS,
@@ -34016,6 +34016,161 @@ fn coredll_raw_region_or_canonicalizes_duplicate_coverage() -> Result<()> {
         }
     ));
     assert_eq!(kernel.resources.region(dest).unwrap().rects.len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_equal_rgn_reports_ce_null_and_wrong_handle_errors() -> Result<()> {
+    const BLACK_PEN: u32 = 7;
+    const DEFAULT_PALETTE: u32 = 15;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+
+    let region_a = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [10, 20, 50, 70],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(region_a) did not return a region: {other:?}"),
+    };
+    let region_b = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [10, 20, 50, 70],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(region_b) did not return a region: {other:?}"),
+    };
+    let region_c = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [11, 20, 50, 70],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(region_c) did not return a region: {other:?}"),
+    };
+    let stock_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [BLACK_PEN],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(BLACK_PEN) did not return a handle: {other:?}"),
+    };
+    let stock_palette = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [DEFAULT_PALETTE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(DEFAULT_PALETTE) did not return a handle: {other:?}"),
+    };
+
+    for args in [[0, 0], [region_a, 0], [0, region_a]] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_EQUAL_RGN,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
+    }
+
+    for args in [
+        [region_a, 0x0000_0bad],
+        [region_a, stock_pen],
+        [0x0000_0bad, region_a],
+        [stock_palette, region_a],
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_EQUAL_RGN,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EQUAL_RGN,
+            [region_a, region_b],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EQUAL_RGN,
+            [region_a, region_c],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }

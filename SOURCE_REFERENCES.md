@@ -2404,6 +2404,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     status after offsetting. Raw `OffsetRgn` now reclassifies the stored region
     after moving it, so multi-rect hole regions keep `COMPLEXREGION` instead of
     being collapsed to `SIMPLEREGION`.
+  - `region.cpp::passNull2Region(EEqualRgn)` expects null operands to fail
+    with `ERROR_INVALID_PARAMETER`, while unknown or wrong-type GDI handles
+    fail with `ERROR_INVALID_HANDLE`. Raw `EqualRgn` now follows that error
+    split before comparing valid region geometry, including stock pen/palette
+    wrong-handle cases from the CE fixture.
 
 - GDI DIB/color-table and DIB brush surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
