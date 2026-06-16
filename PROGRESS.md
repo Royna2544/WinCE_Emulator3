@@ -66,6 +66,21 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop` passed. Logs are under
   `target/`.
+- `src/emulator/unicorn.rs` and `src/main.rs`: runtime scheduling now detects
+  when the currently executing thread has no visible receiver work but another
+  active same-process thread does, then rotates to that visible receiver before
+  falling through to broader parked-process handoff. This keeps queued visible
+  input flowing inside the active process without waiting for an unrelated
+  process switch.
+- Validation after the same-process visible-receiver rotation slice: focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop
+  queued_input_rotates_to_any_active_visible_receiver_thread`,
+  `rustfmt --edition 2024 --check src\main.rs src\emulator\unicorn.rs`,
+  `git diff --check -- src\main.rs src\emulator\unicorn.rs`, `cargo build
+  --release --features unicorn,trace,win32-desktop`, and `cargo check
+  --features unicorn,trace,win32-desktop` passed. Runtime validation on the
+  fresh `192.168.0.39:8765` launch showed queued visible input hand off to
+  thread 1 and drain back to `posted=0 visible=0`.
 - `src/emulator/unicorn.rs`: mapped-code indexing now keeps lightweight
   references to mapped blob byte buffers instead of cloning every blob into each
   index. The index still keeps immutable static-code snapshots authoritative
