@@ -12614,6 +12614,13 @@ fn stop_device_notifications_raw(
 fn fsdmgr_volume_util_status_raw(kernel: &mut CeKernel, thread_id: u32, disk_ptr: u32) -> u32 {
     let status = if disk_ptr == 0 {
         ERROR_GEN_FAILURE
+    } else if kernel
+        .fsdmgr_registry_value(disk_ptr, "Util")
+        .as_ref()
+        .and_then(fsdmgr_registry_string_units)
+        .is_some()
+    {
+        ERROR_MOD_NOT_FOUND_LOCAL
     } else {
         ERROR_FILE_NOT_FOUND
     };

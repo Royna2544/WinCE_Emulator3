@@ -3090,7 +3090,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     incoming device handle to `PDSK`. `fsdmgrapi.cpp::FSDMGR_FormatVolume` and
     `FSDMGR_ScanVolume` call a utility DLL named by the disk's `Util` registry
     value; when that value is absent, `CallUtilApi` returns
-    `ERROR_FILE_NOT_FOUND`.
+    `ERROR_FILE_NOT_FOUND`, and the next CE boundary is `LoadLibrary` failure
+    (`ERROR_MOD_NOT_FOUND`) or a missing `ScanVolumeEx`/`FormatVolumeEx`
+    export (`ERROR_PROC_NOT_FOUND`).
     `fsdmgrapi.cpp::FSDMGR_GetRegistryValue`,
     `FSDMGR_GetRegistryString`, and `FSDMGR_GetRegistryFlag` delegate through
     the logical disk's registry-root list. `logicaldisk.cpp` clears missing
@@ -3144,7 +3146,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     owner-checked `AFS_Unmount`/`CloseHandle` mounted-root removal and mounted
     `FSCTL_GET_VOLUME_INFO` metadata. FSDMGR import traps now also expose
     direct CE `FSDMGR_DeviceHandleToHDSK` identity mapping,
-    `FSDMGR_FormatVolume`/`FSDMGR_ScanVolume` no-utility failure status, direct
+    `FSDMGR_FormatVolume`/`FSDMGR_ScanVolume` `Util` registry probing with
+    no-utility `ERROR_FILE_NOT_FOUND` and configured-but-unloaded utility DLL
+    `ERROR_MOD_NOT_FOUND` status, direct
     CE `FSDMGR_AdvertiseInterface` coredll-backed add/remove behavior,
     CE `FSDMGR_GetDiskInfo`/`FSDMGR_GetDiskName` metadata/name path, direct
     `IOCTL_DISK_SETINFO` synthetic `DISK_INFO` persistence,
@@ -3173,8 +3177,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
     for FSDMGR cache imports. Physical block-driver backing, remaining disk IOCTL
-    forwarding, real logical-disk registry-root lookup/cache DLL/filter
-    behavior, real CE mounted-volume availability, powerdown, and thread-exit
+    forwarding, real cache DLL/filter behavior, real CE mounted-volume
+    availability, powerdown, and thread-exit
     wait reference behavior, broader file-security ACL storage and
     enforcement beyond the no-security-manager get/set surface, real utility DLL
     format/scan execution, real static sector address mapping, real

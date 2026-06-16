@@ -3659,6 +3659,7 @@ mod tests {
     #[test]
     fn fsdmgr_device_handle_and_util_imports_match_ce_helper_shape() {
         const ERROR_GEN_FAILURE: u32 = 31;
+        const ERROR_MOD_NOT_FOUND: u32 = 126;
 
         let imports = vec![ImportDescriptor {
             module_name: "fsdmgr.dll".to_owned(),
@@ -3703,6 +3704,7 @@ mod tests {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
         let mut memory = TestMemory::default();
         let disk_handle = 0x1000_6000;
+        let mount_root = r"\Utility Disk";
 
         assert_eq!(
             table.dispatch_trap(
@@ -3741,6 +3743,54 @@ mod tests {
             Some(ERROR_GEN_FAILURE)
         );
         assert_eq!(kernel.threads.get_last_error(11), ERROR_GEN_FAILURE);
+
+        kernel.files.mount(MountConfig {
+            name: Some("Utility Store".to_owned()),
+            device_name: Some("DSK8:".to_owned()),
+            guest_root: mount_root.to_owned(),
+            host_root: None,
+            total_mbytes: 128,
+            free_mbytes: 64,
+            writable: true,
+            removable: true,
+            system: false,
+            hidden: false,
+            interface_classes: Vec::new(),
+            registry_roots: vec![r"HKLM\System\StorageManager\Profiles\Utility".to_owned()],
+            registry_subkey: Some("FATFS".to_owned()),
+        });
+        kernel.registry.set_value(
+            r"HKLM\System\StorageManager\Profiles\Utility\FATFS",
+            "Util",
+            RegistryValue::string("fatutil.dll"),
+        );
+        kernel
+            .fsdmgr_register_volume(disk_handle, mount_root, 0x0bad_f00d)
+            .unwrap();
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_handle, 0],
+            ),
+            Some(ERROR_MOD_NOT_FOUND)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_MOD_NOT_FOUND);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [disk_handle, 0],
+            ),
+            Some(ERROR_MOD_NOT_FOUND)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_MOD_NOT_FOUND);
     }
 
     #[test]

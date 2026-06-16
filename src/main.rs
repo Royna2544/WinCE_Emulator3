@@ -3188,26 +3188,41 @@ fn enqueue_desktop_input(desktop: &mut DesktopRuntime, kernel: &mut CeKernel) ->
                 queued += 1;
             }
             VirtualInputEvent::TouchDown { x, y } => {
-                kernel.remote.enqueue_touch("down", x, y).map_err(|err| {
-                    wince_emulation_v3::Error::Backend(format!("host touch down: {err}"))
-                })?;
-                queued += 1;
+                if enqueue_host_touch(kernel, "down", x, y, "host touch down")? {
+                    queued += 1;
+                }
             }
             VirtualInputEvent::TouchMove { x, y } => {
-                kernel.remote.enqueue_touch("move", x, y).map_err(|err| {
-                    wince_emulation_v3::Error::Backend(format!("host touch move: {err}"))
-                })?;
-                queued += 1;
+                if enqueue_host_touch(kernel, "move", x, y, "host touch move")? {
+                    queued += 1;
+                }
             }
             VirtualInputEvent::TouchUp { x, y } => {
-                kernel.remote.enqueue_touch("up", x, y).map_err(|err| {
-                    wince_emulation_v3::Error::Backend(format!("host touch up: {err}"))
-                })?;
-                queued += 1;
+                if enqueue_host_touch(kernel, "up", x, y, "host touch up")? {
+                    queued += 1;
+                }
             }
         }
     }
     Ok(queued)
+}
+
+fn enqueue_host_touch(
+    kernel: &mut CeKernel,
+    phase: &str,
+    x: i32,
+    y: i32,
+    context: &str,
+) -> Result<bool> {
+    match kernel.remote.enqueue_touch(phase, x, y) {
+        Ok(()) => Ok(true),
+        Err(wince_emulation_v3::ce::remote::RemoteError::TouchOutsideFramebuffer { .. }) => {
+            Ok(false)
+        }
+        Err(err) => Err(wince_emulation_v3::Error::Backend(format!(
+            "{context}: {err}"
+        ))),
+    }
 }
 
 fn enqueue_startup_taps(kernel: &mut CeKernel, taps: &[(i32, i32)]) -> Result<()> {

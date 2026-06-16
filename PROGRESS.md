@@ -15,6 +15,13 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct
+  `FSDMGR_FormatVolume @15` and `FSDMGR_ScanVolume @31` now use the configured
+  logical-disk registry profile to probe the CE `Util` value before reporting
+  status. Missing utility metadata still returns `ERROR_FILE_NOT_FOUND`; a
+  registered disk with a configured utility DLL name now advances to the current
+  `ERROR_MOD_NOT_FOUND` load/execution boundary. Real guest utility DLL export
+  execution remains queued.
 - `src/emulator/cpu_mips.rs` and `src/emulator/unicorn.rs`: startup
   profiling with `sudo --inline cargo flamegraph` showed the iNavi run spending
   scheduler-hook time in a linear MIPS trampoline-origin scan. The scheduler
