@@ -542,10 +542,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     builds page offsets from the current file pointer when `lpReserved` is null
     and treats non-null `lpReserved` as a caller-supplied `ULARGE_INTEGER`
     offset array without advancing the current file pointer; the cached and
-    uncached shared-file-map paths consume those offsets page by page. v3 now
-    handles synchronous current-position and reserved-offset scatter/gather for
-    page-multiple arrays through host-backed files, while overlapped variants
-    and real FSD filter forwarding remain queued.
+    uncached shared-file-map paths consume those offsets page by page.
+    `cachefilt.cpp` forwards `pOverlapped` through the FSD hook but explicitly
+    documents it as unsupported and calls the private handle path without using
+    it. v3 now handles synchronous current-position and reserved-offset
+    scatter/gather for page-multiple arrays through host-backed files and
+    accepts ignored non-null `OVERLAPPED*` pointers, while real lower-FSD/filter
+    forwarding remains queued.
     `volumeapi.cpp` handles
     `FSCTL_GET_VOLUME_INFO` before forwarding other controls to the mounted
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for

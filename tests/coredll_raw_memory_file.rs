@@ -11777,6 +11777,136 @@ fn coredll_raw_device_io_control_file_scatter_gather_reserved_offsets() -> Resul
 }
 
 #[test]
+fn coredll_raw_device_io_control_file_scatter_gather_ignores_overlapped() -> Result<()> {
+    const IOCTL_FILE_WRITE_GATHER: u32 = 0x0009_0044;
+    const IOCTL_FILE_READ_SCATTER: u32 = 0x0009_0048;
+    const PAGE_SIZE: u32 = 4096;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("file_scatter_gather_overlapped");
+    fs::create_dir_all(&root).unwrap();
+    let sdmmc_root = root.join("sdmmc");
+    fs::create_dir_all(&sdmmc_root).unwrap();
+    kernel.set_file_root(&root);
+    kernel.mount_guest_root("\\SDMMC Disk", &sdmmc_root);
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let path_ptr = 0x1_0000;
+    let write_segments_ptr = 0x1_0200;
+    let read_segments_ptr = 0x1_0300;
+    let returned_ptr = 0x1_0400;
+    let write_page = 0x3000_0000;
+    let read_page = 0x3000_2000;
+    let bogus_overlapped_ptr = 0x7fff_0000;
+    let payload = vec![0x73; PAGE_SIZE as usize];
+    memory.write_wide_z(path_ptr, "\\SDMMC Disk\\sg-overlapped.bin");
+    memory.map_words(write_segments_ptr, 2);
+    memory.write_word(write_segments_ptr, write_page);
+    memory.map_words(read_segments_ptr, 2);
+    memory.write_word(read_segments_ptr, read_page);
+    memory.write_bytes(write_page, &payload);
+    memory.map_bytes(read_page, PAGE_SIZE);
+    memory.map_words(returned_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                IOCTL_FILE_WRITE_GATHER,
+                write_segments_ptr,
+                PAGE_SIZE,
+                0,
+                0,
+                returned_ptr,
+                bogus_overlapped_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(returned_ptr)?, PAGE_SIZE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FILE_POINTER,
+            [file, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    memory.write_word(returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                IOCTL_FILE_READ_SCATTER,
+                read_segments_ptr,
+                PAGE_SIZE,
+                0,
+                0,
+                returned_ptr,
+                bogus_overlapped_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(returned_ptr)?, PAGE_SIZE);
+    assert_eq!(memory.read_bytes(read_page, PAGE_SIZE as usize), payload);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CLOSE_HANDLE,
+        [file],
+    );
+    fs::remove_dir_all(root).unwrap();
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_write_file_on_readonly_handle_reports_access_denied() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

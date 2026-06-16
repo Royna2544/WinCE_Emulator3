@@ -19550,7 +19550,7 @@ fn file_handle_scatter_gather_raw<M: CoredllGuestMemory>(
     transfer_bytes: u32,
     reserved_ptr: u32,
     returned_ptr: u32,
-    overlapped_ptr: u32,
+    _overlapped_ptr: u32,
 ) -> bool {
     if segments_ptr == 0
         || transfer_bytes == 0
@@ -19562,15 +19562,6 @@ fn file_handle_scatter_gather_raw<M: CoredllGuestMemory>(
             thread_id,
             returned_ptr,
             ERROR_INVALID_PARAMETER,
-        );
-    }
-    if overlapped_ptr != 0 {
-        return file_scatter_gather_fail(
-            kernel,
-            memory,
-            thread_id,
-            returned_ptr,
-            ERROR_NOT_SUPPORTED,
         );
     }
     let segment_count = transfer_bytes / FILE_SCATTER_GATHER_PAGE_SIZE;

@@ -5159,6 +5159,25 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
   fixture remains ignored, and Cargo still emits the existing unused-code
   warnings.
+- `src/ce/coredll.rs`, `tests/coredll_raw_memory_file.rs`, `PLAN.MD`,
+  `TODO.md`, `KNOWN_BUGS.md`, `SOURCE_REFERENCES.md`, and `PROGRESS.md`:
+  file-handle scatter/gather `DeviceIoControl` now accepts non-null
+  `OVERLAPPED*` arguments and ignores them like CE cachefilt's
+  `FCFILT_ReadFileScatter`/`FCFILT_WriteFileGather` path. The raw regression
+  passes a deliberately bogus non-null overlapped pointer through write-gather
+  and read-scatter to prove the pointer is neither dereferenced nor rejected;
+  real lower-FSD/filter forwarding remains queued.
+- Validation after the scatter/gather overlapped-pointer slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_memory_file
+  coredll_raw_device_io_control_file_scatter_gather_ignores_overlapped --
+  --nocapture`, `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, `$env:CARGO_INCREMENTAL='0'; cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`, and
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop` passed. The eVC4 MIPSII fixture remains ignored,
+  and Cargo still emits the existing unused-code warnings.
 - Validation after the file scatter/gather IOCTL slice:
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop --test coredll_raw_memory_file
