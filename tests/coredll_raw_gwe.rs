@@ -10603,6 +10603,71 @@ fn coredll_raw_mask_blt_mirrors_negative_destination_height_between_selected_dib
 }
 
 #[test]
+fn coredll_raw_mask_blt_mirrors_negative_destination_width_and_height_between_selected_dibs()
+-> Result<()> {
+    const SRCCOPY: u32 = 0x00cc_0020;
+    const WHITENESS: u32 = 0x00ff_0062;
+    fn makerop4(foreground: u32, background: u32) -> u32 {
+        foreground | ((background << 8) & 0xff00_0000)
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let (_mask_dc, mask_bitmap, mask_bits, mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 1, 0x001f);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 1, 0xffe0);
+    memory.write_bytes(dst_bits, &[0; 8]);
+    memory.write_u8(mask_bits, 0x80)?; // foreground, background.
+    memory.write_u8(mask_bits + mask_stride, 0x40)?; // background, foreground.
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MASK_BLT,
+            [
+                dst_dc,
+                2,
+                2,
+                (-2i32) as u32,
+                (-2i32) as u32,
+                src_dc,
+                0,
+                0,
+                mask_bitmap,
+                0,
+                0,
+                makerop4(SRCCOPY, WHITENESS),
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0xffe0);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0xffff);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), 0xffff);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0xf800);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_mask_blt_null_mask_mirrors_negative_destination_width_between_selected_dibs()
 -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
@@ -11024,6 +11089,98 @@ fn coredll_raw_mask_blt_mirrors_negative_destination_height_to_framebuffer() -> 
     assert_eq!(
         framebuffer.dirty_rects(),
         &[FramebufferRect::new(0, 0, 1, 4)]
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_mask_blt_mirrors_negative_destination_width_and_height_to_framebuffer() -> Result<()>
+{
+    const SRCCOPY: u32 = 0x00cc_0020;
+    const WHITENESS: u32 = 0x00ff_0062;
+    fn makerop4(foreground: u32, background: u32) -> u32 {
+        foreground | ((background << 8) & 0xff00_0000)
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "MASKBLT_NEG_WH_FB",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 2, 2),
+    );
+    let dst_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [hwnd],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let (_mask_dc, mask_bitmap, mask_bits, mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 1, 0x001f);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 1, 0xffe0);
+    memory.write_u8(mask_bits, 0x80)?; // foreground, background.
+    memory.write_u8(mask_bits + mask_stride, 0x40)?; // background, foreground.
+
+    let mut framebuffer = VirtualFramebuffer::new(2, 2, PixelFormat::Rgb565)?;
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_MASK_BLT,
+            [
+                dst_dc,
+                2,
+                2,
+                (-2i32) as u32,
+                (-2i32) as u32,
+                src_dc,
+                0,
+                0,
+                mask_bitmap,
+                0,
+                0,
+                makerop4(SRCCOPY, WHITENESS),
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), 0xffe0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 0), 0xffff);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 1), 0xffff);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 1), 0xf800);
+    assert_eq!(
+        framebuffer.dirty_rects(),
+        &[FramebufferRect::new(0, 0, 2, 2)]
     );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 

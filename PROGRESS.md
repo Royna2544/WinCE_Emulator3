@@ -102,6 +102,19 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   1 --features unicorn,trace,win32-desktop`. Test logs are under
   `target/cargo-test-coredll-raw-gwe-maskblt-negheight.20260616-135717.*.log`
   and `target/cargo-test-full-maskblt-negheight.20260616-135728.*.log`.
+- `tests/coredll_raw_gwe.rs`: the same CE `NegativeSize(EMaskBlt)` coverage
+  now includes combined negative destination width and height for selected-DIB
+  and framebuffer destinations. A checker 1 bpp mask proves the source samples
+  and foreground/background ROP4 mask bits mirror together across both axes.
+- Focused validation after the `MaskBlt` both-axes mirroring slice:
+  `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_mask_blt_mirrors_negative_destination_width_and_height --
+  --nocapture` passed, followed by `cargo fmt --check`, `git diff --check`,
+  `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`. Test logs are
+  under `target/cargo-test-coredll-raw-gwe-maskblt-negwh.20260616-140100.*.log`
+  and `target/cargo-test-full-maskblt-negwh.20260616-140111.*.log`.
 - Validation after the transparent off-top clipping slice: focused
   `coredll_raw_transparent_image_clips_off_top`, `cargo fmt --check`, `git
   diff --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo
