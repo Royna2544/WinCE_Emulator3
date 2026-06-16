@@ -129,6 +129,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   1 --features unicorn,trace,win32-desktop`. Test logs are under
   `target/cargo-test-coredll-raw-gwe-transparent-src-height.20260616-140450.*.log`
   and `target/cargo-test-full-transparent-src-height.20260616-140501.*.log`.
+- `tests/coredll_raw_gwe.rs`: raw `TransparentImage` now also covers CE
+  `draw.cpp::StretchBltFlipMirrorTest(ETransparentImage)` isolated negative
+  source-width mirroring for selected-DIB and framebuffer destinations. The
+  regressions prove horizontal source columns flip through the transparent
+  color-key path without requiring a simultaneous destination flip.
+- Focused validation after the `TransparentImage` negative source-width slice:
+  `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_transparent_image_mirrors_negative_source_width -- --nocapture`
+  passed, followed by `cargo fmt --check`, `git diff --check`, `cargo check
+  --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test -j
+  1 --features unicorn,trace,win32-desktop`. Test logs are under
+  `target/cargo-test-coredll-raw-gwe-transparent-src-width.20260616-140838.*.log`
+  and `target/cargo-test-full-transparent-src-width.20260616-140845.*.log`.
 - Validation after the transparent off-top clipping slice: focused
   `coredll_raw_transparent_image_clips_off_top`, `cargo fmt --check`, `git
   diff --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo
