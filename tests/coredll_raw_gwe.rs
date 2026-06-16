@@ -34302,6 +34302,110 @@ fn coredll_raw_in_region_reports_ce_handle_and_rect_errors() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_region_box_and_combine_report_ce_parameter_errors() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+    let rect_ptr = 0x3000_2000;
+    memory.map_words(rect_ptr, 4);
+
+    let region_a = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [10, 20, 50, 70],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(region_a) did not return a region: {other:?}"),
+    };
+    let region_b = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [30, 40, 90, 100],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(region_b) did not return a region: {other:?}"),
+    };
+    let dest = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(dest) did not return a region: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_RGN_BOX,
+            [region_a, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_RGN_BOX,
+            [region_a, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COMBINE_RGN,
+            [dest, region_a, region_b, u32::MAX],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_region_or_incrementally_merges_scanline_rects() -> Result<()> {
     const SIMPLEREGION: u32 = 2;
     const RGN_OR: u32 = 2;
@@ -34311,6 +34415,8 @@ fn coredll_raw_region_or_incrementally_merges_scanline_rects() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 14;
+    let rect_ptr = 0x3000_3000;
+    memory.map_words(rect_ptr, 4);
 
     let dest = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -34369,13 +34475,17 @@ fn coredll_raw_region_or_incrementally_merges_scanline_rects() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_GET_RGN_BOX,
-            [dest, 0],
+            [dest, rect_ptr],
         ),
         CoredllDispatch::Returned {
             export: table.resolve_ordinal(ORD_GET_RGN_BOX).unwrap().clone(),
             value: CoredllValue::U32(SIMPLEREGION),
         }
     );
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 0);
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 0);
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 128);
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 4);
     assert_eq!(
         kernel.resources.region(dest).unwrap().rects,
         vec![Rect {

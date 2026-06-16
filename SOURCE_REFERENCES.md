@@ -2414,6 +2414,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     while `RectInRegion(validRegion, NULL)` fails with
     `ERROR_INVALID_PARAMETER`. Raw `PtInRegion`/`RectInRegion` now follows
     that order before running valid inside/outside geometry tests.
+  - `region.cpp::passNull2Region(EGetRgnBox/ECombineRgn)` expects
+    `GetRgnBox(validRegion, NULL)` to fail with `ERROR_INVALID_PARAMETER`, and
+    invalid `CombineRgn` modes such as `-1` to fail with
+    `ERROR_INVALID_PARAMETER` before changing destination geometry.
 
 - GDI DIB/color-table and DIB brush surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and

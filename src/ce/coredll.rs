@@ -47735,8 +47735,8 @@ fn combine_rgn_raw_slow(
         _ => {
             kernel
                 .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            return ERROR_REGION;
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
         }
     };
     if !kernel.resources.set_region_rects(dest, combined) {
@@ -47766,7 +47766,13 @@ fn get_rgn_box_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return ERROR_REGION;
     };
-    if rect_ptr != 0 && !write_guest_rect(kernel, memory, thread_id, rect_ptr, rect) {
+    if rect_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return ERROR_REGION;
+    }
+    if !write_guest_rect(kernel, memory, thread_id, rect_ptr, rect) {
         return ERROR_REGION;
     }
     kernel.threads.set_last_error(thread_id, 0);
