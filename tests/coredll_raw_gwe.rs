@@ -36,20 +36,20 @@ use wince_emulation_v3::{
             ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
             ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
             ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE, ORD_GET_FOREGROUND_KEYBOARD_TARGET,
-            ORD_GET_FOREGROUND_WINDOW, ORD_GET_KEY_STATE, ORD_GET_KEYBOARD_LAYOUT,
-            ORD_GET_KEYBOARD_LAYOUT_LIST, ORD_GET_KEYBOARD_LAYOUT_NAME_W, ORD_GET_KEYBOARD_TARGET,
-            ORD_GET_LAYOUT, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W, ORD_GET_MESSAGE_POS,
-            ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W,
-            ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_COLOR, ORD_GET_NEAREST_PALETTE_INDEX,
-            ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_OBJECT_TYPE,
-            ORD_GET_OBJECT_W, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT, ORD_GET_PIXEL,
-            ORD_GET_QUEUE_STATUS, ORD_GET_REGION_DATA, ORD_GET_RGN_BOX, ORD_GET_ROP2,
-            ORD_GET_STOCK_OBJECT, ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR,
-            ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS,
-            ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA,
-            ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
-            ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W,
-            ORD_GET_VIEWPORT_EXT_EX, ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW,
+            ORD_GET_FOREGROUND_WINDOW, ORD_GET_ICON_INFO, ORD_GET_KEY_STATE,
+            ORD_GET_KEYBOARD_LAYOUT, ORD_GET_KEYBOARD_LAYOUT_LIST, ORD_GET_KEYBOARD_LAYOUT_NAME_W,
+            ORD_GET_KEYBOARD_TARGET, ORD_GET_LAYOUT, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
+            ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
+            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_COLOR,
+            ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM,
+            ORD_GET_OBJECT_TYPE, ORD_GET_OBJECT_W, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
+            ORD_GET_PIXEL, ORD_GET_QUEUE_STATUS, ORD_GET_REGION_DATA, ORD_GET_RGN_BOX,
+            ORD_GET_ROP2, ORD_GET_STOCK_OBJECT, ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU,
+            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
+            ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN,
+            ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W,
+            ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN,
+            ORD_GET_VERSION_EX_W, ORD_GET_VIEWPORT_EXT_EX, ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW,
             ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_ORG_EX,
             ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W,
             ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT, ORD_GET_WINDOW_THREAD_PROCESS_ID,
@@ -36325,6 +36325,64 @@ fn coredll_raw_def_window_proc_setcursor_uses_class_cursor() -> Result<()> {
         other => panic!("LoadCursorW did not return a stock cursor handle: {other:?}"),
     };
     assert_ne!(class_cursor, 0);
+    let icon_info_ptr = 0x1_0100;
+    memory.map_words(icon_info_ptr, 5);
+    memory.write_u32(icon_info_ptr, 0xdead_beef)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ICON_INFO,
+            [class_cursor, icon_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(icon_info_ptr)?,
+        0,
+        "CE GetIconInfo reports stock cursor handles with fIcon=FALSE"
+    );
+    assert_eq!(memory.read_u32(icon_info_ptr + 4)?, 0);
+    assert_eq!(memory.read_u32(icon_info_ptr + 8)?, 0);
+    assert_eq!(memory.read_u32(icon_info_ptr + 12)?, 0);
+    assert_eq!(memory.read_u32(icon_info_ptr + 16)?, 0);
+    let stock_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_ICON_W,
+        [0, 32512],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(icon),
+            ..
+        } => icon,
+        other => panic!("LoadIconW did not return a stock icon handle: {other:?}"),
+    };
+    assert_ne!(stock_icon, 0);
+    memory.write_u32(icon_info_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ICON_INFO,
+            [stock_icon, icon_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(icon_info_ptr)?,
+        1,
+        "CE GetIconInfo reports stock icon handles with fIcon=TRUE"
+    );
     let prior_cursor = class_cursor ^ 0x40;
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

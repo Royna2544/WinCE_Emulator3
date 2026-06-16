@@ -27999,13 +27999,32 @@ fn get_icon_info_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    // ICONINFO: fIcon(4) + xHotspot(4) + yHotspot(4) + hbmMask(4) + hbmColor(4) = 20 bytes.
-    // Treat all icon handles as icons (fIcon=1), hotspot at 0,0, bitmaps as NULL.
-    write_guest_u32(kernel, memory, thread_id, piconinfo, 1); // fIcon
-    write_guest_u32(kernel, memory, thread_id, piconinfo + 4, 0); // xHotspot
-    write_guest_u32(kernel, memory, thread_id, piconinfo + 8, 0); // yHotspot
-    write_guest_u32(kernel, memory, thread_id, piconinfo + 12, 0); // hbmMask
-    write_guest_u32(kernel, memory, thread_id, piconinfo + 16, 0); // hbmColor
+    let info = if let Some(icon) = kernel.resources.icon(hicon) {
+        (
+            u32::from(icon.is_icon),
+            icon.x_hotspot,
+            icon.y_hotspot,
+            icon.mask_bitmap,
+            icon.color_bitmap,
+        )
+    } else if is_stock_cursor_handle(hicon) {
+        (0, 0, 0, 0, 0)
+    } else if is_icon_handle(kernel, hicon) {
+        (1, 0, 0, 0, 0)
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if !write_guest_u32(kernel, memory, thread_id, piconinfo, info.0)
+        || !write_guest_u32(kernel, memory, thread_id, piconinfo + 4, info.1)
+        || !write_guest_u32(kernel, memory, thread_id, piconinfo + 8, info.2)
+        || !write_guest_u32(kernel, memory, thread_id, piconinfo + 12, info.3)
+        || !write_guest_u32(kernel, memory, thread_id, piconinfo + 16, info.4)
+    {
+        return false;
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -28963,6 +28982,10 @@ fn is_icon_handle(kernel: &CeKernel, icon: u32) -> bool {
     }
     let without_overlay = icon & 0x00ff_ffff;
     without_overlay & 0xffff_0000 == 0x000b_0000 && without_overlay & 0x0000_ffff >= 0x8000
+}
+
+fn is_stock_cursor_handle(handle: u32) -> bool {
+    handle & 0xffff_8000 == 0x000b_0000 && handle & 0x0000_ffff != 0
 }
 
 fn image_list_create_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
