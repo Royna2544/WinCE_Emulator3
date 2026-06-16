@@ -15647,6 +15647,67 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
 }
 
 #[test]
+fn message_box_w_restores_previous_owner_focus_after_default_teardown() -> Result<()> {
+    const MB_OK: u32 = 0x0000_0000;
+    const IDOK: u32 = 1;
+    const WS_CHILD: u32 = 0x4000_0000;
+    const WS_VISIBLE: u32 = 0x1000_0000;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 49;
+    let owner = kernel.create_window_ex_w(thread_id, "MSGBOX_RESTORE_OWNER", "", None, 0, 0, 0);
+    let owner_child = kernel.create_window_ex_w(
+        thread_id,
+        "Button",
+        "Owner child",
+        Some(owner),
+        77,
+        WS_CHILD | WS_VISIBLE,
+        0,
+    );
+    let text = 0x3004_3000;
+    let caption = 0x3004_4000;
+    memory.write_wide_z(text, "Restore focus");
+    memory.write_wide_z(caption, "iNavi");
+
+    assert_eq!(kernel.set_focus(Some(owner_child)), None);
+    assert_eq!(kernel.gwe.get_focus(), Some(owner_child));
+    assert!(kernel.gwe.active_window_is_within(owner));
+
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [owner, text, caption, MB_OK],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(IDOK),
+            ..
+        }
+    ));
+    let record = kernel
+        .shell
+        .last_message_box()
+        .expect("focus-restore message box record");
+    assert_eq!(record.owner_hwnd, owner);
+    assert_eq!(record.result, IDOK);
+    assert_eq!(record.owner_was_enabled, Some(true));
+    assert!(record.dialog_was_active);
+    assert!(!kernel.gwe.is_window(record.dialog_hwnd));
+    assert_eq!(kernel.gwe.get_focus(), Some(owner_child));
+    assert!(kernel.gwe.active_window_is_within(owner));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     const MB_YESNOCANCEL: u32 = 0x0000_0003;
     const MB_DEFBUTTON2: u32 = 0x0000_0100;

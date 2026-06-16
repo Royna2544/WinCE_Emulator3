@@ -1434,7 +1434,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     undefined icon nibbles with `ERROR_INVALID_PARAMETER`, records the requested modal
     text/caption/style plus button IDs, those CE button slots/labels,
     default-button index, icon class, owner enabled-state, transient dialog and
-    child-control HWNDs, active-dialog state, `MB_TOPMOST`'s CE
+    child-control HWNDs, active-dialog state, owner focus/activation
+    restoration after transient-dialog teardown, `MB_TOPMOST`'s CE
     `WS_EX_TOPMOST` extended style, and result. The CE GWE
     `window.hpp` top-level window state tracks removed topmost transitions and
     exposes `SetWindowPos_I`; v3 now keeps `WS_EX_TOPMOST` windows in a
@@ -1758,7 +1759,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     return record was already pruned, v3 can now recover through the latest
     saved return record when it carries a real guest return PC. This keeps the
     invalid user-kdata return boundary fail-closed while preserving the guest's
-    normal caller return path.
+    normal caller return path. Recovered orphaned visible `WM_PAINT` returns
+    now validate the window after the guest WNDPROC returns so the pending
+    update region is consumed like CE's normal paint completion path.
 
 - Registry API boundary:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/fscall.c`

@@ -14382,6 +14382,8 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return Err(0);
     };
+    let previous_focus = kernel.gwe.get_focus();
+    let previous_active = kernel.gwe.get_active_window();
     let owner_was_enabled = if owner_hwnd == 0 {
         None
     } else {
@@ -14455,6 +14457,8 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
         text,
         caption,
         style,
+        previous_focus,
+        previous_active,
         rendered,
         backing_store,
     })
@@ -14474,6 +14478,8 @@ pub(crate) struct MessageBoxModalState {
     text: String,
     caption: String,
     style: u32,
+    previous_focus: Option<u32>,
+    previous_active: Option<u32>,
     rendered: bool,
     backing_store: Option<FramebufferBackingStore>,
 }
@@ -14535,6 +14541,32 @@ impl MessageBoxModalState {
         let _ = kernel.destroy_window_with_reason(self.window_state.dialog_hwnd, "MessageBoxW");
         if let Some(was_enabled) = self.owner_was_enabled {
             let _ = kernel.enable_window(self.owner_hwnd, was_enabled);
+        }
+        if dialog_was_active {
+            if let Some(active) = self
+                .previous_active
+                .filter(|hwnd| kernel.gwe.is_window(*hwnd) && kernel.gwe.is_window_enabled(*hwnd))
+            {
+                let _ = kernel.activate_window(Some(active));
+            } else if self.owner_hwnd != 0
+                && self.owner_was_enabled == Some(true)
+                && kernel.gwe.is_window(self.owner_hwnd)
+                && kernel.gwe.is_window_enabled(self.owner_hwnd)
+            {
+                let _ = kernel.activate_window(Some(self.owner_hwnd));
+            }
+            if let Some(focus) = self
+                .previous_focus
+                .filter(|hwnd| kernel.gwe.is_window(*hwnd) && kernel.gwe.is_window_enabled(*hwnd))
+            {
+                let _ = kernel.set_focus(Some(focus));
+            } else if self.owner_hwnd != 0
+                && self.owner_was_enabled == Some(true)
+                && kernel.gwe.is_window(self.owner_hwnd)
+                && kernel.gwe.is_window_enabled(self.owner_hwnd)
+            {
+                let _ = kernel.set_focus(Some(self.owner_hwnd));
+            }
         }
         if let (Some(framebuffer), Some(backing_store)) =
             (framebuffer.as_deref_mut(), self.backing_store.as_ref())

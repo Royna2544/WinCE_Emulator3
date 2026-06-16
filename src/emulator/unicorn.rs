@@ -5999,6 +5999,10 @@ impl UnicornMips {
                         let _ = unsafe { &mut *kernel_ptr }
                             .release_message_pointer_payload(callout.lparam);
                     }
+                    let _ = finish_orphaned_visible_paint_after_wndproc_return(
+                        unsafe { &mut *kernel_ptr },
+                        &callout,
+                    );
                     record_wndproc_return(
                         &last_wndproc_returns_hook,
                         UnicornWndProcReturn {
@@ -35114,6 +35118,20 @@ fn orphaned_paint_return_can_recover_without_frame<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn finish_orphaned_visible_paint_after_wndproc_return(
+    kernel: &mut CeKernel,
+    callout: &PendingWndProcReturn,
+) -> bool {
+    if callout.source != "OrphanedVisibleMessage" || callout.msg != crate::ce::gwe::WM_PAINT {
+        return false;
+    }
+    if kernel.gwe.update_rect(callout.hwnd).is_none() {
+        return false;
+    }
+    kernel.gwe.validate_window(callout.hwnd)
+}
+
+#[cfg(feature = "unicorn")]
 fn recover_orphaned_wndproc_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     last_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<UnicornWndProcReturn>>>,
@@ -38791,6 +38809,66 @@ mod unicorn_tests {
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
+    }
+
+    #[test]
+    fn orphaned_visible_paint_wndproc_return_validates_remaining_update_region() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let thread_id = 1;
+        let hwnd = kernel.create_window_ex_w(
+            thread_id,
+            "visible_paint",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert_eq!(
+            kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, 0x6004_f2b8),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        let _ = kernel.gwe.validate_window(hwnd);
+        assert!(kernel.gwe.invalidate_window(hwnd, None, true));
+        assert!(kernel.gwe.update_rect(hwnd).is_some());
+
+        let mut callout = super::PendingWndProcReturn {
+            source: "OrphanedVisibleMessage",
+            hwnd,
+            msg: crate::ce::gwe::WM_PAINT,
+            wparam: 0,
+            lparam: 0,
+            wndproc: 0x6004_f2b8,
+            return_pc: 0x0034_26d4,
+            return_sp: 0x7ffb_f5d8,
+            caller_regs: None,
+            class_name: Some("visible_paint".to_owned()),
+            api_result: None,
+            dialog_result_hwnd: None,
+            finalize_destroy: false,
+            destroy_root_hwnd: None,
+            remaining_destroy_callouts: Vec::new(),
+            send_thread_id: None,
+            send_timeout_result_ptr: None,
+            send_restore: None,
+            continuation: None,
+            resume_import: None,
+            clear_focus_after_return: None,
+        };
+        assert!(super::finish_orphaned_visible_paint_after_wndproc_return(
+            &mut kernel,
+            &callout
+        ));
+        assert!(kernel.gwe.update_rect(hwnd).is_none());
+
+        assert!(kernel.gwe.invalidate_window(hwnd, None, true));
+        callout.source = "SendMessageW";
+        assert!(!super::finish_orphaned_visible_paint_after_wndproc_return(
+            &mut kernel,
+            &callout
+        ));
+        assert!(kernel.gwe.update_rect(hwnd).is_some());
     }
 
     #[test]

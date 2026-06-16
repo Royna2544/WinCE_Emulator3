@@ -48,6 +48,12 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   branch. A completed receiver result writes `lpdwResult`, consumes the send
   completion, suspends the interrupted active thread, resumes the sender with
   `TRUE`, and leaves last error clear.
+- `src/ce/coredll.rs` and `tests/coredll_raw_kernel.rs`: modal
+  `MessageBoxW` teardown now restores the caller's previous focus/activation
+  target when it is still valid and enabled, falling back to the owner only if
+  the owner was enabled before the modal box. A raw regression covers the
+  default-result fallback path restoring focus to an owner child after the
+  transient dialog is destroyed.
 - Focused validation after the Unicorn parked `SendMessageTimeout` timeout
   re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
   -j 1 --features unicorn,trace,win32-desktop send_message_timeout_ --lib`
@@ -97,6 +103,10 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `src/emulator/unicorn.rs`: orphaned visible `WM_PAINT` return stubs now share
   the caller-frame-free recovery path used by `CallWindowProcW`, with a focused
   regression proving the stub restores `PC`/`RA` to the archived return address.
+- `src/emulator/unicorn.rs`: orphaned visible `WM_PAINT` WNDPROC returns now
+  also validate the pending update region after the guest returns, so the
+  recovered `OrphanedVisibleMessage` paint path clears the same dirty state as
+  the normal paint dispatch path.
 - `src/ce/coredll.rs` and `tests/coredll_raw_memory_file.rs`: raw
   `CreateFileW` now maps missing files to `ERROR_FILE_NOT_FOUND`, empty or
   root-escaping paths to `ERROR_PATH_NOT_FOUND`, access denial to
