@@ -304,6 +304,8 @@ const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
 #[cfg(feature = "unicorn")]
 const UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL: u32 = 16;
 #[cfg(feature = "unicorn")]
+const UNICORN_FAST_START_HOOK_PAGE_SIZE: u32 = 0x1000;
+#[cfg(feature = "unicorn")]
 const IMPORT_TRAP_ARG_COUNT: usize = 12;
 #[cfg(feature = "unicorn")]
 const THREAD_EXIT_STUB_ADDR: u32 =
@@ -5270,9 +5272,8 @@ impl UnicornMips {
             let fast_pc_stop = Rc::clone(&pc_stop);
             let mut fast_start_sites = fast_start_indirect_transfer_sites(&self.mapped_blobs);
             fast_start_sites.extend(self.trampoline_jumps.iter().map(|jump| jump.origin));
-            fast_start_sites.sort_unstable();
-            fast_start_sites.dedup();
-            for site in fast_start_sites {
+            let fast_start_ranges = fast_start_hook_ranges(&fast_start_sites);
+            for (start, end) in fast_start_ranges {
                 let mapped_code = Rc::clone(&fast_mapped_code);
                 let trampoline_ranges = Rc::clone(&fast_trampoline_ranges);
                 let stub_by_origin = Rc::clone(&fast_trampoline_stub_by_origin);
@@ -5285,8 +5286,8 @@ impl UnicornMips {
                 let pc_stop = Rc::clone(&fast_pc_stop);
                 let current_thread_id_fast_code_hook = Rc::clone(&current_thread_id_fast_code_hook);
                 uc.add_code_hook(
-                    u64::from(site),
-                    u64::from(site),
+                    u64::from(start),
+                    u64::from(end),
                     move |uc, address, _size| {
                         let pc = address as u32;
                         let code_trace_index = code_trace_counter.get().wrapping_add(1);
@@ -5449,7 +5450,7 @@ impl UnicornMips {
                 )
                 .map_err(|err| {
                     Error::Backend(format!(
-                        "install fast-start control-transfer hook 0x{site:08x}: {err:?}"
+                        "install fast-start control-transfer hook 0x{start:08x}-0x{end:08x}: {err:?}"
                     ))
                 })?;
             }
@@ -8609,6 +8610,50 @@ fn fast_start_indirect_transfer_sites(blobs: &[MappedBlob]) -> Vec<u32> {
     sites.sort_unstable();
     sites.dedup();
     sites
+}
+
+#[cfg(feature = "unicorn")]
+fn fast_start_hook_ranges(sites: &[u32]) -> Vec<(u32, u32)> {
+    let mut pages: Vec<u32> = sites
+        .iter()
+        .map(|site| site & !(UNICORN_FAST_START_HOOK_PAGE_SIZE - 1))
+        .collect();
+    pages.sort_unstable();
+    pages.dedup();
+
+    let mut ranges = Vec::new();
+    let mut iter = pages.into_iter();
+    let Some(mut start) = iter.next() else {
+        return ranges;
+    };
+    let mut last = start;
+    for page in iter {
+        if page == last.saturating_add(UNICORN_FAST_START_HOOK_PAGE_SIZE) {
+            last = page;
+            continue;
+        }
+        ranges.push((
+            start,
+            last.saturating_add(UNICORN_FAST_START_HOOK_PAGE_SIZE - 1),
+        ));
+        start = page;
+        last = page;
+    }
+    ranges.push((
+        start,
+        last.saturating_add(UNICORN_FAST_START_HOOK_PAGE_SIZE - 1),
+    ));
+    ranges
+}
+
+#[cfg(all(feature = "unicorn", test))]
+#[test]
+fn fast_start_hook_ranges_coalesce_sites_by_page() {
+    assert_eq!(fast_start_hook_ranges(&[]), Vec::<(u32, u32)>::new());
+    assert_eq!(
+        fast_start_hook_ranges(&[0x1004, 0x1ffc, 0x3000, 0x3004, 0x7000]),
+        vec![(0x1000, 0x1fff), (0x3000, 0x3fff), (0x7000, 0x7fff)]
+    );
 }
 
 #[cfg(feature = "unicorn")]
