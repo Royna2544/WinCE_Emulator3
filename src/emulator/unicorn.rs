@@ -2327,33 +2327,40 @@ impl UnicornMips {
                 return true;
             }
             let pending_call_sp = pending.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
-            let pending_module = mapped_blob_module_for_pc(mapped_blobs, pending.wndproc);
+            let send_message_without_restore =
+                pending.source == "SendMessageW" && pending.send_restore.is_none();
             let keep = context_frames
                 .iter()
                 .copied()
                 .flatten()
                 .any(|(pc, ra, sp)| {
-                    let same_wndproc_module = pending_module.as_ref().is_none_or(|module| {
-                        let mut frame_modules = [pc, ra]
-                            .into_iter()
-                            .filter_map(|addr| mapped_blob_module_for_pc(mapped_blobs, addr));
-                        let mut saw_mapped_frame = false;
-                        let same = frame_modules.any(|frame_module| {
-                            saw_mapped_frame = true;
-                            &frame_module == module || frame_module.starts_with("image:")
-                        });
-                        same || !saw_mapped_frame
-                    });
+                    let nested_stack_candidate = ra != 0
+                        && sp <= pending_call_sp
+                        && pending_call_sp < pending.return_sp
+                        && pending_call_sp.wrapping_sub(sp) <= WNDPROC_NESTED_STACK_GRACE_BYTES;
                     pc == pending.return_pc
                         || pc == WNDPROC_RETURN_STUB_ADDR
                         || (ra == WNDPROC_RETURN_STUB_ADDR && sp == pending_call_sp)
-                        || (ra != 0
-                            && sp <= pending_call_sp
-                            && pending_call_sp < pending.return_sp
-                            && pending_call_sp.wrapping_sub(sp) <= WNDPROC_NESTED_STACK_GRACE_BYTES
-                            && (same_wndproc_module
-                                || (pending.source == "SendMessageW"
-                                    && pending.send_restore.is_none())))
+                        || (nested_stack_candidate
+                            && (send_message_without_restore || {
+                                let pending_module =
+                                    mapped_blob_module_for_pc(mapped_blobs, pending.wndproc);
+                                let same_wndproc_module =
+                                    pending_module.as_ref().is_none_or(|module| {
+                                        let mut frame_modules =
+                                            [pc, ra].into_iter().filter_map(|addr| {
+                                                mapped_blob_module_for_pc(mapped_blobs, addr)
+                                            });
+                                        let mut saw_mapped_frame = false;
+                                        let same = frame_modules.any(|frame_module| {
+                                            saw_mapped_frame = true;
+                                            &frame_module == module
+                                                || frame_module.starts_with("image:")
+                                        });
+                                        same || !saw_mapped_frame
+                                    });
+                                same_wndproc_module
+                            }))
                 });
             if !keep {
                 removed_callouts.push(pending.clone());
