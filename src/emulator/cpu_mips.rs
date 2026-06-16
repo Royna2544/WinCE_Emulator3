@@ -70,26 +70,63 @@ pub(crate) struct MipsTrampolineJump {
     pub byte_len: u32,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct MipsTrampolineJumpIndex {
+    jumps_by_stub: Vec<MipsTrampolineJump>,
+}
+
+impl MipsTrampolineJumpIndex {
+    pub fn new(jumps: &[MipsTrampolineJump]) -> Self {
+        let mut jumps_by_stub = jumps.to_vec();
+        jumps_by_stub.sort_by_key(|jump| jump.stub);
+        Self { jumps_by_stub }
+    }
+
+    pub fn jump_for_pc(&self, pc: u32) -> Option<MipsTrampolineJump> {
+        let index = self
+            .jumps_by_stub
+            .partition_point(|trampoline| trampoline.stub <= pc);
+        let trampoline = self.jumps_by_stub.get(index.checked_sub(1)?)?;
+        let end = trampoline.stub.checked_add(trampoline.byte_len)?;
+        (pc < end).then_some(*trampoline)
+    }
+
+    pub fn origin_for_pc(&self, pc: u32) -> Option<u32> {
+        self.jump_for_pc(pc).map(|trampoline| trampoline.origin)
+    }
+
+    pub fn origin_for_stub(&self, stub: u32) -> Option<u32> {
+        let index = self
+            .jumps_by_stub
+            .binary_search_by_key(&stub, |trampoline| trampoline.stub)
+            .ok()?;
+        Some(self.jumps_by_stub[index].origin)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LiveTrampolineState {
     pub ranges: Vec<(u32, u32)>,
     pub jumps: Vec<MipsTrampolineJump>,
     pages: HashSet<u32>,
     stub_by_origin: HashMap<u32, u32>,
-    origin_by_stub: HashMap<u32, u32>,
+    jump_index: MipsTrampolineJumpIndex,
 }
 
 impl LiveTrampolineState {
-    pub fn new(ranges: Vec<(u32, u32)>, jumps: Vec<MipsTrampolineJump>) -> Self {
+    pub fn new_with_stub_map(
+        ranges: Vec<(u32, u32)>,
+        jumps: Vec<MipsTrampolineJump>,
+        stub_by_origin: HashMap<u32, u32>,
+    ) -> Self {
         let pages = trampoline_pages_for_ranges(&ranges);
-        let stub_by_origin = trampoline_stub_by_origin(&jumps);
-        let origin_by_stub = trampoline_origin_by_stub(&jumps);
+        let jump_index = MipsTrampolineJumpIndex::new(&jumps);
         Self {
             ranges,
             jumps,
             pages,
             stub_by_origin,
-            origin_by_stub,
+            jump_index,
         }
     }
 
@@ -100,7 +137,7 @@ impl LiveTrampolineState {
         self.jumps.extend(patch.jumps.iter().copied());
         self.pages = trampoline_pages_for_ranges(&self.ranges);
         self.stub_by_origin = trampoline_stub_by_origin(&self.jumps);
-        self.origin_by_stub = trampoline_origin_by_stub(&self.jumps);
+        self.jump_index = MipsTrampolineJumpIndex::new(&self.jumps);
     }
 
     pub fn target_in_pages(&self, target: u32) -> bool {
@@ -116,17 +153,11 @@ impl LiveTrampolineState {
     }
 
     pub fn origin_for_stub(&self, stub: u32) -> Option<u32> {
-        self.origin_by_stub.get(&stub).copied()
+        self.jump_index.origin_for_stub(stub)
     }
 
     pub fn origin_for_pc(&self, pc: u32) -> Option<u32> {
-        self.jumps.iter().find_map(|trampoline| {
-            trampoline
-                .stub
-                .checked_add(trampoline.byte_len)
-                .filter(|end| pc >= trampoline.stub && pc < *end)
-                .map(|_| trampoline.origin)
-        })
+        self.jump_index.origin_for_pc(pc)
     }
 }
 
@@ -488,10 +519,6 @@ fn target_in_trampoline_pages(target: u32, pages: &HashSet<u32>) -> bool {
 
 pub(crate) fn trampoline_stub_by_origin(jumps: &[MipsTrampolineJump]) -> HashMap<u32, u32> {
     jumps.iter().map(|jump| (jump.origin, jump.stub)).collect()
-}
-
-pub(crate) fn trampoline_origin_by_stub(jumps: &[MipsTrampolineJump]) -> HashMap<u32, u32> {
-    jumps.iter().map(|jump| (jump.stub, jump.origin)).collect()
 }
 
 // ── jump table detection ──────────────────────────────────────────────────────

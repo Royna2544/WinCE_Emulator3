@@ -2,8 +2,8 @@
 use super::cpu_mips::{
     LiveTrampolineState, MIPS_JMPBUF_FP_SLOT, MIPS_JMPBUF_GP_SLOT, MIPS_JMPBUF_RA_SLOT,
     MIPS_JMPBUF_RETURN_PC_SLOT, MIPS_JMPBUF_S0_SLOT, MIPS_JMPBUF_SP_SLOT, MIPS_NOP,
-    MipsGuestContext, MipsTrampolineJump, MipsTrampolinePatchResult, capture_mips_gprs,
-    decode_addiu_zero, decode_direct_jump_target, decode_indirect_call_register,
+    MipsGuestContext, MipsTrampolineJump, MipsTrampolineJumpIndex, MipsTrampolinePatchResult,
+    capture_mips_gprs, decode_addiu_zero, decode_direct_jump_target, decode_indirect_call_register,
     decode_jalr_register, decode_jr_register, decode_old_mips_kernel_call,
     decode_trampoline_long_jump_target, decode_trampoline_sentinel_target, is_mips_delay_slot_pc,
     is_patched_trampoline_jump, is_trampoline_sentinel_first_word, mips_gpr_name,
@@ -4597,10 +4597,12 @@ impl UnicornMips {
         let mapped_code = MappedCodeIndex::new(self.mapped_blobs.clone());
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
+        let trampoline_jump_index = MipsTrampolineJumpIndex::new(&trampoline_jumps);
         let trampoline_stub_by_origin = trampoline_stub_by_origin(&trampoline_jumps);
-        let live_trampoline_state = Rc::new(RefCell::new(LiveTrampolineState::new(
+        let live_trampoline_state = Rc::new(RefCell::new(LiveTrampolineState::new_with_stub_map(
             trampoline_ranges.clone(),
             trampoline_jumps.clone(),
+            trampoline_stub_by_origin.clone(),
         )));
         let progress_import_traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
@@ -5548,7 +5550,7 @@ impl UnicornMips {
             Rc::clone(&pending_dll_lifecycle_returns);
         let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
-        let trampoline_jumps_timeslice_hook = trampoline_jumps.clone();
+        let trampoline_jump_index_timeslice_hook = trampoline_jump_index.clone();
         let host_wall_clock_stop_timeslice_hook = Rc::clone(&host_wall_clock_stop);
         uc.add_block_hook(1, 0, move |uc, address, _size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
@@ -5581,7 +5583,7 @@ impl UnicornMips {
                 pc,
                 previous_pc,
                 &trampoline_ranges_timeslice_hook,
-                &trampoline_jumps_timeslice_hook,
+                &trampoline_jump_index_timeslice_hook,
                 |addr| read_unicorn_u32(uc, addr),
             );
             if live_pump
@@ -5596,7 +5598,7 @@ impl UnicornMips {
                     pc,
                     previous_pc,
                     &trampoline_ranges_timeslice_hook,
-                    &trampoline_jumps_timeslice_hook,
+                    &trampoline_jump_index_timeslice_hook,
                     |addr| read_unicorn_u32(uc, addr),
                 )
             {
@@ -13436,11 +13438,11 @@ fn scheduler_timeslice_context_pc(
     pc: u32,
     previous_pc: Option<u32>,
     trampoline_ranges: &[(u32, u32)],
-    trampoline_jumps: &[MipsTrampolineJump],
+    trampoline_jump_index: &MipsTrampolineJumpIndex,
     read_word: impl Fn(u32) -> Option<u32>,
 ) -> Option<u32> {
     if target_in_ranges(pc, trampoline_ranges) {
-        return mips_trampoline_origin_for_pc(pc, trampoline_jumps);
+        return trampoline_jump_index.origin_for_pc(pc);
     }
     if is_control_transfer_target(previous_pc, pc)
         || is_mips_delay_slot_pc(read_word, previous_pc, pc)
@@ -13455,14 +13457,18 @@ fn live_wall_clock_block_stop_pc(
     pc: u32,
     previous_pc: Option<u32>,
     trampoline_ranges: &[(u32, u32)],
-    trampoline_jumps: &[MipsTrampolineJump],
+    trampoline_jump_index: &MipsTrampolineJumpIndex,
     read_word: impl Fn(u32) -> Option<u32>,
 ) -> Option<u32> {
     if pc >= IMPORT_TRAP_BASE {
         return None;
     }
     if target_in_ranges(pc, trampoline_ranges) {
-        return wall_clock_restart_pc_for_mips_trampoline(pc, trampoline_jumps, &read_word);
+        return wall_clock_restart_pc_for_mips_trampoline_indexed(
+            pc,
+            trampoline_jump_index,
+            &read_word,
+        );
     }
     if is_control_transfer_target(previous_pc, pc)
         || is_mips_delay_slot_pc(read_word, previous_pc, pc)
@@ -23686,6 +23692,7 @@ mod wait_scheduler_tests {
             stub: 0x00a9_fe34,
             byte_len: 0x24,
         }];
+        let jump_index = super::MipsTrampolineJumpIndex::new(&jumps);
         let ranges = [(0x00a9_f000, 0x1000)];
 
         assert_eq!(
@@ -23693,7 +23700,7 @@ mod wait_scheduler_tests {
                 0x00a9_fe48,
                 Some(0x00a9_fe44),
                 &ranges,
-                &jumps,
+                &jump_index,
                 |_| None,
             ),
             Some(0x0026_a26c)
@@ -23703,13 +23710,14 @@ mod wait_scheduler_tests {
     #[test]
     fn scheduler_timeslice_context_rejects_unknown_trampoline_pc() {
         let ranges = [(0x00a9_f000, 0x1000)];
+        let jump_index = super::MipsTrampolineJumpIndex::default();
 
         assert_eq!(
             super::scheduler_timeslice_context_pc(
                 0x00a9_fe48,
                 Some(0x00a9_fe44),
                 &ranges,
-                &[],
+                &jump_index,
                 |_| None,
             ),
             None
@@ -31513,12 +31521,17 @@ fn wall_clock_restart_pc_for_mips_trampoline(
     trampoline_jumps: &[MipsTrampolineJump],
     read_u32: impl Fn(u32) -> Option<u32>,
 ) -> Option<u32> {
-    let trampoline = trampoline_jumps.iter().find(|trampoline| {
-        trampoline
-            .stub
-            .checked_add(trampoline.byte_len)
-            .is_some_and(|end| pc >= trampoline.stub && pc < end)
-    })?;
+    let trampoline_index = MipsTrampolineJumpIndex::new(trampoline_jumps);
+    wall_clock_restart_pc_for_mips_trampoline_indexed(pc, &trampoline_index, read_u32)
+}
+
+#[cfg(feature = "unicorn")]
+fn wall_clock_restart_pc_for_mips_trampoline_indexed(
+    pc: u32,
+    trampoline_jump_index: &MipsTrampolineJumpIndex,
+    read_u32: impl Fn(u32) -> Option<u32>,
+) -> Option<u32> {
+    let trampoline = trampoline_jump_index.jump_for_pc(pc)?;
     let offset = pc.wrapping_sub(trampoline.stub);
     if offset <= 8 {
         return Some(trampoline.origin);
@@ -39532,7 +39545,11 @@ mod unicorn_tests {
 
     #[test]
     fn live_trampoline_state_extends_runtime_ranges_and_origin_maps() {
-        let mut state = super::LiveTrampolineState::new(Vec::new(), Vec::new());
+        let mut state = super::LiveTrampolineState::new_with_stub_map(
+            Vec::new(),
+            Vec::new(),
+            std::collections::HashMap::new(),
+        );
         let patch = super::MipsTrampolinePatchResult {
             range: Some((0x1002_0000, 0x1000)),
             jumps: vec![super::MipsTrampolineJump {
