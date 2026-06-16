@@ -4386,6 +4386,39 @@ mod tests {
         assert_eq!(memory.word(bytes_returned_ptr), 56);
         assert_eq!(kernel.fsdmgr_fmd_region_count(disk_ptr), Some(2));
 
+        memory.map_bytes(read_sector_ptr, &vec![0x5a; 512]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, 0, 1, read_sector_ptr, 512],
+            ),
+            Some(0)
+        );
+        memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
+        assert_eq!(&read_back[..8], b"MSFLSH50");
+        assert_eq!(u32::from_le_bytes(read_back[8..12].try_into().unwrap()), 16);
+        assert_eq!(
+            u32::from_le_bytes(read_back[12..16].try_into().unwrap()),
+            56
+        );
+        assert_eq!(&read_back[16..24], b"BOOT\0\0\0\0");
+        assert_eq!(u32::from_le_bytes(read_back[24..28].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(read_back[28..32].try_into().unwrap()), 1);
+        for (index, expected) in [0, 0, 8, 8, 4, 1024, 1, 2, 8, 8, 8, 4, 1024, 0]
+            .into_iter()
+            .enumerate()
+        {
+            let offset = 32 + index * 4;
+            assert_eq!(
+                u32::from_le_bytes(read_back[offset..offset + 4].try_into().unwrap()),
+                expected
+            );
+        }
+        assert!(read_back[88..].iter().all(|byte| *byte == 0));
+
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
         assert_eq!(
             table.dispatch_trap(

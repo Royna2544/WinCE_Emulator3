@@ -545,12 +545,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     mode, block-lock ranges, sector-size state, total-block-bounded raw block
     writes into sparse disk backing, CE `ReservedReq` validation plus named
     synthetic reserved-region byte persistence and `ReservedEntry` table output,
-    `FlashRegion` table validation/storage, a `GET_INTERFACE` ABI skeleton
-    with `cbSize == sizeof(FMDInterface)` and null unsupported callback slots,
-    raw-block-size, and deterministic NOR-style `FMDInfo` metadata with the
-    stored region count for the FMD controls; real FLS flash-layout-sector
-    forwarding, hardware flash media, and callable FMD callback thunks remain
-    open.
+    `FlashRegion` table validation/storage, synthetic sector-zero
+    `FlashLayoutSector` materialization with the `MSFLSH50` signature,
+    reserved-entry byte count/table, and region-entry byte count/table, a
+    `GET_INTERFACE` ABI skeleton with `cbSize == sizeof(FMDInterface)` and null
+    unsupported callback slots, raw-block-size, and deterministic NOR-style
+    `FMDInfo` metadata with the stored region count for the FMD controls;
+    hardware-backed FLS discovery/forwarding, hardware flash media, and
+    callable FMD callback thunks remain open.
     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`
     defines `FSCTL_COPY_EXTERNAL_START`, `FSCTL_COPY_EXTERNAL_COMPLETE`, and
     the 536-byte `FILE_COPY_EXTERNAL` header; UDF's
@@ -616,7 +618,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for
     refresh/flush no-ops and host-backed unsupported-FSCTL no-touch failure.
     Remaining storage fidelity is physical block-driver backing, external
-    cache/filter DLL behavior, remaining hardware-flash/callable FMD interface thunks/FLS flash-layout-sector forwarding and specialized disk IOCTLs, real FATFS
+    cache/filter DLL behavior, remaining hardware-flash/callable FMD interface thunks/hardware-backed FLS discovery and specialized disk IOCTLs, real FATFS
     volume format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume
     behavior, hardware power-state timing, and
@@ -3366,7 +3368,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
-    for FSDMGR cache imports. Physical block-driver backing, remaining hardware-flash/callable FMD interface thunks/FLS flash-layout-sector forwarding and disk IOCTL
+    for FSDMGR cache imports. Physical block-driver backing, remaining hardware-flash/callable FMD interface thunks/hardware-backed FLS discovery and disk IOCTL
     forwarding, real cache DLL/filter behavior, real CE mounted-volume
     availability, powerdown, and thread-exit
     wait reference behavior, broader file-security ACL storage and

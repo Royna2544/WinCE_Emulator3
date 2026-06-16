@@ -54,6 +54,10 @@ use std::{
 
 pub const FSDMGR_INTERNAL_PROCESS_ID: u32 = 0xffff_fffe;
 const FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE: u32 = 512;
+const FSDMGR_FLS_SIGNATURE: &[u8; 8] = b"MSFLSH50";
+const FSDMGR_FLS_HEADER_SIZE: usize = 16;
+const FSDMGR_FLS_RESERVED_ENTRY_SIZE: usize = 16;
+const FSDMGR_FLS_REGION_ENTRY_SIZE: usize = 28;
 const IOCTL_DISK_FORMAT_VOLUME: u32 = 0x0007_0220;
 const IOCTL_DISK_SCAN_VOLUME: u32 = 0x0007_0224;
 const IOCTL_DISK_SET_STANDBY_TIMER: u32 = 0x0007_1c18;
@@ -2907,7 +2911,18 @@ impl CeKernel {
         if self.fsdmgr_disk_info(disk_ptr).is_none() {
             return ERROR_INVALID_PARAMETER;
         }
+        let previous_regions = self.fsdmgr_fmd_region_tables.get(&disk_ptr).cloned();
         self.fsdmgr_fmd_region_tables.insert(disk_ptr, regions);
+        let status = self.fsdmgr_sync_fmd_flash_layout_sector(disk_ptr);
+        if status != ERROR_SUCCESS {
+            if let Some(previous_regions) = previous_regions {
+                self.fsdmgr_fmd_region_tables
+                    .insert(disk_ptr, previous_regions);
+            } else {
+                self.fsdmgr_fmd_region_tables.remove(&disk_ptr);
+            }
+            return status;
+        }
         ERROR_SUCCESS
     }
 
@@ -2964,6 +2979,10 @@ impl CeKernel {
             stored.resize(end as usize, 0);
         }
         stored[start as usize..end as usize].copy_from_slice(bytes);
+        let status = self.fsdmgr_sync_fmd_flash_layout_sector(disk_ptr);
+        if status != ERROR_SUCCESS {
+            return status;
+        }
         ERROR_SUCCESS
     }
 
@@ -2984,6 +3003,56 @@ impl CeKernel {
             })
             .collect();
         Some(entries)
+    }
+
+    fn fsdmgr_sync_fmd_flash_layout_sector(&mut self, disk_ptr: u32) -> u32 {
+        let Some(reserved_entries) = self.fsdmgr_fmd_reserved_entries(disk_ptr) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        let regions = self
+            .fsdmgr_fmd_region_tables
+            .get(&disk_ptr)
+            .cloned()
+            .unwrap_or_default();
+        let Some(reserved_bytes) = reserved_entries
+            .len()
+            .checked_mul(FSDMGR_FLS_RESERVED_ENTRY_SIZE)
+        else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        let Some(region_bytes) = regions.len().checked_mul(FSDMGR_FLS_REGION_ENTRY_SIZE) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        let Some(layout_bytes) = FSDMGR_FLS_HEADER_SIZE
+            .checked_add(reserved_bytes)
+            .and_then(|len| len.checked_add(region_bytes))
+        else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if layout_bytes > FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE as usize {
+            return ERROR_INVALID_PARAMETER;
+        }
+
+        let mut sector = vec![0; FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE as usize];
+        sector[..FSDMGR_FLS_SIGNATURE.len()].copy_from_slice(FSDMGR_FLS_SIGNATURE);
+        sector[8..12].copy_from_slice(&(reserved_bytes as u32).to_le_bytes());
+        sector[12..16].copy_from_slice(&(region_bytes as u32).to_le_bytes());
+
+        let mut offset = FSDMGR_FLS_HEADER_SIZE;
+        for (name, block_count) in reserved_entries {
+            sector[offset..offset + 8].copy_from_slice(&name);
+            sector[offset + 8..offset + 12].copy_from_slice(&0u32.to_le_bytes());
+            sector[offset + 12..offset + 16].copy_from_slice(&block_count.to_le_bytes());
+            offset += FSDMGR_FLS_RESERVED_ENTRY_SIZE;
+        }
+        for region in regions {
+            for value in region {
+                sector[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                offset += 4;
+            }
+        }
+        self.fsdmgr_disk_sectors.insert((disk_ptr, 0), sector);
+        ERROR_SUCCESS
     }
 
     pub fn fsdmgr_write_fmd_raw_blocks(
