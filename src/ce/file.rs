@@ -1301,6 +1301,14 @@ impl HostFileSystem {
         Ok(FileLockStatus::Success)
     }
 
+    pub fn file_has_locks(&self, id: u32) -> Result<bool> {
+        let file = self.open_file(id)?;
+        Ok(self
+            .file_locks
+            .get(&file.host_path)
+            .is_some_and(|locks| !locks.is_empty()))
+    }
+
     pub fn test_file_lock_range(
         &self,
         id: u32,

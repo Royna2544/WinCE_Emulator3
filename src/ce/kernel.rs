@@ -4804,6 +4804,13 @@ impl CeKernel {
         self.files.unlock_file_ranges_owned_by_id(file.file_id)
     }
 
+    pub fn file_handle_has_locks(&self, handle: u32) -> Result<bool> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.files.file_has_locks(file.file_id)
+    }
+
     pub fn test_file_lock_range(
         &self,
         handle: u32,
