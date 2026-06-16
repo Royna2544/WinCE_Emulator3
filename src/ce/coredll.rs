@@ -51139,6 +51139,7 @@ fn vkey_to_scan_code(vkey: u32) -> u32 {
         0x26 => 0x48,     // Up (extended)
         0x27 => 0x4d,     // Right (extended)
         0x28 => 0x50,     // Down (extended)
+        0x2c => 0xe037,   // Snapshot (extended)
         0x2d => 0x52,     // Insert (extended)
         0x2e => 0x53,     // Delete (extended)
         0x30 => 0x0b,     // '0'
@@ -51233,6 +51234,9 @@ fn scan_code_to_vkey(scan: u32) -> u32 {
     if scan == 0xe11477 {
         return 0x13; // Pause
     }
+    if scan == 0x84 {
+        return 0x2c; // Snapshot
+    }
     if (scan & 0xff00) == 0xe000 {
         let scan = scan & 0x7f;
         return match scan {
@@ -51250,6 +51254,7 @@ fn scan_code_to_vkey(scan: u32) -> u32 {
             0x51 => 0x22, // PageDown
             0x52 => 0x2d, // Insert
             0x53 => 0x2e, // Delete
+            0x7c => 0x2c, // Snapshot
             0x7e => 0x03, // Cancel
             _ => 0,
         };
