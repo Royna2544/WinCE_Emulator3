@@ -6266,6 +6266,24 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         0xfeed_face,
         "non-PE ExtractIconExW fallback should leave later slots untouched"
     );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, 0, 0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        0,
+        "non-PE ExtractIconExW with no output arrays is a no-op, not a synthetic extraction"
+    );
     memory.write_u32(large_icon_ptr, 0xface_cafe)?;
     memory.write_u32(small_icon_ptr, 0xc001_d00d)?;
     assert!(matches!(

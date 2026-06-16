@@ -29924,7 +29924,7 @@ fn extract_icon_ex_w_raw<M: CoredllGuestMemory>(
             1
         };
     }
-    if icon_index < 0 || icon_count == 0 {
+    if icon_index < 0 || icon_count == 0 || (large_out == 0 && small_out == 0) {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
