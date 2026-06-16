@@ -15,6 +15,12 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: the direct-send WNDPROC orphan cleanup now avoids
+  mapped-blob module lookups unless the current frame is already a plausible
+  nested WNDPROC frame, and it skips those lookups entirely for the existing
+  direct `SendMessageW` no-restore acceptance path. A sudo cargo flamegraph of
+  iNavi startup showed the slowdown concentrated in Unicorn code hooks and this
+  cleanup path, not host SD-card file I/O.
 - `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
   `TransparentImage` now follows CE `wingdi.h`/`draw.cpp::TransparentBltBitmapTest`
   by accepting a direct bitmap `HANDLE` as `hSrc` in addition to HDC sources.
