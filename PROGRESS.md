@@ -109,6 +109,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   1 --features unicorn,trace,win32-desktop`. Test logs are under
   `target/cargo-test-coredll-raw-gwe-transparent-mixed-corners.20260616-142029.*.log`
   and `target/cargo-test-full-transparent-mixed-corners.20260616-142037.*.log`.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and framebuffer
+  `TransparentImage` now cover CE `draw.cpp::ClipBitBlt(ETransparentImage)`
+  fully clipped top-left and bottom-right no-op cases. The regressions prove
+  fully eliminated destination rectangles still return success without changing
+  selected-DIB pixels or marking framebuffer dirty.
+- Focused validation after the `TransparentImage` fully clipped no-op slice:
+  `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_transparent_image_fully_clipped -- --nocapture` passed, followed
+  by `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test -j
+  1 --features unicorn,trace,win32-desktop`. Test logs are under
+  `target/cargo-test-coredll-raw-gwe-transparent-full-clip.20260616-142511.*.log`
+  and `target/cargo-test-full-transparent-full-clip.20260616-142535.*.log`.
 - Validation after the transparent all-edge clipping and active visible-receiver
   rotation slice: focused
   `remote_input_rotates_to_active_visible_receiver_thread`, focused

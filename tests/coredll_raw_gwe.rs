@@ -14979,6 +14979,158 @@ fn coredll_raw_transparent_image_clips_off_top_left_framebuffer_source_alignment
 }
 
 #[test]
+fn coredll_raw_transparent_image_fully_clipped_top_left_selected_dib_is_noop() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const WHITE565: u16 = 0xffff;
+    const RED565: u16 = 0xf800;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+
+    for y in 0..2 {
+        for x in 0..2 {
+            write_rgb565(&mut memory, dst_bits, dst_stride, x, y, WHITE565);
+        }
+    }
+    for y in 0..4 {
+        for x in 0..4 {
+            write_rgb565(&mut memory, src_bits, src_stride, x, y, RED565);
+        }
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            None,
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                dst_dc,
+                (-4i32) as u32,
+                (-4i32) as u32,
+                4,
+                4,
+                src_dc,
+                0,
+                0,
+                4,
+                4,
+                MAGENTA_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    for y in 0..2 {
+        for x in 0..2 {
+            assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, x, y), WHITE565);
+        }
+    }
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_transparent_image_fully_clipped_top_left_framebuffer_is_noop() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const WHITE565: u16 = 0xffff;
+    const RED565: u16 = 0xf800;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "TRANSPARENT_FULL_CLIP_TL_FB",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 2, 2),
+    );
+    let dst_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [hwnd],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+    for y in 0..4 {
+        for x in 0..4 {
+            write_rgb565(&mut memory, src_bits, src_stride, x, y, RED565);
+        }
+    }
+
+    let mut framebuffer = VirtualFramebuffer::new(2, 2, PixelFormat::Rgb565)?;
+    for y in 0..2 {
+        let row = y * framebuffer.stride();
+        framebuffer.pixels_mut()[row..row + 2].copy_from_slice(&WHITE565.to_le_bytes());
+        framebuffer.pixels_mut()[row + 2..row + 4].copy_from_slice(&WHITE565.to_le_bytes());
+    }
+    let _ = framebuffer.take_dirty_rects();
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                dst_dc,
+                (-4i32) as u32,
+                (-4i32) as u32,
+                4,
+                4,
+                src_dc,
+                0,
+                0,
+                4,
+                4,
+                MAGENTA_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    for y in 0..2 {
+        for x in 0..2 {
+            assert_eq!(framebuffer_rgb565_at(&framebuffer, x, y), WHITE565);
+        }
+    }
+    assert!(framebuffer.dirty_rects().is_empty());
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_clips_off_top_right_selected_dib_source_alignment() -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
     const WHITE565: u16 = 0xffff;
@@ -15727,6 +15879,134 @@ fn coredll_raw_transparent_image_clips_off_bottom_right_framebuffer_source_align
         framebuffer.dirty_rects(),
         &[FramebufferRect::new(0, 0, 2, 2)]
     );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_transparent_image_fully_clipped_bottom_right_selected_dib_is_noop() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const WHITE565: u16 = 0xffff;
+    const RED565: u16 = 0xf800;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+
+    for y in 0..2 {
+        for x in 0..2 {
+            write_rgb565(&mut memory, dst_bits, dst_stride, x, y, WHITE565);
+        }
+    }
+    for y in 0..4 {
+        for x in 0..4 {
+            write_rgb565(&mut memory, src_bits, src_stride, x, y, RED565);
+        }
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            None,
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [dst_dc, 2, 2, 4, 4, src_dc, 0, 0, 4, 4, MAGENTA_COLORREF,],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    for y in 0..2 {
+        for x in 0..2 {
+            assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, x, y), WHITE565);
+        }
+    }
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_transparent_image_fully_clipped_bottom_right_framebuffer_is_noop() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const WHITE565: u16 = 0xffff;
+    const RED565: u16 = 0xf800;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "TRANSPARENT_FULL_CLIP_BR_FB",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 2, 2),
+    );
+    let dst_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [hwnd],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+    for y in 0..4 {
+        for x in 0..4 {
+            write_rgb565(&mut memory, src_bits, src_stride, x, y, RED565);
+        }
+    }
+
+    let mut framebuffer = VirtualFramebuffer::new(2, 2, PixelFormat::Rgb565)?;
+    for y in 0..2 {
+        let row = y * framebuffer.stride();
+        framebuffer.pixels_mut()[row..row + 2].copy_from_slice(&WHITE565.to_le_bytes());
+        framebuffer.pixels_mut()[row + 2..row + 4].copy_from_slice(&WHITE565.to_le_bytes());
+    }
+    let _ = framebuffer.take_dirty_rects();
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [dst_dc, 2, 2, 4, 4, src_dc, 0, 0, 4, 4, MAGENTA_COLORREF,],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    for y in 0..2 {
+        for x in 0..2 {
+            assert_eq!(framebuffer_rgb565_at(&framebuffer, x, y), WHITE565);
+        }
+    }
+    assert!(framebuffer.dirty_rects().is_empty());
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
