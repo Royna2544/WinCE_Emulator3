@@ -160,6 +160,7 @@ const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
 const FMD_INTERFACE_SIZE: u32 = 56;
 const FMD_FLASH_REGION_SIZE: u32 = 28;
+const FMD_RESERVED_ENTRY_SIZE: u32 = 16;
 const FMD_RESERVED_NAME_LEN: u32 = 8;
 const FMD_RESERVED_REQ_SIZE: u32 = 20;
 const FMD_RAW_WRITE_BLOCKS_REQ_SIZE: u32 = 16;
@@ -13946,10 +13947,24 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
             fsdmgr_fmd_raw_write_blocks_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
         }
         IOCTL_FMD_READ_RESERVED => fsdmgr_fmd_reserved_request_raw(
-            kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, true,
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            in_ptr,
+            in_bytes,
+            true,
+            bytes_returned_ptr,
         ),
         IOCTL_FMD_WRITE_RESERVED => fsdmgr_fmd_reserved_request_raw(
-            kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, false,
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            in_ptr,
+            in_bytes,
+            false,
+            bytes_returned_ptr,
         ),
         IOCTL_FMD_SET_REGION_TABLE => fsdmgr_fmd_set_region_table_raw(
             kernel,
@@ -14178,21 +14193,53 @@ fn fsdmgr_fmd_get_reserved_table_raw<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     disk_ptr: u32,
-    _table_ptr: u32,
-    _table_bytes: u32,
+    table_ptr: u32,
+    table_bytes: u32,
     bytes_returned_ptr: u32,
 ) -> bool {
-    if kernel.fsdmgr_disk_info(disk_ptr).is_none() {
+    let Some(entries) = kernel.fsdmgr_fmd_reserved_entries(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(required_bytes) = (entries.len() as u32).checked_mul(FMD_RESERVED_ENTRY_SIZE) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if bytes_returned_ptr != 0
+        && memory
+            .write_u32(bytes_returned_ptr, required_bytes)
+            .is_err()
+    {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    if bytes_returned_ptr != 0 && memory.write_u32(bytes_returned_ptr, 0).is_err() {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
+    if required_bytes != 0 {
+        if table_ptr == 0 || table_bytes < required_bytes {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        for (index, (name, blocks)) in entries.iter().enumerate() {
+            let entry_ptr = table_ptr.wrapping_add(index as u32 * FMD_RESERVED_ENTRY_SIZE);
+            if memory.write_bytes(entry_ptr, name).is_err()
+                || memory.write_u32(entry_ptr.wrapping_add(8), 0).is_err()
+                || memory
+                    .write_u32(entry_ptr.wrapping_add(12), *blocks)
+                    .is_err()
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
@@ -14206,6 +14253,7 @@ fn fsdmgr_fmd_reserved_request_raw<M: CoredllGuestMemory>(
     request_ptr: u32,
     request_bytes: u32,
     read_reserved: bool,
+    bytes_returned_ptr: u32,
 ) -> bool {
     if kernel.fsdmgr_disk_info(disk_ptr).is_none() {
         kernel
@@ -14226,7 +14274,7 @@ fn fsdmgr_fmd_reserved_request_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let Ok(_start) = memory.read_u32(request_ptr.wrapping_add(8)) else {
+    let Ok(start) = memory.read_u32(request_ptr.wrapping_add(8)) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -14251,44 +14299,56 @@ fn fsdmgr_fmd_reserved_request_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return false;
         }
-        let Some(last_ptr) = buffer_ptr.checked_add(buffer_len - 1) else {
+        if buffer_ptr.checked_add(buffer_len - 1).is_none() {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return false;
         };
         if read_reserved {
-            let Ok(first) = memory.read_u8(buffer_ptr) else {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                return false;
-            };
-            let Ok(last) = memory.read_u8(last_ptr) else {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                return false;
-            };
-            if memory.write_u8(buffer_ptr, first).is_err()
-                || memory.write_u8(last_ptr, last).is_err()
-            {
+            match kernel.fsdmgr_read_fmd_reserved_region(disk_ptr, name, start, buffer_len) {
+                Some(Ok(bytes)) => {
+                    if memory.write_bytes(buffer_ptr, &bytes).is_err() {
+                        kernel
+                            .threads
+                            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                        return false;
+                    }
+                }
+                Some(Err(status)) => {
+                    kernel.threads.set_last_error(thread_id, status);
+                    return false;
+                }
+                None => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    return false;
+                }
+            }
+        } else {
+            let mut bytes = vec![0; buffer_len as usize];
+            if memory.read_bytes(buffer_ptr, &mut bytes).is_err() {
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
                 return false;
             }
-        } else if memory.read_u8(buffer_ptr).is_err() || memory.read_u8(last_ptr).is_err() {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-            return false;
+            let status = kernel.fsdmgr_write_fmd_reserved_region(disk_ptr, name, start, &bytes);
+            if status != 0 {
+                kernel.threads.set_last_error(thread_id, status);
+                return false;
+            }
         }
     }
-    kernel
-        .threads
-        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-    false
+    if bytes_returned_ptr != 0 && memory.write_u32(bytes_returned_ptr, 0).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn fsdmgr_fmd_set_region_table_raw<M: CoredllGuestMemory>(

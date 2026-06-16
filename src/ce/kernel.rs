@@ -242,6 +242,7 @@ pub struct CeKernel {
     fsdmgr_fmd_block_locks: BTreeMap<u32, Vec<FsdmgrFmdBlockLockRange>>,
     fsdmgr_fmd_sector_sizes: BTreeMap<u32, u32>,
     fsdmgr_fmd_region_tables: BTreeMap<u32, Vec<[u32; 7]>>,
+    fsdmgr_fmd_reserved_regions: BTreeMap<(u32, [u8; 8]), Vec<u8>>,
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
     next_fsdmgr_volume_lock: u32,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -995,6 +996,7 @@ impl CeKernel {
             fsdmgr_fmd_block_locks: BTreeMap::new(),
             fsdmgr_fmd_sector_sizes: BTreeMap::new(),
             fsdmgr_fmd_region_tables: BTreeMap::new(),
+            fsdmgr_fmd_reserved_regions: BTreeMap::new(),
             fsdmgr_volume_locks: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             modal_dialog_results: BTreeMap::new(),
@@ -2917,6 +2919,71 @@ impl CeKernel {
                 .map(|regions| regions.len() as u32)
                 .unwrap_or(0),
         )
+    }
+
+    pub fn fsdmgr_read_fmd_reserved_region(
+        &mut self,
+        disk_ptr: u32,
+        name: [u8; 8],
+        start: u32,
+        len: u32,
+    ) -> Option<std::result::Result<Vec<u8>, u32>> {
+        self.fsdmgr_disk_info(disk_ptr)?;
+        let Some(end) = start.checked_add(len) else {
+            return Some(Err(ERROR_INVALID_PARAMETER));
+        };
+        let mut bytes = vec![0; len as usize];
+        if let Some(stored) = self.fsdmgr_fmd_reserved_regions.get(&(disk_ptr, name)) {
+            let copy_start = start.min(stored.len() as u32) as usize;
+            let copy_end = end.min(stored.len() as u32) as usize;
+            if copy_end > copy_start {
+                bytes[..copy_end - copy_start].copy_from_slice(&stored[copy_start..copy_end]);
+            }
+        }
+        Some(Ok(bytes))
+    }
+
+    pub fn fsdmgr_write_fmd_reserved_region(
+        &mut self,
+        disk_ptr: u32,
+        name: [u8; 8],
+        start: u32,
+        bytes: &[u8],
+    ) -> u32 {
+        if self.fsdmgr_disk_info(disk_ptr).is_none() {
+            return ERROR_INVALID_PARAMETER;
+        }
+        let Some(end) = start.checked_add(bytes.len() as u32) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        let stored = self
+            .fsdmgr_fmd_reserved_regions
+            .entry((disk_ptr, name))
+            .or_default();
+        if stored.len() < end as usize {
+            stored.resize(end as usize, 0);
+        }
+        stored[start as usize..end as usize].copy_from_slice(bytes);
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_fmd_reserved_entries(&self, disk_ptr: u32) -> Option<Vec<([u8; 8], u32)>> {
+        self.fsdmgr_disk_info(disk_ptr)?;
+        let block_size = self
+            .fsdmgr_fmd_sector_size(disk_ptr)
+            .unwrap_or(FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE)
+            .max(1);
+        let entries = self
+            .fsdmgr_fmd_reserved_regions
+            .iter()
+            .filter_map(|((stored_disk, name), bytes)| {
+                (*stored_disk == disk_ptr).then(|| {
+                    let blocks = (bytes.len() as u32).saturating_add(block_size - 1) / block_size;
+                    (*name, blocks)
+                })
+            })
+            .collect();
+        Some(entries)
     }
 
     pub fn fsdmgr_write_fmd_raw_blocks(

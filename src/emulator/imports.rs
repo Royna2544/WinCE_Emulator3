@@ -4022,13 +4022,13 @@ mod tests {
                     0,
                 ],
             ),
-            Some(0)
+            Some(1)
         );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
         memory
             .read_bytes(fmd_reserved_buffer_ptr, &mut reserved_bytes)
             .unwrap();
-        assert_eq!(reserved_bytes, [0x11, 0x22, 0x33, 0x44]);
+        assert_eq!(reserved_bytes, [0, 0, 0, 0]);
 
         memory.map_word(fmd_reserved_req_ptr + 16, 0x1001_d000);
         assert_eq!(
@@ -4053,6 +4053,7 @@ mod tests {
         assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
 
         memory.map_word(fmd_reserved_req_ptr + 16, fmd_reserved_buffer_ptr);
+        memory.map_bytes(fmd_reserved_buffer_ptr, &[0x55, 0x66, 0x77, 0x88]);
         assert_eq!(
             table.dispatch_trap(
                 &mut kernel,
@@ -4070,13 +4071,39 @@ mod tests {
                     0,
                 ],
             ),
-            Some(0)
+            Some(1)
         );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
         memory
             .read_bytes(fmd_reserved_buffer_ptr, &mut reserved_bytes)
             .unwrap();
-        assert_eq!(reserved_bytes, [0x11, 0x22, 0x33, 0x44]);
+        assert_eq!(reserved_bytes, [0x55, 0x66, 0x77, 0x88]);
+
+        memory.map_bytes(fmd_reserved_buffer_ptr, &[0xaa, 0xaa, 0xaa, 0xaa]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_READ_RESERVED,
+                    fmd_reserved_req_ptr,
+                    20,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        memory
+            .read_bytes(fmd_reserved_buffer_ptr, &mut reserved_bytes)
+            .unwrap();
+        assert_eq!(reserved_bytes, [0x55, 0x66, 0x77, 0x88]);
 
         memory.map_word(fmd_reserved_out_ptr, 0xfeed_cafe);
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
@@ -4097,11 +4124,44 @@ mod tests {
                     0,
                 ],
             ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(memory.word(bytes_returned_ptr), 16);
+        assert_eq!(memory.word(fmd_reserved_out_ptr), 0xfeed_cafe);
+
+        memory.map_bytes(fmd_reserved_out_ptr, &[0; 8]);
+        memory.map_word(fmd_reserved_out_ptr + 8, 0xfeed_cafe);
+        memory.map_word(fmd_reserved_out_ptr + 12, 0xfeed_cafe);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_GET_RESERVED_TABLE,
+                    0,
+                    0,
+                    fmd_reserved_out_ptr,
+                    16,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
             Some(1)
         );
         assert_eq!(kernel.threads.get_last_error(11), 0);
-        assert_eq!(memory.word(bytes_returned_ptr), 0);
-        assert_eq!(memory.word(fmd_reserved_out_ptr), 0xfeed_cafe);
+        assert_eq!(memory.word(bytes_returned_ptr), 16);
+        let mut reserved_name = [0; 8];
+        memory
+            .read_bytes(fmd_reserved_out_ptr, &mut reserved_name)
+            .unwrap();
+        assert_eq!(&reserved_name, b"BOOT\0\0\0\0");
+        assert_eq!(memory.word(fmd_reserved_out_ptr + 8), 0);
+        assert_eq!(memory.word(fmd_reserved_out_ptr + 12), 1);
 
         memory.map_word(fmd_reserved_out_ptr, 0xfeed_cafe);
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
