@@ -25547,6 +25547,7 @@ fn sh_notification_get_data_i_raw<M: CoredllGuestMemory>(
         }
     }
     if raw_arg(args, 7) != 0 {
+        let html_len = record.html.encode_utf16().count() as u32 + 1;
         let capacity = if raw_arg(args, 9) != 0 {
             read_guest_u32(kernel, memory, thread_id, raw_arg(args, 9)).unwrap_or(0) as usize
         } else {
@@ -25565,6 +25566,11 @@ fn sh_notification_get_data_i_raw<M: CoredllGuestMemory>(
                 &record.html,
                 capacity,
             )
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+        if raw_arg(args, 9) != 0
+            && !write_guest_u32(kernel, memory, thread_id, raw_arg(args, 9), html_len)
         {
             return ERROR_INVALID_PARAMETER;
         }

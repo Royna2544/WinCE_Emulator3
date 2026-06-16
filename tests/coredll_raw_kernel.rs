@@ -14760,6 +14760,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(memory.read_u32(out + 52)?, 0xCAFE_BABE);
     assert_eq!(memory.read_wide_z(out_title, 32), "Route alert");
     assert_eq!(memory.read_wide_z(out_html, 32), "<b>Driv");
+    assert_eq!(memory.read_u32(html_len)?, 17);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
