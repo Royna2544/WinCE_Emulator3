@@ -537,10 +537,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp` routes
     those file-handle controls to `FSDMGR_ReadWriteFileSg`, and
     `filesystem.cpp::OpenSGArray` requires a non-null `FILE_SEGMENT_ELEMENT`
-    array and a nonzero transfer size aligned to the CE page size. v3 now
-    handles synchronous current-position scatter/gather for page-multiple
-    arrays through host-backed files, while reserved offset-array and
-    overlapped variants remain queued.
+    array and a nonzero transfer size aligned to the CE page size.
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\FSD\CACHEFILT\privatefilehandle.cpp`
+    builds page offsets from the current file pointer when `lpReserved` is null
+    and treats non-null `lpReserved` as a caller-supplied `ULARGE_INTEGER`
+    offset array without advancing the current file pointer; the cached and
+    uncached shared-file-map paths consume those offsets page by page. v3 now
+    handles synchronous current-position and reserved-offset scatter/gather for
+    page-multiple arrays through host-backed files, while overlapped variants
+    and real FSD filter forwarding remain queued.
     `volumeapi.cpp` handles
     `FSCTL_GET_VOLUME_INFO` before forwarding other controls to the mounted
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for

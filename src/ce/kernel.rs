@@ -218,8 +218,8 @@ pub struct CeKernel {
     crt_rand_state: u32,
     crt_strtok_next_by_thread: BTreeMap<u32, u32>,
     crt_wcstok_next_by_thread: BTreeMap<u32, u32>,
-    recent_file_ops: Vec<FileTraceRecord>,
-    recent_file_open_ops: Vec<FileTraceRecord>,
+    recent_file_ops: VecDeque<FileTraceRecord>,
+    recent_file_open_ops: VecDeque<FileTraceRecord>,
     recent_process_ops: Vec<ProcessTraceRecord>,
     recent_event_ops: Vec<EventTraceRecord>,
     recent_message_ops: Vec<MessageTraceRecord>,
@@ -968,8 +968,8 @@ impl CeKernel {
             crt_rand_state: 1,
             crt_strtok_next_by_thread: BTreeMap::new(),
             crt_wcstok_next_by_thread: BTreeMap::new(),
-            recent_file_ops: Vec::new(),
-            recent_file_open_ops: Vec::new(),
+            recent_file_ops: VecDeque::new(),
+            recent_file_open_ops: VecDeque::new(),
             recent_process_ops: Vec::new(),
             recent_event_ops: Vec::new(),
             recent_message_ops: Vec::new(),
@@ -2823,12 +2823,12 @@ impl CeKernel {
         self.files.host_path_for_guest(guest_path)
     }
 
-    pub fn recent_file_ops(&self) -> &[FileTraceRecord] {
-        &self.recent_file_ops
+    pub fn recent_file_ops(&self) -> Vec<FileTraceRecord> {
+        self.recent_file_ops.iter().cloned().collect()
     }
 
-    pub fn recent_file_open_ops(&self) -> &[FileTraceRecord] {
-        &self.recent_file_open_ops
+    pub fn recent_file_open_ops(&self) -> Vec<FileTraceRecord> {
+        self.recent_file_open_ops.iter().cloned().collect()
     }
 
     pub fn recent_process_ops(&self) -> &[ProcessTraceRecord] {
@@ -3026,14 +3026,14 @@ impl CeKernel {
     fn push_file_trace(&mut self, record: FileTraceRecord) {
         if is_file_open_trace(record.op) {
             if self.recent_file_open_ops.len() == FILE_TRACE_LIMIT {
-                self.recent_file_open_ops.remove(0);
+                self.recent_file_open_ops.pop_front();
             }
-            self.recent_file_open_ops.push(record.clone());
+            self.recent_file_open_ops.push_back(record.clone());
         }
         if self.recent_file_ops.len() == FILE_TRACE_LIMIT {
-            self.recent_file_ops.remove(0);
+            self.recent_file_ops.pop_front();
         }
-        self.recent_file_ops.push(record);
+        self.recent_file_ops.push_back(record);
     }
 
     pub fn path_for_handle(&self, handle: u32) -> Option<String> {
@@ -3415,6 +3415,34 @@ impl CeKernel {
         self.files.read_at(file_id, offset, requested)
     }
 
+    pub fn read_file_handle_at(
+        &mut self,
+        handle: u32,
+        offset: usize,
+        requested: usize,
+    ) -> Result<Vec<u8>> {
+        let path = self.path_for_handle(handle);
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        let result = self.files.read_at(file.file_id, offset, requested);
+        self.push_file_trace(FileTraceRecord {
+            op: "ReadFileScatter",
+            handle: Some(handle),
+            path,
+            preview: result
+                .as_deref()
+                .ok()
+                .and_then(|bytes| file_read_trace_preview(Some(offset as u64), None, bytes)),
+            requested: Some(requested as u32),
+            transferred: result.as_ref().ok().map(|bytes| bytes.len() as u32),
+            position: Some(offset as u64),
+            result: result.as_ref().ok().map(|_| 1),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
+        result
+    }
+
     pub fn read_guest_file(&self, path: &str) -> Result<Vec<u8>> {
         self.files.read_guest_file(path)
     }
@@ -3591,6 +3619,48 @@ impl CeKernel {
         bytes: &[u8],
     ) -> Result<FileIoResult> {
         self.files.write_at(file_id, offset, bytes)
+    }
+
+    pub fn write_file_handle_at(
+        &mut self,
+        handle: u32,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<FileIoResult> {
+        let path = self.path_for_handle(handle);
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        let file_id = file.file_id;
+        let result = self.files.write_at(file_id, offset, bytes);
+        if result
+            .as_ref()
+            .is_ok_and(|io| io.success && io.bytes_transferred != 0)
+            && let Ok(KernelObject::File(file)) = self.handles.get_mut(handle)
+        {
+            file.notify_change_pending = true;
+        }
+        self.push_file_trace(FileTraceRecord {
+            op: "WriteFileGather",
+            handle: Some(handle),
+            path: path.clone(),
+            preview: file_trace_preview(bytes),
+            requested: Some(bytes.len() as u32),
+            transferred: result.as_ref().ok().map(|io| io.bytes_transferred),
+            position: Some(offset as u64),
+            result: result.as_ref().ok().map(|io| u32::from(io.success)),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
+        if result
+            .as_ref()
+            .is_ok_and(|io| io.success && io.bytes_transferred != 0)
+            && let Some(path) = path.as_deref()
+            && path.starts_with('\\')
+        {
+            self.post_shell_file_change_notifications(SHCNE_UPDATEITEM, Some(path), None);
+            self.signal_file_change_notifications(SHCNE_UPDATEITEM, Some(path), None);
+        }
+        result
     }
 
     pub fn set_file_pointer(

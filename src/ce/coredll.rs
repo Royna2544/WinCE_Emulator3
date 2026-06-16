@@ -19564,7 +19564,7 @@ fn file_handle_scatter_gather_raw<M: CoredllGuestMemory>(
             ERROR_INVALID_PARAMETER,
         );
     }
-    if reserved_ptr != 0 || overlapped_ptr != 0 {
+    if overlapped_ptr != 0 {
         return file_scatter_gather_fail(
             kernel,
             memory,
@@ -19597,41 +19597,31 @@ fn file_handle_scatter_gather_raw<M: CoredllGuestMemory>(
         }
         buffers.push(buffer_ptr);
     }
-
-    let mut transferred = 0;
-    let success = if ioctl_code == IOCTL_FILE_READ_SCATTER {
-        for buffer_ptr in buffers {
-            let mut chunk = Vec::new();
-            let read = match kernel.read_file_into(handle, FILE_SCATTER_GATHER_PAGE_SIZE, |bytes| {
-                chunk.extend_from_slice(bytes);
-                Ok(())
-            }) {
-                Ok(read) => read,
-                Err(_) => {
-                    kernel
-                        .threads
-                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-                    write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
-                    return false;
-                }
-            };
-            if read != FILE_SCATTER_GATHER_PAGE_SIZE {
-                kernel.threads.set_last_error(thread_id, 0);
-                write_optional_count(kernel, memory, thread_id, returned_ptr, transferred);
-                return true;
-            }
-            if !write_guest_bytes(kernel, memory, thread_id, buffer_ptr, &chunk) {
-                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
-                return false;
-            }
-            transferred += read;
-        }
-        true
+    let offsets = if reserved_ptr == 0 {
+        None
     } else {
-        let mut bytes = Vec::with_capacity(transfer_bytes as usize);
-        for buffer_ptr in buffers {
-            let mut chunk = vec![0; FILE_SCATTER_GATHER_PAGE_SIZE as usize];
-            if memory.read_bytes(buffer_ptr, &mut chunk).is_err() {
+        let mut offsets = Vec::with_capacity(segment_count as usize);
+        for index in 0..segment_count {
+            let offset_ptr = reserved_ptr.wrapping_add(index * FILE_SEGMENT_ELEMENT_SIZE);
+            let Ok(offset_low) = memory.read_u32(offset_ptr) else {
+                return file_scatter_gather_fail(
+                    kernel,
+                    memory,
+                    thread_id,
+                    returned_ptr,
+                    ERROR_INVALID_PARAMETER,
+                );
+            };
+            let Ok(offset_high) = memory.read_u32(offset_ptr.wrapping_add(4)) else {
+                return file_scatter_gather_fail(
+                    kernel,
+                    memory,
+                    thread_id,
+                    returned_ptr,
+                    ERROR_INVALID_PARAMETER,
+                );
+            };
+            if offset_high != 0 {
                 return file_scatter_gather_fail(
                     kernel,
                     memory,
@@ -19640,24 +19630,139 @@ fn file_handle_scatter_gather_raw<M: CoredllGuestMemory>(
                     ERROR_INVALID_PARAMETER,
                 );
             }
-            bytes.extend_from_slice(&chunk);
+            offsets.push(offset_low as usize);
         }
-        match kernel.write_file(handle, &bytes) {
-            Ok(result) if result.success => {
-                transferred = result.bytes_transferred;
-                true
+        Some(offsets)
+    };
+
+    let mut transferred = 0;
+    let success = if ioctl_code == IOCTL_FILE_READ_SCATTER {
+        if let Some(offsets) = offsets {
+            for (buffer_ptr, offset) in buffers.into_iter().zip(offsets) {
+                let chunk = match kernel.read_file_handle_at(
+                    handle,
+                    offset,
+                    FILE_SCATTER_GATHER_PAGE_SIZE as usize,
+                ) {
+                    Ok(chunk) => chunk,
+                    Err(_) => {
+                        kernel
+                            .threads
+                            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                        return false;
+                    }
+                };
+                if chunk.len() != FILE_SCATTER_GATHER_PAGE_SIZE as usize {
+                    return file_scatter_gather_fail(
+                        kernel,
+                        memory,
+                        thread_id,
+                        returned_ptr,
+                        ERROR_INVALID_PARAMETER,
+                    );
+                }
+                if !write_guest_bytes(kernel, memory, thread_id, buffer_ptr, &chunk) {
+                    write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                    return false;
+                }
+                transferred += FILE_SCATTER_GATHER_PAGE_SIZE;
             }
-            Ok(_) => {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_ACCESS_DENIED);
-                false
+            true
+        } else {
+            for buffer_ptr in buffers {
+                let mut chunk = Vec::new();
+                let read =
+                    match kernel.read_file_into(handle, FILE_SCATTER_GATHER_PAGE_SIZE, |bytes| {
+                        chunk.extend_from_slice(bytes);
+                        Ok(())
+                    }) {
+                        Ok(read) => read,
+                        Err(_) => {
+                            kernel
+                                .threads
+                                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                            return false;
+                        }
+                    };
+                if read != FILE_SCATTER_GATHER_PAGE_SIZE {
+                    kernel.threads.set_last_error(thread_id, 0);
+                    write_optional_count(kernel, memory, thread_id, returned_ptr, transferred);
+                    return true;
+                }
+                if !write_guest_bytes(kernel, memory, thread_id, buffer_ptr, &chunk) {
+                    write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                    return false;
+                }
+                transferred += read;
             }
-            Err(_) => {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-                false
+            true
+        }
+    } else {
+        if let Some(offsets) = offsets {
+            for (buffer_ptr, offset) in buffers.into_iter().zip(offsets) {
+                let mut chunk = vec![0; FILE_SCATTER_GATHER_PAGE_SIZE as usize];
+                if memory.read_bytes(buffer_ptr, &mut chunk).is_err() {
+                    return file_scatter_gather_fail(
+                        kernel,
+                        memory,
+                        thread_id,
+                        returned_ptr,
+                        ERROR_INVALID_PARAMETER,
+                    );
+                }
+                match kernel.write_file_handle_at(handle, offset, &chunk) {
+                    Ok(result) if result.success => {
+                        transferred += result.bytes_transferred;
+                    }
+                    Ok(_) => {
+                        kernel
+                            .threads
+                            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+                        return false;
+                    }
+                    Err(_) => {
+                        kernel
+                            .threads
+                            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                        return false;
+                    }
+                }
+            }
+            true
+        } else {
+            let mut bytes = Vec::with_capacity(transfer_bytes as usize);
+            for buffer_ptr in buffers {
+                let mut chunk = vec![0; FILE_SCATTER_GATHER_PAGE_SIZE as usize];
+                if memory.read_bytes(buffer_ptr, &mut chunk).is_err() {
+                    return file_scatter_gather_fail(
+                        kernel,
+                        memory,
+                        thread_id,
+                        returned_ptr,
+                        ERROR_INVALID_PARAMETER,
+                    );
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            match kernel.write_file(handle, &bytes) {
+                Ok(result) if result.success => {
+                    transferred = result.bytes_transferred;
+                    true
+                }
+                Ok(_) => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+                    false
+                }
+                Err(_) => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    false
+                }
             }
         }
     };

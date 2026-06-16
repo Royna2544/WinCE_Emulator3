@@ -5138,6 +5138,27 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   The raw regression writes two pages with gather and reads them back with
   scatter through host-backed mounted storage; offset-array and overlapped
   variants remain queued.
+- `src/ce/coredll.rs`, `src/ce/kernel.rs`,
+  `tests/coredll_raw_memory_file.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`,
+  and `SOURCE_REFERENCES.md`: file-handle
+  `DeviceIoControl(IOCTL_FILE_READ_SCATTER/IOCTL_FILE_WRITE_GATHER)` now also
+  supports CE reserved offset arrays from `privatefilehandle.cpp`, reading and
+  writing each page at its caller-supplied absolute offset without advancing the
+  current file pointer. The raw regression writes two pages out-of-cursor with
+  `WriteFileGather`, proves a later normal `WriteFile` still lands at the old
+  cursor, then reads the pages back in reversed offset order with
+  `ReadFileScatter`; overlapped scatter/gather and real FSD filter forwarding
+  remain queued.
+- Validation after the reserved-offset scatter/gather slice:
+  `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_memory_file
+  coredll_raw_device_io_control_file_scatter_gather_reserved_offsets --
+  --nocapture`, `cargo fmt --check`, `git diff --check`,
+  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test
+  -j 1 --features unicorn,trace,win32-desktop` passed. The eVC4 MIPSII
+  fixture remains ignored, and Cargo still emits the existing unused-code
+  warnings.
 - Validation after the file scatter/gather IOCTL slice:
   `$env:CARGO_INCREMENTAL='0'; cargo test -j 1 --features
   unicorn,trace,win32-desktop --test coredll_raw_memory_file
