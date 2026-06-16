@@ -13102,6 +13102,7 @@ fn shell_notify_icon_deletes_existing_record_after_owner_window_is_stale() -> Re
 fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Result<()> {
     const NIM_ADD: u32 = 0;
     const NIM_MODIFY: u32 = 1;
+    const NIM_DELETE: u32 = 2;
     const NIF_MESSAGE: u32 = 0x0000_0001;
     const NIF_ICON: u32 = 0x0000_0002;
     const NIF_TIP: u32 = 0x0000_0004;
@@ -13243,6 +13244,252 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
             .is_none()
     );
+
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Duplicate should not post");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [
+                msg_ptr,
+                taskbar_hwnd,
+                WM_HANDLESHELLNOTIFYICON,
+                WM_HANDLESHELLNOTIFYICON,
+                1,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    memory.write_word(data + 8, 89);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_MODIFY, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [
+                msg_ptr,
+                taskbar_hwnd,
+                WM_HANDLESHELLNOTIFYICON,
+                WM_HANDLESHELLNOTIFYICON,
+                1,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    memory.write_word(data + 8, 88);
+    memory.write_word(data + 12, NIF_TIP);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Taskbar modify");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_MODIFY, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [
+                msg_ptr,
+                taskbar_hwnd,
+                WM_HANDLESHELLNOTIFYICON,
+                WM_HANDLESHELLNOTIFYICON,
+                1,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, taskbar_hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_HANDLESHELLNOTIFYICON);
+    assert_eq!(memory.read_u32(msg_ptr + 8)?, NIM_MODIFY);
+    let copied_modify = memory.read_u32(msg_ptr + 12)?;
+    assert_ne!(copied_modify, 0);
+    assert_eq!(
+        memory.read_wide_z(copied_modify + NID_TIP_OFFSET, 64),
+        "Taskbar modify"
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.message_pointer_payload(copied_modify).is_none());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_DELETE, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.shell.notify_icon(app_hwnd, 88).is_none());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [
+                msg_ptr,
+                taskbar_hwnd,
+                WM_HANDLESHELLNOTIFYICON,
+                WM_HANDLESHELLNOTIFYICON,
+                1,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, taskbar_hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_HANDLESHELLNOTIFYICON);
+    assert_eq!(memory.read_u32(msg_ptr + 8)?, NIM_DELETE);
+    let copied_delete = memory.read_u32(msg_ptr + 12)?;
+    assert_ne!(copied_delete, 0);
+    assert_eq!(
+        memory.read_wide_z(copied_delete + NID_TIP_OFFSET, 64),
+        "Taskbar modify"
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.message_pointer_payload(copied_delete).is_none());
+
+    memory.write_word(data + 12, NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE);
+    memory.write_word(data + 16, WM_USER + 123);
+    memory.write_word(data + 20, 0x000b_8123);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Taskbar copy again");
+    memory.write_word(data + NID_STATE_OFFSET, 0x4);
+    memory.write_word(data + NID_STATE_MASK_OFFSET, 0xff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [
+                msg_ptr,
+                taskbar_hwnd,
+                WM_HANDLESHELLNOTIFYICON,
+                WM_HANDLESHELLNOTIFYICON,
+                1,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let copied_readd = memory.read_u32(msg_ptr + 12)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.message_pointer_payload(copied_readd).is_none());
 
     assert!(kernel.destroy_window(taskbar_hwnd));
     memory.write_word(data + 12, NIF_TIP);
