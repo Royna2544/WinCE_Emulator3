@@ -1759,8 +1759,7 @@ impl UnicornMips {
             }
         }
         let paint_thread_id = candidate_threads.iter().copied().find(|thread_id| {
-            *thread_id != active_thread_id
-                && !self.thread_has_blocked_scheduler_context(*thread_id)
+            !self.thread_has_blocked_scheduler_context(*thread_id)
                 && Self::thread_has_dirty_visible_window(*thread_id, kernel)
                 && kernel
                     .peek_ready_visible_message_w_filtered(
@@ -1775,8 +1774,7 @@ impl UnicornMips {
         });
         let visible_message_thread_id = paint_thread_id.or_else(|| {
             candidate_threads.iter().copied().find(|thread_id| {
-                *thread_id != active_thread_id
-                    && !self.thread_has_blocked_scheduler_context(*thread_id)
+                !self.thread_has_blocked_scheduler_context(*thread_id)
                     && kernel
                         .peek_ready_visible_message_w_filtered(*thread_id, None, 0, 0)
                         .is_some_and(|message| {
@@ -23820,6 +23818,72 @@ mod wait_scheduler_tests {
         let restored = scheduler.saved_context.as_ref().unwrap();
         assert_eq!(restored.pc, active_pc);
         assert_eq!(restored.regs, active_regs);
+    }
+
+    #[test]
+    fn active_visible_message_can_reenter_saved_guest_context() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let active_pc = 0x0033_9c54;
+        let return_sp = 0x7ffd_f0a0;
+        let wndproc = 0x6004_f0f4;
+        let msg = crate::ce::gwe::WM_LBUTTONDOWN;
+
+        scheduler.current_thread_id = active_thread_id;
+        let mut active_regs = super::MipsGuestContext::zero();
+        active_regs.regs[29] = return_sp;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: active_regs.clone(),
+        });
+
+        let hwnd = kernel.create_window_ex_w(
+            active_thread_id,
+            "visible_receiver",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        let _ = kernel.gwe.validate_window(hwnd);
+        assert!(kernel.post_message_w(hwnd, msg, 1, 0x0020_0010));
+
+        assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
+        assert_eq!(scheduler.current_thread_id(), active_thread_id);
+        assert!(
+            kernel
+                .peek_ready_visible_message_w_filtered(active_thread_id, None, msg, msg)
+                .is_none()
+        );
+        let saved = scheduler.saved_context.as_ref().unwrap();
+        assert_eq!(saved.pc, wndproc);
+        assert_eq!(saved.regs.regs[4], hwnd);
+        assert_eq!(saved.regs.regs[5], msg);
+        assert_eq!(saved.regs.regs[6], 1);
+        assert_eq!(saved.regs.regs[7], 0x0020_0010);
+        assert_eq!(saved.regs.regs[25], wndproc);
+        assert_eq!(
+            saved.regs.regs[29],
+            return_sp - super::WNDPROC_CALL_FRAME_BYTES
+        );
+
+        let pending = scheduler.pending_wndproc_returns.last().unwrap();
+        assert_eq!(pending.source, "OrphanedVisibleMessage");
+        assert_eq!(pending.hwnd, hwnd);
+        assert_eq!(pending.msg, msg);
+        let resume = pending.resume_import.as_ref().unwrap();
+        assert_eq!(resume.thread_id, active_thread_id);
+        assert_eq!(resume.import_pc, active_pc);
+        assert_eq!(resume.regs, active_regs);
     }
 
     #[test]
