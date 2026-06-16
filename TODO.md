@@ -53,6 +53,12 @@ Regenerated on 2026-06-11 from current source and test coverage.
   shrinkable-stream packet paths; byte-for-byte private `CECompress`/
   `CEDecompress` engine parity remains open if the missing engine body is found.
 - Continue iNavi route-flow work from the current process/window/shell readiness point into destination search and map interaction.
+- Continue the iNavi splash dismissal investigation after the large read-only
+  backing fix: startup disk I/O is no longer the dominant blocker in the fast
+  live run, and only the main `GetMessage` waiter remains. The owned splash
+  popup `0x00020008` still stays topmost and receives touch messages, so the
+  next step is to trace the real hide/destroy/state-transition trigger rather
+  than adding synthetic dialog or path-specific behavior.
 - Continue the iNavi UI crawl after the detached `drive97` release recheck:
   the remote server now owns its listener in shared server state and startup
   self-probes `/api/v1/status` before printing the URL, closing the false

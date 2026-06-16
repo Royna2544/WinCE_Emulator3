@@ -38,7 +38,7 @@ const AFS_FLAG_HIDDEN: u32 = 0x0001;
 const AFS_FLAG_SYSTEM: u32 = 0x0020;
 const AFS_FLAG_PERMANENT: u32 = 0x0040;
 const READ_ONLY_MEMORY_BACKING_MIN_BYTES: usize = 1024 * 1024;
-const READ_ONLY_MEMORY_BACKING_MAX_BYTES: usize = 8 * 1024 * 1024;
+const READ_ONLY_MEMORY_BACKING_MAX_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct HostFileSystem {
@@ -2631,6 +2631,41 @@ mod tests {
         assert_eq!(fs.read_file(reread, 1).unwrap(), b"Z");
 
         fs.close(reread).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_only_large_host_files_use_shared_memory_backing() {
+        let root = std::env::temp_dir().join(format!(
+            "wince_file_large_read_cache_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bytes: Vec<u8> = (0..=255).cycle().take(9 * 1024 * 1024).collect();
+        fs::write(root.join("large.bin"), &bytes).unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let first = fs
+            .create_file_w("\\large.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        let second = fs
+            .create_file_w("\\large.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+
+        assert!(fs.open_file(first).unwrap().is_memory_backed());
+        assert!(fs.open_file(second).unwrap().is_memory_backed());
+        assert_eq!(
+            fs.read_at(second, bytes.len() - 4096, 4096).unwrap(),
+            bytes[bytes.len() - 4096..]
+        );
+        let stats = fs.io_stats();
+        assert_eq!(stats.memory_backed_open_count, 2);
+        assert_eq!(stats.host_file_open_count, 0);
+        assert_eq!(stats.host_file_read_count, 0);
+
+        fs.close(first).unwrap();
+        fs.close(second).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

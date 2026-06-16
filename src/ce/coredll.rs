@@ -13641,7 +13641,7 @@ fn fsdmgr_disk_ex_transfer_raw<M: CoredllGuestMemory>(
         }
         return 0;
     }
-    if buffer_count == 0 || buffer_count > 64 || buffers_ptr == 0 {
+    if buffer_count == 0 || buffers_ptr == 0 {
         return ERROR_INVALID_PARAMETER;
     }
     if buffer_count

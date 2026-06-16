@@ -6319,6 +6319,49 @@ mod tests {
         memory.read_bytes(read_a, &mut read_back[..512]).unwrap();
         memory.read_bytes(read_b, &mut read_back[512..]).unwrap();
         assert_eq!(read_back, sector_bytes);
+
+        let many_read_info = 0x1001_1000;
+        let many_read_buffers = 0x1001_2000;
+        let many_read_results = 0x1001_3000;
+        let many_read_out = 0x1001_4000;
+        memory.map_word(many_read_info, 0);
+        memory.map_word(many_read_info + 4, disk_ptr);
+        memory.map_word(many_read_info + 8, 21);
+        memory.map_word(many_read_info + 12, 1);
+        memory.map_word(many_read_info + 16, 0);
+        memory.map_word(many_read_info + 20, 65);
+        memory.map_word(many_read_info + 24, many_read_buffers);
+        memory.map_word(many_read_info + 28, 0);
+        memory.map_word(many_read_results, 0xfeed_cafe);
+        memory.map_word(many_read_results + 4, 0xfeed_cafe);
+        memory.map_bytes(many_read_out, &vec![0x33; 512]);
+        let mut offset = 0;
+        for index in 0..65 {
+            let len = if index < 64 { 7 } else { 64 };
+            memory.map_word(many_read_buffers + index * 8, many_read_out + offset);
+            memory.map_word(many_read_buffers + index * 8 + 4, len);
+            offset += len;
+        }
+        assert_eq!(offset, 512);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [many_read_info, many_read_results],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(many_read_results), 0);
+        assert_eq!(memory.word(many_read_results + 4), 1);
+        let mut many_read_back = vec![0; 512];
+        memory
+            .read_bytes(many_read_out, &mut many_read_back)
+            .unwrap();
+        assert_eq!(many_read_back, sector_bytes[..512]);
     }
 
     #[test]

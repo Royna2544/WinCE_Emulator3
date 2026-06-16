@@ -24,6 +24,12 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
 - Message-queue import parking is implemented, but iNavi live runs still need
   proof that device-notification consumers observe startup attach events in the
   same order and wake cadence as CE while the owned splash popup remains visible.
+- iNavi fast live startup now clears the heavy map/search DB I/O phase quickly
+  with the generic large read-only memory backing, but the app-owned splash
+  window still remains visible after loader waiters drain. Remote touch is
+  delivered to the real popup window, so the remaining risk is a missing CE UI
+  state transition, timer/message behavior, or app-side readiness signal rather
+  than a synthetic dialog or SD-card read-only failure.
 - Direct CE `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
   `FSDMGR_GetRegistryValue @20` imports are covered for the missing-registry
   fail-closed path and output clearing; real logical-disk registry-root lookup

@@ -15,6 +15,31 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/file.rs`: read-only host files up to 128 MiB now use the existing
+  shared memory-backed open path. This keeps large map/search bundles out of
+  the repeated host-file reopen/read path without naming iNavi paths or files,
+  and preserves the existing writer-open invalidation behavior.
+- Live validation on `192.168.0.39:8765` after the larger read-only backing
+  change: the main app relaunched as PID 18260 and reached the post-loader
+  splash-idle state in about 45 seconds with `file_io=host_open:96
+  host_read:18717/2013001B mem_open:97 max_read:497178` and only the main
+  `GetMessage` waiter left. The previous same-phase run had reached
+  `host_read` around 88 MiB and still had kernel loader waiters active. The
+  owned splash popup `0x00020008` remains visible and receives remote
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP`; the remaining issue is the app-owned splash
+  dismissal/state transition, not startup disk I/O.
+- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct
+  `FSDMGR_EmptyLockContainer @13` now clears the CE file-lock-state container
+  pointer and sets the terminal flag when queued locks exist, instead of
+  treating the call as a pure no-op.
+- Validation for this slice: focused `cargo test --features
+  unicorn,trace,win32-desktop read_only -- --nocapture`, focused
+  `host_file_read_file_into_chunks_large_requests`, focused
+  `fsdmgr_file_lock_imports_route_existing_range_lock_state`, `rustfmt
+  --edition 2024 --check src\ce\file.rs src\ce\coredll.rs
+  src\emulator\imports.rs`, `git diff --check -- src\ce\file.rs
+  src\ce\coredll.rs src\emulator\imports.rs`, and `cargo build --release
+  --features unicorn,trace,win32-desktop --bin wince_emulation_v3` passed.
 - `src/emulator/unicorn.rs`: committed `467ae36d` fixes the live-pump
   scheduler path where the active iNavi thread could stop at
   `THREAD_EXIT_STUB_ADDR` (`0x7fffffe0`) while another active thread still had
