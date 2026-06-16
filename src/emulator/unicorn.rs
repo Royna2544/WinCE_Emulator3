@@ -6072,6 +6072,37 @@ impl UnicornMips {
             move |uc, address, _size| {
                 let address = address as u32;
                 if address == THREAD_EXIT_STUB_ADDR {
+                    let active_thread_id = *current_thread_id_hook.borrow();
+                    let no_running_thread = running_guest_thread_hook.borrow().is_none();
+                    if no_running_thread
+                        && (try_wait_and_resume_blocked_wait(
+                            unsafe { &mut *kernel_ptr },
+                            uc,
+                            active_thread_id,
+                            &current_thread_id_hook,
+                            &blocked_wait_threads_hook,
+                            &suspended_guest_thread_hook,
+                            &running_guest_thread_hook,
+                            host_wall_clock_started,
+                            host_wall_clock_limit,
+                            live_pump,
+                        ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
+                            unsafe { &mut *kernel_ptr },
+                            uc,
+                            active_thread_id,
+                            &current_thread_id_hook,
+                            &blocked_guest_thread_hook,
+                            &displaced_blocked_get_messages_hook,
+                            &suspended_guest_thread_hook,
+                            &running_guest_thread_hook,
+                            &pending_wndproc_returns_hook,
+                            host_wall_clock_started,
+                            host_wall_clock_limit,
+                            live_pump,
+                        ))
+                    {
+                        return;
+                    }
                     *thread_exit_reached_import_hook.borrow_mut() = true;
                     let _ = uc.emu_stop();
                     return;
@@ -7691,18 +7722,6 @@ impl UnicornMips {
             },
         )
         .map_err(|err| Error::Backend(format!("install import hook: {err:?}")))?;
-
-        // ── Thread-exit stub hook: stops emulation when the thread-exit trampoline fires ──
-        let thread_exit_reached_hook = Rc::clone(&thread_exit_reached);
-        uc.add_code_hook(
-            u64::from(THREAD_EXIT_STUB_ADDR),
-            u64::from(THREAD_EXIT_STUB_ADDR),
-            move |uc, _address, _size| {
-                *thread_exit_reached_hook.borrow_mut() = true;
-                let _ = uc.emu_stop();
-            },
-        )
-        .map_err(|err| Error::Backend(format!("install thread-exit hook: {err:?}")))?;
 
         // ── Memory fault hook + optional iNavi/render-map trace watch hooks ────────
         let memory_fault = Rc::new(RefCell::new(None));
