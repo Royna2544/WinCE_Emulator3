@@ -14097,7 +14097,7 @@ fn fsdmgr_disk_validate_delete_sector_info_raw<M: CoredllGuestMemory>(
 
 fn fsdmgr_disk_get_sector_addr_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     disk_ptr: u32,
     sector_list_ptr: u32,
@@ -14122,9 +14122,40 @@ fn fsdmgr_disk_get_sector_addr_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
+    if kernel.fsdmgr_fmd_region_count(disk_ptr).unwrap_or(0) == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return false;
+    }
+    let mut sectors = Vec::with_capacity((sector_list_bytes / 4) as usize);
     for offset in (0..sector_list_bytes).step_by(4) {
+        let sector = match memory.read_u32(sector_list_ptr.wrapping_add(offset)) {
+            Ok(value) => value,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+        };
+        sectors.push(sector);
+    }
+    for (index, sector) in sectors.into_iter().enumerate() {
+        const INVALID_SECTOR_ADDR: u32 = 0xffff_ffff;
+        let addr = match kernel.fsdmgr_fmd_physical_sector_addr(disk_ptr, sector) {
+            Some(Ok(addr)) => addr,
+            Some(Err(_)) => INVALID_SECTOR_ADDR,
+            None => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+        };
+        let offset = (index as u32).wrapping_mul(4);
         if memory
-            .read_u32(sector_list_ptr.wrapping_add(offset))
+            .write_u32(addr_list_ptr.wrapping_add(offset), addr)
             .is_err()
         {
             kernel
@@ -14133,10 +14164,8 @@ fn fsdmgr_disk_get_sector_addr_raw<M: CoredllGuestMemory>(
             return false;
         }
     }
-    kernel
-        .threads
-        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-    false
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn fsdmgr_disk_copy_external_raw<M: CoredllGuestMemory>(

@@ -4829,8 +4829,8 @@ mod tests {
         assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
         assert_eq!(memory.word(bytes_returned_ptr), 0);
 
-        memory.map_word(sector_list_ptr, 11);
-        memory.map_word(sector_list_ptr + 4, 12);
+        memory.map_word(sector_list_ptr, 32);
+        memory.map_word(sector_list_ptr + 4, 64);
         memory.map_word(sector_addr_ptr, 0xfeed_cafe);
         memory.map_word(sector_addr_ptr + 4, 0xfeed_cafe);
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
@@ -4851,11 +4851,11 @@ mod tests {
                     0,
                 ],
             ),
-            Some(0)
+            Some(1)
         );
-        assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
-        assert_eq!(memory.word(sector_addr_ptr), 0xfeed_cafe);
-        assert_eq!(memory.word(sector_addr_ptr + 4), 0xfeed_cafe);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(sector_addr_ptr), 8 * 1024);
+        assert_eq!(memory.word(sector_addr_ptr + 4), 0xffff_ffff);
         assert_eq!(memory.word(bytes_returned_ptr), 0);
 
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
