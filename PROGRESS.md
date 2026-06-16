@@ -138,6 +138,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `target/cargo-test-coredll-raw-gwe-transparent-almost-full-clip.20260616-143045.*.log`
   and
   `target/cargo-test-full-transparent-almost-full-clip.20260616-143106.*.log`.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and framebuffer
+  `TransparentImage` now cover CE `draw.cpp::ClipBitBlt(ETransparentImage)`
+  individual left/right/top/bottom fully clipped no-op rows plus their
+  one-pixel-visible near-full edge rows. The helpers verify successful no-op
+  returns without framebuffer dirtiness and one-pixel survivors sampling the
+  expected source edge pixel.
+- Validation after the `TransparentImage` individual-edge clipping slice:
+  `cargo test --features unicorn,trace,win32-desktop individual_edges --
+  --nocapture`, `cargo fmt --check`, `git diff --check`, `cargo check
+  --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test
+  -j 1 --features unicorn,trace,win32-desktop`. Test logs are under
+  `target/cargo-test-coredll-raw-gwe-transparent-individual-edge-clip.20260616-143621.*.log`
+  and `target/cargo-test-full-transparent-individual-edge-clip.20260616-143632.*.log`.
 - Validation after the transparent all-edge clipping and active visible-receiver
   rotation slice: focused
   `remote_input_rotates_to_active_visible_receiver_thread`, focused
