@@ -37227,18 +37227,18 @@ fn imm_set_composition_string_w_raw<M: CoredllGuestMemory>(
     let dw_index = raw_arg(args, 1);
     let lp_comp = raw_arg(args, 2);
     let dw_comp_len = raw_arg(args, 3);
-    // Only SCS_SETSTR (GCS_COMPREADSTR|GCS_COMPSTR = 0x09) is handled here.
-    const SCS_SETSTR: u32 = 0x0009;
-    if dw_index != SCS_SETSTR {
-        kernel.threads.set_last_error(thread_id, 0);
-        return true; // unsupported index: silently succeed
-    }
     let Some(himc) = resolve_imm_status_context(kernel, himc) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
+    // Only SCS_SETSTR (GCS_COMPREADSTR|GCS_COMPSTR = 0x09) is handled here.
+    const SCS_SETSTR: u32 = 0x0009;
+    if dw_index != SCS_SETSTR {
+        kernel.threads.set_last_error(thread_id, 0);
+        return false;
+    }
     let composition: Vec<u16> = if lp_comp != 0 && dw_comp_len >= 2 {
         let byte_count = dw_comp_len & !1; // round down to even
         read_guest_bytes(kernel, memory, thread_id, lp_comp, byte_count)

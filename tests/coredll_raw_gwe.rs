@@ -32790,6 +32790,7 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
         }
     ));
     const SCS_SETSTR: u32 = 0x0009;
+    const SCS_CHANGEATTR: u32 = 0x0012;
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -32815,6 +32816,35 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
             ..
         } => {}
         other => panic!("unexpected ImmGetCompositionStringW after NULL set: {other:?}"),
+    }
+    assert_eq!(memory.read_u16(composition_out_ptr)?, 0x3131);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_SET_COMPOSITION_STRING_W,
+            [himc, SCS_CHANGEATTR, composition_set_ptr, 1, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMM_GET_COMPOSITION_STRING_W,
+        [himc, GCS_COMPSTR, composition_out_ptr, 2],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        } => {}
+        other => panic!("unexpected ImmGetCompositionStringW after unsupported set: {other:?}"),
     }
     assert_eq!(memory.read_u16(composition_out_ptr)?, 0x3131);
 
