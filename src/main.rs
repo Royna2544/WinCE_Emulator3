@@ -355,7 +355,7 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
-        if cpu.clear_escaped_visible_message_callouts() {
+        if cpu.clear_escaped_visible_message_callouts(kernel) {
             reported_blocked_message_wait = false;
             continue;
         }

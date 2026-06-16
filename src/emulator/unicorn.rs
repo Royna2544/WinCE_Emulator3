@@ -2217,7 +2217,7 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    pub fn clear_escaped_visible_message_callouts(&mut self) -> bool {
+    pub fn clear_escaped_visible_message_callouts(&mut self, kernel: &mut CeKernel) -> bool {
         let candidates = [
             self.saved_context.as_ref().map(|saved| saved.pc),
             self.last_debug.as_ref().map(|snapshot| snapshot.pc),
@@ -2245,6 +2245,7 @@ impl UnicornMips {
         let Some(resume) = callout.resume_import.clone() else {
             return false;
         };
+        let _ = finish_guest_paint_after_wndproc_return(kernel, &callout);
         self.saved_context = Some(SavedCpuContext {
             pc: resume.import_pc,
             regs: resume.regs,
@@ -23486,13 +23487,93 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: super::MipsGuestContext::zero(),
         });
-        assert!(scheduler.clear_escaped_visible_message_callouts());
+        assert!(scheduler.clear_escaped_visible_message_callouts(&mut kernel));
         assert!(scheduler.pending_wndproc_returns.is_empty());
         assert!(scheduler.orphaned_wndproc_returns.is_empty());
         assert_eq!(scheduler.current_thread_id(), active_thread_id);
         assert_eq!(
             scheduler.running_guest_thread,
             Some((active_thread_id, active_thread_handle))
+        );
+        let restored = scheduler.saved_context.as_ref().unwrap();
+        assert_eq!(restored.pc, active_pc);
+        assert_eq!(restored.regs, active_regs);
+    }
+
+    #[test]
+    fn escaped_visible_paint_completion_validates_update_region() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = 7;
+        let active_pc = 0x0031_cf80;
+        let return_sp = 0x7ffb_f5f8;
+        let wndproc = 0x6004_f0f4;
+        let mut active_regs = super::MipsGuestContext::zero();
+        active_regs.regs[29] = return_sp;
+        active_regs.regs[31] = active_pc;
+        let hwnd = kernel.create_window_ex_w(
+            super::MAIN_GUEST_THREAD_ID,
+            "escaped_paint",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        let _ = kernel.gwe.validate_window(hwnd);
+        assert!(kernel.gwe.invalidate_window(hwnd, None, true));
+        assert!(kernel.gwe.update_rect(hwnd).is_some());
+
+        scheduler.current_thread_id = super::MAIN_GUEST_THREAD_ID;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: super::MipsGuestContext::zero(),
+        });
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "OrphanedVisibleMessage",
+                hwnd,
+                msg: crate::ce::gwe::WM_PAINT,
+                wparam: 0,
+                lparam: 0,
+                wndproc,
+                return_pc: active_pc,
+                return_sp,
+                caller_regs: None,
+                class_name: Some("escaped_paint".to_owned()),
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: None,
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: Some(super::ResumeImportAfterWndProc {
+                    thread_id: active_thread_id,
+                    running_thread: Some((active_thread_id, 0x107)),
+                    regs: active_regs.clone(),
+                    import_pc: active_pc,
+                }),
+                clear_focus_after_return: None,
+            });
+
+        assert!(scheduler.clear_escaped_visible_message_callouts(&mut kernel));
+        assert!(scheduler.pending_wndproc_returns.is_empty());
+        assert!(kernel.gwe.update_rect(hwnd).is_none());
+        assert_eq!(scheduler.current_thread_id(), active_thread_id);
+        assert_eq!(
+            scheduler.running_guest_thread,
+            Some((active_thread_id, 0x107))
         );
         let restored = scheduler.saved_context.as_ref().unwrap();
         assert_eq!(restored.pc, active_pc);
