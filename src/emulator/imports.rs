@@ -2342,12 +2342,15 @@ mod tests {
     #[test]
     fn fsdmgr_file_lock_imports_route_existing_range_lock_state() {
         const ERROR_INVALID_HANDLE: u32 = 6;
+        const ERROR_INVALID_PARAMETER: u32 = 87;
         const ERROR_LOCK_VIOLATION: u32 = 33;
         const GENERIC_READ: u32 = 0x8000_0000;
         const GENERIC_WRITE: u32 = 0x4000_0000;
         const CREATE_ALWAYS: u32 = 2;
         const OPEN_EXISTING: u32 = 3;
         const LOCKFILE_EXCLUSIVE_LOCK: u32 = 2;
+        const ACQUIRE_FILE_LOCK_STATE: u32 = 0xaaaa;
+        const RELEASE_FILE_LOCK_STATE: u32 = 0xbbbb;
 
         fn map_overlapped(memory: &mut TestMemory, addr: u32, offset_low: u32, offset_high: u32) {
             let mut bytes = [0u8; 20];
@@ -2499,8 +2502,71 @@ mod tests {
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
                 [
-                    0xaaaa,
-                    0xbbbb,
+                    0,
+                    RELEASE_FILE_LOCK_STATE,
+                    file,
+                    LOCKFILE_EXCLUSIVE_LOCK,
+                    0,
+                    7,
+                    0,
+                    lock_overlapped,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    peer_file,
+                    1,
+                    2,
+                    5,
+                    0,
+                ],
+            ),
+            Some(1),
+            "missing acquire callback must fail before mutating the lock container"
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    0,
+                    file,
+                    LOCKFILE_EXCLUSIVE_LOCK,
+                    0,
+                    7,
+                    0,
+                    lock_overlapped,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
                     file,
                     LOCKFILE_EXCLUSIVE_LOCK,
                     0,
@@ -2563,7 +2629,15 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
-                [0, 0, peer_file, 1, 2, 5, 0],
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    peer_file,
+                    1,
+                    2,
+                    5,
+                    0,
+                ],
             ),
             Some(0)
         );
@@ -2575,7 +2649,15 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
-                [0, 0, file, 1, 2, 5, 0],
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    file,
+                    1,
+                    2,
+                    5,
+                    0,
+                ],
             ),
             Some(1)
         );
@@ -2587,7 +2669,13 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
-                [0, 0, peer_file, 1, 2],
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    peer_file,
+                    1,
+                    2,
+                ],
             ),
             Some(1)
         );
@@ -2599,7 +2687,15 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 4,
-                [0, 0, file, 0, 7, 0, lock_overlapped],
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    file,
+                    0,
+                    7,
+                    0,
+                    lock_overlapped,
+                ],
             ),
             Some(1)
         );
@@ -2611,7 +2707,15 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
-                [0, 0, peer_file, 1, 2, 5, 0],
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    peer_file,
+                    1,
+                    2,
+                    5,
+                    0,
+                ],
             ),
             Some(1)
         );
@@ -2623,7 +2727,16 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 7,
-                [0, 0, peer_file, 0, 0, 2, 0, peer_overlapped],
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    peer_file,
+                    0,
+                    0,
+                    2,
+                    0,
+                    peer_overlapped,
+                ],
             ),
             Some(1)
         );
@@ -2635,7 +2748,7 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 5,
-                [0, 0, peer_file],
+                [ACQUIRE_FILE_LOCK_STATE, RELEASE_FILE_LOCK_STATE, peer_file,],
             ),
             Some(1)
         );
@@ -2647,7 +2760,15 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
-                [0, 0, file, 0, 2, 5, 0],
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    file,
+                    0,
+                    2,
+                    5,
+                    0,
+                ],
             ),
             Some(1)
         );
@@ -2671,7 +2792,15 @@ mod tests {
                 &mut memory,
                 11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 8,
-                [0, 0, 0xfeed_face, 0, 2, 0, lock_overlapped],
+                [
+                    ACQUIRE_FILE_LOCK_STATE,
+                    RELEASE_FILE_LOCK_STATE,
+                    0xfeed_face,
+                    0,
+                    2,
+                    0,
+                    lock_overlapped,
+                ],
             ),
             Some(0)
         );

@@ -11625,6 +11625,8 @@ fn fsdmgr_file_lock_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     thread_id: u32,
+    acquire_file_lock_state: u32,
+    release_file_lock_state: u32,
     file_handle: u32,
     flags: u32,
     length_low: u32,
@@ -11632,6 +11634,14 @@ fn fsdmgr_file_lock_raw<M: CoredllGuestMemory>(
     overlapped_ptr: u32,
     lock: bool,
 ) -> bool {
+    if !fsdmgr_file_lock_callbacks_available(
+        kernel,
+        thread_id,
+        acquire_file_lock_state,
+        release_file_lock_state,
+    ) {
+        return false;
+    }
     file_lock_ex_raw(
         kernel,
         memory,
@@ -11645,7 +11655,21 @@ fn fsdmgr_file_lock_raw<M: CoredllGuestMemory>(
     )
 }
 
-fn fsdmgr_remove_file_lock_ex_raw(kernel: &mut CeKernel, thread_id: u32, file_handle: u32) -> bool {
+fn fsdmgr_remove_file_lock_ex_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    acquire_file_lock_state: u32,
+    release_file_lock_state: u32,
+    file_handle: u32,
+) -> bool {
+    if !fsdmgr_file_lock_callbacks_available(
+        kernel,
+        thread_id,
+        acquire_file_lock_state,
+        release_file_lock_state,
+    ) {
+        return false;
+    }
     match kernel.unlock_file_ranges_owned_by_handle(file_handle) {
         Ok(FileLockStatus::Success) => {
             kernel.threads.set_last_error(thread_id, 0);
@@ -11675,11 +11699,21 @@ fn fsdmgr_remove_file_lock_ex_raw(kernel: &mut CeKernel, thread_id: u32, file_ha
 fn fsdmgr_test_file_lock_raw(
     kernel: &mut CeKernel,
     thread_id: u32,
+    acquire_file_lock_state: u32,
+    release_file_lock_state: u32,
     file_handle: u32,
     read: bool,
     length_low: u32,
     explicit_offset: Option<(u32, u32)>,
 ) -> bool {
+    if !fsdmgr_file_lock_callbacks_available(
+        kernel,
+        thread_id,
+        acquire_file_lock_state,
+        release_file_lock_state,
+    ) {
+        return false;
+    }
     let start = match explicit_offset {
         Some((low, high)) => u64::from(low) | (u64::from(high) << 32),
         None => match kernel.file_cursor(file_handle) {
@@ -11716,6 +11750,21 @@ fn fsdmgr_test_file_lock_raw(
             false
         }
     }
+}
+
+fn fsdmgr_file_lock_callbacks_available(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    acquire_file_lock_state: u32,
+    release_file_lock_state: u32,
+) -> bool {
+    if acquire_file_lock_state == 0 || release_file_lock_state == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    true
 }
 
 fn fsdmgr_empty_lock_container_raw<M: CoredllGuestMemory>(
@@ -12490,6 +12539,8 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             kernel,
             memory,
             thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
             raw_arg(args, 3),
             raw_arg(args, 5),
@@ -12533,6 +12584,8 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             kernel,
             memory,
             thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
             0,
             raw_arg(args, 4),
@@ -12543,6 +12596,8 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         FsdmgrImport::FsdmgrRemoveFileLockEx => u32::from(fsdmgr_remove_file_lock_ex_raw(
             kernel,
             thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
         )),
         FsdmgrImport::FsdmgrResizeCache => {
@@ -12556,6 +12611,8 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         FsdmgrImport::FsdmgrTestFileLock => u32::from(fsdmgr_test_file_lock_raw(
             kernel,
             thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
             raw_arg(args, 3) != 0,
             raw_arg(args, 4),
@@ -12564,6 +12621,8 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         FsdmgrImport::FsdmgrTestFileLockEx => u32::from(fsdmgr_test_file_lock_raw(
             kernel,
             thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
             raw_arg(args, 3) != 0,
             raw_arg(args, 4),
