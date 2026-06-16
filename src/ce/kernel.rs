@@ -2423,15 +2423,39 @@ impl CeKernel {
                 "FSDMGR disk pointer 0x{disk_ptr:08x} is already registered"
             )));
         }
-        let (guest_root, created) =
-            self.files
-                .register_fsdmgr_mount_name(mount_name)
-                .map_err(|err| match err {
-                    Error::InvalidArgument(_) | Error::OutOfStructures(_) => err,
-                    other => Error::InvalidArgument(format!(
-                        "invalid FSDMGR mount name {mount_name}: {other}"
-                    )),
-                })?;
+        let existing_guest_root = self
+            .files
+            .existing_fsdmgr_mount_root(mount_name)
+            .map_err(|err| match err {
+                Error::InvalidArgument(_) => err,
+                other => Error::InvalidArgument(format!(
+                    "invalid FSDMGR mount name {mount_name}: {other}"
+                )),
+            })?
+            .filter(|guest_root| self.volume_handle_for_guest_root(guest_root).is_none());
+        let (guest_root, created) = if let Some(guest_root) = existing_guest_root {
+            (guest_root, false)
+        } else {
+            let base_guest_root = self
+                .files
+                .existing_fsdmgr_mount_root(mount_name)
+                .ok()
+                .flatten();
+            let (guest_root, created) =
+                self.files
+                    .register_fsdmgr_mount_name(mount_name)
+                    .map_err(|err| match err {
+                        Error::InvalidArgument(_) | Error::OutOfStructures(_) => err,
+                        other => Error::InvalidArgument(format!(
+                            "invalid FSDMGR mount name {mount_name}: {other}"
+                        )),
+                    })?;
+            if let Some(base_guest_root) = base_guest_root.as_deref() {
+                self.files
+                    .copy_mount_registry_profile(base_guest_root, &guest_root);
+            }
+            (guest_root, created)
+        };
         let handle = self.handles.insert(KernelObject::Volume(VolumeObject {
             owner_process_id: self.current_process_id,
             guest_root: guest_root.clone(),
@@ -2452,6 +2476,19 @@ impl CeKernel {
         Ok(handle)
     }
 
+    fn volume_handle_for_guest_root(&self, guest_root: &str) -> Option<u32> {
+        self.handles
+            .iter()
+            .find_map(|(handle, object)| match object {
+                KernelObject::Volume(volume)
+                    if volume.guest_root.eq_ignore_ascii_case(guest_root) =>
+                {
+                    Some(handle)
+                }
+                _ => None,
+            })
+    }
+
     pub fn fsdmgr_volume_handle_for_disk(&self, disk_ptr: u32) -> Option<u32> {
         if disk_ptr == 0 {
             return None;
@@ -2462,6 +2499,19 @@ impl CeKernel {
                 KernelObject::Volume(volume) if volume.disk_ptr == Some(disk_ptr) => Some(handle),
                 _ => None,
             })
+    }
+
+    pub fn fsdmgr_registry_value(&self, disk_ptr: u32, value_name: &str) -> Option<RegistryValue> {
+        let guest_root = self.handles.iter().find_map(|(_, object)| match object {
+            KernelObject::Volume(volume) if volume.disk_ptr == Some(disk_ptr) => {
+                Some(volume.guest_root.as_str())
+            }
+            _ => None,
+        })?;
+        self.files
+            .registry_paths_for_guest_root(guest_root)
+            .into_iter()
+            .find_map(|path| self.registry.query_value(&path, value_name).ok().cloned())
     }
 
     pub fn fsdmgr_async_enter_volume(&mut self, volume_handle: u32) -> Result<(u32, u32)> {

@@ -21,6 +21,11 @@ interface_classes = [
     "{A32942B7-920C-486b-B0E6-92A702A99B35}",
     "{8DD679CE-8AB4-43c8-A14A-EA4963FAA715}",
 ]
+registry_roots = [
+    "HKLM\\System\\StorageManager\\Profiles\\SDMemory",
+    "HKLM\\System\\StorageManager",
+]
+registry_subkey = "FATFS"
 
 [[mounts]]
 name = "resident_flash"

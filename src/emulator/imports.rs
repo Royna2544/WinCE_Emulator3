@@ -849,6 +849,7 @@ mod tests {
         ce::{
             coredll::CoredllGuestMemory,
             kernel::{CeKernel, DeviceInterfaceAdvertisement},
+            registry::RegistryValue,
         },
         config::{MountConfig, RuntimeConfig},
     };
@@ -1911,6 +1912,8 @@ mod tests {
             system: true,
             hidden: true,
             interface_classes: Vec::new(),
+            registry_roots: Vec::new(),
+            registry_subkey: None,
         });
         let volume = kernel
             .create_volume_handle_for_guest_root(r"\ResidentFlash")
@@ -3480,6 +3483,177 @@ mod tests {
         );
         assert_eq!(memory.word(dword_out_ptr), 0xfeed_cafe);
         assert_eq!(kernel.threads.get_last_error(11), ERROR_GEN_FAILURE);
+    }
+
+    #[test]
+    fn fsdmgr_registry_imports_read_configured_logical_disk_roots() {
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_RegisterVolume".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_GetRegistryValue".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Ordinal(19),
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_GetRegistryFlag".to_owned(),
+                    },
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        kernel.files.mount(MountConfig {
+            name: Some("Profiled Store".to_owned()),
+            device_name: Some("DSK9:".to_owned()),
+            guest_root: r"\Profiled Disk".to_owned(),
+            host_root: None,
+            total_mbytes: 128,
+            free_mbytes: 64,
+            writable: true,
+            removable: true,
+            system: false,
+            hidden: false,
+            interface_classes: Vec::new(),
+            registry_roots: vec![
+                r"HKLM\System\StorageManager\Profiles\Profiled".to_owned(),
+                r"HKLM\System\StorageManager".to_owned(),
+            ],
+            registry_subkey: Some("FATFS".to_owned()),
+        });
+        kernel.registry.set_value(
+            r"HKLM\System\StorageManager\Profiles\Profiled\FATFS",
+            "CacheDll",
+            RegistryValue::string("profilecache.dll"),
+        );
+        kernel.registry.set_value(
+            r"HKLM\System\StorageManager\Profiles\Profiled\FATFS",
+            "EnableFileCache",
+            RegistryValue::dword(1),
+        );
+        kernel.registry.set_value(
+            r"HKLM\System\StorageManager\Profiles\Profiled\FATFS",
+            "LockIOBuffers",
+            RegistryValue::dword(0),
+        );
+        kernel.registry.set_value(
+            r"HKLM\System\StorageManager\FATFS",
+            "FallbackValue",
+            RegistryValue::dword(0x1234_5678),
+        );
+
+        let mut memory = TestMemory::default();
+        let disk_ptr = 0x1000_6000;
+        let mount_name_ptr = 0x1000_6800;
+        let value_name_ptr = 0x1000_7000;
+        let dword_out_ptr = 0x1000_8000;
+        let string_out_ptr = 0x1000_9000;
+        let flag_out_ptr = 0x1000_a000;
+        memory.map_wide_z(mount_name_ptr, r"\Profiled Disk");
+        memory.map_word(dword_out_ptr, 0);
+        memory.map_wide_buffer(string_out_ptr, 32);
+        memory.map_word(flag_out_ptr, 0x0000_00f0);
+
+        let volume = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [disk_ptr, mount_name_ptr, 0x0bad_f00d],
+            )
+            .unwrap();
+        assert_ne!(volume, 0);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        memory.map_wide_z(value_name_ptr, "FallbackValue");
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_ptr, value_name_ptr, dword_out_ptr],
+            ),
+            Some(1)
+        );
+        assert_eq!(memory.word(dword_out_ptr), 0x1234_5678);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        memory.map_wide_z(value_name_ptr, "CacheDll");
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [disk_ptr, value_name_ptr, string_out_ptr, 32],
+            ),
+            Some(1)
+        );
+        assert_eq!(memory.read_wide_z(string_out_ptr, 32), "profilecache.dll");
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        memory.map_wide_z(value_name_ptr, "EnableFileCache");
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+                [disk_ptr, value_name_ptr, flag_out_ptr, 0x0000_0008],
+            ),
+            Some(1)
+        );
+        assert_eq!(memory.word(flag_out_ptr), 0x0000_00f8);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        memory.map_wide_z(value_name_ptr, "LockIOBuffers");
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+                [disk_ptr, value_name_ptr, flag_out_ptr, 0x0000_0008],
+            ),
+            Some(1)
+        );
+        assert_eq!(memory.word(flag_out_ptr), 0x0000_00f0);
+        assert_eq!(kernel.threads.get_last_error(11), 0);
     }
 
     #[test]

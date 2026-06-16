@@ -62,6 +62,8 @@ pub struct FileMount {
     pub system: bool,
     pub hidden: bool,
     pub interface_classes: Vec<String>,
+    pub registry_roots: Vec<String>,
+    pub registry_subkey: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,22 +395,13 @@ impl HostFileSystem {
             system: false,
             hidden: false,
             interface_classes: Vec::new(),
+            registry_roots: Vec::new(),
+            registry_subkey: None,
         });
     }
 
     pub fn register_fsdmgr_mount_name(&mut self, mount_name: &str) -> Result<(String, bool)> {
-        let mut mount_name = mount_name.trim();
-        while mount_name.starts_with('\\') || mount_name.starts_with('/') {
-            mount_name = &mount_name[1..];
-        }
-        mount_name = mount_name.trim_matches(['\\', '/']);
-        if mount_name.is_empty() {
-            return Err(Error::InvalidArgument("empty FSDMGR mount name".to_owned()));
-        }
-        let normalized_base = normalize_guest_path(mount_name);
-        if normalized_base.is_empty() {
-            return Err(Error::InvalidArgument("empty FSDMGR mount name".to_owned()));
-        }
+        let normalized_base = normalize_fsdmgr_mount_name(mount_name)?;
         for suffix in 1..=9 {
             let candidate = if suffix == 1 {
                 normalized_base.clone()
@@ -431,12 +424,60 @@ impl HostFileSystem {
                 system: false,
                 hidden: false,
                 interface_classes: Vec::new(),
+                registry_roots: Vec::new(),
+                registry_subkey: None,
             });
             return Ok((guest_root, true));
         }
         Err(Error::OutOfStructures(format!(
             "no FSDMGR mount-name slots left for {mount_name}"
         )))
+    }
+
+    pub fn existing_fsdmgr_mount_root(&self, mount_name: &str) -> Result<Option<String>> {
+        let normalized_base = normalize_fsdmgr_mount_name(mount_name)?;
+        if normalized_base.is_empty() {
+            return Err(Error::InvalidArgument("empty FSDMGR mount name".to_owned()));
+        }
+        Ok(self
+            .mounts
+            .contains_key(&normalized_base)
+            .then(|| format!("\\{}", normalized_base.replace('/', "\\"))))
+    }
+
+    pub fn registry_paths_for_guest_root(&self, guest_root: &str) -> Vec<String> {
+        let guest_root = normalize_guest_path(guest_root);
+        let Some(mount) = self.mounts.get(&guest_root) else {
+            return Vec::new();
+        };
+        mount
+            .registry_roots
+            .iter()
+            .filter(|root| !root.trim().is_empty())
+            .map(|root| match mount.registry_subkey.as_deref() {
+                Some(subkey) if !subkey.trim().is_empty() => {
+                    format!(
+                        "{}\\{}",
+                        root.trim_end_matches('\\'),
+                        subkey.trim_matches('\\')
+                    )
+                }
+                _ => root.trim_end_matches('\\').to_owned(),
+            })
+            .collect()
+    }
+
+    pub fn copy_mount_registry_profile(&mut self, source_root: &str, target_root: &str) {
+        let source_root = normalize_guest_path(source_root);
+        let target_root = normalize_guest_path(target_root);
+        let Some(source) = self.mounts.get(&source_root).cloned() else {
+            return;
+        };
+        let Some(target) = self.mounts.get_mut(&target_root) else {
+            return;
+        };
+        target.registry_roots = source.registry_roots;
+        target.registry_subkey = source.registry_subkey;
     }
 
     pub fn unmount_guest_root(&mut self, guest_root: &str) -> Option<FileMount> {
@@ -480,6 +521,8 @@ impl HostFileSystem {
                 system: mount.system,
                 hidden: mount.hidden,
                 interface_classes: mount.interface_classes,
+                registry_roots: mount.registry_roots,
+                registry_subkey: mount.registry_subkey,
             },
         );
     }
@@ -1656,6 +1699,22 @@ fn normalize_guest_path(guest_path: &str) -> String {
         .to_owned()
 }
 
+fn normalize_fsdmgr_mount_name(mount_name: &str) -> Result<String> {
+    let mut mount_name = mount_name.trim();
+    while mount_name.starts_with('\\') || mount_name.starts_with('/') {
+        mount_name = &mount_name[1..];
+    }
+    mount_name = mount_name.trim_matches(['\\', '/']);
+    if mount_name.is_empty() {
+        return Err(Error::InvalidArgument("empty FSDMGR mount name".to_owned()));
+    }
+    let normalized = normalize_guest_path(mount_name);
+    if normalized.is_empty() {
+        return Err(Error::InvalidArgument("empty FSDMGR mount name".to_owned()));
+    }
+    Ok(normalized)
+}
+
 fn is_root_relative_path(guest_path: &str) -> bool {
     guest_path
         .trim_start()
@@ -1957,6 +2016,8 @@ mod tests {
             system: false,
             hidden: false,
             interface_classes: Vec::new(),
+            registry_roots: Vec::new(),
+            registry_subkey: None,
         });
         fs.mount(MountConfig {
             name: Some("resident_flash".to_owned()),
@@ -1970,6 +2031,8 @@ mod tests {
             system: false,
             hidden: false,
             interface_classes: Vec::new(),
+            registry_roots: Vec::new(),
+            registry_subkey: None,
         });
         let (_id, data) = fs.find_first_file_w("\\").unwrap();
         assert_eq!(
@@ -2265,6 +2328,8 @@ mod tests {
             system: true,
             hidden: false,
             interface_classes: Vec::new(),
+            registry_roots: Vec::new(),
+            registry_subkey: None,
         });
 
         let (_id, data) = fs.find_first_file_w("\\Windows").unwrap();
@@ -2317,6 +2382,8 @@ mod tests {
             system: false,
             hidden: false,
             interface_classes: Vec::new(),
+            registry_roots: Vec::new(),
+            registry_subkey: None,
         });
         let id = fs
             .create_file_w("\\SDMMC Disk\\which.txt", GENERIC_READ, OPEN_EXISTING)

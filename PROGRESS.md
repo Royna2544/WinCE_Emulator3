@@ -94,8 +94,9 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct `fsdmgr.dll`
   `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
   `FSDMGR_GetRegistryValue @20` imports now patch through the normal import
-  trap table and fail closed with CE-style missing-registry output clearing
-  instead of leaving stale caller buffers behind.
+  trap table, fail closed with CE-style missing-registry output clearing
+  instead of leaving stale caller buffers behind, and read configured
+  logical-disk root/subkey profile values for DWORD, string, and flag queries.
 - `src/ce/coredll.rs`, `tests/coredll_raw_memory_file.rs`, and
   `SOURCE_REFERENCES.md`: raw `DPA_EnumCallback`/`DSA_EnumCallback` now treat a
   null callback as a successful no-op instead of a raw unsupported callback

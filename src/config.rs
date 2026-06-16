@@ -53,6 +53,8 @@ pub struct MountConfig {
     pub system: bool,
     pub hidden: bool,
     pub interface_classes: Vec<String>,
+    pub registry_roots: Vec<String>,
+    pub registry_subkey: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +84,9 @@ struct MountToml {
     hidden: Option<bool>,
     #[serde(default)]
     interface_classes: Vec<String>,
+    #[serde(default)]
+    registry_roots: Vec<String>,
+    registry_subkey: Option<String>,
 }
 
 impl RuntimeConfig {
@@ -196,6 +201,8 @@ impl MountConfig {
             system: raw.system.unwrap_or(false),
             hidden: raw.hidden.unwrap_or(false),
             interface_classes: raw.interface_classes,
+            registry_roots: raw.registry_roots,
+            registry_subkey: raw.registry_subkey,
         })
     }
 
@@ -296,6 +303,11 @@ removable = true
 system = false
 hidden = false
 interface_classes = ["{A32942B7-920C-486b-B0E6-92A702A99B35}"]
+registry_roots = [
+    "HKLM\\System\\StorageManager\\Profiles\\SDMemory",
+    "HKLM\\System\\StorageManager",
+]
+registry_subkey = "FATFS"
 
 [[mounts]]
 name = "windows"
@@ -330,6 +342,14 @@ writable = true
             storage.mounts[0].interface_classes,
             vec!["{A32942B7-920C-486b-B0E6-92A702A99B35}".to_owned()]
         );
+        assert_eq!(
+            storage.mounts[0].registry_roots,
+            vec![
+                r"HKLM\System\StorageManager\Profiles\SDMemory".to_owned(),
+                r"HKLM\System\StorageManager".to_owned()
+            ]
+        );
+        assert_eq!(storage.mounts[0].registry_subkey.as_deref(), Some("FATFS"));
         assert!(storage.mounts[0].writable);
         assert!(storage.mounts[0].removable);
         assert!(!storage.mounts[0].system);

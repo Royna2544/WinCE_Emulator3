@@ -3144,6 +3144,8 @@ fn object_store_config_and_mount_config_total_and_free_bytes_convert_mbytes() {
         system: false,
         hidden: false,
         interface_classes: Vec::new(),
+        registry_roots: Vec::new(),
+        registry_subkey: None,
     };
     assert_eq!(mount.total_bytes(), 1024 * 1024);
     assert_eq!(mount.free_bytes(), 0);
@@ -3169,6 +3171,8 @@ fn kernel_boot_publishes_mount_iclass_interfaces_and_unmount_removes_them() -> R
             "{A4E7EDDA-E575-4252-9D6B-4195D48BB865}".to_owned(),
             "not-a-guid".to_owned(),
         ],
+        registry_roots: Vec::new(),
+        registry_subkey: None,
     });
 
     let mut kernel = CeKernel::boot(config);
@@ -3229,6 +3233,8 @@ fn mount_iclass_entries_parse_explicit_and_namespace_names() -> Result<()> {
             format!("{BLOCK_GUID_TEXT}=%b"),
             "not-a-guid=\\Ignored".to_owned(),
         ],
+        registry_roots: Vec::new(),
+        registry_subkey: None,
     });
 
     let mut kernel = CeKernel::boot(config);
@@ -3291,6 +3297,8 @@ fn mount_iclass_duplicate_advertisements_are_owner_scoped() -> Result<()> {
             system: false,
             hidden: false,
             interface_classes: vec![BLOCK_GUID_TEXT.to_owned()],
+            registry_roots: Vec::new(),
+            registry_subkey: None,
         });
     }
 

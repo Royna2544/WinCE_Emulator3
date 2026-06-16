@@ -23,9 +23,10 @@ Regenerated on 2026-06-11 from current source and test coverage.
 - Unicorn now parks blocking `ReadMsgQueue`/`WriteMsgQueue` imports on message-queue readiness and replays the original coredll import on wake or timeout. Continue live validation that device-notification consumers drain startup events in CE order, and keep true per-device `fsdev_t` scoping as the remaining message-queue/interface gap.
 - Storage now also covers direct CE `FSDMGR_GetRegistryFlag @18`,
   `FSDMGR_GetRegistryString @19`, and `FSDMGR_GetRegistryValue @20` imports
-  with missing-registry output clearing; remaining registry work is loading real
-  logical-disk root values and forwarding utility/cache/filter DLL metadata from
-  the mounted storage profile.
+  with missing-registry output clearing plus configured logical-disk
+  root/subkey lookup for mounted profiles; remaining registry-adjacent work is
+  executing utility DLLs and loading/forwarding cache/filter DLL behavior from
+  mounted storage metadata.
 - Storage now also covers direct CE `FSDMGR_AsyncEnterVolume @80` and `FSDMGR_AsyncExitVolume @81` imports for registered HVOLs with distinct one-shot lock-token output, mismatched/duplicate/stale exit rejection, output-copy cleanup, and invalid-parameter/removed-device failures; remaining async-volume work is CE mounted-volume availability, powerdown, and thread-exit wait reference behavior.
 - Storage now also covers direct CE `FSDMGR_ParseSecurityDescriptor @82` for null security attributes, kernel-mode descriptor pointer validation, private `SECDESHDR.cbSize` reporting, and coredll/AFS `GetFileSecurityW`/`SetFileSecurityW` no-security-manager path routing; remaining file-security work is broader ACL storage/enforcement.
 - Continue narrowing `CeGetFileNotificationInfo` reset/error propagation beyond the covered prefix drains, no-more-items, undersized buffers, pending no-fit output-count write order, fitted-record count-pointer fault drain, partial caller-buffer fault copied-prefix drain, no-pending null-returned pointer order, all-zero no-data reset, null-buffer guarded writes, and trailing-NUL record sizing.

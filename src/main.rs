@@ -387,6 +387,14 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
+        if cpu.complete_active_process_thread_exit_with_framebuffer(
+            kernel,
+            Some(desktop.framebuffer_mut()),
+        ) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
             continue;
@@ -741,6 +749,14 @@ fn run_cpu_loop(
                 print_unicorn_stop(snapshot);
             }
             break;
+        }
+        if cpu.complete_active_process_thread_exit_with_framebuffer(
+            kernel,
+            Some(desktop.framebuffer_mut()),
+        ) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
         }
         if switch_completed_active_context(cpu, kernel) {
             reported_blocked_message_wait = false;

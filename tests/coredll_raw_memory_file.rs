@@ -3688,6 +3688,8 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
         system: true,
         hidden: false,
         interface_classes: Vec::new(),
+        registry_roots: Vec::new(),
+        registry_subkey: None,
     });
     kernel.files.mount(MountConfig {
         name: Some("HiddenStore".to_owned()),
@@ -3701,6 +3703,8 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
         system: false,
         hidden: true,
         interface_classes: Vec::new(),
+        registry_roots: Vec::new(),
+        registry_subkey: None,
     });
 
     let mut memory = TestGuestMemory::default();
@@ -3915,6 +3919,8 @@ fn coredll_raw_system_and_hidden_mounts_follow_fsdmgr_attributes() -> Result<()>
         system: false,
         hidden: false,
         interface_classes: Vec::new(),
+        registry_roots: Vec::new(),
+        registry_subkey: None,
     });
 
     memory.write_wide_z(path_ptr, r"\ReadOnlyCard");
@@ -4731,6 +4737,8 @@ fn coredll_raw_cross_volume_move_from_readonly_source_copies_without_delete() ->
         system: false,
         hidden: false,
         interface_classes: Vec::new(),
+        registry_roots: Vec::new(),
+        registry_subkey: None,
     });
 
     let mut memory = TestGuestMemory::default();
@@ -4956,6 +4964,8 @@ fn coredll_raw_readonly_mount_reports_access_denied_for_mutations() -> Result<()
         system: false,
         hidden: false,
         interface_classes: Vec::new(),
+        registry_roots: Vec::new(),
+        registry_subkey: None,
     });
 
     let mut memory = TestGuestMemory::default();

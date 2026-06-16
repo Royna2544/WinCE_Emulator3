@@ -1845,6 +1845,15 @@ impl UnicornMips {
     }
 
     #[cfg(not(feature = "unicorn"))]
+    pub fn complete_active_process_thread_exit_with_framebuffer(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        false
+    }
+
+    #[cfg(not(feature = "unicorn"))]
     pub fn prepare_active_orphaned_visible_message_callout(
         &mut self,
         _kernel: &mut CeKernel,
@@ -3220,6 +3229,15 @@ impl UnicornMips {
             }
         }
         self.parked_child_processes = kept;
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn complete_active_process_thread_exit_with_framebuffer(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        self.complete_active_process_thread_exit(kernel, framebuffer)
     }
 
     #[cfg(feature = "unicorn")]

@@ -3097,6 +3097,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     DWORD outputs to zero, clears missing strings to empty, and leaves flag
     words unchanged when the backing DWORD is absent; `fsdhelper.cpp` accepts
     only `REG_DWORD` for values and `REG_SZ`/`REG_MULTI_SZ` for strings.
+    The emulator now models that root/subkey search for configured mounted
+    profiles via `mounts.toml` `registry_roots` and `registry_subkey`, including
+    first registration of an unused configured mount before falling back to CE
+    suffix allocation for duplicate mount names.
     `fsdmgrapi.cpp::FSDMGR_AsyncEnterVolume` resolves the `HVOL` with
     `LockAPIHandle`, returns `ERROR_DEVICE_REMOVED` when the volume cannot be
     locked, copies the acquired lock handle and mounted-volume pointer to the

@@ -11862,13 +11862,16 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
+            raw_arg(args, 3),
         )),
         FsdmgrImport::FsdmgrGetRegistryString => u32::from(fsdmgr_get_registry_string_raw(
             kernel,
             memory,
             thread_id,
             raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
             raw_arg(args, 3),
         )),
@@ -11877,6 +11880,7 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
         )),
         FsdmgrImport::FsdmgrGetVolumeHandle => {
@@ -12963,14 +12967,26 @@ fn fsdmgr_get_registry_value_raw<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     disk_ptr: u32,
+    value_name_ptr: u32,
     value_out_ptr: u32,
 ) -> bool {
     let status = if disk_ptr == 0 {
         ERROR_GEN_FAILURE
     } else if value_out_ptr == 0 || memory.write_u32(value_out_ptr, 0).is_err() {
         ERROR_GEN_FAILURE
+    } else if let Some(value_name) = fsdmgr_registry_value_name(memory, value_name_ptr) {
+        match kernel
+            .fsdmgr_registry_value(disk_ptr, &value_name)
+            .and_then(|value| value.as_dword())
+        {
+            Some(value) => match memory.write_u32(value_out_ptr, value) {
+                Ok(()) => 0,
+                Err(_) => ERROR_GEN_FAILURE,
+            },
+            None => ERROR_FILE_NOT_FOUND,
+        }
     } else {
-        ERROR_FILE_NOT_FOUND
+        ERROR_GEN_FAILURE
     };
     kernel.threads.set_last_error(thread_id, status);
     status == 0
@@ -12981,18 +12997,33 @@ fn fsdmgr_get_registry_string_raw<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     disk_ptr: u32,
+    value_name_ptr: u32,
     value_out_ptr: u32,
     value_chars: u32,
 ) -> bool {
     let status = if disk_ptr == 0 {
         ERROR_GEN_FAILURE
-    } else if value_out_ptr != 0 && value_chars != 0 {
-        match memory.write_u16(value_out_ptr, 0) {
-            Ok(()) => ERROR_FILE_NOT_FOUND,
-            Err(_) => ERROR_GEN_FAILURE,
+    } else if value_out_ptr != 0 && value_chars != 0 && memory.write_u16(value_out_ptr, 0).is_err()
+    {
+        ERROR_GEN_FAILURE
+    } else if let Some(value_name) = fsdmgr_registry_value_name(memory, value_name_ptr) {
+        match kernel
+            .fsdmgr_registry_value(disk_ptr, &value_name)
+            .and_then(|value| fsdmgr_registry_string_units(&value))
+        {
+            Some(units) if units.len() <= value_chars as usize => {
+                match fsdmgr_write_registry_string_units(memory, value_out_ptr, &units) {
+                    Ok(()) => 0,
+                    Err(_) => ERROR_GEN_FAILURE,
+                }
+            }
+            Some(_) | None => {
+                let _ = memory.write_u16(value_out_ptr, 0);
+                ERROR_FILE_NOT_FOUND
+            }
         }
     } else {
-        ERROR_FILE_NOT_FOUND
+        ERROR_GEN_FAILURE
     };
     kernel.threads.set_last_error(thread_id, status);
     status == 0
@@ -13000,18 +13031,87 @@ fn fsdmgr_get_registry_string_raw<M: CoredllGuestMemory>(
 
 fn fsdmgr_get_registry_flag_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    _memory: &mut M,
+    memory: &mut M,
     thread_id: u32,
     disk_ptr: u32,
-    _flag_ptr: u32,
+    value_name_ptr: u32,
+    flag_ptr: u32,
+    set_bit: u32,
 ) -> bool {
     let status = if disk_ptr == 0 {
         ERROR_GEN_FAILURE
+    } else if flag_ptr == 0 {
+        ERROR_GEN_FAILURE
+    } else if let Some(value_name) = fsdmgr_registry_value_name(memory, value_name_ptr) {
+        match kernel
+            .fsdmgr_registry_value(disk_ptr, &value_name)
+            .and_then(|value| value.as_dword())
+        {
+            Some(value) => match memory.read_u32(flag_ptr) {
+                Ok(flag) => {
+                    let new_flag = if value != 0 {
+                        flag | set_bit
+                    } else {
+                        flag & !set_bit
+                    };
+                    match memory.write_u32(flag_ptr, new_flag) {
+                        Ok(()) => 0,
+                        Err(_) => ERROR_GEN_FAILURE,
+                    }
+                }
+                Err(_) => ERROR_GEN_FAILURE,
+            },
+            None => ERROR_FILE_NOT_FOUND,
+        }
     } else {
-        ERROR_FILE_NOT_FOUND
+        ERROR_GEN_FAILURE
     };
     kernel.threads.set_last_error(thread_id, status);
     status == 0
+}
+
+fn fsdmgr_registry_value_name<M: CoredllGuestMemory>(
+    memory: &M,
+    value_name_ptr: u32,
+) -> Option<String> {
+    if value_name_ptr == 0 {
+        Some(String::new())
+    } else {
+        read_guest_wide_arg(memory, value_name_ptr)
+    }
+}
+
+fn fsdmgr_registry_string_units(value: &crate::ce::registry::RegistryValue) -> Option<Vec<u16>> {
+    match (&value.ty, &value.data) {
+        (
+            crate::ce::registry::RegistryType::RegSz,
+            crate::ce::registry::RegistryData::String(text),
+        ) => Some(text.encode_utf16().chain(std::iter::once(0)).collect()),
+        (
+            crate::ce::registry::RegistryType::RegMultiSz,
+            crate::ce::registry::RegistryData::MultiString(values),
+        ) => {
+            let mut units = Vec::new();
+            for value in values {
+                units.extend(value.encode_utf16());
+                units.push(0);
+            }
+            units.push(0);
+            Some(units)
+        }
+        _ => None,
+    }
+}
+
+fn fsdmgr_write_registry_string_units<M: CoredllGuestMemory>(
+    memory: &mut M,
+    value_out_ptr: u32,
+    units: &[u16],
+) -> std::result::Result<(), Error> {
+    for (index, unit) in units.iter().copied().enumerate() {
+        memory.write_u16(value_out_ptr + (index as u32 * 2), unit)?;
+    }
+    Ok(())
 }
 
 fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
