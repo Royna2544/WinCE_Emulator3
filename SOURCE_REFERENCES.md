@@ -510,6 +510,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     caller buffer before scanning the reserved table, returning an empty table
     size when no reserved table exists, a DWORD raw block size, and flash
     type/base/region/reserved-count metadata.
+    `C:\WINCE600\PUBLIC\COMMON\OAK\INC\fls.h` defines `FlashRegion` as seven
+    DWORD fields, and the DeviceEmulator SmartMedia FMD's disabled
+    `IOCTL_FMD_SET_REGION_TABLE` branch validates an exact
+    `g_dwNumRegions * sizeof(FlashRegion)` input table before copying it into
+    the cached region table and flash-layout-sector region area.
     v3 now traps the direct ordinals, persists
     direct/cache/Ex writes in sparse synthetic 512-byte sectors, reads unwritten
     sectors as zero-filled data, writes synthetic `DISK_INFO`, handles both
@@ -530,7 +535,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     flush-cache as successful basic disk IOCTLs, and now exposes synthetic XIP
     mode, block-lock ranges, sector-size state, raw block writes into sparse
     disk backing, CE `ReservedReq` validation against the empty reserved table,
-    raw-block-size, and deterministic NOR-style `FMDInfo` metadata for the FMD
+    `FlashRegion` table validation/storage, raw-block-size, and deterministic
+    NOR-style `FMDInfo` metadata with the stored region count for the FMD
     controls.
     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`
     defines `FSCTL_COPY_EXTERNAL_START`, `FSCTL_COPY_EXTERNAL_COMPLETE`, and
@@ -588,7 +594,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for
     refresh/flush no-ops and host-backed unsupported-FSCTL no-touch failure.
     Remaining storage fidelity is physical block-driver backing, external
-    cache/filter DLL behavior, remaining hardware-flash/FMD interface/actual reserved-region storage/region-table and specialized disk IOCTLs, real FATFS
+    cache/filter DLL behavior, remaining hardware-flash/FMD interface/actual reserved-region storage/FLS region-table forwarding and specialized disk IOCTLs, real FATFS
     volume format/scan execution, real static sector address mapping, real
     external-copy accelerator behavior, hardware flash secure-wipe resume
     behavior, hardware power-state timing, and
@@ -3329,7 +3335,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     copy-external-start/complete `DISK_COPY_EXTERNAL` validation/unsupported
     no-touch behavior, file-handle `FSCTL_SET_FILE_CACHE` disable-only
     validation/no-op behavior, and the CE null-cache fallback ID/status behavior
-    for FSDMGR cache imports. Physical block-driver backing, remaining hardware-flash/FMD interface/actual reserved-region storage/region-table and disk IOCTL
+    for FSDMGR cache imports. Physical block-driver backing, remaining hardware-flash/FMD interface/actual reserved-region storage/FLS region-table forwarding and disk IOCTL
     forwarding, real cache DLL/filter behavior, real CE mounted-volume
     availability, powerdown, and thread-exit
     wait reference behavior, broader file-security ACL storage and

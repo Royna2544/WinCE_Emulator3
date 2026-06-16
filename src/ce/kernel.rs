@@ -241,6 +241,7 @@ pub struct CeKernel {
     fsdmgr_fmd_xip_modes: BTreeMap<u32, bool>,
     fsdmgr_fmd_block_locks: BTreeMap<u32, Vec<FsdmgrFmdBlockLockRange>>,
     fsdmgr_fmd_sector_sizes: BTreeMap<u32, u32>,
+    fsdmgr_fmd_region_tables: BTreeMap<u32, Vec<[u32; 7]>>,
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
     next_fsdmgr_volume_lock: u32,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -993,6 +994,7 @@ impl CeKernel {
             fsdmgr_fmd_xip_modes: BTreeMap::new(),
             fsdmgr_fmd_block_locks: BTreeMap::new(),
             fsdmgr_fmd_sector_sizes: BTreeMap::new(),
+            fsdmgr_fmd_region_tables: BTreeMap::new(),
             fsdmgr_volume_locks: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             modal_dialog_results: BTreeMap::new(),
@@ -2896,6 +2898,24 @@ impl CeKernel {
                 .get(&disk_ptr)
                 .copied()
                 .unwrap_or(FSDMGR_SYNTHETIC_DISK_SECTOR_SIZE),
+        )
+    }
+
+    pub fn fsdmgr_set_fmd_region_table(&mut self, disk_ptr: u32, regions: Vec<[u32; 7]>) -> u32 {
+        if self.fsdmgr_disk_info(disk_ptr).is_none() {
+            return ERROR_INVALID_PARAMETER;
+        }
+        self.fsdmgr_fmd_region_tables.insert(disk_ptr, regions);
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_fmd_region_count(&self, disk_ptr: u32) -> Option<u32> {
+        self.fsdmgr_disk_info(disk_ptr)?;
+        Some(
+            self.fsdmgr_fmd_region_tables
+                .get(&disk_ptr)
+                .map(|regions| regions.len() as u32)
+                .unwrap_or(0),
         )
     }
 

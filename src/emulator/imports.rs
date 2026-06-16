@@ -2443,6 +2443,7 @@ mod tests {
         const IOCTL_FMD_READ_RESERVED: u32 = 0x0007_1f94;
         const IOCTL_FMD_WRITE_RESERVED: u32 = 0x0007_1f98;
         const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
+        const IOCTL_FMD_SET_REGION_TABLE: u32 = 0x0007_1fa0;
         const IOCTL_FMD_SET_SECTORSIZE: u32 = 0x0007_1fa4;
         const IOCTL_FMD_RAW_WRITE_BLOCKS: u32 = 0x0007_1fa8;
         const IOCTL_FMD_GET_RAW_BLOCK_SIZE: u32 = 0x0007_1fac;
@@ -2511,6 +2512,7 @@ mod tests {
         let fmd_raw_write_buffer_ptr = 0x1001_a000;
         let fmd_reserved_req_ptr = 0x1001_b000;
         let fmd_reserved_buffer_ptr = 0x1001_c000;
+        let fmd_region_table_ptr = 0x1001_d000;
 
         let mut sector_bytes = vec![0; 512];
         sector_bytes[..17].copy_from_slice(b"direct-disk-write");
@@ -3217,6 +3219,60 @@ mod tests {
         memory.read_bytes(read_sector_ptr, &mut read_back).unwrap();
         assert!(read_back.iter().all(|byte| *byte == 0));
 
+        for (index, value) in [0, 0, 8, 8, 4, 1024, 1, 2, 8, 8, 8, 4, 1024, 0]
+            .into_iter()
+            .enumerate()
+        {
+            memory.map_word(fmd_region_table_ptr + (index as u32 * 4), value);
+        }
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_SET_REGION_TABLE,
+                    fmd_region_table_ptr,
+                    55,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+        assert_eq!(kernel.fsdmgr_fmd_region_count(disk_ptr), Some(0));
+
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_SET_REGION_TABLE,
+                    fmd_region_table_ptr,
+                    56,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.word(bytes_returned_ptr), 56);
+        assert_eq!(kernel.fsdmgr_fmd_region_count(disk_ptr), Some(2));
+
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
         assert_eq!(
             table.dispatch_trap(
@@ -3267,7 +3323,7 @@ mod tests {
         assert_eq!(memory.word(fmd_info_ptr), 0xfeed_cafe);
         assert_eq!(memory.word(fmd_info_ptr + 4), 1);
         assert_eq!(memory.word(fmd_info_ptr + 8), 0);
-        assert_eq!(memory.word(fmd_info_ptr + 12), 0);
+        assert_eq!(memory.word(fmd_info_ptr + 12), 2);
         assert_eq!(memory.word(fmd_info_ptr + 16), 0);
         assert_eq!(memory.word(bytes_returned_ptr), 20);
 

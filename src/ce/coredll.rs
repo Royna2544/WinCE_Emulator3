@@ -149,6 +149,7 @@ const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
 const IOCTL_FMD_READ_RESERVED: u32 = 0x0007_1f94;
 const IOCTL_FMD_WRITE_RESERVED: u32 = 0x0007_1f98;
 const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
+const IOCTL_FMD_SET_REGION_TABLE: u32 = 0x0007_1fa0;
 const IOCTL_FMD_SET_SECTORSIZE: u32 = 0x0007_1fa4;
 const IOCTL_FMD_RAW_WRITE_BLOCKS: u32 = 0x0007_1fa8;
 const IOCTL_FMD_GET_RAW_BLOCK_SIZE: u32 = 0x0007_1fac;
@@ -156,6 +157,7 @@ const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
 const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+const FMD_FLASH_REGION_SIZE: u32 = 28;
 const FMD_RESERVED_NAME_LEN: u32 = 8;
 const FMD_RESERVED_REQ_SIZE: u32 = 20;
 const FMD_RAW_WRITE_BLOCKS_REQ_SIZE: u32 = 16;
@@ -13574,6 +13576,15 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
         IOCTL_FMD_WRITE_RESERVED => fsdmgr_fmd_reserved_request_raw(
             kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, false,
         ),
+        IOCTL_FMD_SET_REGION_TABLE => fsdmgr_fmd_set_region_table_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            in_ptr,
+            in_bytes,
+            bytes_returned_ptr,
+        ),
         IOCTL_FMD_GET_RESERVED_TABLE => fsdmgr_fmd_get_reserved_table_raw(
             kernel,
             memory,
@@ -13905,6 +13916,69 @@ fn fsdmgr_fmd_reserved_request_raw<M: CoredllGuestMemory>(
     false
 }
 
+fn fsdmgr_fmd_set_region_table_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    table_ptr: u32,
+    table_bytes: u32,
+    bytes_returned_ptr: u32,
+) -> bool {
+    if kernel.fsdmgr_disk_info(disk_ptr).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if table_ptr == 0 || table_bytes % FMD_FLASH_REGION_SIZE != 0 {
+        let _ = if bytes_returned_ptr != 0 {
+            memory.write_u32(bytes_returned_ptr, 0)
+        } else {
+            Ok(())
+        };
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let region_count = table_bytes / FMD_FLASH_REGION_SIZE;
+    let mut regions = Vec::with_capacity(region_count as usize);
+    for region_index in 0..region_count {
+        let region_ptr = table_ptr.wrapping_add(region_index * FMD_FLASH_REGION_SIZE);
+        let mut region = [0; 7];
+        for field_index in 0..7 {
+            let field_ptr = region_ptr.wrapping_add(field_index * 4);
+            let Ok(value) = memory.read_u32(field_ptr) else {
+                let _ = if bytes_returned_ptr != 0 {
+                    memory.write_u32(bytes_returned_ptr, 0)
+                } else {
+                    Ok(())
+                };
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            };
+            region[field_index as usize] = value;
+        }
+        regions.push(region);
+    }
+    let status = kernel.fsdmgr_set_fmd_region_table(disk_ptr, regions);
+    if status != 0 {
+        kernel.threads.set_last_error(thread_id, status);
+        return false;
+    }
+    if bytes_returned_ptr != 0 && memory.write_u32(bytes_returned_ptr, table_bytes).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn fsdmgr_fmd_set_xip_mode_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -14132,12 +14206,12 @@ fn fsdmgr_fmd_get_info_raw<M: CoredllGuestMemory>(
     info_bytes: u32,
     bytes_returned_ptr: u32,
 ) -> bool {
-    if kernel.fsdmgr_disk_info(disk_ptr).is_none() {
+    let Some(region_count) = kernel.fsdmgr_fmd_region_count(disk_ptr) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
-    }
+    };
     if info_ptr == 0 || info_bytes < FMD_INFO_SIZE {
         kernel
             .threads
@@ -14149,7 +14223,9 @@ fn fsdmgr_fmd_get_info_raw<M: CoredllGuestMemory>(
         .write_u32(info_ptr.wrapping_add(4), FLASH_TYPE_NOR)
         .is_err()
         || memory.write_u32(info_ptr.wrapping_add(8), 0).is_err()
-        || memory.write_u32(info_ptr.wrapping_add(12), 0).is_err()
+        || memory
+            .write_u32(info_ptr.wrapping_add(12), region_count)
+            .is_err()
         || memory.write_u32(info_ptr.wrapping_add(16), 0).is_err()
         || (bytes_returned_ptr != 0 && memory.write_u32(bytes_returned_ptr, FMD_INFO_SIZE).is_err())
     {
