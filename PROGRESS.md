@@ -21,6 +21,12 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   direct `SendMessageW` no-restore acceptance path. A sudo cargo flamegraph of
   iNavi startup showed the slowdown concentrated in Unicorn code hooks and this
   cleanup path, not host SD-card file I/O.
+- `src/emulator/unicorn.rs` and `src/main.rs`: remote input draining can now
+  rotate from the currently active guest thread to a suspended target thread
+  with visible receiver work, preserving the active saved CPU context as a
+  persisted suspended thread for later resume. This covers the active-thread
+  variant of the iNavi visible-message handoff instead of only waking already
+  parked send/wait threads.
 - `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
   `TransparentImage` now follows CE `wingdi.h`/`draw.cpp::TransparentBltBitmapTest`
   by accepting a direct bitmap `HANDLE` as `hSrc` in addition to HDC sources.
@@ -52,6 +58,21 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `TransparentImage` now cover CE `draw.cpp::ClipBitBlt(ETransparentImage)`
   off-top source alignment, proving top-edge destination clipping advances
   source rows and transparent sampled rows preserve the destination.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and same-framebuffer
+  `TransparentImage` now cover the remaining CE
+  `draw.cpp::ClipBitBlt(ETransparentImage)` right and bottom destination
+  clipping edges, proving the visible tail is trimmed while transparent samples
+  inside the clipped area still preserve the destination.
+- Validation after the transparent all-edge clipping and active visible-receiver
+  rotation slice: focused
+  `remote_input_rotates_to_active_visible_receiver_thread`, focused
+  `coredll_raw_transparent_image_clips_off_right`, focused
+  `coredll_raw_transparent_image_clips_off_bottom`, `cargo fmt --check`, `git
+  diff --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo
+  test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  and full `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
+  Full-test logs are under
+  `target/cargo-test-full-transparent-all-edges.20260616-134146.*.log`.
 - Validation after the transparent off-top clipping slice: focused
   `coredll_raw_transparent_image_clips_off_top`, `cargo fmt --check`, `git
   diff --check`, `cargo check --features unicorn,trace,win32-desktop`, `cargo

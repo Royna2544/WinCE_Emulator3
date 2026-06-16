@@ -422,6 +422,12 @@ fn run_cpu_loop(
             let current_cpu_targeted = remote_drained
                 .target_thread_ids
                 .contains(&cpu.current_thread_id());
+            if cpu
+                .rotate_to_active_visible_receiver_thread(kernel, &remote_drained.target_thread_ids)
+            {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
             if cpu.rotate_to_ready_parked_threads_with_framebuffer(
                 kernel,
                 &remote_drained.target_thread_ids,
@@ -674,6 +680,12 @@ fn run_cpu_loop(
             let current_cpu_targeted = remote_drained
                 .target_thread_ids
                 .contains(&cpu.current_thread_id());
+            if cpu
+                .rotate_to_active_visible_receiver_thread(kernel, &remote_drained.target_thread_ids)
+            {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
             if cpu.rotate_to_ready_parked_threads_with_framebuffer(
                 kernel,
                 &remote_drained.target_thread_ids,
