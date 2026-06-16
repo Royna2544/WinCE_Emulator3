@@ -51260,11 +51260,26 @@ fn vkey_to_scan_code(vkey: u32) -> u32 {
         0xbe => 0x34,     // .
         0xbf => 0x35,     // /
         0xc0 => 0x29,     // `
+        0xc1 => 0x73,     // CE US private/OEM row
+        0xc2 => 0x7e,     // CE US private/OEM row
         0xdb => 0x1a,     // [
         0xdc => 0x2b,     // backslash
         0xdd => 0x1b,     // ]
         0xde => 0x28,     // '
         0xdf => 0xe05f,   // Off (extended)
+        0xe2 => 0x73,     // OEM_102 / extended backslash
+        0xe9 => 0x71,     // CE US RDP/IME alias
+        0xea => 0x5c,     // CE US RDP/IME alias
+        0xeb => 0x7b,     // CE US RDP/IME alias
+        0xed => 0x6f,     // CE US RDP/IME alias
+        0xee => 0x5a,     // CE US RDP/IME alias
+        0xf0 => 0x7d,     // DBE Alphanumeric
+        0xf1 => 0x5b,     // DBE Katakana
+        0xf2 => 0x70,     // DBE Hiragana
+        0xf3 => 0x5f,     // DBE SBCS char
+        0xf5 => 0x5e,     // DBE Roman
+        0xf9 => 0x5d,     // EREOF
+        0xfb => 0x62,     // Zoom
         _ => 0,
     }
 }
