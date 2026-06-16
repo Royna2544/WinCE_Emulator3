@@ -20,16 +20,19 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   `RefCell` borrow, restores the sender MIPS context to the saved return PC,
   reports `ERROR_TIMEOUT`, leaves `lpdwResult` untouched, consumes the timeout
   completion record, and removes the receiver's stale queued delivery.
+- `src/emulator/unicorn.rs`: the scheduler-driven blocked
+  `SendMessageTimeout` resume path now has the same borrow-safe timeout cleanup
+  and a regression that proves the interrupted active thread is suspended while
+  execution returns to the timed-out sender without stale receiver delivery.
 - Focused validation after the Unicorn parked `SendMessageTimeout` timeout
   re-entry slice: `cargo fmt` and `$env:CARGO_INCREMENTAL='0'; cargo test
-  --features unicorn,trace,win32-desktop
-  send_message_timeout_block_reentry_expires_without_receiver_delivery` passed;
-  full validation then passed with `cargo fmt --check`, `git diff --check`,
-  `$env:CARGO_INCREMENTAL='0'; cargo check --features
+  -j 1 --features unicorn,trace,win32-desktop send_message_timeout_ --lib`
+  passed; full validation then passed with `cargo fmt --check`, `git diff
+  --check`, `$env:CARGO_INCREMENTAL='0'; cargo check --features
   unicorn,trace,win32-desktop`, and `$env:CARGO_INCREMENTAL='0'; cargo test -j
   1 --features unicorn,trace,win32-desktop`. Cargo still emits the existing
-  unused-code warnings, plus an unused `CpuBackend` import warning in heavily
-  filtered focused tests.
+  unused-code warnings, plus an unused `CpuBackend` import warning in filtered
+  tests.
 - `tests/coredll_raw_gwe.rs`: raw `SendMessageTimeout` coverage now verifies
   `SMTO_ABORTIFHUNG` by itself queues normally while the receiver is just below
   the CE 5-second hung threshold, leaves the caller result pointer untouched,

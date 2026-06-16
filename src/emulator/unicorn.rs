@@ -2218,15 +2218,50 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn clear_escaped_visible_message_callouts(&mut self) -> bool {
-        let context_pcs = [
+        let candidates = [
             self.saved_context.as_ref().map(|saved| saved.pc),
             self.last_debug.as_ref().map(|snapshot| snapshot.pc),
         ];
-        Self::clear_escaped_visible_message_callouts_for_context(
-            &mut self.pending_wndproc_returns,
-            context_pcs,
-            Some(&mut self.orphaned_wndproc_returns),
-        )
+        let Some(index) = self
+            .pending_wndproc_returns
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, pending)| {
+                let escaped_visible_message = pending.source == "OrphanedVisibleMessage"
+                    && pending.resume_import.is_some()
+                    && pending.return_pc != 0
+                    && candidates
+                        .iter()
+                        .copied()
+                        .flatten()
+                        .any(|pc| pc == pending.return_pc);
+                escaped_visible_message.then_some(index)
+            })
+        else {
+            return false;
+        };
+        let callout = self.pending_wndproc_returns.remove(index);
+        let Some(resume) = callout.resume_import.clone() else {
+            return false;
+        };
+        self.saved_context = Some(SavedCpuContext {
+            pc: resume.import_pc,
+            regs: resume.regs,
+        });
+        self.current_thread_id = resume.thread_id;
+        self.running_guest_thread = resume.running_thread;
+        tracing::warn!(
+            target: "ce.gwe",
+            hwnd = format_args!("0x{:08x}", callout.hwnd),
+            msg = format_args!("0x{:08x}", callout.msg),
+            wndproc = format_args!("0x{:08x}", callout.wndproc),
+            import_pc = format_args!("0x{:08x}", resume.import_pc),
+            thread_id = resume.thread_id,
+            running_thread = ?resume.running_thread,
+            "completed escaped visible-message WNDPROC callout"
+        );
+        true
     }
 
     #[cfg(feature = "unicorn")]
@@ -2239,7 +2274,7 @@ impl UnicornMips {
         let mut removed_callouts = Vec::new();
         pending_wndproc_returns.retain(|pending| {
             let escaped_visible_message = pending.source == "OrphanedVisibleMessage"
-                && pending.resume_import.is_some()
+                && pending.resume_import.is_none()
                 && pending.return_pc != 0
                 && context_pcs
                     .iter()
@@ -13067,7 +13102,8 @@ fn try_resume_blocked_send_message_timeout<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    let Some(blocked) = blocked_smt.borrow().clone() else {
+    let blocked_state = { blocked_smt.borrow().clone() };
+    let Some(blocked) = blocked_state else {
         return false;
     };
     if active_thread_id == blocked.thread_id {
@@ -23442,20 +23478,21 @@ mod wait_scheduler_tests {
         assert_eq!(resume.import_pc, active_pc);
         assert_eq!(resume.regs.regs[29], return_sp);
 
-        assert!(
-            super::UnicornMips::clear_escaped_visible_message_callouts_for_context(
-                &mut scheduler.pending_wndproc_returns,
-                [Some(active_pc), None],
-                Some(&mut scheduler.orphaned_wndproc_returns),
-            )
-        );
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: super::MipsGuestContext::zero(),
+        });
+        assert!(scheduler.clear_escaped_visible_message_callouts());
         assert!(scheduler.pending_wndproc_returns.is_empty());
-        assert_eq!(scheduler.orphaned_wndproc_returns.len(), 1);
+        assert!(scheduler.orphaned_wndproc_returns.is_empty());
+        assert_eq!(scheduler.current_thread_id(), active_thread_id);
         assert_eq!(
-            scheduler.orphaned_wndproc_returns[0].source,
-            "OrphanedVisibleMessage"
+            scheduler.running_guest_thread,
+            Some((active_thread_id, active_thread_handle))
         );
-        assert_eq!(scheduler.orphaned_wndproc_returns[0].return_pc, active_pc);
+        let restored = scheduler.saved_context.as_ref().unwrap();
+        assert_eq!(restored.pc, active_pc);
+        assert_eq!(restored.regs, active_regs);
     }
 
     #[test]
@@ -40919,6 +40956,123 @@ mod unicorn_tests {
         uc.mem_read(u64::from(result_ptr), &mut result_bytes)
             .unwrap();
         assert_eq!(u32::from_le_bytes(result_bytes), 0xfeed_cafe);
+    }
+
+    #[test]
+    fn send_message_timeout_scheduler_resume_expires_and_suspends_active_thread() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sender_thread = 63;
+        let receiver_thread = 64;
+        let active_thread = 65;
+        let sender_handle = 0x0000_0630;
+        let active_handle = 0x0000_0650;
+        let result_ptr = 0x0001_1040;
+        let sender_return_pc = 0x0040_6300;
+        let active_pc = 0x0040_6500;
+        uc.mem_map(0x0001_1000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(result_ptr), &0xabcd_ef01_u32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0x6363_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_6300).unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_6300).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(sender_return_pc))
+            .unwrap();
+
+        let hwnd =
+            kernel
+                .gwe
+                .create_window(receiver_thread, "SendTimeoutSchedulerBlock", "timeout");
+        let blocked_smt = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
+        let args = [
+            hwnd,
+            crate::ce::gwe::WM_USER + 215,
+            0x63,
+            0x64,
+            0,
+            30,
+            result_ptr,
+        ];
+
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            sender_thread,
+            &blocked_smt,
+            &running_thread,
+        ));
+        let blocked = blocked_smt
+            .borrow()
+            .as_ref()
+            .expect("blocked send timeout")
+            .clone();
+        kernel.timers.sleep_ms(30);
+        *running_thread.borrow_mut() = Some((active_thread, active_handle));
+        uc.reg_write(RegisterMIPS::S0, 0x6565_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_6500).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(active_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_6510).unwrap();
+
+        let current_thread_id = Rc::new(RefCell::new(active_thread));
+        let suspended_thread = Rc::new(RefCell::new(None));
+        assert!(super::try_resume_blocked_send_message_timeout(
+            &mut kernel,
+            &mut uc,
+            active_thread,
+            &current_thread_id,
+            &blocked_smt,
+            &suspended_thread,
+            None,
+            &running_thread,
+            Some(active_pc),
+            true,
+        ));
+
+        assert!(blocked_smt.borrow().is_none());
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((sender_thread, sender_handle))
+        );
+        let suspended = suspended_thread
+            .borrow()
+            .as_ref()
+            .expect("active thread suspended")
+            .clone();
+        assert_eq!(suspended.thread_id, active_thread);
+        assert_eq!(suspended.thread_handle, Some(active_handle));
+        assert_eq!(suspended.pc, active_pc);
+        assert_eq!(suspended.regs.regs[16], 0x6565_0001);
+        assert_eq!(
+            kernel.take_completed_send_message_result(blocked.block_state.send_id),
+            None
+        );
+        assert_eq!(kernel.gwe.get_message(receiver_thread), None);
+        assert_eq!(
+            kernel.threads.get_last_error(sender_thread),
+            crate::ce::coredll::ERROR_TIMEOUT_LOCAL
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x6363_0001);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
+            sender_return_pc
+        );
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            sender_return_pc
+        );
+        let mut result_bytes = [0; 4];
+        uc.mem_read(u64::from(result_ptr), &mut result_bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0xabcd_ef01);
     }
 
     #[test]

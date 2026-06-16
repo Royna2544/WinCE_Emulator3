@@ -2185,6 +2185,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     regression now covers the direct import re-entry path as well, including
     clearing the parked state without a lingering `RefCell` borrow, preserving
     the caller's result pointer, and removing receiver delivery after timeout.
+    Scheduler-driven `SendMessageTimeout` wake/resume now has matching coverage
+    for the timeout branch, including clearing the parked state without a
+    lingering borrow, preserving the interrupted active thread in suspended
+    state, switching back to the sender, and avoiding stale receiver delivery.
     The scheduler
     now has a send-reply blocked-wait kind
     keyed by sent-message id, mirroring the sender-side `pSentNext`/reply wait
