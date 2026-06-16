@@ -14956,6 +14956,26 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(memory.read_u32(out + 40)?, hwnd);
     assert_eq!(memory.read_u32(out + 52)?, 0xCAFE_BABE);
 
+    memory.write_wide_z(out_html, "stale html");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_GET_DATA_I,
+            [data + 24, 16, 301, 0, 0, 0, 0, out_html, 128, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_wide_z(out_html, 32),
+        "",
+        "CE GetNotificationData ignores cbHTML without pdwHTMLLength and returns an empty HTML buffer"
+    );
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

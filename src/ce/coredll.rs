@@ -25485,7 +25485,11 @@ fn sh_notification_get_data_i_raw<M: CoredllGuestMemory>(
         let capacity = if raw_arg(args, 9) != 0 {
             read_guest_u32(kernel, memory, thread_id, raw_arg(args, 9)).unwrap_or(0) as usize
         } else {
-            wide_capacity_from_cb(raw_arg(args, 8))
+            // CE's taskbar GetNotificationData ignores cbHTML when no
+            // pdwHTMLLength pointer is supplied and calls StringCbCopy with
+            // sizeof(*m_pwszHTML), so non-empty HTML reports success but
+            // leaves the caller's buffer empty.
+            1
         };
         if capacity == 0
             || !write_guest_wide_fixed(
@@ -25710,14 +25714,6 @@ fn write_shell_notification_data<M: CoredllGuestMemory>(
             ptr.wrapping_add(SHNOTIFICATIONDATA_LPARAM_OFFSET),
             record.lparam,
         )
-}
-
-fn wide_capacity_from_cb(cb: u32) -> usize {
-    if cb <= 1 {
-        cb as usize
-    } else {
-        (cb / 2) as usize
-    }
 }
 
 fn notification_result_to_error(result: NotificationResult) -> u32 {
