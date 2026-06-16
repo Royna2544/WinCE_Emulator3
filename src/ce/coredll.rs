@@ -106,9 +106,13 @@ const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
 const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
 const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
 const FSCTL_SET_FILE_CACHE: u32 = 0x0009_0090;
+const IOCTL_FILE_WRITE_GATHER: u32 = 0x0009_0044;
+const IOCTL_FILE_READ_SCATTER: u32 = 0x0009_0048;
 const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
 const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
+const FILE_SCATTER_GATHER_PAGE_SIZE: u32 = 4096;
+const FILE_SEGMENT_ELEMENT_SIZE: u32 = 8;
 const DISK_IOCTL_GETINFO: u32 = 1;
 const DISK_IOCTL_SETINFO: u32 = 5;
 const DISK_IOCTL_INITIALIZED: u32 = 4;
@@ -19438,6 +19442,24 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
     let output_ptr = raw_arg(args, 4);
     let output_capacity = raw_arg(args, 5);
     let returned_ptr = raw_arg(args, 6);
+    let overlapped_ptr = raw_arg(args, 7);
+    if matches!(
+        ioctl_code,
+        IOCTL_FILE_READ_SCATTER | IOCTL_FILE_WRITE_GATHER
+    ) {
+        return file_handle_scatter_gather_raw(
+            kernel,
+            memory,
+            thread_id,
+            handle,
+            ioctl_code,
+            input_ptr,
+            input_len,
+            output_ptr,
+            returned_ptr,
+            overlapped_ptr,
+        );
+    }
     if ioctl_code == FSCTL_SET_FILE_CACHE {
         match kernel.is_file_handle(handle) {
             Ok(true) => {
@@ -19516,6 +19538,149 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
         },
     );
     result.success
+}
+
+fn file_handle_scatter_gather_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    ioctl_code: u32,
+    segments_ptr: u32,
+    transfer_bytes: u32,
+    reserved_ptr: u32,
+    returned_ptr: u32,
+    overlapped_ptr: u32,
+) -> bool {
+    if segments_ptr == 0
+        || transfer_bytes == 0
+        || transfer_bytes % FILE_SCATTER_GATHER_PAGE_SIZE != 0
+    {
+        return file_scatter_gather_fail(
+            kernel,
+            memory,
+            thread_id,
+            returned_ptr,
+            ERROR_INVALID_PARAMETER,
+        );
+    }
+    if reserved_ptr != 0 || overlapped_ptr != 0 {
+        return file_scatter_gather_fail(
+            kernel,
+            memory,
+            thread_id,
+            returned_ptr,
+            ERROR_NOT_SUPPORTED,
+        );
+    }
+    let segment_count = transfer_bytes / FILE_SCATTER_GATHER_PAGE_SIZE;
+    let mut buffers = Vec::with_capacity(segment_count as usize);
+    for index in 0..segment_count {
+        let segment_ptr = segments_ptr.wrapping_add(index * FILE_SEGMENT_ELEMENT_SIZE);
+        let Ok(buffer_ptr) = memory.read_u32(segment_ptr) else {
+            return file_scatter_gather_fail(
+                kernel,
+                memory,
+                thread_id,
+                returned_ptr,
+                ERROR_INVALID_PARAMETER,
+            );
+        };
+        if buffer_ptr == 0 {
+            return file_scatter_gather_fail(
+                kernel,
+                memory,
+                thread_id,
+                returned_ptr,
+                ERROR_INVALID_PARAMETER,
+            );
+        }
+        buffers.push(buffer_ptr);
+    }
+
+    let mut transferred = 0;
+    let success = if ioctl_code == IOCTL_FILE_READ_SCATTER {
+        for buffer_ptr in buffers {
+            let mut chunk = Vec::new();
+            let read = match kernel.read_file_into(handle, FILE_SCATTER_GATHER_PAGE_SIZE, |bytes| {
+                chunk.extend_from_slice(bytes);
+                Ok(())
+            }) {
+                Ok(read) => read,
+                Err(_) => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                    return false;
+                }
+            };
+            if read != FILE_SCATTER_GATHER_PAGE_SIZE {
+                kernel.threads.set_last_error(thread_id, 0);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, transferred);
+                return true;
+            }
+            if !write_guest_bytes(kernel, memory, thread_id, buffer_ptr, &chunk) {
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+            transferred += read;
+        }
+        true
+    } else {
+        let mut bytes = Vec::with_capacity(transfer_bytes as usize);
+        for buffer_ptr in buffers {
+            let mut chunk = vec![0; FILE_SCATTER_GATHER_PAGE_SIZE as usize];
+            if memory.read_bytes(buffer_ptr, &mut chunk).is_err() {
+                return file_scatter_gather_fail(
+                    kernel,
+                    memory,
+                    thread_id,
+                    returned_ptr,
+                    ERROR_INVALID_PARAMETER,
+                );
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        match kernel.write_file(handle, &bytes) {
+            Ok(result) if result.success => {
+                transferred = result.bytes_transferred;
+                true
+            }
+            Ok(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+                false
+            }
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                false
+            }
+        }
+    };
+
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, transferred) {
+        return false;
+    }
+    if success {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    success
+}
+
+fn file_scatter_gather_fail<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    returned_ptr: u32,
+    error: u32,
+) -> bool {
+    kernel.threads.set_last_error(thread_id, error);
+    write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+    false
 }
 
 fn file_handle_set_file_cache_raw<M: CoredllGuestMemory>(

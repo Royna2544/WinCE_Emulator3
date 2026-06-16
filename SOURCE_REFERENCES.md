@@ -532,6 +532,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     request before mapped-file paging, so v3 now implements that disable-only
     file-handle surface as a no-op cache-state marker and keeps broader cache
     filter behavior queued.
+    `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h` defines
+    `IOCTL_FILE_READ_SCATTER` and `IOCTL_FILE_WRITE_GATHER`;
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp` routes
+    those file-handle controls to `FSDMGR_ReadWriteFileSg`, and
+    `filesystem.cpp::OpenSGArray` requires a non-null `FILE_SEGMENT_ELEMENT`
+    array and a nonzero transfer size aligned to the CE page size. v3 now
+    handles synchronous current-position scatter/gather for page-multiple
+    arrays through host-backed files, while reserved offset-array and
+    overlapped variants remain queued.
     `volumeapi.cpp` handles
     `FSCTL_GET_VOLUME_INFO` before forwarding other controls to the mounted
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for
