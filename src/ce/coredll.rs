@@ -142,6 +142,10 @@ const IOCTL_DISK_COPY_EXTERNAL_COMPLETE: u32 = 0x0007_1c5c;
 const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
 const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
 const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
+const IOCTL_FMD_SET_XIPMODE: u32 = 0x0007_1f80;
+const IOCTL_FMD_LOCK_BLOCKS: u32 = 0x0007_1f84;
+const IOCTL_FMD_UNLOCK_BLOCKS: u32 = 0x0007_1f88;
+const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
 const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
 const IOCTL_FMD_GET_RAW_BLOCK_SIZE: u32 = 0x0007_1fac;
 const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
@@ -13539,6 +13543,18 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
             kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes,
         )
         .is_some(),
+        IOCTL_FMD_SET_XIPMODE => {
+            fsdmgr_fmd_set_xip_mode_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
+        }
+        IOCTL_FMD_GET_XIPMODE => {
+            fsdmgr_fmd_get_xip_mode_raw(kernel, memory, thread_id, disk_ptr, out_ptr, out_bytes)
+        }
+        IOCTL_FMD_LOCK_BLOCKS => fsdmgr_fmd_set_block_lock_raw(
+            kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, true,
+        ),
+        IOCTL_FMD_UNLOCK_BLOCKS => fsdmgr_fmd_set_block_lock_raw(
+            kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes, false,
+        ),
         IOCTL_FMD_GET_RESERVED_TABLE => fsdmgr_fmd_get_reserved_table_raw(
             kernel,
             memory,
@@ -13775,6 +13791,93 @@ fn fsdmgr_fmd_get_reserved_table_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn fsdmgr_fmd_set_xip_mode_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    disk_ptr: u32,
+    mode_ptr: u32,
+    mode_bytes: u32,
+) -> bool {
+    if mode_ptr == 0 || mode_bytes < 1 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(mode) = memory.read_u8(mode_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let status = kernel.fsdmgr_set_fmd_xip_mode(disk_ptr, mode != 0);
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
+}
+
+fn fsdmgr_fmd_get_xip_mode_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    mode_ptr: u32,
+    mode_bytes: u32,
+) -> bool {
+    let Some(mode) = kernel.fsdmgr_fmd_xip_mode(disk_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if mode_ptr == 0 || mode_bytes < 1 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if memory.write_u8(mode_ptr, u8::from(mode)).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn fsdmgr_fmd_set_block_lock_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    disk_ptr: u32,
+    lock_info_ptr: u32,
+    lock_info_bytes: u32,
+    locked: bool,
+) -> bool {
+    if lock_info_ptr == 0 || lock_info_bytes < 8 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(start_block) = memory.read_u32(lock_info_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(block_count) = memory.read_u32(lock_info_ptr.wrapping_add(4)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let status = kernel.fsdmgr_set_fmd_block_lock(disk_ptr, start_block, block_count, locked);
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
 }
 
 fn fsdmgr_fmd_get_raw_block_size_raw<M: CoredllGuestMemory>(

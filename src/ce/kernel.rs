@@ -102,6 +102,12 @@ struct FsdmgrVolumeLock {
     volume_handle: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FsdmgrFmdBlockLockRange {
+    start_block: u32,
+    block_count: u32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RemoteServerControlDrain {
     pub handled: usize,
@@ -232,6 +238,8 @@ pub struct CeKernel {
     next_message_queue_id: u32,
     fsdmgr_disk_sectors: BTreeMap<(u32, u32), Vec<u8>>,
     fsdmgr_disk_info_overrides: BTreeMap<u32, [u32; 6]>,
+    fsdmgr_fmd_xip_modes: BTreeMap<u32, bool>,
+    fsdmgr_fmd_block_locks: BTreeMap<u32, Vec<FsdmgrFmdBlockLockRange>>,
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
     next_fsdmgr_volume_lock: u32,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -981,6 +989,8 @@ impl CeKernel {
             next_message_queue_id: 1,
             fsdmgr_disk_sectors: BTreeMap::new(),
             fsdmgr_disk_info_overrides: BTreeMap::new(),
+            fsdmgr_fmd_xip_modes: BTreeMap::new(),
+            fsdmgr_fmd_block_locks: BTreeMap::new(),
             fsdmgr_volume_locks: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             modal_dialog_results: BTreeMap::new(),
@@ -2809,6 +2819,64 @@ impl CeKernel {
         }
         self.fsdmgr_disk_info_overrides.insert(disk_ptr, info);
         ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_set_fmd_xip_mode(&mut self, disk_ptr: u32, enabled: bool) -> u32 {
+        if self.fsdmgr_disk_info(disk_ptr).is_none() {
+            return ERROR_INVALID_PARAMETER;
+        }
+        self.fsdmgr_fmd_xip_modes.insert(disk_ptr, enabled);
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_fmd_xip_mode(&self, disk_ptr: u32) -> Option<bool> {
+        self.fsdmgr_disk_info(disk_ptr)?;
+        Some(
+            self.fsdmgr_fmd_xip_modes
+                .get(&disk_ptr)
+                .copied()
+                .unwrap_or(false),
+        )
+    }
+
+    pub fn fsdmgr_set_fmd_block_lock(
+        &mut self,
+        disk_ptr: u32,
+        start_block: u32,
+        block_count: u32,
+        locked: bool,
+    ) -> u32 {
+        if self.fsdmgr_disk_info(disk_ptr).is_none() {
+            return ERROR_INVALID_PARAMETER;
+        }
+        if locked {
+            if block_count != 0 {
+                self.fsdmgr_fmd_block_locks
+                    .entry(disk_ptr)
+                    .or_default()
+                    .push(FsdmgrFmdBlockLockRange {
+                        start_block,
+                        block_count,
+                    });
+            }
+        } else {
+            self.fsdmgr_fmd_block_locks.remove(&disk_ptr);
+        }
+        ERROR_SUCCESS
+    }
+
+    pub fn fsdmgr_fmd_block_locked(&self, disk_ptr: u32, block: u32) -> Option<bool> {
+        self.fsdmgr_disk_info(disk_ptr)?;
+        Some(
+            self.fsdmgr_fmd_block_locks
+                .get(&disk_ptr)
+                .is_some_and(|ranges| {
+                    ranges.iter().any(|range| {
+                        range.block_count != 0
+                            && block.wrapping_sub(range.start_block) < range.block_count
+                    })
+                }),
+        )
     }
 
     pub fn fsdmgr_disk_io_control_status(&mut self, disk_ptr: u32, ioctl: u32) -> u32 {

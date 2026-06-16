@@ -2436,6 +2436,10 @@ mod tests {
         const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
         const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
         const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
+        const IOCTL_FMD_SET_XIPMODE: u32 = 0x0007_1f80;
+        const IOCTL_FMD_LOCK_BLOCKS: u32 = 0x0007_1f84;
+        const IOCTL_FMD_UNLOCK_BLOCKS: u32 = 0x0007_1f88;
+        const IOCTL_FMD_GET_XIPMODE: u32 = 0x0007_1f90;
         const IOCTL_FMD_GET_RESERVED_TABLE: u32 = 0x0007_1f9c;
         const IOCTL_FMD_GET_RAW_BLOCK_SIZE: u32 = 0x0007_1fac;
         const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
@@ -2496,6 +2500,8 @@ mod tests {
         let copy_external_out_ptr = 0x1001_3000;
         let fmd_info_ptr = 0x1001_4000;
         let fmd_reserved_out_ptr = 0x1001_5000;
+        let fmd_xip_mode_ptr = 0x1001_6000;
+        let fmd_block_lock_ptr = 0x1001_7000;
 
         let mut sector_bytes = vec![0; 512];
         sector_bytes[..17].copy_from_slice(b"direct-disk-write");
@@ -2731,6 +2737,171 @@ mod tests {
         assert_eq!(memory.word(storage_id_ptr + 8), 0);
         assert_eq!(memory.word(storage_id_ptr + 12), 0);
         assert_eq!(memory.word(bytes_returned_ptr), 16);
+
+        memory.map_bytes(fmd_xip_mode_ptr, &[0xfe]);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_GET_XIPMODE,
+                    0,
+                    0,
+                    fmd_xip_mode_ptr,
+                    1,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(memory.read_u8(fmd_xip_mode_ptr).unwrap(), 0);
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        memory.map_bytes(fmd_xip_mode_ptr, &[1]);
+        memory.map_word(bytes_returned_ptr, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_SET_XIPMODE,
+                    fmd_xip_mode_ptr,
+                    1,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(kernel.fsdmgr_fmd_xip_mode(disk_ptr), Some(true));
+        assert_eq!(memory.word(bytes_returned_ptr), 0);
+
+        memory.map_bytes(fmd_xip_mode_ptr, &[0xfe]);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_GET_XIPMODE,
+                    0,
+                    0,
+                    fmd_xip_mode_ptr,
+                    1,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(memory.read_u8(fmd_xip_mode_ptr).unwrap(), 1);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_SET_XIPMODE,
+                    fmd_xip_mode_ptr,
+                    0,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(kernel.fsdmgr_fmd_xip_mode(disk_ptr), Some(true));
+
+        memory.map_word(fmd_block_lock_ptr, 7);
+        memory.map_word(fmd_block_lock_ptr + 4, 3);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_LOCK_BLOCKS,
+                    fmd_block_lock_ptr,
+                    8,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(kernel.fsdmgr_fmd_block_locked(disk_ptr, 6), Some(false));
+        assert_eq!(kernel.fsdmgr_fmd_block_locked(disk_ptr, 7), Some(true));
+        assert_eq!(kernel.fsdmgr_fmd_block_locked(disk_ptr, 9), Some(true));
+        assert_eq!(kernel.fsdmgr_fmd_block_locked(disk_ptr, 10), Some(false));
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_UNLOCK_BLOCKS,
+                    fmd_block_lock_ptr,
+                    8,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+        assert_eq!(kernel.fsdmgr_fmd_block_locked(disk_ptr, 7), Some(false));
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [
+                    disk_ptr,
+                    IOCTL_FMD_LOCK_BLOCKS,
+                    fmd_block_lock_ptr,
+                    7,
+                    0,
+                    0,
+                    bytes_returned_ptr,
+                    0,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(kernel.fsdmgr_fmd_block_locked(disk_ptr, 7), Some(false));
 
         memory.map_word(fmd_reserved_out_ptr, 0xfeed_cafe);
         memory.map_word(bytes_returned_ptr, 0xfeed_cafe);

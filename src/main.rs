@@ -183,6 +183,7 @@ fn main() -> Result<()> {
             &kernel,
             desktop.framebuffer(),
             None,
+            true,
         );
     }
 
@@ -1524,6 +1525,7 @@ fn service_remote_endpoint(
         kernel,
         desktop.framebuffer(),
         snapshot.as_ref(),
+        false,
     );
     RemoteEndpointDrain {
         handled: drained.handled,
@@ -1537,6 +1539,7 @@ fn publish_remote_endpoint(
     kernel: &CeKernel,
     framebuffer: &VirtualFramebuffer,
     snapshot: Option<&UnicornDebugSnapshot>,
+    publish_framebuffer: bool,
 ) {
     if let Some(server) = server {
         let cpu = cpu.map(|cpu| {
@@ -1545,7 +1548,9 @@ fn publish_remote_endpoint(
         });
         server.publish_status(&kernel.remote_status());
         server.publish_recent_logs(kernel.remote.recent_log_lines(4096));
-        server.publish_framebuffer(framebuffer);
+        if publish_framebuffer {
+            server.publish_framebuffer(framebuffer);
+        }
         if !server.claim_debug_publish_slot(remote_debug_publish_interval()) {
             return;
         }
@@ -1605,6 +1610,7 @@ fn publish_remote_debug_after_scheduler_change(
         kernel,
         desktop.framebuffer(),
         snapshot.as_ref(),
+        false,
     );
 }
 

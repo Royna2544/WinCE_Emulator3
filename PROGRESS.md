@@ -15,19 +15,23 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
-- `src/ce/coredll.rs` and `src/emulator/imports.rs`: direct
-  `FSDMGR_DiskIoControl @12` now recognizes CE `fmd.h`
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `src/emulator/imports.rs`:
+  direct `FSDMGR_DiskIoControl @12` now recognizes CE `fmd.h`
+  `IOCTL_FMD_SET_XIPMODE`, `IOCTL_FMD_GET_XIPMODE`,
+  `IOCTL_FMD_LOCK_BLOCKS`, `IOCTL_FMD_UNLOCK_BLOCKS`,
   `IOCTL_FMD_GET_RESERVED_TABLE`, `IOCTL_FMD_GET_RAW_BLOCK_SIZE`, and
-  `IOCTL_FMD_GET_INFO` controls. The synthetic disk reports an empty reserved
-  table, returns the current synthetic block size, validates FMD metadata
-  buffers, and fills deterministic NOR-style `FMDInfo` metadata while leaving
-  hardware flash lock/write/reserved-region behavior queued.
-- Validation after the FMD metadata IOCTL slice: focused
+  `IOCTL_FMD_GET_INFO` controls. The synthetic disk tracks XIP mode and
+  block-lock ranges, reports an empty reserved table, returns the current
+  synthetic block size, validates FMD buffers, and fills deterministic
+  NOR-style `FMDInfo` metadata while leaving hardware flash interface,
+  raw-write, and reserved-region behavior queued.
+- Validation after the FMD XIP/block-lock IOCTL slice: focused
   `cargo test -j 1 --features unicorn,trace,win32-desktop
   emulator::imports::tests::fsdmgr_disk_support_imports_round_trip_sparse_sectors_and_info`,
+  `cargo fmt --check`, `git diff --check`,
   `cargo check --features unicorn,trace,win32-desktop`, and full
-  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Logs were
-  kept under `target/`.
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed. Logs are
+  under `target/`.
 - `src/emulator/unicorn.rs`: mapped-code indexing now keeps lightweight
   references to mapped blob byte buffers instead of cloning every blob into each
   index. The index still keeps immutable static-code snapshots authoritative
