@@ -13466,6 +13466,71 @@ fn coredll_raw_transparent_image_composites_between_memory_dcs() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_transparent_image_clips_off_left_selected_dib_source_alignment() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const WHITE565: u16 = 0xffff;
+    const BLUE565: u16 = 0x001f;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 1);
+
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, src_bits, src_stride, 2, 0, 0xf81f);
+    write_rgb565(&mut memory, src_bits, src_stride, 3, 0, BLUE565);
+    write_rgb565(&mut memory, dst_bits, dst_stride, 0, 0, WHITE565);
+    write_rgb565(&mut memory, dst_bits, dst_stride, 1, 0, WHITE565);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            None,
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                dst_dc,
+                (-2i32) as u32,
+                0,
+                4,
+                1,
+                src_dc,
+                0,
+                0,
+                4,
+                1,
+                MAGENTA_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        WHITE565,
+        "clipped transparent source pixel should preserve destination"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 0),
+        BLUE565,
+        "visible destination pixel should sample the advanced source coordinate"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_mirrors_negative_extents_between_selected_dibs() -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
 

@@ -40,6 +40,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   CE `draw.cpp::TransparentBltErrorTest` near-miss transparent keys. A solid
   nonzero RGB source remains opaque when the transparent key matches only one
   or two color channels, preserving the CE screen-half comparison behavior.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB `TransparentImage` now has CE
+  `draw.cpp::ClipBitBlt(ETransparentImage)` off-left clipping coverage. The
+  regression proves that destination clipping advances the source sample and
+  that a clipped-in transparent source pixel still preserves the destination.
+- Validation after the transparent off-left clipping slice: focused
+  `coredll_raw_transparent_image_clips_off_left_selected_dib_source_alignment`,
+  `cargo fmt --check`, `git diff --check`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test -j
+  1 --features unicorn,trace,win32-desktop` passed. Full-test logs are under
+  `target/cargo-test-full-transparent-clip.20260616-132423.*.log`.
 - Validation after the transparent near-miss slice: focused
   `coredll_raw_transparent_image_near_miss_keys_remain_opaque`, `cargo fmt
   --check`, `git diff --check`, `cargo check --features
