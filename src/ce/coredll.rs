@@ -11622,6 +11622,107 @@ fn file_lock_ex_raw<M: CoredllGuestMemory>(
     }
 }
 
+fn fsdmgr_file_lock_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    file_handle: u32,
+    flags: u32,
+    length_low: u32,
+    length_high: u32,
+    overlapped_ptr: u32,
+    lock: bool,
+) -> bool {
+    file_lock_ex_raw(
+        kernel,
+        memory,
+        thread_id,
+        file_handle,
+        flags,
+        length_low,
+        length_high,
+        overlapped_ptr,
+        lock,
+    )
+}
+
+fn fsdmgr_remove_file_lock_ex_raw(kernel: &mut CeKernel, thread_id: u32, file_handle: u32) -> bool {
+    match kernel.unlock_file_ranges_owned_by_handle(file_handle) {
+        Ok(FileLockStatus::Success) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Ok(FileLockStatus::Conflict) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_LOCK_VIOLATION);
+            false
+        }
+        Ok(FileLockStatus::InvalidParameter) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn fsdmgr_test_file_lock_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    file_handle: u32,
+    read: bool,
+    length_low: u32,
+    explicit_offset: Option<(u32, u32)>,
+) -> bool {
+    let start = match explicit_offset {
+        Some((low, high)) => u64::from(low) | (u64::from(high) << 32),
+        None => match kernel.file_cursor(file_handle) {
+            Ok(cursor) => cursor as u64,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return false;
+            }
+        },
+    };
+    match kernel.test_file_lock_range(file_handle, start, u64::from(length_low), read) {
+        Ok(FileLockStatus::Success) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Ok(FileLockStatus::Conflict) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_LOCK_VIOLATION);
+            false
+        }
+        Ok(FileLockStatus::InvalidParameter) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn fsdmgr_empty_lock_container_raw(kernel: &mut CeKernel, thread_id: u32) {
+    kernel.threads.set_last_error(thread_id, 0);
+}
+
 fn iswctype_raw(wch: u32, ctype: u32) -> u32 {
     let ch = char::from_u32(wch & 0xffff).unwrap_or('\0');
     let mut mask = 0_u32;
@@ -12114,6 +12215,7 @@ enum FsdmgrImport {
     FsdmgrDeregisterVolume,
     FsdmgrDeviceHandleToHdsk,
     FsdmgrDiskIoControl,
+    FsdmgrEmptyLockContainer,
     FsdmgrFlushCache,
     FsdmgrFormatVolume,
     FsdmgrGetDiskInfo,
@@ -12126,12 +12228,17 @@ enum FsdmgrImport {
     FsdmgrGetMountFlags,
     FsdmgrInvalidateCache,
     FsdmgrParseSecurityDescriptor,
+    FsdmgrInstallFileLock,
     FsdmgrReadDisk,
     FsdmgrReadDiskEx,
     FsdmgrRegisterVolume,
+    FsdmgrRemoveFileLock,
+    FsdmgrRemoveFileLockEx,
     FsdmgrResizeCache,
     FsdmgrScanVolume,
     FsdmgrSyncCache,
+    FsdmgrTestFileLock,
+    FsdmgrTestFileLockEx,
     FsdmgrWriteDisk,
     FsdmgrWriteDiskEx,
     StoremgrFsIoControlW,
@@ -12244,6 +12351,10 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             raw_arg(args, 5),
             raw_arg(args, 6),
         ),
+        FsdmgrImport::FsdmgrEmptyLockContainer => {
+            fsdmgr_empty_lock_container_raw(kernel, thread_id);
+            0
+        }
         FsdmgrImport::FsdmgrFlushCache => {
             let status = kernel.fsdmgr_flush_cache(raw_arg(args, 0));
             fsdmgr_cache_status_raw(kernel, thread_id, status)
@@ -12313,6 +12424,17 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             let status = kernel.fsdmgr_invalidate_cache(raw_arg(args, 0));
             fsdmgr_cache_status_raw(kernel, thread_id, status)
         }
+        FsdmgrImport::FsdmgrInstallFileLock => u32::from(fsdmgr_file_lock_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+            raw_arg(args, 5),
+            raw_arg(args, 6),
+            raw_arg(args, 7),
+            true,
+        )),
         FsdmgrImport::FsdmgrParseSecurityDescriptor => fsdmgr_parse_security_descriptor_raw(
             memory,
             raw_arg(args, 0),
@@ -12345,6 +12467,22 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ),
+        FsdmgrImport::FsdmgrRemoveFileLock => u32::from(fsdmgr_file_lock_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 2),
+            0,
+            raw_arg(args, 4),
+            raw_arg(args, 5),
+            raw_arg(args, 6),
+            false,
+        )),
+        FsdmgrImport::FsdmgrRemoveFileLockEx => u32::from(fsdmgr_remove_file_lock_ex_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 2),
+        )),
         FsdmgrImport::FsdmgrResizeCache => {
             let status = kernel.fsdmgr_resize_cache(raw_arg(args, 0));
             fsdmgr_cache_status_raw(kernel, thread_id, status)
@@ -12353,6 +12491,22 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             let status = kernel.fsdmgr_sync_cache(raw_arg(args, 0));
             fsdmgr_cache_status_raw(kernel, thread_id, status)
         }
+        FsdmgrImport::FsdmgrTestFileLock => u32::from(fsdmgr_test_file_lock_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 2),
+            raw_arg(args, 3) != 0,
+            raw_arg(args, 4),
+            None,
+        )),
+        FsdmgrImport::FsdmgrTestFileLockEx => u32::from(fsdmgr_test_file_lock_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 2),
+            raw_arg(args, 3) != 0,
+            raw_arg(args, 4),
+            Some((raw_arg(args, 5), raw_arg(args, 6))),
+        )),
         FsdmgrImport::FsdmgrWriteDisk => fsdmgr_write_disk_raw(
             kernel,
             memory,
@@ -12516,6 +12670,7 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         10 => Some(FsdmgrImport::FsdmgrDeregisterVolume),
         11 => Some(FsdmgrImport::FsdmgrDeviceHandleToHdsk),
         12 => Some(FsdmgrImport::FsdmgrDiskIoControl),
+        13 => Some(FsdmgrImport::FsdmgrEmptyLockContainer),
         14 => Some(FsdmgrImport::FsdmgrFlushCache),
         15 => Some(FsdmgrImport::FsdmgrFormatVolume),
         16 => Some(FsdmgrImport::FsdmgrGetDiskInfo),
@@ -12525,13 +12680,18 @@ fn fsdmgr_import_by_ordinal(ordinal: u32) -> Option<FsdmgrImport> {
         20 => Some(FsdmgrImport::FsdmgrGetRegistryValue),
         21 => Some(FsdmgrImport::FsdmgrGetVolumeHandle),
         22 => Some(FsdmgrImport::FsdmgrGetVolumeName),
+        23 => Some(FsdmgrImport::FsdmgrInstallFileLock),
         24 => Some(FsdmgrImport::FsdmgrInvalidateCache),
         25 => Some(FsdmgrImport::FsdmgrReadDisk),
         26 => Some(FsdmgrImport::FsdmgrReadDiskEx),
         27 => Some(FsdmgrImport::FsdmgrRegisterVolume),
+        28 => Some(FsdmgrImport::FsdmgrRemoveFileLock),
+        29 => Some(FsdmgrImport::FsdmgrRemoveFileLockEx),
         30 => Some(FsdmgrImport::FsdmgrResizeCache),
         31 => Some(FsdmgrImport::FsdmgrScanVolume),
         32 => Some(FsdmgrImport::FsdmgrSyncCache),
+        33 => Some(FsdmgrImport::FsdmgrTestFileLock),
+        34 => Some(FsdmgrImport::FsdmgrTestFileLockEx),
         37 => Some(FsdmgrImport::FsdmgrGetMountFlags),
         35 => Some(FsdmgrImport::FsdmgrWriteDisk),
         36 => Some(FsdmgrImport::FsdmgrWriteDiskEx),
@@ -12584,6 +12744,7 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsdmgr_deregistervolume" => Some(FsdmgrImport::FsdmgrDeregisterVolume),
         "fsdmgr_devicehandletohdsk" => Some(FsdmgrImport::FsdmgrDeviceHandleToHdsk),
         "fsdmgr_diskiocontrol" => Some(FsdmgrImport::FsdmgrDiskIoControl),
+        "fsdmgr_emptylockcontainer" => Some(FsdmgrImport::FsdmgrEmptyLockContainer),
         "fsdmgr_flushcache" => Some(FsdmgrImport::FsdmgrFlushCache),
         "fsdmgr_formatvolume" => Some(FsdmgrImport::FsdmgrFormatVolume),
         "fsdmgr_getdiskinfo" => Some(FsdmgrImport::FsdmgrGetDiskInfo),
@@ -12594,14 +12755,19 @@ fn fsdmgr_import_by_name(name: &str) -> Option<FsdmgrImport> {
         "fsdmgr_getvolumehandle" => Some(FsdmgrImport::FsdmgrGetVolumeHandle),
         "fsdmgr_getvolumename" => Some(FsdmgrImport::FsdmgrGetVolumeName),
         "fsdmgr_getmountflags" => Some(FsdmgrImport::FsdmgrGetMountFlags),
+        "fsdmgr_installfilelock" => Some(FsdmgrImport::FsdmgrInstallFileLock),
         "fsdmgr_invalidatecache" => Some(FsdmgrImport::FsdmgrInvalidateCache),
         "fsdmgr_parsesecuritydescriptor" => Some(FsdmgrImport::FsdmgrParseSecurityDescriptor),
         "fsdmgr_readdisk" => Some(FsdmgrImport::FsdmgrReadDisk),
         "fsdmgr_readdiskex" => Some(FsdmgrImport::FsdmgrReadDiskEx),
         "fsdmgr_registervolume" => Some(FsdmgrImport::FsdmgrRegisterVolume),
+        "fsdmgr_removefilelock" => Some(FsdmgrImport::FsdmgrRemoveFileLock),
+        "fsdmgr_removefilelockex" => Some(FsdmgrImport::FsdmgrRemoveFileLockEx),
         "fsdmgr_resizecache" => Some(FsdmgrImport::FsdmgrResizeCache),
         "fsdmgr_scanvolume" => Some(FsdmgrImport::FsdmgrScanVolume),
         "fsdmgr_synccache" => Some(FsdmgrImport::FsdmgrSyncCache),
+        "fsdmgr_testfilelock" => Some(FsdmgrImport::FsdmgrTestFileLock),
+        "fsdmgr_testfilelockex" => Some(FsdmgrImport::FsdmgrTestFileLockEx),
         "fsdmgr_writedisk" => Some(FsdmgrImport::FsdmgrWriteDisk),
         "fsdmgr_writediskex" => Some(FsdmgrImport::FsdmgrWriteDiskEx),
         "storemgr_fsiocontrolw" => Some(FsdmgrImport::StoremgrFsIoControlW),

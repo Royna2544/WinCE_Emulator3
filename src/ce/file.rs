@@ -1180,6 +1180,42 @@ impl HostFileSystem {
         Ok(FileLockStatus::Success)
     }
 
+    pub fn unlock_file_ranges_owned_by_id(&mut self, id: u32) -> Result<FileLockStatus> {
+        self.open_file(id)?;
+        self.unlock_file_ranges_owned_by_any_path(id);
+        Ok(FileLockStatus::Success)
+    }
+
+    pub fn test_file_lock_range(
+        &self,
+        id: u32,
+        start: u64,
+        length: u64,
+        read: bool,
+    ) -> Result<FileLockStatus> {
+        let Some(finish) = file_lock_finish(start, length) else {
+            return Ok(FileLockStatus::InvalidParameter);
+        };
+        let file = self.open_file(id)?;
+        let Some(locks) = self.file_locks.get(&file.host_path) else {
+            return Ok(FileLockStatus::Success);
+        };
+        let conflicts = locks.iter().any(|lock| {
+            lock.owner_file_id != id
+                && file_lock_ranges_overlap(start, finish, lock.start, lock.finish)
+                && (!read || lock.exclusive)
+        });
+        Ok(if conflicts {
+            FileLockStatus::Conflict
+        } else {
+            FileLockStatus::Success
+        })
+    }
+
+    pub fn file_cursor(&self, id: u32) -> Result<usize> {
+        Ok(self.open_file(id)?.cursor)
+    }
+
     pub fn file_is_eof(&self, id: u32) -> Result<bool> {
         Ok(self.open_file(id)?.is_eof())
     }
@@ -1399,6 +1435,13 @@ impl HostFileSystem {
                 self.file_locks.remove(host_path);
             }
         }
+    }
+
+    fn unlock_file_ranges_owned_by_any_path(&mut self, id: u32) {
+        self.file_locks.retain(|_, locks| {
+            locks.retain(|lock| lock.owner_file_id != id);
+            !locks.is_empty()
+        });
     }
 
     fn translate_guest_path(&self, guest_path: &str) -> Result<PathBuf> {

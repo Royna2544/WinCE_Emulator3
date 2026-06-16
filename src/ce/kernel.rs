@@ -4451,6 +4451,34 @@ impl CeKernel {
         self.files.unlock_file_range(file.file_id, start, length)
     }
 
+    pub fn unlock_file_ranges_owned_by_handle(&mut self, handle: u32) -> Result<FileLockStatus> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.files.unlock_file_ranges_owned_by_id(file.file_id)
+    }
+
+    pub fn test_file_lock_range(
+        &self,
+        handle: u32,
+        start: u64,
+        length: u64,
+        read: bool,
+    ) -> Result<FileLockStatus> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.files
+            .test_file_lock_range(file.file_id, start, length, read)
+    }
+
+    pub fn file_cursor(&self, handle: u32) -> Result<usize> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        self.files.file_cursor(file.file_id)
+    }
+
     pub fn close_handle(&mut self, handle: u32) -> Result<bool> {
         let object = self.handles.get(handle)?.clone();
         let detail = self.describe_handle(handle);

@@ -784,6 +784,7 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 10
                     | 11
                     | 12
+                    | 13
                     | 14
                     | 15
                     | 16
@@ -793,13 +794,18 @@ fn is_supported_fsdmgr_import(import: &ImportBy) -> bool {
                     | 20
                     | 21
                     | 22
+                    | 23
                     | 24
                     | 25
                     | 26
                     | 27
+                    | 28
+                    | 29
                     | 30
                     | 31
                     | 32
+                    | 33
+                    | 34
                     | 35
                     | 36
                     | 37
@@ -2299,6 +2305,304 @@ mod tests {
         let _ = kernel.close_handle(internal_find_handle);
         let _ = kernel.close_handle(opened);
         let _ = kernel.close_handle(created);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fsdmgr_file_lock_imports_route_existing_range_lock_state() {
+        const ERROR_INVALID_HANDLE: u32 = 6;
+        const ERROR_LOCK_VIOLATION: u32 = 33;
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const GENERIC_WRITE: u32 = 0x4000_0000;
+        const CREATE_ALWAYS: u32 = 2;
+        const OPEN_EXISTING: u32 = 3;
+        const LOCKFILE_EXCLUSIVE_LOCK: u32 = 2;
+
+        fn map_overlapped(memory: &mut TestMemory, addr: u32, offset_low: u32, offset_high: u32) {
+            let mut bytes = [0u8; 20];
+            bytes[8..12].copy_from_slice(&offset_low.to_le_bytes());
+            bytes[12..16].copy_from_slice(&offset_high.to_le_bytes());
+            memory.map_bytes(addr, &bytes);
+        }
+
+        let imports = vec![ImportDescriptor {
+            module_name: "fsdmgr.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSEXT_CreateFileW".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(23),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2008,
+                    iat_rva: 0x3008,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_TestFileLockEx".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x200c,
+                    iat_rva: 0x300c,
+                    import: ImportBy::Ordinal(33),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2010,
+                    iat_rva: 0x3010,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_RemoveFileLock".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2014,
+                    iat_rva: 0x3014,
+                    import: ImportBy::Ordinal(29),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2018,
+                    iat_rva: 0x3018,
+                    import: ImportBy::Ordinal(13),
+                },
+                ImportThunk {
+                    thunk_rva: 0x201c,
+                    iat_rva: 0x301c,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "FSDMGR_InstallFileLock".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2020,
+                    iat_rva: 0x3020,
+                    import: ImportBy::Ordinal(28),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+        assert_eq!(table.len(), 9);
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "wince_fsdmgr_file_lock_imports_{}",
+                std::process::id()
+            ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        kernel.mount_guest_root("\\ResidentFlash", root.clone());
+
+        let mut memory = TestMemory::default();
+        let path = 0x1000_0000;
+        let lock_overlapped = 0x1000_0100;
+        let peer_overlapped = 0x1000_0200;
+        memory.map_wide_z(path, "\\ResidentFlash\\locked.bin");
+        map_overlapped(&mut memory, lock_overlapped, 3, 0);
+        map_overlapped(&mut memory, peer_overlapped, 5, 0);
+
+        let file = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [
+                    path,
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    0,
+                    CREATE_ALWAYS,
+                    0,
+                    0,
+                ],
+            )
+            .unwrap();
+        assert_ne!(file, u32::MAX);
+        let peer_file = table
+            .dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE,
+                [
+                    path,
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    0,
+                    OPEN_EXISTING,
+                    0,
+                    0,
+                ],
+            )
+            .unwrap();
+        assert_ne!(peer_file, u32::MAX);
+        assert_ne!(peer_file, file);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [
+                    0xaaaa,
+                    0xbbbb,
+                    file,
+                    LOCKFILE_EXCLUSIVE_LOCK,
+                    0,
+                    7,
+                    0,
+                    lock_overlapped,
+                ],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [0, 0, peer_file, 1, 2, 5, 0],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_LOCK_VIOLATION);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [0, 0, file, 1, 2, 5, 0],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+                [0, 0, peer_file, 1, 2],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 4,
+                [0, 0, file, 0, 7, 0, lock_overlapped],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [0, 0, peer_file, 1, 2, 5, 0],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 7,
+                [0, 0, peer_file, 0, 0, 2, 0, peer_overlapped],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 5,
+                [0, 0, peer_file],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [0, 0, file, 0, 2, 5, 0],
+            ),
+            Some(1)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 6,
+                [0],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), 0);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 8,
+                [0, 0, 0xfeed_face, 0, 2, 0, lock_overlapped],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_HANDLE);
+
+        let _ = kernel.close_handle(file);
+        let _ = kernel.close_handle(peer_file);
         let _ = fs::remove_dir_all(root);
     }
 

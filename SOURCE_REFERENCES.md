@@ -589,15 +589,24 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp` shows the
     external wrapper safely copying a 20-byte `OVERLAPPED` before entering the
     internal FSD path and returning `ERROR_INVALID_PARAMETER` when that copy
-    fails. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\LOCKMGR\range.cpp`,
+    fails. `C:\WINCE600\PUBLIC\COMMON\SDK\INC\lockmgr.h`,
+    `C:\WINCE600\PUBLIC\COMMON\SDK\INC\lockmgrtypes.h`,
+    `C:\WINCE600\PUBLIC\COMMON\SDK\INC\lockmgrhelp.h`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\LOCKMGR\range.cpp`,
     `lockmgrapi.cpp`, and `lockmgr.cpp` show the inclusive
     `start + length - 1` range model, zero/wrapping range rejection,
-    shared-vs-exclusive conflict checks, exact owner/range unlock, and
-    close-handle lock cleanup through `LXX_UnlockLocksOwnedByHandle`. v3 now
-    exposes the public coredll ordinals, validates wrapper-visible inputs, and
-    enforces host-backed byte-range owner/conflict state for immediate callers;
-    remaining parity is CE-style wait queues for non-immediate conflicts plus
-    lower-FSD/filter forwarding.
+    shared-vs-exclusive conflict checks, exact owner/range unlock,
+    owner-wide unlock through `LXX_UnlockLocksOwnedByHandle`, current-position
+    and explicit-offset test probes, callback-based `FILELOCKSTATE`
+    acquisition, and the wait/retry path for lock conflicts. v3 now exposes the
+    public coredll ordinals plus direct FSDMGR lock-manager imports
+    `FSDMGR_EmptyLockContainer @13`, `FSDMGR_InstallFileLock @23`,
+    `FSDMGR_RemoveFileLock @28`, `FSDMGR_RemoveFileLockEx @29`,
+    `FSDMGR_TestFileLock @33`, and `FSDMGR_TestFileLockEx @34`, validates
+    wrapper-visible inputs, and enforces host-backed byte-range owner/conflict
+    state for immediate callers; remaining parity is CE acquire/release callback
+    forwarding, wait queues for non-immediate conflicts, and lower-FSD/filter
+    forwarding.
     `volumeapi.cpp` handles
     `FSCTL_GET_VOLUME_INFO` before forwarding other controls to the mounted
     FSD hook; v3 now also proves the `STOREMGR_FsIoControlW` import path for

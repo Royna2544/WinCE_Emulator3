@@ -157,6 +157,22 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   requires exact owner/range unlock, and drops a handle's owned locks on close.
   Remaining file-lock parity is CE-style blocking wait queues for non-immediate
   conflicts plus lower-FSD/filter forwarding.
+- `src/ce/coredll.rs`, `src/ce/file.rs`, `src/ce/kernel.rs`, and
+  `src/emulator/imports.rs`: direct `fsdmgr.dll` lock-manager imports now route
+  `FSDMGR_EmptyLockContainer @13`, `FSDMGR_InstallFileLock @23`,
+  `FSDMGR_RemoveFileLock @28`, `FSDMGR_RemoveFileLockEx @29`,
+  `FSDMGR_TestFileLock @33`, and `FSDMGR_TestFileLockEx @34` through the same
+  host-backed range-lock state. The slice covers readable `OVERLAPPED` lock
+  installation/removal, exact-range unlock, owner-wide unlock, current-cursor
+  and explicit-offset test probes, peer conflict detection, and import
+  allowlisting by name and ordinal. Remaining parity is CE acquire/release
+  callback forwarding, blocking wait queues, and lower-FSD/filter forwarding.
+- Validation after the direct FSDMGR file-lock import slice:
+  `cargo fmt --check`, `git diff --check`, focused
+  `cargo test -j 1 --features unicorn,trace,win32-desktop
+  fsdmgr_file_lock_imports_route_existing_range_lock_state`,
+  `cargo check --features unicorn,trace,win32-desktop`, and full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` passed.
 - Validation after the CE file-lock range slice: `cargo fmt --check`, `cargo
   check --features unicorn,trace,win32-desktop`, `git diff --check`, focused
   `cargo test -j 1 --features unicorn,trace,win32-desktop --test
