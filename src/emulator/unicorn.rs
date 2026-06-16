@@ -7332,7 +7332,10 @@ impl UnicornMips {
                     }
                     return;
                 }
-                let caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+                let raw_caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+                let caller_pc =
+                    mips_trampoline_origin_for_pc(raw_caller_pc, unsafe { &*trampoline_jumps_ptr })
+                        .unwrap_or(raw_caller_pc);
                 let caller_module =
                     mapped_blob_module_for_pc(unsafe { &*mapped_blobs_ptr }, caller_pc);
                 let Some(import_return) = traps
