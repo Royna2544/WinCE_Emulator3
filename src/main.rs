@@ -58,6 +58,8 @@ const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 5_000;
 // fresh-Unicorn restart cost (blob copy + retranslation) every second.
 const REMOTE_LIVE_RUN_SLICE_MS: u64 = HOST_REMOTE_BUSY_RUN_SLICE_MS;
 const REMOTE_LIVE_RUN_SLICE_ENV: &str = "WINCE_EMU_REMOTE_LIVE_RUN_SLICE_MS";
+const REMOTE_DEBUG_PUBLISH_INTERVAL_MS: u64 = 500;
+const REMOTE_DEBUG_PUBLISH_INTERVAL_ENV: &str = "WINCE_EMU_REMOTE_DEBUG_PUBLISH_INTERVAL_MS";
 const COMPANION_START_DELAY_MS: u64 = 1_000;
 const COMPANION_INSTRUCTION_LIMIT: usize = 250_000_000;
 #[cfg(windows)]
@@ -1100,6 +1102,14 @@ fn remote_live_run_slice_ms() -> u64 {
         .unwrap_or(REMOTE_LIVE_RUN_SLICE_MS)
 }
 
+fn remote_debug_publish_interval() -> Duration {
+    std::env::var(REMOTE_DEBUG_PUBLISH_INTERVAL_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_millis(REMOTE_DEBUG_PUBLISH_INTERVAL_MS))
+}
+
 fn should_rotate_idle_remote_receiver_parked_process(
     active_has_receiver_work: bool,
     active_has_visible_receiver_work: bool,
@@ -1486,6 +1496,9 @@ fn publish_remote_endpoint(
         server.publish_status(&kernel.remote_status());
         server.publish_recent_logs(kernel.remote.recent_log_lines(4096));
         server.publish_framebuffer(framebuffer);
+        if !server.claim_debug_publish_slot(remote_debug_publish_interval()) {
+            return;
+        }
         server.publish_debug_text("windows", live_kernel_windows_text(kernel));
         server.publish_debug_text("messages", live_kernel_messages_text(kernel));
         server.publish_debug_text("processes-live", live_kernel_processes_text(kernel));

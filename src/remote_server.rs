@@ -157,6 +157,7 @@ struct RemoteServerState {
     latest_status: Mutex<Value>,
     latest_framebuffer: Mutex<Option<RemoteFramebufferImage>>,
     latest_debug: Mutex<BTreeMap<String, String>>,
+    latest_debug_publish: Mutex<Option<Instant>>,
     recent_logs: Mutex<VecDeque<String>>,
     audio: Mutex<RemoteAudioState>,
 }
@@ -225,6 +226,7 @@ impl RemoteServer {
                 })),
                 latest_framebuffer: Mutex::new(None),
                 latest_debug: Mutex::new(BTreeMap::new()),
+                latest_debug_publish: Mutex::new(None),
                 recent_logs: Mutex::new(VecDeque::new()),
                 audio: Mutex::new(RemoteAudioState {
                     chunks: VecDeque::new(),
@@ -349,6 +351,23 @@ impl RemoteServer {
             .lock()
             .expect("remote debug mutex")
             .insert(key.into(), text.into());
+    }
+
+    pub fn claim_debug_publish_slot(&self, interval: Duration) -> bool {
+        if interval.is_zero() {
+            return true;
+        }
+        let now = Instant::now();
+        let mut latest = self
+            .state
+            .latest_debug_publish
+            .lock()
+            .expect("remote debug publish mutex");
+        if latest.is_some_and(|last| now.duration_since(last) < interval) {
+            return false;
+        }
+        *latest = Some(now);
+        true
     }
 
     pub fn publish_recent_logs(&self, lines: impl IntoIterator<Item = String>) {
