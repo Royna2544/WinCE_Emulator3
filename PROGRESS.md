@@ -15,6 +15,26 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`,
+  `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: raw
+  `GetFileVersionInfoSizeW`/`GetFileVersionInfoW` now follow CE
+  `resource.cpp` by extracting integer `RT_VERSION/VS_VERSION_INFO` resources
+  from PE files, validating `VS_FFI_SIGNATURE`, clearing the size API handle
+  out-param, returning `ERROR_INVALID_DATA` for malformed version blocks, and
+  rewriting copied `VERHEAD.wTotLen` to the bounded caller copy length.
+- Validation after the CE version-resource slice: `cargo fmt --check`,
+  focused `cargo test -j 1 --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel
+  coredll_raw_get_file_version_info_reads_ce_version_resource -- --nocapture`,
+  `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_kernel`, full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop`, and
+  `git diff --check` passed. Logs are under
+  `target/cargo-test-file-version-info-20260616-152613.*.log`,
+  `target/cargo-check-features-version-info-20260616-152734.*.log`,
+  `target/cargo-test-coredll-raw-kernel-version-info-20260616-152743.*.log`,
+  and `target/cargo-test-full-features-version-info-20260616-152751.*.log`;
+  `git diff --check` output was limited to CRLF normalization warnings.
 - `src/ce/coredll.rs`, `src/emulator/unicorn.rs`, `tests/support/mod.rs`, and
   `tests/coredll_raw_gwe.rs`: DeviceEmulator `GETRAWFRAMEBUFFER` now maps the
   returned `IMAGE_FRAMEBUFFER_UA_BASE` range when needed and writes a

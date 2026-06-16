@@ -2883,6 +2883,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 - COREDLL resources:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/resource.cpp`
+  and `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp`
   - `FindResourceW` searches MUI first and then base module resources.
   - `LoadResource` returns the data pointer computed from module base plus
     resource RVA.
@@ -2891,6 +2892,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - `LoadStringW` locates the string-table segment `(id >> 4) + 1`, advances
     by counted UTF-16 strings, copies at most `nBufMax - 1` characters, and
     appends a null terminator.
+  - `GetFileVersionInfoSizeW` and `GetFileVersionInfoW` extract integer
+    `RT_VERSION/VS_VERSION_INFO` resources, validate the copied
+    `VS_FIXEDFILEINFO.dwSignature` against `VS_FFI_SIGNATURE`, reject malformed
+    length/signature data with `ERROR_INVALID_DATA`, clear the size API's
+    `lpdwHandle`, and rewrite copied `VERHEAD.wTotLen` to the bounded caller
+    copy length.
 
 - COM/OLE initialization reference:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/DEVICE/SERVICES/CORE/servcom.cpp`

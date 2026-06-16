@@ -150,6 +150,7 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
 ## Recently Closed From Source State
 
 - `ExtractIconExW` no longer appears to be synthetic-only: current source reads PE resources, chooses an icon group, builds color/mask bitmaps, creates icon handles, and falls back to shell icons for index zero.
+- `GetFileVersionInfoSizeW`/`GetFileVersionInfoW` no longer report universal absence of version resources: current source reads integer `RT_VERSION/VS_VERSION_INFO` resources from PE files, validates `VS_FFI_SIGNATURE`, reports malformed data with `ERROR_INVALID_DATA`, and rewrites the copied `VERHEAD.wTotLen` to the bounded copy length.
 - File-change notification coalescing now handles duplicate records, transient create/delete churn, and modified/delete collapse.
 - Destroying a cross-thread `SendMessageTimeout` target now writes a zero result to `lpdwResult` for the completed destroyed-target case.
 - System and hidden mounted-volume attributes are now source-backed: nested
