@@ -12648,6 +12648,101 @@ fn coredll_raw_transparent_image_copies_selected_bitmap_with_color_key() -> Resu
 }
 
 #[test]
+fn coredll_raw_transparent_image_accepts_bitmap_source_handle() -> Result<()> {
+    const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
+    const DISPPERF_ROP_TRANSPARENT_BLT: u32 = 0x0000_cccc;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let mut framebuffer = VirtualFramebuffer::new(4, 4, PixelFormat::Rgb565)?;
+    framebuffer.pixels_mut().fill(0xff);
+    let _ = framebuffer.take_dirty_rects();
+
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    let (_src_dc, src_bitmap, src_bits, _src_stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    memory.write_bytes(
+        src_bits,
+        &[
+            0xff, 0x00, 0xff, 0xff, // transparent magenta
+            0x00, 0xff, 0x00, 0xff, // green
+            0xff, 0x00, 0x00, 0xff, // blue
+            0x00, 0x00, 0xff, 0xff, // red
+        ],
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_TRANSPARENT_IMAGE,
+            [
+                screen_dc,
+                1,
+                1,
+                2,
+                2,
+                src_bitmap,
+                0,
+                0,
+                2,
+                2,
+                MAGENTA_COLORREF,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 1), 0xffff);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 1), 0x07e0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 2), 0x001f);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 2), 0xf800);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let timing = kernel.display_perf_timing_bytes();
+    let transparent_timing = timing
+        .chunks_exact(64)
+        .find(|row| {
+            u32::from_le_bytes(row[0..4].try_into().unwrap()) == DISPPERF_ROP_TRANSPARENT_BLT
+        })
+        .expect("transparent blit timing row should be recorded");
+    assert_eq!(
+        u32::from_le_bytes(transparent_timing[40..44].try_into().unwrap()),
+        0,
+        "bitmap HANDLE sources must not count as video memory"
+    );
+    assert_eq!(
+        u32::from_le_bytes(transparent_timing[44..48].try_into().unwrap()),
+        1
+    );
+    assert_eq!(
+        u32::from_le_bytes(transparent_timing[60..64].try_into().unwrap()),
+        1
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_copies_between_framebuffer_hdc_with_color_key() -> Result<()> {
     const BLACK_COLORREF: u32 = 0x0000_0000;
     const WHITE_COLORREF: u32 = 0x00ff_ffff;

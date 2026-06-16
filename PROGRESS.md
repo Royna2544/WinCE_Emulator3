@@ -15,6 +15,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/coredll.rs` and `tests/coredll_raw_gwe.rs`: raw
+  `TransparentImage` now follows CE `wingdi.h`/`draw.cpp::TransparentBltBitmapTest`
+  by accepting a direct bitmap `HANDLE` as `hSrc` in addition to HDC sources.
+  The bitmap-handle route reuses the color-key blit path and keeps DISPPERF
+  source-video-memory accounting clear for system-memory bitmap sources.
 - `src/emulator/unicorn.rs`: escaped cross-thread visible-message WNDPROC
   callouts that already reached their saved import PC now restore the captured
   `ResumeImportAfterWndProc` thread/register context instead of being archived

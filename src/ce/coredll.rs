@@ -43613,7 +43613,16 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
     let src_height = raw_i32_arg(args, 9);
     let transparent_color = raw_arg(args, 10);
     let mut routed_through_blt = false;
-    if !is_valid_hdc(kernel, dst) || !is_valid_hdc(kernel, src) {
+    let src_is_hdc = is_valid_hdc(kernel, src);
+    let src_bitmap = if src_is_hdc {
+        kernel
+            .resources
+            .selected_bitmap(src)
+            .and_then(|handle| kernel.resources.bitmap(handle).cloned())
+    } else {
+        kernel.resources.bitmap(src).cloned()
+    };
+    if !is_valid_hdc(kernel, dst) || (!src_is_hdc && src_bitmap.is_none()) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -43631,9 +43640,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    if kernel.resources.is_memory_dc(src)
-        && let Some(src_bitmap_handle) = kernel.resources.selected_bitmap(src)
-        && let Some(src_bitmap) = kernel.resources.bitmap(src_bitmap_handle).cloned()
+    if let Some(src_bitmap) = src_bitmap
         && src_bitmap.bits_ptr != 0
         && src_bitmap.width > 0
         && src_bitmap.height > 0
@@ -43699,7 +43706,10 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
             }
         }
     }
-    if !routed_through_blt && let Some(framebuffer) = framebuffer.as_deref_mut() {
+    if !routed_through_blt
+        && src_is_hdc
+        && let Some(framebuffer) = framebuffer.as_deref_mut()
+    {
         routed_through_blt = draw_framebuffer_to_framebuffer_transparent(
             kernel,
             framebuffer,
@@ -43720,7 +43730,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
         kernel.record_display_perf_gpe_with_params(
             DISPPERF_ROP_TRANSPARENT_BLT,
             crate::ce::kernel::DisplayPerfBltParams {
-                src_in_video_mem: !kernel.resources.is_memory_dc(src),
+                src_in_video_mem: src_is_hdc && !kernel.resources.is_memory_dc(src),
                 dest_in_video_mem: !kernel.resources.is_memory_dc(dst),
                 transparent: true,
                 ..crate::ce::kernel::DisplayPerfBltParams::default()

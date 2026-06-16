@@ -2623,6 +2623,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     seeding with `SetPixel`. Raw `TransparentImage` now mirrors those
     same-framebuffer HDC copies with a source framebuffer snapshot, preserving
     CE color-key behavior even when source and destination are the same HDC.
+    CE `wingdi.h` declares `TransparentImage` with a generic `HANDLE hSrc`,
+    and `draw.cpp::TransparentBltBitmapTest` passes an `HBITMAP` directly as
+    that source handle after drawing into compatible bitmap backing. Raw
+    `TransparentImage` now accepts both HDC and bitmap source handles; direct
+    bitmap sources reuse the selected-DIB color-key blit path and are not
+    counted as video-memory sources in DISPPERF rows.
     CE `draw.cpp::NegativeSize(ETransparentImage)` and
     `StretchBltFlipMirrorTest(ETransparentImage)` also expect signed
     destination and source extents to succeed with the CE bottom/right +1
