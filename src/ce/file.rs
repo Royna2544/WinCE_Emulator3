@@ -37,8 +37,8 @@ const CE_VOLUME_DEFAULT_BLOCK_SIZE: u32 = 4096;
 const AFS_FLAG_HIDDEN: u32 = 0x0001;
 const AFS_FLAG_SYSTEM: u32 = 0x0020;
 const AFS_FLAG_PERMANENT: u32 = 0x0040;
-const READ_ONLY_MEMORY_BACKING_MIN_BYTES: usize = 1024 * 1024;
-const READ_ONLY_MEMORY_BACKING_MAX_BYTES: usize = 128 * 1024 * 1024;
+const MEMORY_BACKING_MIN_BYTES: usize = 1024 * 1024;
+const MEMORY_BACKING_MAX_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct HostFileSystem {
@@ -374,6 +374,25 @@ impl fmt::Debug for FileBacking {
             Self::HostFile(_) => f.write_str("HostFile(<open>)"),
         }
     }
+}
+
+fn memory_backing_bounds() -> std::ops::RangeInclusive<usize> {
+    MEMORY_BACKING_MIN_BYTES..=MEMORY_BACKING_MAX_BYTES
+}
+
+fn existing_writable_memory_backing(
+    host_path: &Path,
+    file_len: usize,
+) -> Result<Option<FileBacking>> {
+    if !memory_backing_bounds().contains(&file_len) {
+        return Ok(None);
+    }
+
+    let bytes = fs::read(host_path).map_err(|source| Error::Io {
+        path: host_path.to_path_buf(),
+        source,
+    })?;
+    Ok(Some(FileBacking::Memory(bytes)))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -799,7 +818,17 @@ impl HostFileSystem {
                         self.invalidate_read_only_cache(&host_path);
                         let (file, writable) =
                             open_existing_host_file(&host_path, requested_writable)?;
-                        (FileBacking::HostFile(file), file_len, writable)
+                        if writable {
+                            if let Some(backing) =
+                                existing_writable_memory_backing(&host_path, file_len)?
+                            {
+                                (backing, file_len, true)
+                            } else {
+                                (FileBacking::HostFile(file), file_len, true)
+                            }
+                        } else {
+                            (FileBacking::HostFile(file), file_len, false)
+                        }
                     }
                 }
                 OPEN_ALWAYS => {
@@ -1527,9 +1556,7 @@ impl HostFileSystem {
         metadata: &fs::Metadata,
         file_len: usize,
     ) -> Result<Option<FileBacking>> {
-        if !(READ_ONLY_MEMORY_BACKING_MIN_BYTES..=READ_ONLY_MEMORY_BACKING_MAX_BYTES)
-            .contains(&file_len)
-        {
+        if !memory_backing_bounds().contains(&file_len) {
             return Ok(None);
         }
 
@@ -2439,9 +2466,9 @@ mod tests {
     }
 
     #[test]
-    fn readwrite_existing_host_files_do_not_preload_contents() {
+    fn readwrite_existing_bounded_host_files_use_private_memory_backing() {
         let root = std::env::temp_dir().join(format!(
-            "wince_file_readwrite_stream_{}",
+            "wince_file_readwrite_memory_{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
@@ -2462,8 +2489,8 @@ mod tests {
             )
             .unwrap();
         let open = fs.open_file(id).unwrap();
-        assert!(open.is_host_file_backed());
-        assert_eq!(open.memory_len(), 0);
+        assert!(open.is_memory_backed());
+        assert_eq!(open.memory_len(), 2 * 1024 * 1024);
         assert_eq!(open.file_len(), 2 * 1024 * 1024);
 
         fs.set_file_pointer(id, 1024 * 1024).unwrap();
@@ -2477,6 +2504,36 @@ mod tests {
         let mut written = [0u8; 8];
         verify.read_exact(&mut written).unwrap();
         assert_eq!(&written, b"-written");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn readwrite_existing_oversized_host_files_do_not_preload_contents() {
+        let root = std::env::temp_dir().join(format!(
+            "wince_file_readwrite_stream_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("oversized-rw.bin");
+        let file = fs::File::create(&path).unwrap();
+        file.set_len((MEMORY_BACKING_MAX_BYTES + 1) as u64).unwrap();
+        drop(file);
+
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w(
+                "\\oversized-rw.bin",
+                GENERIC_READ | GENERIC_WRITE,
+                OPEN_EXISTING,
+            )
+            .unwrap();
+        let open = fs.open_file(id).unwrap();
+        assert!(open.is_host_file_backed());
+        assert_eq!(open.memory_len(), 0);
+        assert_eq!(open.file_len(), MEMORY_BACKING_MAX_BYTES + 1);
+
+        fs.close(id).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2590,7 +2647,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let mut bytes: Vec<u8> = (0..=255)
             .cycle()
-            .take(READ_ONLY_MEMORY_BACKING_MIN_BYTES + 4096)
+            .take(MEMORY_BACKING_MIN_BYTES + 4096)
             .collect();
         fs::write(root.join("pack.bin"), &bytes).unwrap();
 
