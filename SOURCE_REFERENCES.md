@@ -1189,7 +1189,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     caller bitmap backing into icon-owned storage, and `DestroyIcon` releases
     only bitmaps marked as icon-owned. This also lets `ImageList_GetIcon` and
     PE-extracted icons free their owned backing storage without deleting caller
-    source bitmaps.
+    source bitmaps. Raw `ImageList_GetIcon` coverage now also verifies the
+    returned icon-owned mask/color bitmaps survive source `ImageList_Destroy`
+    and remain visible through `GetIconInfo` until `DestroyIcon`.
     The local
     resource image list now returns failure for invalid or undersized source
     bitmaps on both `ImageList_Add` and `ImageList_AddMasked` instead of

@@ -10250,6 +10250,54 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         0x80,
         "CE ImageList_GetIcon initializes unmasked icon masks to white"
     );
+    let unmasked_icon_color = memory.read_u32(unmasked_icon_info_ptr + 16)?;
+    assert_ne!(unmasked_icon_color, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DESTROY,
+            [resource_loaded],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.image_list(resource_loaded).is_none());
+    assert!(
+        kernel.resources.bitmap(unmasked_icon_mask).is_some(),
+        "CE ImageList_GetIcon returns an icon whose mask survives source list destruction"
+    );
+    assert!(
+        kernel.resources.bitmap(unmasked_icon_color).is_some(),
+        "CE ImageList_GetIcon returns an icon whose color bitmap survives source list destruction"
+    );
+    for offset in (0..20).step_by(4) {
+        memory.write_u32(unmasked_icon_info_ptr + offset, 0)?;
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ICON_INFO,
+            [unmasked_icon, unmasked_icon_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(unmasked_icon_info_ptr + 12)?,
+        unmasked_icon_mask
+    );
+    assert_eq!(
+        memory.read_u32(unmasked_icon_info_ptr + 16)?,
+        unmasked_icon_color
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -10263,6 +10311,9 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
+    assert!(kernel.resources.icon(unmasked_icon).is_none());
+    assert!(kernel.resources.bitmap(unmasked_icon_mask).is_none());
+    assert!(kernel.resources.bitmap(unmasked_icon_color).is_none());
 
     memory.write_wide_z(bitmap_path_ptr, r"\Images\masked.bmp");
     assert!(matches!(

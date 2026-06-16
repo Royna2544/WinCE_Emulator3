@@ -920,13 +920,18 @@ fn heap_spillover_perms() -> MemoryPerms {
 #[derive(Debug, Clone)]
 struct MappedCodeIndex {
     blobs: Vec<MappedBlob>,
-    page_to_blob: HashMap<u32, usize>,
+    page_to_blobs: HashMap<u32, Vec<usize>>,
+    static_code_blobs: Vec<bool>,
 }
 
 #[cfg(feature = "unicorn")]
 impl MappedCodeIndex {
     fn new(blobs: Vec<MappedBlob>) -> Self {
-        let mut page_to_blob = HashMap::new();
+        let mut page_to_blobs: HashMap<u32, Vec<usize>> = HashMap::new();
+        let static_code_blobs = blobs
+            .iter()
+            .map(|blob| mapped_blob_is_static_code(blob))
+            .collect();
         for (index, blob) in blobs.iter().enumerate() {
             if blob.bytes.is_empty() {
                 continue;
@@ -937,17 +942,55 @@ impl MappedCodeIndex {
                 .saturating_add(blob.bytes.len().saturating_sub(1) as u32)
                 >> 12;
             for page in first_page..=last_page {
-                page_to_blob.entry(page).or_insert(index);
+                page_to_blobs.entry(page).or_default().push(index);
             }
         }
         Self {
             blobs,
-            page_to_blob,
+            page_to_blobs,
+            static_code_blobs,
         }
     }
 
+    fn read_static_code_u32(&self, address: u32) -> Option<u32> {
+        self.find_blob_index(address)
+            .filter(|index| self.static_code_blobs.get(*index).copied().unwrap_or(false))
+            .and_then(|index| self.read_blob_u32(index, address))
+    }
+
     fn read_u32(&self, address: u32) -> Option<u32> {
-        let blob = self.blobs.get(*self.page_to_blob.get(&(address >> 12))?)?;
+        let index = self.find_blob_index(address)?;
+        self.read_blob_u32(index, address)
+    }
+
+    fn label(&self, address: u32) -> Option<String> {
+        let index = self.find_blob_index(address)?;
+        let blob = self.blobs.get(index)?;
+        let offset = address.checked_sub(blob.base)? as usize;
+        if offset < blob.bytes.len() {
+            Some(format!("{}+0x{offset:x}", blob.name))
+        } else {
+            None
+        }
+    }
+
+    fn find_blob_index(&self, address: u32) -> Option<usize> {
+        self.page_to_blobs
+            .get(&(address >> 12))?
+            .iter()
+            .copied()
+            .find(|index| {
+                self.blobs.get(*index).is_some_and(|blob| {
+                    address
+                        .checked_sub(blob.base)
+                        .and_then(|offset| usize::try_from(offset).ok())
+                        .is_some_and(|offset| offset < blob.bytes.len())
+                })
+            })
+    }
+
+    fn read_blob_u32(&self, index: usize, address: u32) -> Option<u32> {
+        let blob = self.blobs.get(index)?;
         let offset = address.checked_sub(blob.base)? as usize;
         let end = offset.checked_add(4)?;
         if end <= blob.bytes.len() {
@@ -956,16 +999,13 @@ impl MappedCodeIndex {
             None
         }
     }
+}
 
-    fn label(&self, address: u32) -> Option<String> {
-        let blob = self.blobs.get(*self.page_to_blob.get(&(address >> 12))?)?;
-        let offset = address.checked_sub(blob.base)?;
-        if usize::try_from(offset).ok()? < blob.bytes.len() {
-            Some(format!("{}+0x{offset:x}", blob.name))
-        } else {
-            None
-        }
-    }
+#[cfg(feature = "unicorn")]
+fn mapped_blob_is_static_code(blob: &MappedBlob) -> bool {
+    blob.name.starts_with("image:")
+        || blob.name.starts_with("dll:")
+        || blob.name.starts_with("trampoline:")
 }
 
 impl UnicornMips {
@@ -11642,7 +11682,10 @@ fn read_unicorn_code_u32<D>(
     mapped_code: &MappedCodeIndex,
     address: u32,
 ) -> Option<u32> {
-    read_unicorn_u32(uc, address).or_else(|| mapped_code.read_u32(address))
+    mapped_code
+        .read_static_code_u32(address)
+        .or_else(|| read_unicorn_u32(uc, address))
+        .or_else(|| mapped_code.read_u32(address))
 }
 
 #[cfg(feature = "unicorn")]
@@ -38854,6 +38897,72 @@ mod unicorn_tests {
             &0x03e0_0008u32.to_le_bytes()
         );
         assert!(blobs.iter().any(|blob| blob.name == "other"));
+    }
+
+    #[test]
+    fn mapped_code_index_reads_static_code_before_unicorn_memory() {
+        let static_code = 0x27bd_ffe0u32;
+        let live_code = 0x03e0_0008u32;
+        let mapped_code = super::MappedCodeIndex::new(vec![super::MappedBlob {
+            name: "image:main.exe".to_owned(),
+            base: 0x0004_0000,
+            bytes: static_code.to_le_bytes().to_vec(),
+        }]);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x0004_0000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(0x0004_0000, &live_code.to_le_bytes()).unwrap();
+
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, 0x0004_0000),
+            Some(static_code)
+        );
+    }
+
+    #[test]
+    fn mapped_code_index_keeps_mutable_code_reads_live() {
+        let stale_trap = 0x0000_0000u32;
+        let live_trap = 0x03e0_0008u32;
+        let stale_heap = 0x1111_2222u32;
+        let live_heap = 0x3333_4444u32;
+        let mapped_code = super::MappedCodeIndex::new(vec![
+            super::MappedBlob {
+                name: "ce-import-traps".to_owned(),
+                base: crate::emulator::imports::IMPORT_TRAP_BASE,
+                bytes: stale_trap.to_le_bytes().to_vec(),
+            },
+            super::MappedBlob {
+                name: super::HEAP_SPILLOVER_BLOB_NAME.to_owned(),
+                base: 0x3100_0000,
+                bytes: stale_heap.to_le_bytes().to_vec(),
+            },
+        ]);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(
+            crate::emulator::imports::IMPORT_TRAP_BASE.into(),
+            0x1000,
+            Prot::ALL,
+        )
+        .unwrap();
+        uc.mem_map(0x3100_0000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(
+            crate::emulator::imports::IMPORT_TRAP_BASE.into(),
+            &live_trap.to_le_bytes(),
+        )
+        .unwrap();
+        uc.mem_write(0x3100_0000, &live_heap.to_le_bytes()).unwrap();
+
+        assert_eq!(
+            super::read_unicorn_code_u32(
+                &uc,
+                &mapped_code,
+                crate::emulator::imports::IMPORT_TRAP_BASE,
+            ),
+            Some(live_trap)
+        );
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, 0x3100_0000),
+            Some(live_heap)
+        );
     }
 
     #[test]

@@ -15,6 +15,25 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: Unicorn mapped-code fallback now indexes every
+  mapped blob on a page instead of the first one only, prefers immutable
+  static-code snapshots for image/DLL/trampoline instruction reads, and keeps
+  live Unicorn memory authoritative for mutable trap and heap-spillover code.
+- `tests/coredll_raw_kernel.rs`, `PLAN.MD`, `TODO.md`, `KNOWN_BUGS.md`, and
+  `SOURCE_REFERENCES.md`: raw `ImageList_GetIcon` lifetime coverage now
+  verifies that the returned icon-owned mask/color bitmaps survive source
+  `ImageList_Destroy`, remain visible through `GetIconInfo`, and are released
+  by `DestroyIcon`, matching CE `imagelist.cpp::GetIcon` temporary-bitmap
+  cleanup around `CreateIconIndirect_I`.
+- Full validation after the mapped-code and `ImageList_GetIcon` lifetime
+  slices: `cargo fmt --check`, `git diff --check`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop mapped_code_index`, `cargo test -j 1
+  --features unicorn,trace,win32-desktop --test coredll_raw_kernel
+  image_list_ordinals_track_created_lists_and_icons`, `cargo check --features
+  unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_kernel`, and `cargo test -j
+  1 --features unicorn,trace,win32-desktop` passed. Logs were written under
+  `target/`.
 - `src/ce/coredll.rs`, `tests/coredll_raw_kernel.rs`, `PLAN.MD`,
   `TODO.md`, `KNOWN_BUGS.md`, and `SOURCE_REFERENCES.md`: bitmap-backed
   `ImageList_GetIcon` now mirrors CE `imagelist.cpp::GetIcon` by initializing
