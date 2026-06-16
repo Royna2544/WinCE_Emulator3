@@ -50534,6 +50534,14 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
         returned(mvk(&mut kernel, &mut memory, 0xE11477, MAPVK_VSC_TO_VK)),
         VK_PAUSE
     );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xF1, MAPVK_VSC_TO_VK)),
+        0x19
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xF2, MAPVK_VSC_TO_VK)),
+        0x15
+    );
 
     assert_eq!(
         returned(mvk(&mut kernel, &mut memory, 0x1D, MAPVK_VSC_TO_VK_EX)),
@@ -50570,6 +50578,14 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
     assert_eq!(
         returned(mvk(&mut kernel, &mut memory, 0xE11477, MAPVK_VSC_TO_VK_EX)),
         VK_PAUSE
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xF1, MAPVK_VSC_TO_VK_EX)),
+        0x19
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xF2, MAPVK_VSC_TO_VK_EX)),
+        0x15
     );
 
     assert_eq!(returned(mvk(&mut kernel, &mut memory, 0x41, 99)), 0);

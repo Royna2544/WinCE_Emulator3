@@ -51303,6 +51303,11 @@ fn scan_code_to_vkey(scan: u32) -> u32 {
     if scan == 0x84 {
         return 0x2c; // Snapshot
     }
+    match scan {
+        0xf1 => return 0x19, // VK_HANJA
+        0xf2 => return 0x15, // VK_HANGUL
+        _ => {}
+    }
     if (scan & 0xff00) == 0xe000 {
         let scan = scan & 0x7f;
         return match scan {
