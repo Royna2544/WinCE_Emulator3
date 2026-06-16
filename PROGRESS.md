@@ -152,6 +152,19 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   -j 1 --features unicorn,trace,win32-desktop`. Test logs are under
   `target/cargo-test-coredll-raw-gwe-transparent-individual-edge-clip.20260616-143621.*.log`
   and `target/cargo-test-full-transparent-individual-edge-clip.20260616-143632.*.log`.
+- `tests/coredll_raw_gwe.rs`: raw selected-DIB and framebuffer
+  `TransparentImage` now cover CE `draw.cpp::SimpleTransparentImageTest`'s
+  translated source rectangle: a green transparent source quadrant preserves a
+  black destination while a nested red source pixel copies from the offset
+  source rectangle.
+- Validation after the `TransparentImage` simple source-offset slice: `cargo
+  test --features unicorn,trace,win32-desktop simple_source_offset --
+  --nocapture`, `cargo fmt --check`, `git diff --check`, `cargo check
+  --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features
+  unicorn,trace,win32-desktop --test coredll_raw_gwe`, and full `cargo test
+  -j 1 --features unicorn,trace,win32-desktop`. Test logs are under
+  `target/cargo-test-coredll-raw-gwe-transparent-simple-source-offset.20260616-144131.*.log`
+  and `target/cargo-test-full-transparent-simple-source-offset.20260616-144139.*.log`.
 - Validation after the transparent all-edge clipping and active visible-receiver
   rotation slice: focused
   `remote_input_rotates_to_active_visible_receiver_thread`, focused

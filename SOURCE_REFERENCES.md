@@ -2623,6 +2623,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     seeding with `SetPixel`. Raw `TransparentImage` now mirrors those
     same-framebuffer HDC copies with a source framebuffer snapshot, preserving
     CE color-key behavior even when source and destination are the same HDC.
+    CE `draw.cpp::SimpleTransparentImageTest` fills a translated source
+    quadrant with the transparent green key, nests a red rectangle inside that
+    source region, and blits from the offset green rectangle to the destination;
+    raw selected-DIB and framebuffer `TransparentImage` now preserve the black
+    destination under transparent green pixels while copying the nested red
+    source pixel from the translated source rectangle.
     CE `wingdi.h` declares `TransparentImage` with a generic `HANDLE hSrc`,
     and `draw.cpp::TransparentBltBitmapTest` passes an `HBITMAP` directly as
     that source handle after drawing into compatible bitmap backing. Raw
