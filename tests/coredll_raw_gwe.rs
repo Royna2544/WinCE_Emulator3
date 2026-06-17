@@ -49247,6 +49247,174 @@ fn coredll_raw_draw_text_w_wordbreak_draws_multiple_lines() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
+    const DT_NOPREFIX: u32 = 0x0800;
+    const TRANSPARENT: u32 = 1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 143_u32;
+    let (dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 32, 64);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_TEXT_COLOR,
+            [dc, 0x0000_00ff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_MODE,
+            [dc, TRANSPARENT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+
+    let rect_ptr = 0x2_0700_u32;
+    memory.map_words(rect_ptr, 4);
+    let write_rect = |memory: &mut TestGuestMemory, top: u32| {
+        memory.write_word(rect_ptr, 0);
+        memory.write_word(rect_ptr + 4, top);
+        memory.write_word(rect_ptr + 8, 32);
+        memory.write_word(rect_ptr + 12, top + 16);
+    };
+    let red_pixels_in_band = |memory: &TestGuestMemory, y0: u32, y1: u32| -> usize {
+        (y0..y1)
+            .flat_map(|y| (0..32).map(move |x| (x, y)))
+            .filter(|(x, y)| rgb565_at(memory, bits_ptr, stride, *x, *y) == 0xf800)
+            .count()
+    };
+    let band_pixels = |memory: &TestGuestMemory, y0: u32| -> Vec<u16> {
+        (y0..y0 + 16)
+            .flat_map(|y| (0..32).map(move |x| rgb565_at(memory, bits_ptr, stride, x, y)))
+            .collect()
+    };
+
+    let text_prefix_only = 0x2_0800_u32;
+    let text_escaped_amp = 0x2_0900_u32;
+    let text_literal_amp = 0x2_0a00_u32;
+    let text_prefixed_x = 0x2_0b00_u32;
+    let text_literal_x = 0x2_0c00_u32;
+    memory.write_wide_z(text_prefix_only, "&");
+    memory.write_wide_z(text_escaped_amp, "&&");
+    memory.write_wide_z(text_literal_amp, "&");
+    memory.write_wide_z(text_prefixed_x, "&X");
+    memory.write_wide_z(text_literal_x, "X");
+
+    write_rect(&mut memory, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_prefix_only, 1, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        red_pixels_in_band(&memory, 0, 16),
+        0,
+        "a single trailing prefix ampersand should succeed without drawing"
+    );
+
+    write_rect(&mut memory, 16);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_escaped_amp, 2, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert!(
+        red_pixels_in_band(&memory, 16, 32) > 0,
+        "escaped ampersand should render a literal ampersand"
+    );
+
+    write_rect(&mut memory, 32);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_literal_amp, 1, rect_ptr, DT_NOPREFIX],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        band_pixels(&memory, 16),
+        band_pixels(&memory, 32),
+        "&& without DT_NOPREFIX should render like literal & with DT_NOPREFIX"
+    );
+
+    write_rect(&mut memory, 48);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_prefixed_x, 2, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+
+    write_rect(&mut memory, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_literal_x, 1, rect_ptr, DT_NOPREFIX],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        band_pixels(&memory, 48),
+        band_pixels(&memory, 0),
+        "prefixed character should render like the character with DT_NOPREFIX"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_text_draw_calls_reject_readonly_selected_bitmap() -> Result<()> {
     const ETO_OPAQUE: u32 = 0x0002;
 

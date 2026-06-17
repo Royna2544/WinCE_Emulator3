@@ -14945,7 +14945,12 @@ fn try_block_wait_for_single_object<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    if thread_id == MAIN_GUEST_THREAD_ID {
+    let fallback_thread_handle = if thread_id == MAIN_GUEST_THREAD_ID {
+        Some(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE)
+    } else {
+        kernel.guest_thread_handle_by_id(thread_id)
+    };
+    if let Some(thread_handle) = fallback_thread_handle {
         if suspended_thread.borrow().is_none()
             && timeout != crate::ce::timer::INFINITE
             && !has_ready_blocked_waiter(kernel, thread_id)
@@ -14966,7 +14971,6 @@ fn try_block_wait_for_single_object<D>(
             );
         }
         let kind = BlockedWaitKind::Kernel;
-        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
         let wait_handles = vec![wait_handle];
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_blocked_waiter(
@@ -15104,7 +15108,6 @@ fn annotate_blocking_single_wait_import_records(
     if let Some(import) = records.iter_mut().rev().find(|import| {
         import.kind == crate::emulator::imports::ImportModuleKind::Coredll
             && import.ordinal == Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT)
-            && import.result.is_none()
     }) {
         import.detail = detail;
     }
@@ -21924,6 +21927,63 @@ mod wait_scheduler_tests {
             uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
             return_pc
         );
+    }
+
+    #[test]
+    fn current_worker_single_wait_blocks_when_running_metadata_is_missing() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let (thread_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let event = kernel.create_event_w(None, true, false);
+        let return_pc = 0x1357_6000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        assert!(super::try_block_wait_for_single_object(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
+            &[event, INFINITE],
+            &last_imports,
+            &import_milestones,
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &displaced_blocked_get_messages,
+            &suspended_thread,
+            &running_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            true,
+        ));
+
+        let waits = blocked_waits.borrow();
+        assert_eq!(waits.len(), 1);
+        assert_eq!(waits[0].thread_id, thread_id);
+        assert_eq!(waits[0].thread_handle, thread_handle);
+        assert_eq!(waits[0].timeout_ms, INFINITE);
+        assert_eq!(waits[0].return_pc, return_pc);
+        assert_eq!(*running_thread.borrow(), None);
+        assert!(kernel.blocked_waiter(waits[0].wait_id).is_some());
     }
 
     #[test]

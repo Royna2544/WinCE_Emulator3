@@ -49135,41 +49135,32 @@ struct DrawTextLine {
     width: i32,
 }
 
-fn draw_text_line_width<M: CoredllGuestMemory>(
+fn draw_text_line_width(
     kernel: &CeKernel,
-    memory: &M,
     hdc: u32,
-    text_ptr: u32,
     start: usize,
     count: usize,
+    units: &[u16],
 ) -> i32 {
     if count == 0 {
         0
     } else {
-        measure_text_width(
-            kernel,
-            memory,
-            hdc,
-            text_ptr.wrapping_add((start as u32).saturating_mul(2)),
-            count.min(u32::MAX as usize) as u32,
-            0,
-        )
+        let end = start.saturating_add(count).min(units.len());
+        measure_text_units_width(kernel, hdc, &units[start..end])
     }
 }
 
-fn push_draw_text_line<M: CoredllGuestMemory>(
+fn push_draw_text_line(
     lines: &mut Vec<DrawTextLine>,
     kernel: &CeKernel,
-    memory: &M,
     hdc: u32,
-    text_ptr: u32,
     start: usize,
     end: usize,
     width: Option<i32>,
+    units: &[u16],
 ) {
     let count = end.saturating_sub(start);
-    let width =
-        width.unwrap_or_else(|| draw_text_line_width(kernel, memory, hdc, text_ptr, start, count));
+    let width = width.unwrap_or_else(|| draw_text_line_width(kernel, hdc, start, count, units));
     lines.push(DrawTextLine {
         start,
         count,
@@ -49177,15 +49168,14 @@ fn push_draw_text_line<M: CoredllGuestMemory>(
     });
 }
 
-fn layout_draw_text_lines<M: CoredllGuestMemory>(
+fn layout_draw_text_lines(
     kernel: &CeKernel,
-    memory: &M,
     hdc: u32,
-    text_ptr: u32,
-    char_count: usize,
+    units: &[u16],
     rect_width: i32,
     format: u32,
 ) -> Vec<DrawTextLine> {
+    let char_count = units.len();
     if char_count == 0 {
         return Vec::new();
     }
@@ -49193,7 +49183,7 @@ fn layout_draw_text_lines<M: CoredllGuestMemory>(
         return vec![DrawTextLine {
             start: 0,
             count: char_count,
-            width: draw_text_line_width(kernel, memory, hdc, text_ptr, 0, char_count),
+            width: draw_text_line_width(kernel, hdc, 0, char_count, units),
         }];
     }
 
@@ -49204,18 +49194,12 @@ fn layout_draw_text_lines<M: CoredllGuestMemory>(
     let mut last_space: Option<(usize, usize, i32)> = None;
 
     while i < char_count {
-        let unit = memory
-            .read_u16(text_ptr.wrapping_add((i as u32).saturating_mul(2)))
-            .unwrap_or(0);
+        let unit = units[i];
         if unit == b'\r' as u16 || unit == b'\n' as u16 {
-            push_draw_text_line(
-                &mut lines, kernel, memory, hdc, text_ptr, line_start, i, None,
-            );
+            push_draw_text_line(&mut lines, kernel, hdc, line_start, i, None, units);
             i += 1;
             if unit == b'\r' as u16 && i < char_count {
-                let next = memory
-                    .read_u16(text_ptr.wrapping_add((i as u32).saturating_mul(2)))
-                    .unwrap_or(0);
+                let next = units[i];
                 if next == b'\n' as u16 {
                     i += 1;
                 }
@@ -49226,11 +49210,10 @@ fn layout_draw_text_lines<M: CoredllGuestMemory>(
         }
 
         let candidate_count = i + 1 - line_start;
-        let candidate_width =
-            draw_text_line_width(kernel, memory, hdc, text_ptr, line_start, candidate_count);
+        let candidate_width = draw_text_line_width(kernel, hdc, line_start, candidate_count, units);
         if unit == b' ' as u16 || unit == b'\t' as u16 {
             let before_space_width =
-                draw_text_line_width(kernel, memory, hdc, text_ptr, line_start, i - line_start);
+                draw_text_line_width(kernel, hdc, line_start, i - line_start, units);
             last_space = Some((i, i + 1, before_space_width));
         }
 
@@ -49240,12 +49223,11 @@ fn layout_draw_text_lines<M: CoredllGuestMemory>(
                     push_draw_text_line(
                         &mut lines,
                         kernel,
-                        memory,
                         hdc,
-                        text_ptr,
                         line_start,
                         space_index,
                         Some(before_space_width),
+                        units,
                     );
                     line_start = after_space;
                     i = line_start;
@@ -49253,9 +49235,7 @@ fn layout_draw_text_lines<M: CoredllGuestMemory>(
                     continue;
                 }
             }
-            push_draw_text_line(
-                &mut lines, kernel, memory, hdc, text_ptr, line_start, i, None,
-            );
+            push_draw_text_line(&mut lines, kernel, hdc, line_start, i, None, units);
             line_start = i;
             last_space = None;
             continue;
@@ -49264,11 +49244,35 @@ fn layout_draw_text_lines<M: CoredllGuestMemory>(
     }
 
     if line_start < char_count || lines.is_empty() {
-        push_draw_text_line(
-            &mut lines, kernel, memory, hdc, text_ptr, line_start, char_count, None,
-        );
+        push_draw_text_line(&mut lines, kernel, hdc, line_start, char_count, None, units);
     }
     lines
+}
+
+fn draw_text_processed_units(units: &[u16], format: u32) -> Vec<u16> {
+    if format & DT_NOPREFIX != 0 {
+        return units.to_vec();
+    }
+    let mut out = Vec::with_capacity(units.len());
+    let mut index = 0usize;
+    while index < units.len() {
+        if units[index] == b'&' as u16 {
+            if index + 1 < units.len() && units[index + 1] == b'&' as u16 {
+                out.push(b'&' as u16);
+                index += 2;
+            } else {
+                index += 1;
+                if index < units.len() {
+                    out.push(units[index]);
+                    index += 1;
+                }
+            }
+        } else {
+            out.push(units[index]);
+            index += 1;
+        }
+    }
+    out
 }
 
 fn draw_text_w_raw<M: CoredllGuestMemory>(
@@ -49291,18 +49295,26 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
         return 0;
     };
-    let char_count = if count < 0 {
-        read_guest_wide_arg(memory, text_ptr).map(|text| text.encode_utf16().count())
+    let raw_units = if count < 0 {
+        read_guest_wide_arg(memory, text_ptr).map(|text| text.encode_utf16().collect::<Vec<_>>())
     } else {
-        Some(count as usize)
+        Some(
+            (0..count as u32)
+                .map(|index| {
+                    memory
+                        .read_u16(text_ptr.wrapping_add(index.saturating_mul(2)))
+                        .unwrap_or(0)
+                })
+                .collect::<Vec<_>>(),
+        )
     };
-    let Some(char_count) = char_count else {
+    let Some(raw_units) = raw_units else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    if char_count == 0 {
+    if raw_units.is_empty() {
         kernel.threads.set_last_error(thread_id, 0);
         return 1;
     }
@@ -49321,8 +49333,14 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     };
     let cell_h = metrics.height.max(1);
     let rect_w = (rect.right - rect.left).max(0);
-    let lines = layout_draw_text_lines(kernel, memory, hdc, text_ptr, char_count, rect_w, format);
-    let total_h = cell_h.saturating_mul(lines.len().min(i32::MAX as usize) as i32);
+    let units = draw_text_processed_units(&raw_units, format);
+    let lines = layout_draw_text_lines(kernel, hdc, &units, rect_w, format);
+    let visible_line_count = if lines.is_empty() && !raw_units.is_empty() {
+        1
+    } else {
+        lines.len()
+    };
+    let total_h = cell_h.saturating_mul(visible_line_count.min(i32::MAX as usize) as i32);
     let max_line_w = lines.iter().map(|line| line.width).max().unwrap_or(0);
 
     if format & DT_CALCRECT != 0 {
@@ -49368,33 +49386,13 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
         } else {
             base_y.saturating_add(cell_h.saturating_mul(line_index as i32))
         };
-        let line_ptr = text_ptr.wrapping_add((line.start as u32).saturating_mul(2));
+        let line_end = line.start.saturating_add(line.count).min(units.len());
+        let line_units = &units[line.start..line_end];
 
         if let Some(fb) = framebuffer.as_deref_mut() {
-            draw_ext_text_glyphs_to_framebuffer(
-                kernel,
-                memory,
-                fb,
-                hdc,
-                x,
-                y,
-                line_ptr,
-                line.count.min(u32::MAX as usize) as u32,
-                0,
-                clip,
-            );
+            draw_text_units_to_framebuffer(kernel, fb, hdc, x, y, line_units, clip);
         } else if kernel.resources.is_memory_dc(hdc) {
-            draw_ext_text_glyphs_to_bitmap(
-                kernel,
-                memory,
-                hdc,
-                x,
-                y,
-                line_ptr,
-                line.count.min(u32::MAX as usize) as u32,
-                0,
-                clip,
-            );
+            draw_text_units_to_bitmap(kernel, memory, hdc, x, y, line_units, clip);
         }
     }
 
@@ -49404,6 +49402,267 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
 
 // Render FONT_8X8 glyphs into the selected bitmap of a memory DC.
 // Analogous to draw_ext_text_glyphs_to_framebuffer but writes via write_bitmap_pixel_rgb.
+fn measure_text_units_width(kernel: &CeKernel, hdc: u32, units: &[u16]) -> i32 {
+    let state = kernel.resources.dc_state(hdc);
+    let font = state
+        .as_ref()
+        .and_then(|state| kernel.resources.font(state.selected_font).cloned());
+    let metrics = TextMetricsModel::from_font(font.as_ref());
+    let text_char_extra = state.map(|state| state.text_char_extra).unwrap_or(0);
+    let mut previous_char_width = 0;
+    let mut total = 0i32;
+    for unit in units.iter().copied() {
+        let char_width = metrics.char_width(unit);
+        total = total.saturating_add(text_advance_with_extra(
+            char_width,
+            previous_char_width,
+            text_char_extra,
+        ));
+        previous_char_width = char_width;
+    }
+    total
+}
+
+fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    hdc: u32,
+    x: i32,
+    y: i32,
+    units: &[u16],
+    clip: Option<Rect>,
+) {
+    if !kernel.resources.is_memory_dc(hdc) {
+        return;
+    }
+    let Some(bitmap) = selected_bitmap_object(kernel, hdc) else {
+        return;
+    };
+
+    let Some(state) = kernel.resources.dc_state(hdc) else {
+        return;
+    };
+    let text_color = state.text_color;
+    let bk_mode = state.bk_mode;
+    let bk_color = state.bk_color;
+    let font = kernel.resources.font(state.selected_font).cloned();
+    let metrics = TextMetricsModel::from_font(font.as_ref());
+    let cell_h = metrics.height.max(1) as usize;
+    let cell_w = metrics.ave_width.max(1);
+    let text_char_extra = state.text_char_extra;
+    let total_w = measure_text_units_width(kernel, hdc, units);
+    let text_bounds = Rect {
+        left: x,
+        top: y,
+        right: x.saturating_add(total_w),
+        bottom: y.saturating_add(cell_h as i32),
+    };
+    let requested = if let Some(clip) = clip {
+        let Some(rect) = intersect_rect_value(normalize_rect(text_bounds), normalize_rect(clip))
+        else {
+            return;
+        };
+        rect
+    } else {
+        normalize_rect(text_bounds)
+    };
+    let clips = hdc_clip_rects(kernel, hdc, requested, bitmap.width, bitmap.height);
+    if clips.is_empty() {
+        return;
+    }
+    let rgb = colorref_rgb(text_color);
+    let bk_rgb = colorref_rgb(bk_color);
+    let bm_w = bitmap.width;
+    let bm_h = bitmap.height;
+    let mut cursor_x = x;
+    let mut previous_char_width = 0;
+
+    for unit in units.iter().copied() {
+        let char_width = metrics.char_width(unit);
+        let advance = text_advance_with_extra(char_width, previous_char_width, text_char_extra);
+
+        if bk_mode == BKMODE_OPAQUE && advance > 0 {
+            let bg_left = cursor_x;
+            let bg_right = cursor_x.saturating_add(advance);
+            let bg_top = y;
+            let bg_bottom = y.saturating_add(cell_h as i32);
+            for sy in bg_top.max(0)..bg_bottom.min(bm_h) {
+                for sx in bg_left.max(0)..bg_right.min(bm_w) {
+                    if !clip_rects_contain_point(&clips, sx, sy) {
+                        continue;
+                    }
+                    let _ = write_bitmap_pixel_rgb(memory, &bitmap, sx, sy, bk_rgb);
+                }
+            }
+        }
+
+        if unit >= 32 && unit < 128 {
+            let glyph = FONT_8X8[(unit - 32) as usize];
+            for glyph_row in 0..8usize {
+                let row_byte = glyph[glyph_row];
+                if row_byte == 0 {
+                    continue;
+                }
+                let sy0 = y + (glyph_row * cell_h / 8) as i32;
+                let sy1 = y + ((glyph_row + 1) * cell_h / 8) as i32;
+                for sy in sy0..sy1 {
+                    if sy < 0 || sy >= bm_h {
+                        continue;
+                    }
+                    for glyph_col in 0..8usize {
+                        if row_byte & (0x80u8 >> glyph_col) == 0 {
+                            continue;
+                        }
+                        let sx0 = cursor_x + (glyph_col as i32 * cell_w) / 8;
+                        let sx1 = cursor_x + ((glyph_col as i32 + 1) * cell_w) / 8;
+                        let sx1 = sx1.max(sx0 + 1);
+                        for sx in sx0..sx1 {
+                            if sx < 0 || sx >= bm_w {
+                                continue;
+                            }
+                            if !clip_rects_contain_point(&clips, sx, sy) {
+                                continue;
+                            }
+                            let _ = write_bitmap_pixel_rgb(memory, &bitmap, sx, sy, rgb);
+                        }
+                    }
+                }
+            }
+        }
+
+        cursor_x += advance;
+        previous_char_width = char_width;
+    }
+}
+
+fn draw_text_units_to_framebuffer(
+    kernel: &CeKernel,
+    fb: &mut dyn Framebuffer,
+    hdc: u32,
+    x: i32,
+    y: i32,
+    units: &[u16],
+    clip: Option<Rect>,
+) {
+    let state = kernel.resources.dc_state(hdc).unwrap_or_default();
+    let text_color = state.text_color;
+    let bk_mode = state.bk_mode;
+    let bk_color = state.bk_color;
+    let font = kernel.resources.font(state.selected_font).cloned();
+    let metrics = TextMetricsModel::from_font(font.as_ref());
+    let cell_h = metrics.height.max(1) as usize;
+    let cell_w = metrics.ave_width.max(1);
+    let text_char_extra = state.text_char_extra;
+    let total_w = measure_text_units_width(kernel, hdc, units);
+    let text_bounds = Rect {
+        left: x,
+        top: y,
+        right: x.saturating_add(total_w),
+        bottom: y.saturating_add(cell_h as i32),
+    };
+    let requested = if let Some(clip) = clip {
+        let Some(rect) = intersect_rect_value(normalize_rect(text_bounds), normalize_rect(clip))
+        else {
+            return;
+        };
+        rect
+    } else {
+        normalize_rect(text_bounds)
+    };
+    let Some((origin, client_clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, requested)
+    else {
+        return;
+    };
+    let screen_clips: Vec<Rect> = client_clips
+        .into_iter()
+        .map(|clip| clip.offset(origin.x, origin.y))
+        .collect();
+
+    let info = fb.info();
+    let stride = info.stride;
+    let bpp = info.format.bytes_per_pixel();
+    let pixel = pixel_bytes_for_colorref(info.format, text_color);
+    let bk_pixel = pixel_bytes_for_colorref(info.format, bk_color);
+    let fb_w = info.width as i32;
+    let fb_h = info.height as i32;
+    let screen_x0 = x + origin.x;
+    let screen_y0 = y + origin.y;
+    let mut cursor_x = screen_x0;
+    let mut previous_char_width = 0;
+    let mut any_pixel = false;
+
+    for unit in units.iter().copied() {
+        let char_width = metrics.char_width(unit);
+        let advance = text_advance_with_extra(char_width, previous_char_width, text_char_extra);
+
+        if bk_mode == BKMODE_OPAQUE && advance > 0 {
+            let bg_left = cursor_x;
+            let bg_right = cursor_x.saturating_add(advance);
+            let bg_top = screen_y0;
+            let bg_bottom = screen_y0.saturating_add(cell_h as i32);
+            for sy in bg_top.max(0)..bg_bottom.min(fb_h) {
+                for sx in bg_left.max(0)..bg_right.min(fb_w) {
+                    if !clip_rects_contain_point(&screen_clips, sx, sy) {
+                        continue;
+                    }
+                    let off = sy as usize * stride + sx as usize * bpp;
+                    fb.pixels_mut()[off..off + bpp].copy_from_slice(&bk_pixel[..bpp]);
+                    any_pixel = true;
+                }
+            }
+        }
+
+        if unit >= 32 && unit < 128 {
+            let glyph = FONT_8X8[(unit - 32) as usize];
+            for glyph_row in 0..8usize {
+                let row_byte = glyph[glyph_row];
+                if row_byte == 0 {
+                    continue;
+                }
+                let sy0 = screen_y0 + (glyph_row * cell_h / 8) as i32;
+                let sy1 = screen_y0 + ((glyph_row + 1) * cell_h / 8) as i32;
+                for sy in sy0..sy1 {
+                    if sy < 0 || sy >= fb_h {
+                        continue;
+                    }
+                    for glyph_col in 0..8usize {
+                        if row_byte & (0x80u8 >> glyph_col) == 0 {
+                            continue;
+                        }
+                        let sx0 = cursor_x + (glyph_col as i32 * cell_w) / 8;
+                        let sx1 = cursor_x + ((glyph_col as i32 + 1) * cell_w) / 8;
+                        let sx1 = sx1.max(sx0 + 1);
+                        for sx in sx0..sx1 {
+                            if sx < 0 || sx >= fb_w {
+                                continue;
+                            }
+                            if !clip_rects_contain_point(&screen_clips, sx, sy) {
+                                continue;
+                            }
+                            let off = sy as usize * stride + sx as usize * bpp;
+                            fb.pixels_mut()[off..off + bpp].copy_from_slice(&pixel[..bpp]);
+                            any_pixel = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        cursor_x += advance;
+        previous_char_width = char_width;
+    }
+
+    if any_pixel {
+        let sx = screen_x0.max(0).min(fb_w) as u32;
+        let sy = screen_y0.max(0).min(fb_h) as u32;
+        let ex = cursor_x.max(0).min(fb_w) as u32;
+        let ey = (screen_y0 + cell_h as i32).max(0).min(fb_h) as u32;
+        if ex > sx && ey > sy {
+            fb.mark_dirty(FramebufferRect::new(sx, sy, ex - sx, ey - sy));
+        }
+    }
+}
+
 fn draw_ext_text_glyphs_to_bitmap<M: CoredllGuestMemory>(
     kernel: &CeKernel,
     memory: &mut M,
