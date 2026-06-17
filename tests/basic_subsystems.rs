@@ -1289,6 +1289,11 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
     }));
     assert_eq!(response["accepted"], 1);
     assert!(kernel.serial_read_ready(com));
+    assert_eq!(kernel.remote.serial_byte_count(), 0);
+    assert_eq!(
+        kernel.comm_queue_lengths(com)?,
+        (b"$GPRMC,serial*00\r\n".len() as u32, 0)
+    );
     assert_eq!(
         kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| match blocked.kind {
             SchedulerBlockedWaitKind::Kernel => true,
@@ -1332,6 +1337,34 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
     let stats = kernel.scheduler_stats();
     assert_eq!(stats.serial_read_signal_count, 1);
     assert_eq!(stats.serial_read_wake_candidate_count, 1);
+    Ok(())
+}
+
+#[test]
+fn remote_serial_injection_drains_to_target_when_device_opens_later() -> Result<()> {
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let remote_target = kernel.remote_gps_target();
+
+    let response = kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "nmea",
+        "sentences": ["$GPRMC,later*00"]
+    }));
+    assert_eq!(response["accepted"], 1);
+    assert_eq!(
+        kernel.remote.serial_byte_count(),
+        b"$GPRMC,later*00\r\n".len()
+    );
+
+    let com = kernel.create_file_w(&remote_target, GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    assert_eq!(kernel.remote.serial_byte_count(), 0);
+    assert!(kernel.serial_read_ready(com));
+    assert_eq!(
+        kernel.comm_queue_lengths(com)?,
+        (b"$GPRMC,later*00\r\n".len() as u32, 0)
+    );
+    assert_eq!(kernel.read_file(com, 64)?, b"$GPRMC,later*00\r\n");
+    assert!(!kernel.serial_read_ready(com));
     Ok(())
 }
 

@@ -15,6 +15,24 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/kernel.rs` and `tests/basic_subsystems.rs`: remote serial/GPS
+  payloads now drain into the matching open serial device as soon as the REST
+  control message is dispatched, and payloads queued before the guest opens the
+  configured target drain when that serial device is created. This keeps the
+  remote queue from growing behind an already-open `COM7:` handle without
+  naming iNavi or any app-specific file path.
+- Validation for the remote serial drain slice: `rustfmt --edition 2024
+  src\ce\kernel.rs tests\basic_subsystems.rs`, focused `cargo test --features
+  unicorn,trace,win32-desktop
+  remote_serial_injection_queues_scheduler_serial_read_candidates -- --nocapture`,
+  focused `cargo test --features unicorn,trace,win32-desktop
+  remote_serial_injection_drains_to_target_when_device_opens_later --
+  --nocapture`, and `cargo build --release --features
+  unicorn,trace,win32-desktop --bin wince_emulation_v3` passed. A live
+  `192.168.0.39:8765` run after posting location showed
+  `queued_serial_bytes=0` and open `COM7:` `rx=174`, confirming the REST sensor
+  path reaches the guest serial handle. The guest's later `ReadFile` /
+  `WaitCommEvent` cadence and the owned splash dismissal remain open.
 - `src/emulator/unicorn.rs`: raw thread-exit-stub handling now recognizes the
   case where a real non-main guest thread reaches `THREAD_EXIT_STUB_ADDR` while
   no guest thread is currently running. The hook removes that thread's stale

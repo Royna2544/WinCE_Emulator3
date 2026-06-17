@@ -3744,6 +3744,31 @@ impl CeKernel {
         count
     }
 
+    fn drain_remote_serial_to_matching_open_device(&mut self) -> usize {
+        if self.remote.serial_byte_count() == 0 {
+            return 0;
+        }
+        let target = self.remote_gps_target();
+        if target.is_empty() {
+            return 0;
+        }
+        let Some(handle) = self
+            .handles
+            .iter()
+            .find_map(|(handle, object)| match object {
+                KernelObject::Device(device)
+                    if device.is_serial() && device.accepts_remote_serial_target(&target) =>
+                {
+                    Some(handle)
+                }
+                _ => None,
+            })
+        else {
+            return 0;
+        };
+        self.drain_remote_serial_to_handle(handle, usize::MAX)
+    }
+
     pub fn poll_host_serial_to_handle(&mut self, handle: u32, max_bytes: usize) -> usize {
         if max_bytes == 0 {
             return 0;
@@ -3764,6 +3789,7 @@ impl CeKernel {
     ) -> Result<u32> {
         if let Ok(session) = self.devices.open(path) {
             let handle = self.handles.insert(KernelObject::Device(session));
+            self.drain_remote_serial_to_handle(handle, usize::MAX);
             self.push_file_trace(FileTraceRecord {
                 op: "CreateFileW",
                 handle: Some(handle),
@@ -7750,6 +7776,7 @@ impl CeKernel {
         let serial_before = self.remote.serial_byte_count();
         let response = self.remote.dispatch_control_message(message, gps_target);
         if self.remote.serial_byte_count() > serial_before {
+            self.drain_remote_serial_to_matching_open_device();
             self.queue_all_serial_read_wake_candidates();
             self.queue_all_serial_event_wake_candidates();
         }

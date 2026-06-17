@@ -129,9 +129,10 @@ Regenerated on 2026-06-11 from current source and test coverage.
 - Continue sensor-consumption tracing after the config-driven remote GPS target
   and serial modem-status fixes: the live iNavi run now opens `COM7:` as the
   remote GPS target and opens `MFS1:`/`SMB1:` for motion sensors, but repeated
-  location posts can still queue until the guest's next serial read/event path.
-  Capture the concrete `ReadFile`/`WaitCommEvent` cadence and confirm whether
-  map/UI code consumes parsed GPS position after startup. In the latest
+  location posts now drain into the matching open serial RX queue immediately
+  instead of remaining in the remote queue. Capture the concrete
+  `ReadFile`/`WaitCommEvent` cadence and confirm whether map/UI code consumes
+  parsed GPS position after startup. In the latest
   trace-mode splash/resource-loading run no serial or sensor handles opened at
   all, so queued NMEA alone is not evidence that REST injection failed.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or a

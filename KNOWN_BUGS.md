@@ -163,10 +163,10 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   `remote_gps` serial port, live `drive29` confirms queued NMEA drains when
   iNavi opens `COM7:`, and raw `GetCommModemStatus` now reports asserted
   CTS/DSR/RLSD for serial handles. Current live evidence shows `COM7:` remains
-  open as the remote GPS target, but new REST GPS posts can sit queued while the
-  guest is loading map data and not issuing further serial reads; the exact
-  `ReadFile`/`WaitCommEvent` cadence and parsed-position consumption still need
-  proof.
+  open as the remote GPS target and new REST GPS posts drain into that serial
+  RX queue (`queued_serial_bytes=0`, `COM7:` `rx=174` after a location post).
+  The exact guest `ReadFile`/`WaitCommEvent` cadence and parsed-position
+  consumption still need proof while the app remains on the owned splash.
 
 ## Build And Validation Risks
 
