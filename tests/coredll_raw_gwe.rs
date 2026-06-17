@@ -54,13 +54,13 @@ use wince_emulation_v3::{
             ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W,
             ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT, ORD_GET_WINDOW_THREAD_PROCESS_ID,
             ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL, ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD,
-            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_CREATE,
-            ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX,
-            ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
-            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
-            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMM_ASSOCIATE_CONTEXT,
-            ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC, ORD_IMM_DESTROY_CONTEXT,
-            ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
+            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
+            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAW,
+            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_END_DRAG,
+            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
+            ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
             ORD_IMM_ENUM_REGISTER_WORD_W, ORD_IMM_ESCAPE_W, ORD_IMM_GENERATE_MESSAGE,
             ORD_IMM_GET_CANDIDATE_LIST_COUNT_W, ORD_IMM_GET_CANDIDATE_LIST_W,
             ORD_IMM_GET_CANDIDATE_WINDOW, ORD_IMM_GET_COMPOSITION_FONT_W,
@@ -50692,6 +50692,179 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pixels() -> Result<()> {
             .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
             .is_none()
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_image_list_set_drag_cursor_composes_masked_negative_offset() -> Result<()> {
+    const ILC_COLOR16: u32 = 0x0010;
+    const CLR_MAGENTA: u32 = 0x00ff_00ff;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 177_u32;
+
+    let (base_bitmap, base_bits, base_stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    for y in 0..2 {
+        for x in 0..2 {
+            memory.write_u16(base_bits + y * base_stride + x * 2, 0xf800)?;
+        }
+    }
+
+    let (cursor_bitmap, cursor_bits, cursor_stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    memory.write_u16(cursor_bits, 0xf81f)?;
+    memory.write_u16(cursor_bits + 2, 0x07e0)?;
+    memory.write_u16(cursor_bits + cursor_stride, 0x001f)?;
+    memory.write_u16(cursor_bits + cursor_stride + 2, 0xffff)?;
+
+    let base_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_COLOR16, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("base ImageList_Create returned unexpected result: {other:?}"),
+    };
+    let cursor_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_COLOR16, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("cursor ImageList_Create returned unexpected result: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [base_list, base_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD_MASKED,
+            [cursor_list, cursor_bitmap, CLR_MAGENTA],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_BEGIN_DRAG,
+            [base_list, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            [cursor_list, 0, (-1_i32) as u32, (-1_i32) as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let drag_point = 0x2_2000_u32;
+    let drag_hotspot = 0x2_2100_u32;
+    memory.map_words(drag_point, 2);
+    memory.map_words(drag_hotspot, 2);
+    let drag_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+        [drag_point, drag_hotspot],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_GetDragImage returned unexpected result: {other:?}"),
+    };
+    assert_eq!(kernel.resources.image_list(drag_list).unwrap().width, 3);
+    assert_eq!(kernel.resources.image_list(drag_list).unwrap().height, 3);
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 3, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [drag_list, 0, dst_dc, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0x0000,
+        "transparent cursor pixels leave the expanded area untouched"
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0x07e0);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), 0x001f);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0xffff);
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 2, 2),
+        0xf800,
+        "negative cursor offsets keep the shifted base drag pixels"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_END_DRAG,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.image_list(drag_list).is_none());
 
     Ok(())
 }
