@@ -10766,6 +10766,120 @@ fn coredll_raw_mask_blt_maps_mono_ddb_source_with_destination_text_colors() -> R
 }
 
 #[test]
+fn coredll_raw_mask_blt_maps_color_source_to_mono_ddb_with_source_bk_color() -> Result<()> {
+    const SRCCOPY: u32 = 0x00cc_0020;
+    const BLACKNESS: u32 = 0x0000_0042;
+    const GREEN_COLORREF: u32 = 0x0000_ff00;
+    fn makerop4(foreground: u32, background: u32) -> u32 {
+        foreground | ((background << 8) & 0xff00_0000)
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let dst_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+    let mono_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_BITMAP,
+        [2, 1, 1, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateBitmap(1bpp) did not return a bitmap: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [dst_dc, mono_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    let mono_bits = kernel
+        .resources
+        .bitmap(mono_bitmap)
+        .map(|bitmap| bitmap.bits_ptr)
+        .expect("selected mono DDB should still be tracked");
+    assert_ne!(mono_bits, 0);
+
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 0, 0x07e0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_COLOR,
+            [src_dc, GREEN_COLORREF],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+    let (_mask_dc, mask_bitmap, mask_bits, _mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    memory.write_u8(mask_bits, 0xc0)?; // both pixels use the foreground/source ROP.
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MASK_BLT,
+            [
+                dst_dc,
+                0,
+                0,
+                2,
+                1,
+                src_dc,
+                0,
+                0,
+                mask_bitmap,
+                0,
+                0,
+                makerop4(SRCCOPY, BLACKNESS),
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(memory.read_u8(mono_bits)? & 0xc0, 0x40);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_mask_blt_allows_null_source_for_source_free_rop4() -> Result<()> {
     const BLACKNESS: u32 = 0x0000_0042;
     const WHITENESS: u32 = 0x00ff_0062;

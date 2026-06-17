@@ -32794,6 +32794,7 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
             blend,
             None,
             rop,
+            None,
             clip,
         );
     }
@@ -33305,6 +33306,7 @@ fn copy_image_list_bitmap_pixels_from_snapshot<M: CoredllGuestMemory>(
         height,
         src_bitmap,
         &src_bytes,
+        None,
         None,
         None,
         None,
@@ -33891,6 +33893,7 @@ fn render_image_list_image_to_bitmap<M: CoredllGuestMemory>(
             .as_ref()
             .map(|(mask, bytes)| (*mask, bytes.as_slice())),
         image.transparent_color.map(colorref_rgb),
+        None,
         None,
         None,
         None,
@@ -44834,6 +44837,7 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
     let brush = mask_blt_rop4_needs_pattern(rop4)
         .then(|| selected_brush_pixel_source(kernel, memory, dst))
         .flatten();
+    let mono_destination_bk_rgb = mono_ddb_destination_bk_rgb(kernel, src, &dst_bmp);
 
     let dst_rect = Rect {
         left: dst_x.min(dst_x.saturating_add(width)),
@@ -44872,7 +44876,14 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
                     None
                 };
                 let result = apply_bitmap_rop(src_rgb, dst_rgb, pattern_rgb, Some(rop));
-                let _ = write_bitmap_pixel_rgb(memory, &dst_bmp, x, y, result);
+                let _ = write_blt_bitmap_pixel_rgb(
+                    memory,
+                    &dst_bmp,
+                    x,
+                    y,
+                    result,
+                    mono_destination_bk_rgb,
+                );
             }
         }
     }
@@ -45013,7 +45024,7 @@ fn apply_mono_ddb_source_colors(
     dst_hdc: u32,
     bitmap: &mut crate::ce::resource::BitmapObject,
 ) {
-    if bitmap.bits_pixel != 1 || !bitmap.color_table.is_empty() || bitmap.dib_section {
+    if !is_mono_ddb_bitmap(bitmap) {
         return;
     }
     let state = kernel.resources.dc_state(dst_hdc).unwrap_or_default();
@@ -45021,6 +45032,25 @@ fn apply_mono_ddb_source_colors(
         colorref_bgr_table_entry(state.text_color),
         colorref_bgr_table_entry(state.bk_color),
     ];
+}
+
+fn mono_ddb_destination_bk_rgb(
+    kernel: &CeKernel,
+    src_hdc: u32,
+    bitmap: &crate::ce::resource::BitmapObject,
+) -> Option<[u8; 3]> {
+    is_mono_ddb_bitmap(bitmap)
+        .then(|| {
+            kernel
+                .resources
+                .dc_state(src_hdc)
+                .map(|state| colorref_rgb(state.bk_color))
+        })
+        .flatten()
+}
+
+fn is_mono_ddb_bitmap(bitmap: &crate::ce::resource::BitmapObject) -> bool {
+    bitmap.bits_pixel == 1 && bitmap.color_table.is_empty() && !bitmap.dib_section
 }
 
 fn colorref_bgr_table_entry(colorref: u32) -> [u8; 4] {
@@ -45146,6 +45176,7 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                         None,
                         brush.as_ref(),
                         (rop != SRCCOPY).then_some(rop),
+                        mono_ddb_destination_bk_rgb(kernel, src, &dst_bitmap),
                         clip,
                     );
                 }
@@ -45302,6 +45333,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                         None,
                         brush.as_ref(),
                         (rop != SRCCOPY).then_some(rop),
+                        mono_ddb_destination_bk_rgb(kernel, src, &dst_bitmap),
                         clip,
                     );
                 }
@@ -45857,6 +45889,7 @@ fn draw_dib_source_to_memory_dc<M: CoredllGuestMemory>(
             None,
             brush,
             rop,
+            None,
             clip,
         );
     }
@@ -46195,6 +46228,7 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
     blend: Option<ImageListBlend>,
     brush: Option<&BrushPixelSource>,
     rop: Option<u32>,
+    mono_destination_bk_rgb: Option<[u8; 3]>,
     clip: Rect,
 ) {
     if dst.bits_ptr == 0
@@ -46269,10 +46303,55 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
             if let Some(alpha) = source_alpha {
                 let _ = write_bitmap_pixel_rgba(memory, dst, x, y, result, alpha);
             } else {
-                let _ = write_bitmap_pixel_rgb(memory, dst, x, y, result);
+                let _ =
+                    write_blt_bitmap_pixel_rgb(memory, dst, x, y, result, mono_destination_bk_rgb);
             }
         }
     }
+}
+
+fn write_blt_bitmap_pixel_rgb<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    x: i32,
+    y: i32,
+    rgb: [u8; 3],
+    mono_destination_bk_rgb: Option<[u8; 3]>,
+) -> Result<()> {
+    if mono_destination_bk_rgb.is_some() && is_mono_ddb_bitmap(bitmap) {
+        return write_mono_ddb_pixel(memory, bitmap, x, y, Some(rgb) == mono_destination_bk_rgb);
+    }
+    write_bitmap_pixel_rgb(memory, bitmap, x, y, rgb)
+}
+
+fn write_mono_ddb_pixel<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    x: i32,
+    y: i32,
+    set_white_bit: bool,
+) -> Result<()> {
+    if x < 0 || y < 0 || x >= bitmap.width || y >= bitmap.height {
+        return Ok(());
+    }
+    let row = if bitmap.top_down {
+        y
+    } else {
+        bitmap.height - 1 - y
+    } as u32;
+    let x = x as u32;
+    let addr = bitmap
+        .bits_ptr
+        .wrapping_add(row.saturating_mul(bitmap.width_bytes as u32))
+        .wrapping_add(x / 8);
+    let mut byte = memory.read_u8(addr).unwrap_or(0);
+    let mask = 0x80u8 >> (x % 8);
+    if set_white_bit {
+        byte |= mask;
+    } else {
+        byte &= !mask;
+    }
+    memory.write_u8(addr, byte)
 }
 
 fn write_bitmap_pixel_rgb<M: CoredllGuestMemory>(
@@ -47078,6 +47157,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                         None,
                         None,
                         Some(colorref_rgb(transparent_color)),
+                        None,
                         None,
                         None,
                         None,
