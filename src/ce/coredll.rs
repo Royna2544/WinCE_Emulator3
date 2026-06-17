@@ -8079,7 +8079,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_IMAGE_LIST_BEGIN_DRAG => Some(CoredllValue::Bool(image_list_begin_drag_raw(
-            kernel, thread_id, args,
+            kernel, memory, thread_id, args,
         ))),
         ORD_IMAGE_LIST_DRAG_ENTER => Some(CoredllValue::Bool(image_list_drag_enter_raw(
             kernel, thread_id, args,
@@ -33314,26 +33314,79 @@ fn image_list_merge_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> 
     }
 }
 
-fn image_list_begin_drag_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn image_list_begin_drag_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
     let handle = raw_arg(args, 0);
     let index = raw_i32_arg(args, 1);
     let hotspot_x = raw_i32_arg(args, 2);
     let hotspot_y = raw_i32_arg(args, 3);
+    let Some(source_image) = (index >= 0)
+        .then(|| {
+            kernel
+                .resources
+                .image_list(handle)
+                .and_then(|list| list.images.get(index as usize))
+                .cloned()
+        })
+        .flatten()
+    else {
+        match kernel
+            .resources
+            .begin_image_list_drag(handle, index, hotspot_x, hotspot_y)
+        {
+            Some(false) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+            None => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return false;
+            }
+            Some(true) => {
+                kernel.threads.set_last_error(thread_id, 0);
+                return true;
+            }
+        }
+    };
+    let Some((images, cloned_bitmaps)) =
+        clone_image_list_images_for_duplicate(kernel, memory, thread_id, &[source_image])
+    else {
+        if kernel.threads.get_last_error(thread_id) == 0 {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        }
+        return false;
+    };
     match kernel
         .resources
-        .begin_image_list_drag(handle, index, hotspot_x, hotspot_y)
+        .begin_image_list_drag_with_images(handle, hotspot_x, hotspot_y, images)
     {
         Some(true) => {
             kernel.threads.set_last_error(thread_id, 0);
             true
         }
         Some(false) => {
+            for bitmap in cloned_bitmaps {
+                delete_owned_bitmap(kernel, bitmap);
+            }
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             false
         }
         None => {
+            for bitmap in cloned_bitmaps {
+                delete_owned_bitmap(kernel, bitmap);
+            }
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -33426,7 +33479,18 @@ fn image_list_drag_show_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32])
 }
 
 fn image_list_end_drag_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+    let owned_bitmaps: Vec<u32> = kernel
+        .resources
+        .image_list_drag_internal_handles()
+        .into_iter()
+        .flat_map(|handle| image_list_owned_bitmap_handles(kernel, handle))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     if kernel.resources.end_image_list_drag() {
+        for bitmap in owned_bitmaps {
+            delete_owned_bitmap(kernel, bitmap);
+        }
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {

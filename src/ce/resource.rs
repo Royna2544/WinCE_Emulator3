@@ -1967,6 +1967,37 @@ impl ResourceSystem {
         Some(true)
     }
 
+    pub fn begin_image_list_drag_with_images(
+        &mut self,
+        handle: u32,
+        hotspot_x: i32,
+        hotspot_y: i32,
+        images: Vec<ImageListImage>,
+    ) -> Option<bool> {
+        if self.image_list_drag.is_some() {
+            return Some(false);
+        }
+        if images.is_empty() {
+            return Some(false);
+        }
+        let drag_list = self.create_image_list_drag_clone_with_images(handle, images)?;
+        self.image_list_drag_hotspot_x = hotspot_x;
+        self.image_list_drag_hotspot_y = hotspot_y;
+        self.image_list_drag_dither = drag_list;
+        self.image_list_drag_merged = 0;
+        self.image_list_drag = Some(ImageListDragState {
+            image_list: drag_list,
+            index: 0,
+            hotspot_x,
+            hotspot_y,
+            lock_hwnd: self.image_list_drag_lock_hwnd,
+            x: self.image_list_drag_x,
+            y: self.image_list_drag_y,
+            visible: false,
+        });
+        Some(true)
+    }
+
     pub fn set_image_list_drag_cursor(
         &mut self,
         handle: u32,
@@ -2060,6 +2091,19 @@ impl ResourceSystem {
         true
     }
 
+    pub fn image_list_drag_internal_handles(&self) -> Vec<u32> {
+        let mut handles = Vec::new();
+        if self.image_list_drag_dither != 0 {
+            handles.push(self.image_list_drag_dither);
+        }
+        if self.image_list_drag_merged != 0
+            && self.image_list_drag_merged != self.image_list_drag_dither
+        {
+            handles.push(self.image_list_drag_merged);
+        }
+        handles
+    }
+
     pub fn image_list_drag(&self) -> Option<ImageListDragState> {
         self.image_list_drag
     }
@@ -2084,9 +2128,18 @@ impl ResourceSystem {
     }
 
     fn create_image_list_drag_clone(&mut self, handle: u32, index: i32) -> Option<u32> {
-        const ILC_SHARED: u32 = 0x0100;
         let source = self.image_lists.get(&handle)?;
         let image = source.images.get(index as usize)?.clone();
+        self.create_image_list_drag_clone_with_images(handle, vec![image])
+    }
+
+    fn create_image_list_drag_clone_with_images(
+        &mut self,
+        handle: u32,
+        images: Vec<ImageListImage>,
+    ) -> Option<u32> {
+        const ILC_SHARED: u32 = 0x0100;
+        let source = self.image_lists.get(&handle)?;
         let new_handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
         self.image_lists.insert(
@@ -2100,7 +2153,7 @@ impl ResourceSystem {
                 bk_color: source.bk_color,
                 color_table: source.color_table.clone(),
                 colors_set: source.colors_set,
-                images: vec![image],
+                images,
                 overlays: BTreeMap::new(),
                 last_draw: None,
                 last_dither_copy: None,
