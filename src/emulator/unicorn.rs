@@ -3198,6 +3198,24 @@ impl UnicornMips {
                 wait.regs.regs[29],
                 handles
             ));
+            let code_start = wait.return_pc & !0xf;
+            if let Some(bytes) = self.read_mapped_bytes(code_start, 32) {
+                let words = bytes
+                    .chunks_exact(4)
+                    .enumerate()
+                    .map(|(index, chunk)| {
+                        let pc = code_start.wrapping_add((index * 4) as u32);
+                        let value = u32::from_le_bytes(chunk.try_into().unwrap());
+                        format!("0x{pc:08x}:0x{value:08x}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                out.push_str(&format!("      return_pc_words={words}\n"));
+            } else {
+                out.push_str(&format!(
+                    "      return_pc_words=unmapped start=0x{code_start:08x}\n"
+                ));
+            }
         }
         out
     }
