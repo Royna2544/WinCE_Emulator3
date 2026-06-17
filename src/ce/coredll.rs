@@ -49124,6 +49124,8 @@ const DT_VCENTER: u32 = 0x0004;
 const DT_BOTTOM: u32 = 0x0008;
 const DT_WORDBREAK: u32 = 0x0010;
 const DT_SINGLELINE: u32 = 0x0020;
+const DT_EXPANDTABS: u32 = 0x0040;
+const DT_TABSTOP: u32 = 0x0080;
 const DT_NOCLIP: u32 = 0x0100;
 const DT_CALCRECT: u32 = 0x0400;
 const DT_NOPREFIX: u32 = 0x0800;
@@ -49143,12 +49145,13 @@ fn draw_text_line_width(
     start: usize,
     count: usize,
     units: &[u16],
+    format: u32,
 ) -> i32 {
     if count == 0 {
         0
     } else {
         let end = start.saturating_add(count).min(units.len());
-        measure_text_units_width(kernel, hdc, &units[start..end])
+        measure_draw_text_units_width(kernel, hdc, &units[start..end], format)
     }
 }
 
@@ -49160,9 +49163,11 @@ fn push_draw_text_line(
     end: usize,
     width: Option<i32>,
     units: &[u16],
+    format: u32,
 ) {
     let count = end.saturating_sub(start);
-    let width = width.unwrap_or_else(|| draw_text_line_width(kernel, hdc, start, count, units));
+    let width =
+        width.unwrap_or_else(|| draw_text_line_width(kernel, hdc, start, count, units, format));
     lines.push(DrawTextLine {
         start,
         count,
@@ -49185,7 +49190,7 @@ fn layout_draw_text_lines(
         return vec![DrawTextLine {
             start: 0,
             count: char_count,
-            width: draw_text_line_width(kernel, hdc, 0, char_count, units),
+            width: draw_text_line_width(kernel, hdc, 0, char_count, units, format),
         }];
     }
 
@@ -49198,7 +49203,7 @@ fn layout_draw_text_lines(
     while i < char_count {
         let unit = units[i];
         if unit == b'\r' as u16 || unit == b'\n' as u16 {
-            push_draw_text_line(&mut lines, kernel, hdc, line_start, i, None, units);
+            push_draw_text_line(&mut lines, kernel, hdc, line_start, i, None, units, format);
             i += 1;
             if unit == b'\r' as u16 && i < char_count {
                 let next = units[i];
@@ -49212,10 +49217,11 @@ fn layout_draw_text_lines(
         }
 
         let candidate_count = i + 1 - line_start;
-        let candidate_width = draw_text_line_width(kernel, hdc, line_start, candidate_count, units);
+        let candidate_width =
+            draw_text_line_width(kernel, hdc, line_start, candidate_count, units, format);
         if unit == b' ' as u16 || unit == b'\t' as u16 {
             let before_space_width =
-                draw_text_line_width(kernel, hdc, line_start, i - line_start, units);
+                draw_text_line_width(kernel, hdc, line_start, i - line_start, units, format);
             last_space = Some((i, i + 1, before_space_width));
         }
 
@@ -49230,6 +49236,7 @@ fn layout_draw_text_lines(
                         space_index,
                         Some(before_space_width),
                         units,
+                        format,
                     );
                     line_start = after_space;
                     i = line_start;
@@ -49237,7 +49244,7 @@ fn layout_draw_text_lines(
                     continue;
                 }
             }
-            push_draw_text_line(&mut lines, kernel, hdc, line_start, i, None, units);
+            push_draw_text_line(&mut lines, kernel, hdc, line_start, i, None, units, format);
             line_start = i;
             last_space = None;
             continue;
@@ -49246,7 +49253,9 @@ fn layout_draw_text_lines(
     }
 
     if line_start < char_count || lines.is_empty() {
-        push_draw_text_line(&mut lines, kernel, hdc, line_start, char_count, None, units);
+        push_draw_text_line(
+            &mut lines, kernel, hdc, line_start, char_count, None, units, format,
+        );
     }
     lines
 }
@@ -49307,24 +49316,23 @@ fn apply_draw_text_ellipsis(
     if rect_width <= 0 || format & (DT_END_ELLIPSIS | DT_WORD_ELLIPSIS) == 0 {
         return processed;
     }
-    if measure_text_units_width(kernel, hdc, &processed.units) <= rect_width {
+    if measure_draw_text_units_width(kernel, hdc, &processed.units, format) <= rect_width {
         return processed;
     }
 
     let ellipsis = [b'.' as u16, b'.' as u16, b'.' as u16];
-    let ellipsis_width = measure_text_units_width(kernel, hdc, &ellipsis);
     let mut dot_count = ellipsis.len();
     while dot_count > 0
-        && measure_text_units_width(kernel, hdc, &ellipsis[..dot_count]) > rect_width
+        && measure_draw_text_units_width(kernel, hdc, &ellipsis[..dot_count], format) > rect_width
     {
         dot_count -= 1;
     }
     let suffix = &ellipsis[..dot_count];
-    let suffix_width = measure_text_units_width(kernel, hdc, suffix);
+    let suffix_width = measure_draw_text_units_width(kernel, hdc, suffix, format);
 
     let mut keep = processed.units.len();
     while keep > 0
-        && measure_text_units_width(kernel, hdc, &processed.units[..keep])
+        && measure_draw_text_units_width(kernel, hdc, &processed.units[..keep], format)
             .saturating_add(suffix_width)
             > rect_width
     {
@@ -49471,6 +49479,7 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
                 y,
                 line_units,
                 line_prefix_underline,
+                format,
                 clip,
             );
         } else if kernel.resources.is_memory_dc(hdc) {
@@ -49482,6 +49491,7 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
                 y,
                 line_units,
                 line_prefix_underline,
+                format,
                 clip,
             );
         }
@@ -49512,6 +49522,60 @@ fn measure_text_units_width(kernel: &CeKernel, hdc: u32, units: &[u16]) -> i32 {
         previous_char_width = char_width;
     }
     total
+}
+
+fn draw_text_tab_columns(format: u32) -> Option<i32> {
+    if format & DT_EXPANDTABS == 0 {
+        return None;
+    }
+    let encoded = if format & DT_TABSTOP != 0 {
+        ((format >> 8) & 0xff) as i32
+    } else {
+        0
+    };
+    Some(if encoded > 1 { encoded } else { 8 })
+}
+
+fn draw_text_unit_advances(
+    metrics: &TextMetricsModel,
+    text_char_extra: i32,
+    units: &[u16],
+    format: u32,
+) -> Vec<i32> {
+    let tab_width = draw_text_tab_columns(format)
+        .map(|columns| metrics.ave_width.max(1).saturating_mul(columns));
+    let mut previous_char_width = 0;
+    let mut total = 0i32;
+    let mut advances = Vec::with_capacity(units.len());
+    for unit in units.iter().copied() {
+        let char_width = metrics.char_width(unit);
+        let advance = if unit == b'\t' as u16 {
+            if let Some(tab_width) = tab_width.filter(|width| *width > 0) {
+                let next_stop = (total / tab_width + 1).saturating_mul(tab_width);
+                next_stop.saturating_sub(total).max(1)
+            } else {
+                text_advance_with_extra(char_width, previous_char_width, text_char_extra)
+            }
+        } else {
+            text_advance_with_extra(char_width, previous_char_width, text_char_extra)
+        };
+        advances.push(advance);
+        total = total.saturating_add(advance);
+        previous_char_width = char_width;
+    }
+    advances
+}
+
+fn measure_draw_text_units_width(kernel: &CeKernel, hdc: u32, units: &[u16], format: u32) -> i32 {
+    let state = kernel.resources.dc_state(hdc);
+    let font = state
+        .as_ref()
+        .and_then(|state| kernel.resources.font(state.selected_font).cloned());
+    let metrics = TextMetricsModel::from_font(font.as_ref());
+    let text_char_extra = state.map(|state| state.text_char_extra).unwrap_or(0);
+    draw_text_unit_advances(&metrics, text_char_extra, units, format)
+        .into_iter()
+        .fold(0i32, i32::saturating_add)
 }
 
 fn write_text_rop2_bitmap_pixel<M: CoredllGuestMemory>(
@@ -49583,6 +49647,7 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
     y: i32,
     units: &[u16],
     prefix_underline: &[bool],
+    format: u32,
     clip: Option<Rect>,
 ) {
     if !kernel.resources.is_memory_dc(hdc) {
@@ -49604,7 +49669,8 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
     let cell_h = metrics.height.max(1) as usize;
     let cell_w = metrics.ave_width.max(1);
     let text_char_extra = state.text_char_extra;
-    let total_w = measure_text_units_width(kernel, hdc, units);
+    let advances = draw_text_unit_advances(&metrics, text_char_extra, units, format);
+    let total_w = advances.iter().copied().fold(0i32, i32::saturating_add);
     let text_bounds = Rect {
         left: x,
         top: y,
@@ -49629,11 +49695,9 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
     let bm_w = bitmap.width;
     let bm_h = bitmap.height;
     let mut cursor_x = x;
-    let mut previous_char_width = 0;
 
     for (char_idx, unit) in units.iter().copied().enumerate() {
-        let char_width = metrics.char_width(unit);
-        let advance = text_advance_with_extra(char_width, previous_char_width, text_char_extra);
+        let advance = advances.get(char_idx).copied().unwrap_or(0);
 
         if bk_mode == BKMODE_OPAQUE && advance > 0 {
             let bg_left = cursor_x;
@@ -49699,7 +49763,6 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
         }
 
         cursor_x += advance;
-        previous_char_width = char_width;
     }
 }
 
@@ -49711,6 +49774,7 @@ fn draw_text_units_to_framebuffer(
     y: i32,
     units: &[u16],
     prefix_underline: &[bool],
+    format: u32,
     clip: Option<Rect>,
 ) {
     let state = kernel.resources.dc_state(hdc).unwrap_or_default();
@@ -49723,7 +49787,8 @@ fn draw_text_units_to_framebuffer(
     let cell_h = metrics.height.max(1) as usize;
     let cell_w = metrics.ave_width.max(1);
     let text_char_extra = state.text_char_extra;
-    let total_w = measure_text_units_width(kernel, hdc, units);
+    let advances = draw_text_unit_advances(&metrics, text_char_extra, units, format);
+    let total_w = advances.iter().copied().fold(0i32, i32::saturating_add);
     let text_bounds = Rect {
         left: x,
         top: y,
@@ -49758,12 +49823,10 @@ fn draw_text_units_to_framebuffer(
     let screen_x0 = x + origin.x;
     let screen_y0 = y + origin.y;
     let mut cursor_x = screen_x0;
-    let mut previous_char_width = 0;
     let mut any_pixel = false;
 
     for (char_idx, unit) in units.iter().copied().enumerate() {
-        let char_width = metrics.char_width(unit);
-        let advance = text_advance_with_extra(char_width, previous_char_width, text_char_extra);
+        let advance = advances.get(char_idx).copied().unwrap_or(0);
 
         if bk_mode == BKMODE_OPAQUE && advance > 0 {
             let bg_left = cursor_x;
@@ -49843,7 +49906,6 @@ fn draw_text_units_to_framebuffer(
         }
 
         cursor_x += advance;
-        previous_char_width = char_width;
     }
 
     if any_pixel {

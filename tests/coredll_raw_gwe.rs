@@ -49655,6 +49655,123 @@ fn coredll_raw_draw_text_w_end_ellipsis_replaces_clipped_tail() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_draw_text_w_expand_tabs_uses_default_tab_stops() -> Result<()> {
+    const DT_EXPANDTABS: u32 = 0x0040;
+    const TRANSPARENT: u32 = 1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 172_u32;
+    let (dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 96, 48);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_TEXT_COLOR,
+            [dc, 0x0000_00ff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_MODE,
+            [dc, TRANSPARENT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+
+    let rect_ptr = 0x2_1300_u32;
+    let text_tab = 0x2_1400_u32;
+    let text_expanded = 0x2_1500_u32;
+    let text_single_space = 0x2_1600_u32;
+    memory.map_words(rect_ptr, 4);
+    memory.write_wide_z(text_tab, "A\tB");
+    memory.write_wide_z(text_expanded, "A       B");
+    memory.write_wide_z(text_single_space, "A B");
+
+    let write_rect = |memory: &mut TestGuestMemory, top: u32| {
+        memory.write_word(rect_ptr, 0);
+        memory.write_word(rect_ptr + 4, top);
+        memory.write_word(rect_ptr + 8, 96);
+        memory.write_word(rect_ptr + 12, top + 16);
+    };
+    let band_pixels = |memory: &TestGuestMemory, y0: u32| -> Vec<u16> {
+        (y0..y0 + 16)
+            .flat_map(|y| (0..96).map(move |x| rgb565_at(memory, bits_ptr, stride, x, y)))
+            .collect()
+    };
+
+    write_rect(&mut memory, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_tab, (-1i32) as u32, rect_ptr, DT_EXPANDTABS],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    write_rect(&mut memory, 16);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_expanded, (-1i32) as u32, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    write_rect(&mut memory, 32);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_single_space, (-1i32) as u32, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        band_pixels(&memory, 0),
+        band_pixels(&memory, 16),
+        "DT_EXPANDTABS should advance to the default eight-column tab stop"
+    );
+    assert_ne!(
+        band_pixels(&memory, 0),
+        band_pixels(&memory, 32),
+        "expanded tabs should not collapse to a single fallback-width blank"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_text_draw_calls_reject_readonly_selected_bitmap() -> Result<()> {
     const ETO_OPAQUE: u32 = 0x0002;
 
