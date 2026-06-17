@@ -793,6 +793,14 @@ fn run_cpu_loop(
             continue;
         }
         if active_process_exited(cpu) {
+            if should_keep_remote_active_exit_alive(
+                args.remote_server.is_some(),
+                cpu.active_process_has_visible_receiver_work(kernel),
+            ) {
+                reported_blocked_message_wait = false;
+                std::thread::sleep(Duration::from_millis(16));
+                continue;
+            }
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 print_unicorn_stop(snapshot);
             }
@@ -1072,6 +1080,13 @@ fn rotate_to_same_process_visible_receiver_thread(
 fn active_process_exited(cpu: &UnicornMips) -> bool {
     cpu.last_debug_snapshot()
         .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some())
+}
+
+fn should_keep_remote_active_exit_alive(
+    remote_server: bool,
+    active_visible_receiver_work: bool,
+) -> bool {
+    remote_server && active_visible_receiver_work
 }
 
 fn switch_completed_active_context(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
@@ -4108,6 +4123,13 @@ mod tests {
     fn remote_input_receiver_rotation_preserves_active_visible_ui_work() {
         assert!(should_rotate_remote_input_receiver_parked_process(false));
         assert!(!should_rotate_remote_input_receiver_parked_process(true));
+    }
+
+    #[test]
+    fn remote_active_exit_keeps_visible_ui_serviceable() {
+        assert!(should_keep_remote_active_exit_alive(true, true));
+        assert!(!should_keep_remote_active_exit_alive(false, true));
+        assert!(!should_keep_remote_active_exit_alive(true, false));
     }
 
     #[test]
