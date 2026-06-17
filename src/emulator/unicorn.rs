@@ -14228,6 +14228,28 @@ fn blocked_wait_can_resume(blocked: &BlockedWaitThread, kernel: &CeKernel, now_m
 }
 
 #[cfg(feature = "unicorn")]
+fn format_wait_handles_ready(kernel: &CeKernel, thread_id: u32, handles: &[u32]) -> String {
+    if handles.is_empty() {
+        return "none".to_owned();
+    }
+    handles
+        .iter()
+        .map(|handle| {
+            format!(
+                "0x{handle:08x}:{}:ready={}",
+                kernel.describe_handle(*handle),
+                match kernel.is_wait_ready(*handle, thread_id) {
+                    Some(true) => "true",
+                    Some(false) => "false",
+                    None => "unknown",
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+#[cfg(feature = "unicorn")]
 fn unicorn_blocked_wait_snapshots(kernel: &CeKernel) -> Vec<UnicornBlockedWaitSnapshot> {
     kernel
         .blocked_waiters()
@@ -14245,6 +14267,7 @@ fn unicorn_blocked_wait_snapshots(kernel: &CeKernel) -> Vec<UnicornBlockedWaitSn
                 .map(|handle| UnicornWaitHandleSnapshot {
                     handle,
                     description: kernel.describe_handle(handle),
+                    ready: kernel.is_wait_ready(handle, wait.thread_id),
                 })
                 .collect(),
         })
@@ -14269,6 +14292,7 @@ fn unicorn_trap_handle_snapshot<D>(
     Some(UnicornWaitHandleSnapshot {
         handle,
         description: kernel.describe_handle(handle),
+        ready: None,
     })
 }
 
@@ -16067,6 +16091,16 @@ fn try_block_wait_for_multiple_objects<D>(
             wait_started_ms,
             timeout,
         );
+        kernel.record_wait_event_trace(
+            "BlockWaitForMultipleObjects",
+            None,
+            None,
+            format!(
+                "id={wait_id}/thread={thread_id}/thread_handle=0x{:08x}/count={count}/timeout={timeout}/return_pc=0x{return_pc:08x}/handles=[{}]/source=pending_return",
+                callout.thread_handle,
+                format_wait_handles_ready(kernel, thread_id, &wait_handles)
+            ),
+        );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -16109,6 +16143,15 @@ fn try_block_wait_for_multiple_objects<D>(
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
+        );
+        kernel.record_wait_event_trace(
+            "BlockWaitForMultipleObjects",
+            None,
+            None,
+            format!(
+                "id={wait_id}/thread={thread_id}/thread_handle=0x{thread_handle:08x}/count={count}/timeout={timeout}/return_pc=0x{return_pc:08x}/handles=[{}]/source=running_thread",
+                format_wait_handles_ready(kernel, thread_id, &wait_handles)
+            ),
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
@@ -17525,6 +17568,8 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         && blocked_msg_wait_has_input(&blocked, kernel);
     let sleep_timed_out = matches!(blocked.kind, BlockedWaitKind::Sleep)
         && blocked_wait_timed_out(&blocked, kernel.timers.tick_count());
+    let resume_handles =
+        format_wait_handles_ready(kernel, blocked.thread_id, &blocked.wait_handles);
     let wait_result = if sleep_timed_out {
         0
     } else if message_queue_io_ready || message_queue_io_timed_out {
@@ -17570,6 +17615,35 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     } else {
         crate::ce::timer::WAIT_TIMEOUT
     };
+    kernel.record_wait_event_trace(
+        "ResumeBlockedWait",
+        pulsed_handle.or_else(|| {
+            let object_index = wait_result.wrapping_sub(crate::ce::timer::WAIT_OBJECT_0);
+            (wait_result >= crate::ce::timer::WAIT_OBJECT_0
+                && (object_index as usize) < blocked.wait_handles.len())
+            .then(|| blocked.wait_handles[object_index as usize])
+        }),
+        Some(true),
+        format!(
+            "id={}/thread={}/kind={:?}/return_pc=0x{:08x}/wait_result=0x{:08x}/has_ready_handle={}/serial_read_ready={}/serial_comm_event_ready={}/message_input_ready={}/sleep_timed_out={}/winsock_read_ready={}/winsock_read_timed_out={}/message_queue_io_ready={}/message_queue_io_timed_out={}/send_message_ready={}/handles_before=[{}]",
+            blocked.wait_id,
+            blocked.thread_id,
+            blocked.kind,
+            blocked.return_pc,
+            wait_result,
+            has_ready_handle,
+            serial_read_ready,
+            serial_comm_event_ready,
+            message_input_ready,
+            sleep_timed_out,
+            winsock_read_ready,
+            winsock_read_timed_out,
+            message_queue_io_ready,
+            message_queue_io_timed_out,
+            send_message_ready,
+            resume_handles
+        ),
+    );
     match blocked.kind {
         BlockedWaitKind::Kernel => kernel.record_resumed_wait(wait_result),
         BlockedWaitKind::Sleep => kernel.record_resumed_thread_sleep(),

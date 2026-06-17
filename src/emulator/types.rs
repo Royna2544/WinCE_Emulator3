@@ -251,8 +251,16 @@ impl UnicornDebugSnapshot {
                         if handle_index != 0 {
                             waits_summary.push('|');
                         }
-                        waits_summary
-                            .push_str(&format!("0x{:08x}:{}", handle.handle, handle.description));
+                        waits_summary.push_str(&format!(
+                            "0x{:08x}:{}:ready={}",
+                            handle.handle,
+                            handle.description,
+                            match handle.ready {
+                                Some(true) => "true",
+                                Some(false) => "false",
+                                None => "unknown",
+                            }
+                        ));
                     }
                     if wait.handles.len() > 4 {
                         waits_summary.push_str(&format!("|+{} more", wait.handles.len() - 4));
@@ -759,6 +767,7 @@ pub struct UnicornBlockedWaitSnapshot {
 pub struct UnicornWaitHandleSnapshot {
     pub handle: u32,
     pub description: String,
+    pub ready: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

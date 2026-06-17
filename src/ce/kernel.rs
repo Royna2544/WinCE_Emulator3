@@ -769,7 +769,7 @@ pub struct DeviceTraceRecord {
 const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 const PROCESS_TRACE_LIMIT: usize = 128;
-const EVENT_TRACE_LIMIT: usize = 256;
+const EVENT_TRACE_LIMIT: usize = 4096;
 const MESSAGE_TRACE_LIMIT: usize = 2048;
 const DEVICE_TRACE_LIMIT: usize = 512;
 const SHCNE_RENAMEITEM: u32 = 0x0000_0001;
@@ -3489,6 +3489,24 @@ impl CeKernel {
         self.recent_event_ops.push(record);
     }
 
+    pub fn record_wait_event_trace(
+        &mut self,
+        op: &'static str,
+        handle: Option<u32>,
+        result: Option<bool>,
+        detail: String,
+    ) {
+        self.record_event_trace(EventTraceRecord {
+            op,
+            handle,
+            name: None,
+            manual_reset: None,
+            signaled: None,
+            result,
+            detail: Some(detail),
+        });
+    }
+
     fn record_message_trace(&mut self, record: MessageTraceRecord) {
         if self.recent_message_ops.len() == MESSAGE_TRACE_LIMIT {
             self.recent_message_ops.remove(0);
@@ -5319,10 +5337,22 @@ impl CeKernel {
         trace_detail: Option<String>,
     ) -> bool {
         let success = self.handles.set_event(handle);
-        if success {
-            self.queue_object_wake_candidates(handle);
-        }
-        let detail = append_trace_detail(self.describe_handle(handle), trace_detail);
+        let waiter_ids = self.scheduler.waiter_ids_for_handle(handle);
+        let queued = if success {
+            self.scheduler
+                .queue_pending_wake_ids(waiter_ids.iter().copied())
+        } else {
+            0
+        };
+        let detail = append_trace_detail(
+            format!(
+                "{}/waiters={:?}/queued={}",
+                self.describe_handle(handle),
+                waiter_ids,
+                queued
+            ),
+            trace_detail,
+        );
         self.record_event_trace(EventTraceRecord {
             op: "SetEvent",
             handle: Some(handle),
@@ -5694,9 +5724,27 @@ impl CeKernel {
     }
 
     pub fn remove_blocked_waiter(&mut self, wait_id: u64) -> Option<SchedulerBlockedWait> {
+        let detail = self
+            .scheduler
+            .blocked_wait(wait_id)
+            .map(|wait| {
+                let handles = wait
+                    .wait_handles
+                    .iter()
+                    .map(|handle| format!("0x{handle:08x}:{}", self.describe_handle(*handle)))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                format!(
+                    "id={}/thread={}/thread_handle=0x{:08x}/kind={:?}/handles=[{}]",
+                    wait.id, wait.thread_id, wait.thread_handle, wait.kind, handles
+                )
+            })
+            .unwrap_or_else(|| format!("id={wait_id}/missing"));
         self.pulsed_wait_handles.remove(&wait_id);
         self.comm_event_mask_changed_waits.remove(&wait_id);
-        self.scheduler.remove_blocked_wait(wait_id)
+        let removed = self.scheduler.remove_blocked_wait(wait_id);
+        self.record_wait_event_trace("RemoveBlockedWaiter", None, Some(removed.is_some()), detail);
+        removed
     }
 
     pub fn remove_blocked_waiters_for_thread(&mut self, thread_id: u32) -> usize {
@@ -5753,9 +5801,9 @@ impl CeKernel {
         self.comm_event_mask_changed_waits.remove(&wait_id)
     }
 
-    fn queue_object_wake_candidates(&mut self, handle: u32) {
+    fn queue_object_wake_candidates(&mut self, handle: u32) -> usize {
         let wait_ids = self.scheduler.waiter_ids_for_handle(handle);
-        self.scheduler.queue_pending_wake_ids(wait_ids);
+        self.scheduler.queue_pending_wake_ids(wait_ids)
     }
 
     pub fn queue_serial_read_wake_candidates(&mut self, handle: u32) -> usize {
