@@ -49127,6 +49127,8 @@ const DT_SINGLELINE: u32 = 0x0020;
 const DT_NOCLIP: u32 = 0x0100;
 const DT_CALCRECT: u32 = 0x0400;
 const DT_NOPREFIX: u32 = 0x0800;
+const DT_END_ELLIPSIS: u32 = 0x0000_8000;
+const DT_WORD_ELLIPSIS: u32 = 0x0004_0000;
 
 #[derive(Clone, Copy)]
 struct DrawTextLine {
@@ -49295,6 +49297,49 @@ fn draw_text_processed_units(units: &[u16], format: u32) -> DrawTextProcessed {
     }
 }
 
+fn apply_draw_text_ellipsis(
+    kernel: &CeKernel,
+    hdc: u32,
+    mut processed: DrawTextProcessed,
+    rect_width: i32,
+    format: u32,
+) -> DrawTextProcessed {
+    if rect_width <= 0 || format & (DT_END_ELLIPSIS | DT_WORD_ELLIPSIS) == 0 {
+        return processed;
+    }
+    if measure_text_units_width(kernel, hdc, &processed.units) <= rect_width {
+        return processed;
+    }
+
+    let ellipsis = [b'.' as u16, b'.' as u16, b'.' as u16];
+    let ellipsis_width = measure_text_units_width(kernel, hdc, &ellipsis);
+    let mut dot_count = ellipsis.len();
+    while dot_count > 0
+        && measure_text_units_width(kernel, hdc, &ellipsis[..dot_count]) > rect_width
+    {
+        dot_count -= 1;
+    }
+    let suffix = &ellipsis[..dot_count];
+    let suffix_width = measure_text_units_width(kernel, hdc, suffix);
+
+    let mut keep = processed.units.len();
+    while keep > 0
+        && measure_text_units_width(kernel, hdc, &processed.units[..keep])
+            .saturating_add(suffix_width)
+            > rect_width
+    {
+        keep -= 1;
+    }
+
+    processed.units.truncate(keep);
+    processed.prefix_underline.truncate(keep);
+    processed.units.extend_from_slice(suffix);
+    processed
+        .prefix_underline
+        .extend(std::iter::repeat_n(false, suffix.len()));
+    processed
+}
+
 fn draw_text_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -49353,7 +49398,13 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     };
     let cell_h = metrics.height.max(1);
     let rect_w = (rect.right - rect.left).max(0);
-    let processed = draw_text_processed_units(&raw_units, format);
+    let processed = apply_draw_text_ellipsis(
+        kernel,
+        hdc,
+        draw_text_processed_units(&raw_units, format),
+        rect_w,
+        format,
+    );
     let units = processed.units;
     let lines = layout_draw_text_lines(kernel, hdc, &units, rect_w, format);
     let visible_line_count = if lines.is_empty() && !raw_units.is_empty() {
