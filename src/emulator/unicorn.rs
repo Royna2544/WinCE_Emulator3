@@ -1658,8 +1658,10 @@ impl UnicornMips {
             return false;
         };
         let thread_id = self.current_thread_id();
-        let Some(message) = kernel.take_ready_visible_message_w_filtered(thread_id, None, 0, 0)
-        else {
+        let message = kernel
+            .take_ready_visible_message_w_filtered(thread_id, None, 0, 0)
+            .or_else(|| kernel.take_ready_message_w_filtered(thread_id, None, 0, 0));
+        let Some(message) = message else {
             return false;
         };
         if message.msg == crate::ce::gwe::WM_QUIT {
@@ -1668,7 +1670,7 @@ impl UnicornMips {
         let Some(window) = kernel
             .gwe
             .window(message.hwnd)
-            .filter(|window| !window.destroyed && window.visible)
+            .filter(|window| !window.destroyed)
             .cloned()
         else {
             let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
@@ -28805,6 +28807,58 @@ mod guest_thread_stack_tests {
             scheduler.pending_wndproc_returns[0].source,
             "OrphanedVisibleMessage"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn orphaned_return_stub_active_dispatches_hidden_setup_message() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let thread_id = 1;
+        let hidden_wndproc = 0x6004_f0f4;
+        scheduler.set_initial_thread_id(thread_id);
+        scheduler.current_thread_id = thread_id;
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[29] = 0x7ffd_f558;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            regs,
+        });
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            ra: GUEST_THREAD_RETURN_STUB_ADDR,
+            ..Default::default()
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let hidden = kernel.create_window_ex_w(thread_id, "hidden", "", None, 0, 0, 0);
+        kernel
+            .gwe
+            .set_window_long(hidden, crate::ce::gwe::GWL_WNDPROC, hidden_wndproc);
+        assert!(kernel.post_message_w(hidden, crate::ce::gwe::WM_WINDOWPOSCHANGED, 0, 0x31ab_cdef));
+
+        assert!(scheduler.prepare_active_orphaned_visible_message_callout(&mut kernel));
+
+        assert!(!kernel.gwe.has_message_filtered(
+            thread_id,
+            Some(hidden),
+            crate::ce::gwe::WM_WINDOWPOSCHANGED,
+            crate::ce::gwe::WM_WINDOWPOSCHANGED,
+        ));
+        let saved = scheduler
+            .saved_context
+            .as_ref()
+            .expect("orphaned hidden setup message callout");
+        assert_eq!(saved.pc, hidden_wndproc);
+        assert_eq!(saved.regs.regs[4], hidden);
+        assert_eq!(saved.regs.regs[5], crate::ce::gwe::WM_WINDOWPOSCHANGED);
+        assert_eq!(saved.regs.regs[7], 0x31ab_cdef);
+        assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
 
         Ok(())
     }
