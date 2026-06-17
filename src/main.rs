@@ -888,12 +888,14 @@ fn run_cpu_loop(
                 reported_blocked_message_wait = false;
                 continue;
             }
-            if let Some(snapshot) = cpu.last_debug_snapshot() {
-                print_unicorn_stop(snapshot);
+            if !reported_blocked_message_wait {
+                if let Some(snapshot) = cpu.last_debug_snapshot() {
+                    print_unicorn_stop(snapshot);
+                }
+                reported_blocked_message_wait = true;
             }
         }
         if args.remote_server.is_some() {
-            reported_blocked_message_wait = false;
             std::thread::sleep(Duration::from_millis(16));
             continue;
         }
