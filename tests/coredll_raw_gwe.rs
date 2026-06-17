@@ -4876,6 +4876,97 @@ fn coredll_raw_pat_blt_tiles_pattern_brush_on_selected_memory_dib() -> Result<()
 }
 
 #[test]
+fn coredll_raw_fill_rect_tiles_pattern_brush_on_framebuffer() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let mut framebuffer = VirtualFramebuffer::new(6, 5, PixelFormat::Rgb565)?;
+    let _ = framebuffer.take_dirty_rects();
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 1);
+    memory.write_word(rect_ptr + 4, 1);
+    memory.write_word(rect_ptr + 8, 5);
+    memory.write_word(rect_ptr + 12, 4);
+
+    let (_pattern_dc, pattern_bitmap, pattern_bits, pattern_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    write_rgb565(&mut memory, pattern_bits, pattern_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, pattern_bits, pattern_stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, pattern_bits, pattern_stride, 0, 1, 0x001f);
+    write_rgb565(&mut memory, pattern_bits, pattern_stride, 1, 1, 0xffff);
+    let pattern_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PATTERN_BRUSH,
+        [pattern_bitmap],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePatternBrush did not return a brush: {other:?}"),
+    };
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a desktop HDC: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [screen_dc, pattern_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_FILL_RECT,
+            [screen_dc, rect_ptr, pattern_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 1), 0xffff);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 1), 0x001f);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 2), 0x07e0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 2), 0xf800);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), 0x0000);
+    assert_eq!(
+        framebuffer.dirty_rects(),
+        &[FramebufferRect::new(1, 1, 4, 3)]
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_create_dib_pattern_brush_pt_uses_packed_dib() -> Result<()> {
     const DIB_RGB_COLORS: u32 = 0;
     const DIB_PAL_COLORS: u32 = 1;

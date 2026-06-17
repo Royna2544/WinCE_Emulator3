@@ -43561,10 +43561,9 @@ fn fill_rect_raw<M: CoredllGuestMemory>(
         return 0;
     }
     if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint.clone())
-        && let BrushPaint::Solid(color) = paint
         && let Some(framebuffer) = framebuffer
     {
-        fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, color);
+        fill_framebuffer_rect_for_hdc_paint(kernel, memory, framebuffer, hdc, rect, paint);
     }
     kernel.threads.set_last_error(thread_id, 0);
     1
@@ -43606,10 +43605,9 @@ fn fill_rgn_raw<M: CoredllGuestMemory>(
         return false;
     }
     if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint.clone())
-        && let BrushPaint::Solid(color) = paint
         && let Some(framebuffer) = framebuffer
     {
-        fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, color);
+        fill_framebuffer_rect_for_hdc_paint(kernel, memory, framebuffer, hdc, rect, paint);
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
@@ -43682,6 +43680,51 @@ fn fill_framebuffer_rect_for_hdc(
     for rect in clips {
         let screen_rect = rect.offset(client_origin.x, client_origin.y);
         fill_framebuffer_screen_rect(framebuffer, screen_rect, colorref);
+    }
+}
+
+fn fill_framebuffer_rect_for_hdc_paint<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    rect: Rect,
+    paint: BrushPaint,
+) {
+    let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, rect) else {
+        return;
+    };
+    let pattern = match &paint {
+        BrushPaint::Null => None,
+        BrushPaint::Solid(_) => None,
+        BrushPaint::Pattern(pattern) => {
+            bitmap_pattern_bytes(memory, pattern).map(|bytes| (pattern.clone(), bytes))
+        }
+    };
+    let solid = match &paint {
+        BrushPaint::Null => None,
+        BrushPaint::Solid(colorref) => Some(colorref_rgb(*colorref)),
+        BrushPaint::Pattern(_) => None,
+    };
+    if solid.is_none() && pattern.is_none() {
+        return;
+    }
+    let brush_origin = kernel
+        .resources
+        .dc_state(hdc)
+        .map(|state| state.brush_origin)
+        .unwrap_or(Point { x: 0, y: 0 });
+    for rect in clips {
+        let screen_rect = rect.offset(client_origin.x, client_origin.y);
+        fill_framebuffer_screen_rect_with_rgb(framebuffer, screen_rect, |screen_x, screen_y| {
+            if let Some(rgb) = solid {
+                return Some(rgb);
+            }
+            let (pattern, bytes) = pattern.as_ref()?;
+            let client_x = screen_x - client_origin.x;
+            let client_y = screen_y - client_origin.y;
+            pattern_pixel_rgb(pattern, bytes, client_x, client_y, brush_origin)
+        });
     }
 }
 
@@ -43770,6 +43813,15 @@ fn restore_framebuffer_rect(
 }
 
 fn fill_framebuffer_screen_rect(framebuffer: &mut dyn Framebuffer, rect: Rect, colorref: u32) {
+    let rgb = colorref_rgb(colorref);
+    fill_framebuffer_screen_rect_with_rgb(framebuffer, rect, |_x, _y| Some(rgb));
+}
+
+fn fill_framebuffer_screen_rect_with_rgb(
+    framebuffer: &mut dyn Framebuffer,
+    rect: Rect,
+    mut rgb_at: impl FnMut(i32, i32) -> Option<[u8; 3]>,
+) {
     let info = framebuffer.info();
     let left = rect.left.max(0).min(info.width as i32) as u32;
     let top = rect.top.max(0).min(info.height as i32) as u32;
@@ -43778,12 +43830,15 @@ fn fill_framebuffer_screen_rect(framebuffer: &mut dyn Framebuffer, rect: Rect, c
     if right <= left || bottom <= top {
         return;
     }
-    let pixel = pixel_bytes_for_colorref(info.format, colorref);
     let bytes_per_pixel = info.format.bytes_per_pixel();
     let pixels = framebuffer.pixels_mut();
     for y in top as usize..bottom as usize {
         let row_start = y * info.stride;
         for x in left as usize..right as usize {
+            let Some(rgb) = rgb_at(x as i32, y as i32) else {
+                continue;
+            };
+            let pixel = pixel_bytes_for_rgb(info.format, rgb);
             let offset = row_start + x * bytes_per_pixel;
             pixels[offset..offset + bytes_per_pixel].copy_from_slice(&pixel[..bytes_per_pixel]);
         }
