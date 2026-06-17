@@ -44748,6 +44748,10 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
                 .resources
                 .selected_bitmap(src)
                 .and_then(|src_bmp_h| kernel.resources.bitmap(src_bmp_h).cloned())
+                .map(|mut src_bmp| {
+                    apply_mono_ddb_source_colors(kernel, dst, &mut src_bmp);
+                    src_bmp
+                })
                 .and_then(|src_bmp| {
                     read_bitmap_object_bytes(memory, &src_bmp).map(|src_bytes| (src_bmp, src_bytes))
                 })
@@ -44809,6 +44813,10 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
             .resources
             .selected_bitmap(src)
             .and_then(|src_bmp_h| kernel.resources.bitmap(src_bmp_h).cloned())
+            .map(|mut src_bmp| {
+                apply_mono_ddb_source_colors(kernel, dst, &mut src_bmp);
+                src_bmp
+            })
             .and_then(|src_bmp| {
                 read_bitmap_object_bytes(memory, &src_bmp).map(|src_bytes| (src_bmp, src_bytes))
             })
@@ -45000,6 +45008,26 @@ fn blt_destination_rect(dst_x: i32, dst_y: i32, dst_width: i32, dst_height: i32)
     }
 }
 
+fn apply_mono_ddb_source_colors(
+    kernel: &CeKernel,
+    dst_hdc: u32,
+    bitmap: &mut crate::ce::resource::BitmapObject,
+) {
+    if bitmap.bits_pixel != 1 || !bitmap.color_table.is_empty() || bitmap.dib_section {
+        return;
+    }
+    let state = kernel.resources.dc_state(dst_hdc).unwrap_or_default();
+    bitmap.color_table = vec![
+        colorref_bgr_table_entry(state.text_color),
+        colorref_bgr_table_entry(state.bk_color),
+    ];
+}
+
+fn colorref_bgr_table_entry(colorref: u32) -> [u8; 4] {
+    let [red, green, blue] = colorref_rgb(colorref);
+    [blue, green, red, 0]
+}
+
 fn hdc_has_readonly_selected_bitmap(kernel: &CeKernel, hdc: u32) -> bool {
     selected_bitmap_object(kernel, hdc).is_some_and(|bitmap| !bitmap.bits_writable)
 }
@@ -45077,12 +45105,13 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
         && is_supported_source_bitmap_rop(rop)
         && kernel.resources.is_memory_dc(src)
         && let Some(src_bitmap_handle) = kernel.resources.selected_bitmap(src)
-        && let Some(src_bitmap) = kernel.resources.bitmap(src_bitmap_handle).cloned()
+        && let Some(mut src_bitmap) = kernel.resources.bitmap(src_bitmap_handle).cloned()
         && src_bitmap.bits_ptr != 0
         && src_bitmap.width > 0
         && src_bitmap.height > 0
         && src_bitmap.width_bytes > 0
     {
+        apply_mono_ddb_source_colors(kernel, dst, &mut src_bitmap);
         let byte_count = src_bitmap.width_bytes.saturating_mul(src_bitmap.height) as u32;
         if let Some(src_bytes) =
             read_guest_bytes(kernel, memory, thread_id, src_bitmap.bits_ptr, byte_count)
@@ -45227,12 +45256,13 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
         && is_supported_source_bitmap_rop(rop)
         && kernel.resources.is_memory_dc(src)
         && let Some(src_bitmap_handle) = kernel.resources.selected_bitmap(src)
-        && let Some(src_bitmap) = kernel.resources.bitmap(src_bitmap_handle).cloned()
+        && let Some(mut src_bitmap) = kernel.resources.bitmap(src_bitmap_handle).cloned()
         && src_bitmap.bits_ptr != 0
         && src_bitmap.width > 0
         && src_bitmap.height > 0
         && src_bitmap.width_bytes > 0
     {
+        apply_mono_ddb_source_colors(kernel, dst, &mut src_bitmap);
         let byte_count = src_bitmap.width_bytes.saturating_mul(src_bitmap.height) as u32;
         if let Some(src_bytes) =
             read_guest_bytes(kernel, memory, thread_id, src_bitmap.bits_ptr, byte_count)
