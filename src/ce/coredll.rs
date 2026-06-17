@@ -34275,6 +34275,7 @@ fn read_dib_color_table<M: CoredllGuestMemory>(
     compression: u32,
     bits_pixel: u16,
     color_usage: u32,
+    palette_entries: Option<&[[u8; 4]]>,
 ) -> Vec<[u8; 4]> {
     if !matches!(bits_pixel, 1 | 2 | 4 | 8) {
         return Vec::new();
@@ -34294,8 +34295,14 @@ fn read_dib_color_table<M: CoredllGuestMemory>(
         return Vec::new();
     }
     if color_usage == DIB_PAL_COLORS {
-        return read_dib_palette_index_table(memory, info_ptr, header_size, used_entries)
-            .unwrap_or_else(|| default_indexed_color_table(bits_pixel));
+        return read_dib_palette_index_table(
+            memory,
+            info_ptr,
+            header_size,
+            used_entries,
+            palette_entries,
+        )
+        .unwrap_or_else(|| default_indexed_color_table(bits_pixel));
     }
     let table_ptr = if header_size == 12 {
         info_ptr.wrapping_add(12)
@@ -34340,6 +34347,7 @@ fn read_dib_palette_index_table<M: CoredllGuestMemory>(
     info_ptr: u32,
     header_size: u32,
     used_entries: usize,
+    palette_entries: Option<&[[u8; 4]]>,
 ) -> Option<Vec<[u8; 4]>> {
     let table_ptr = info_ptr.wrapping_add(header_size);
     let mut table = Vec::with_capacity(used_entries);
@@ -34349,10 +34357,26 @@ fn read_dib_palette_index_table<M: CoredllGuestMemory>(
             memory.read_u8(entry_ptr).ok()?,
             memory.read_u8(entry_ptr.wrapping_add(1)).ok()?,
         ]);
-        let value = palette_index.min(u16::from(u8::MAX)) as u8;
-        table.push([value, value, value, 0]);
+        let entry = palette_entries
+            .and_then(|entries| entries.get(palette_index as usize))
+            .copied()
+            .unwrap_or_else(|| {
+                let value = palette_index.min(u16::from(u8::MAX)) as u8;
+                [value, value, value, 0]
+            });
+        table.push(entry);
     }
     Some(table)
+}
+
+fn selected_palette_entries_for_hdc(kernel: &CeKernel, hdc: u32) -> Option<Vec<[u8; 4]>> {
+    let palette = kernel.resources.get_current_object(hdc, 5);
+    palette_entries_for_read(kernel, palette).map(|entries| {
+        entries
+            .into_iter()
+            .map(|entry| [entry[2], entry[1], entry[0], entry[3]])
+            .collect()
+    })
 }
 
 fn default_indexed_color_table(bits_pixel: u16) -> Vec<[u8; 4]> {
@@ -40326,7 +40350,7 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    if color_usage == DIB_PAL_COLORS && !matches!(header.bits_pixel, 1 | 2 | 4 | 8) {
+    if color_usage == DIB_PAL_COLORS && header.bits_pixel != 8 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -40378,6 +40402,9 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
             return 0;
         }
     };
+    let selected_palette_entries = (color_usage == DIB_PAL_COLORS)
+        .then(|| selected_palette_entries_for_hdc(kernel, hdc))
+        .flatten();
     let color_table = read_dib_color_table(
         memory,
         info_ptr,
@@ -40385,6 +40412,7 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
         compression,
         header.bits_pixel,
         color_usage,
+        selected_palette_entries.as_deref(),
     );
     if header.width == 0 || header.height == 0 || header.planes != 1 || header.bits_pixel == 0 {
         kernel
@@ -44415,6 +44443,7 @@ fn read_dib_source<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     thread_id: u32,
+    hdc: u32,
     bits_ptr: u32,
     info_ptr: u32,
     color_usage: u32,
@@ -44455,6 +44484,9 @@ fn read_dib_source<M: CoredllGuestMemory>(
     } else {
         0
     };
+    let selected_palette_entries = (color_usage == DIB_PAL_COLORS)
+        .then(|| selected_palette_entries_for_hdc(kernel, hdc))
+        .flatten();
     let color_table = read_dib_color_table(
         memory,
         info_ptr,
@@ -44462,6 +44494,7 @@ fn read_dib_source<M: CoredllGuestMemory>(
         compression,
         header.bits_pixel,
         color_usage,
+        selected_palette_entries.as_deref(),
     );
     let height = header.height.checked_abs()?;
     let byte_count = bitmap_byte_count(header.width, header.height, header.bits_pixel)?;
@@ -46172,7 +46205,7 @@ fn stretch_dibits_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let Some((bitmap, bitmap_bytes)) =
-        read_dib_source(kernel, memory, thread_id, bits, info, usage)
+        read_dib_source(kernel, memory, thread_id, hdc, bits, info, usage)
     else {
         return 0;
     };
@@ -46276,7 +46309,7 @@ fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let Some((bitmap, bitmap_bytes)) =
-        read_dib_source(kernel, memory, thread_id, bits, info, usage)
+        read_dib_source(kernel, memory, thread_id, hdc, bits, info, usage)
     else {
         return 0;
     };
