@@ -49257,7 +49257,7 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 143_u32;
     let (dc, bits_ptr, stride) =
-        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 32, 64);
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 32, 96);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -49342,19 +49342,6 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_SELECT_OBJECT,
-            [dc, underline_font],
-        ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::Handle(handle),
-            ..
-        } if handle != 0
-    ));
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
             ORD_DRAW_TEXT_W,
             [dc, text_prefix_only, 1, rect_ptr, 0],
         ),
@@ -49424,6 +49411,20 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     ));
 
     write_rect(&mut memory, 0);
+    let stock_font = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SELECT_OBJECT,
+        [dc, underline_font],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("SelectObject(underline font) returned unexpected result: {other:?}"),
+    };
+    assert_ne!(stock_font, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -49441,6 +49442,79 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
         band_pixels(&memory, 48),
         band_pixels(&memory, 0),
         "prefixed character should render like the character with an underlined font"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [dc, stock_font],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == underline_font
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_ROP2,
+            [dc, 11],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(13),
+            ..
+        }
+    ));
+    write_rect(&mut memory, 64);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_prefixed_x, 2, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_ROP2,
+            [dc, 13],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(11),
+            ..
+        }
+    ));
+    write_rect(&mut memory, 80);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_literal_x, 1, rect_ptr, DT_NOPREFIX],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        band_pixels(&memory, 64),
+        band_pixels(&memory, 80),
+        "R2_NOP should suppress the accelerator underline while preserving the text glyph"
     );
 
     Ok(())

@@ -49458,6 +49458,67 @@ fn measure_text_units_width(kernel: &CeKernel, hdc: u32, units: &[u16]) -> i32 {
     total
 }
 
+fn write_text_rop2_bitmap_pixel<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    x: i32,
+    y: i32,
+    rgb: [u8; 3],
+    rop2: i32,
+) {
+    let dst = bitmap_pixel_rgb_from_memory(memory, bitmap, x, y).unwrap_or([0, 0, 0]);
+    let out = apply_rop2_rgb(rop2, rgb, dst);
+    let _ = write_bitmap_pixel_rgb(memory, bitmap, x, y, out);
+}
+
+fn framebuffer_pixel_rgb_at(
+    pixels: &[u8],
+    format: PixelFormat,
+    stride: usize,
+    x: i32,
+    y: i32,
+) -> Option<[u8; 3]> {
+    if x < 0 || y < 0 {
+        return None;
+    }
+    let x = x as usize;
+    let y = y as usize;
+    let bpp = format.bytes_per_pixel();
+    let off = y.checked_mul(stride)?.checked_add(x.checked_mul(bpp)?)?;
+    let pixel = pixels.get(off..off + bpp)?;
+    Some(match format {
+        PixelFormat::Rgb565 => {
+            let raw = u16::from_le_bytes([pixel[0], pixel[1]]) as u32;
+            [
+                component_from_mask(raw, 0x0000_f800)?,
+                component_from_mask(raw, 0x0000_07e0)?,
+                component_from_mask(raw, 0x0000_001f)?,
+            ]
+        }
+        PixelFormat::Bgra8888 => [pixel[2], pixel[1], pixel[0]],
+        PixelFormat::Rgba8888 => [pixel[0], pixel[1], pixel[2]],
+        PixelFormat::Gray8 => [pixel[0], pixel[0], pixel[0]],
+    })
+}
+
+fn write_text_rop2_framebuffer_pixel(
+    fb: &mut dyn Framebuffer,
+    format: PixelFormat,
+    stride: usize,
+    bpp: usize,
+    x: i32,
+    y: i32,
+    rgb: [u8; 3],
+    rop2: i32,
+) {
+    let dst = framebuffer_pixel_rgb_at(fb.pixels(), format, stride, x, y).unwrap_or([0, 0, 0]);
+    let [red, green, blue] = apply_rop2_rgb(rop2, rgb, dst);
+    let color = u32::from(red) | (u32::from(green) << 8) | (u32::from(blue) << 16);
+    let pixel = pixel_bytes_for_colorref(format, color);
+    let off = y as usize * stride + x as usize * bpp;
+    fb.pixels_mut()[off..off + bpp].copy_from_slice(&pixel[..bpp]);
+}
+
 fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
     kernel: &CeKernel,
     memory: &mut M,
@@ -49481,6 +49542,7 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
     let text_color = state.text_color;
     let bk_mode = state.bk_mode;
     let bk_color = state.bk_color;
+    let rop2 = state.rop2;
     let font = kernel.resources.font(state.selected_font).cloned();
     let metrics = TextMetricsModel::from_font(font.as_ref());
     let cell_h = metrics.height.max(1) as usize;
@@ -49575,7 +49637,7 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
                     if !clip_rects_contain_point(&clips, sx, underline_y) {
                         continue;
                     }
-                    let _ = write_bitmap_pixel_rgb(memory, &bitmap, sx, underline_y, rgb);
+                    write_text_rop2_bitmap_pixel(memory, &bitmap, sx, underline_y, rgb, rop2);
                 }
             }
         }
@@ -49599,6 +49661,7 @@ fn draw_text_units_to_framebuffer(
     let text_color = state.text_color;
     let bk_mode = state.bk_mode;
     let bk_color = state.bk_color;
+    let rop2 = state.rop2;
     let font = kernel.resources.font(state.selected_font).cloned();
     let metrics = TextMetricsModel::from_font(font.as_ref());
     let cell_h = metrics.height.max(1) as usize;
@@ -49708,8 +49771,16 @@ fn draw_text_units_to_framebuffer(
                     if !clip_rects_contain_point(&screen_clips, sx, underline_y) {
                         continue;
                     }
-                    let off = underline_y as usize * stride + sx as usize * bpp;
-                    fb.pixels_mut()[off..off + bpp].copy_from_slice(&pixel[..bpp]);
+                    write_text_rop2_framebuffer_pixel(
+                        fb,
+                        info.format,
+                        stride,
+                        bpp,
+                        sx,
+                        underline_y,
+                        colorref_rgb(text_color),
+                        rop2,
+                    );
                     any_pixel = true;
                 }
             }
@@ -49754,6 +49825,7 @@ fn draw_ext_text_glyphs_to_bitmap<M: CoredllGuestMemory>(
     let text_color = state.text_color;
     let bk_mode = state.bk_mode;
     let bk_color = state.bk_color;
+    let rop2 = state.rop2;
     let font = kernel.resources.font(state.selected_font).cloned();
     let metrics = TextMetricsModel::from_font(font.as_ref());
     let cell_h = metrics.height.max(1) as usize;
@@ -49866,7 +49938,7 @@ fn draw_ext_text_glyphs_to_bitmap<M: CoredllGuestMemory>(
                     if !clip_rects_contain_point(&clips, sx, underline_y) {
                         continue;
                     }
-                    let _ = write_bitmap_pixel_rgb(memory, &bitmap, sx, underline_y, rgb);
+                    write_text_rop2_bitmap_pixel(memory, &bitmap, sx, underline_y, rgb, rop2);
                 }
             }
         }
@@ -50409,6 +50481,7 @@ fn draw_ext_text_glyphs_to_framebuffer<M: CoredllGuestMemory>(
     let text_color = state.text_color;
     let bk_mode = state.bk_mode;
     let bk_color = state.bk_color;
+    let rop2 = state.rop2;
     let font = kernel.resources.font(state.selected_font).cloned();
     let metrics = TextMetricsModel::from_font(font.as_ref());
     let cell_h = metrics.height.max(1) as usize;
@@ -50538,8 +50611,16 @@ fn draw_ext_text_glyphs_to_framebuffer<M: CoredllGuestMemory>(
                     if !clip_rects_contain_point(&screen_clips, sx, underline_y) {
                         continue;
                     }
-                    let off = underline_y as usize * stride + sx as usize * bpp;
-                    fb.pixels_mut()[off..off + bpp].copy_from_slice(&pixel[..bpp]);
+                    write_text_rop2_framebuffer_pixel(
+                        fb,
+                        info.format,
+                        stride,
+                        bpp,
+                        sx,
+                        underline_y,
+                        colorref_rgb(text_color),
+                        rop2,
+                    );
                     any_pixel = true;
                 }
             }
