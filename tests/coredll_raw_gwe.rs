@@ -46723,6 +46723,73 @@ fn coredll_raw_set_pixel_rejects_readonly_selected_bitmap() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_set_pixel_rejects_selected_bitmap_boundaries() -> Result<()> {
+    const WHITE: u32 = 0x00ff_ffff;
+    const CLR_INVALID: u32 = 0xffff_ffff;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 145_u32;
+    let (dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 3);
+
+    for (x, y) in [(0_i32, 0_i32), (3, 0), (0, 2), (3, 2)] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_PIXEL,
+                [dc, x as u32, y as u32, WHITE],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(WHITE),
+                ..
+            }
+        ));
+        assert_eq!(
+            rgb565_at(&memory, bits_ptr, stride, x as u32, y as u32),
+            0xffff,
+            "SetPixel should paint valid CE boundary coordinate ({x},{y})"
+        );
+    }
+
+    for (x, y) in [(-1_i32, -1_i32), (4, 0), (0, 3), (4, 3)] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_PIXEL,
+                [dc, x as u32, y as u32, WHITE],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(CLR_INVALID),
+                ..
+            }
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_PIXEL,
+                [dc, x as u32, y as u32],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(CLR_INVALID),
+                ..
+            }
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_line_to_rejects_readonly_selected_bitmap() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

@@ -49929,7 +49929,9 @@ fn set_pixel_raw<M: CoredllGuestMemory>(
     }
     let visible = if kernel.resources.is_memory_dc(hdc) {
         selected_bitmap_object(kernel, hdc)
-            .map(|bitmap| !hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height).is_empty())
+            .map(|bitmap| {
+                !hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height).is_empty()
+            })
             .unwrap_or(false)
     } else {
         hdc_framebuffer_client_clip_rects(kernel, hdc, rect).is_some()
