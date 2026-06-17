@@ -1699,6 +1699,7 @@ fn live_active_process_text(cpu: &UnicornMips, kernel: &CeKernel) -> String {
                 .has_visible_window_message_filtered(thread_id, None, 0, 0)
         );
     }
+    out.push_str(&cpu.blocked_wait_debug_text(kernel));
     out.push_str(&live_kernel_waits_text(kernel));
     out
 }

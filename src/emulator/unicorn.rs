@@ -3165,6 +3165,44 @@ impl UnicornMips {
         "none".to_owned()
     }
 
+    #[cfg(feature = "unicorn")]
+    pub fn blocked_wait_debug_text(&self, kernel: &CeKernel) -> String {
+        if self.blocked_wait_threads.is_empty() {
+            return "  cpu blocked waits: none\n".to_owned();
+        }
+        let mut out = String::from("  cpu blocked waits:\n");
+        for wait in &self.blocked_wait_threads {
+            let handles = if wait.wait_handles.is_empty() {
+                "none".to_owned()
+            } else {
+                wait.wait_handles
+                    .iter()
+                    .map(|handle| format!("0x{handle:08x}:{}", kernel.describe_handle(*handle)))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            };
+            out.push_str(&format!(
+                "    id={} tid={} thread_handle=0x{:08x} kind={:?} timeout={} started={} return_pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} handles={}\n",
+                wait.wait_id,
+                wait.thread_id,
+                wait.thread_handle,
+                wait.kind,
+                wait.timeout_ms,
+                wait.wait_started_ms,
+                wait.return_pc,
+                wait.regs.regs[31],
+                wait.regs.regs[29],
+                handles
+            ));
+        }
+        out
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    pub fn blocked_wait_debug_text(&self, _kernel: &CeKernel) -> String {
+        "  cpu blocked waits: none\n".to_owned()
+    }
+
     pub fn has_parked_process_id(&self, process_id: u32) -> bool {
         self.parked_child_processes
             .iter()
@@ -7271,6 +7309,8 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        &last_imports_hook,
+                        &import_milestones_hook,
                         active_thread_id,
                         &blocked_wait_threads_hook,
                         &pending_guest_thread_returns_hook,
@@ -14697,6 +14737,8 @@ fn try_block_wait_for_single_object<D>(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    last_imports: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastImport>>>,
+    import_milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastImport>>>,
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
@@ -14738,6 +14780,18 @@ fn try_block_wait_for_single_object<D>(
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
+        );
+        annotate_blocking_single_wait_import(
+            kernel,
+            last_imports,
+            import_milestones,
+            wait_id,
+            wait_handle,
+            timeout,
+            wait_started_ms,
+            thread_id,
+            return_pc,
+            blocked_waits,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
@@ -14800,6 +14854,18 @@ fn try_block_wait_for_single_object<D>(
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
+        );
+        annotate_blocking_single_wait_import(
+            kernel,
+            last_imports,
+            import_milestones,
+            wait_id,
+            wait_handle,
+            timeout,
+            wait_started_ms,
+            thread_id,
+            return_pc,
+            blocked_waits,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
@@ -14893,6 +14959,18 @@ fn try_block_wait_for_single_object<D>(
             wait_started_ms,
             timeout,
         );
+        annotate_blocking_single_wait_import(
+            kernel,
+            last_imports,
+            import_milestones,
+            wait_id,
+            wait_handle,
+            timeout,
+            wait_started_ms,
+            thread_id,
+            return_pc,
+            blocked_waits,
+        );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -14953,6 +15031,65 @@ fn try_block_wait_for_single_object<D>(
         return true;
     }
     false
+}
+
+#[cfg(feature = "unicorn")]
+fn annotate_blocking_single_wait_import(
+    kernel: &CeKernel,
+    last_imports: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastImport>>>,
+    import_milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastImport>>>,
+    wait_id: u64,
+    handle: u32,
+    timeout: u32,
+    wait_started_ms: u32,
+    thread_id: u32,
+    return_pc: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+) {
+    let active_waits = {
+        let waits = blocked_waits.borrow();
+        waits
+            .iter()
+            .map(|wait| {
+                let handles = wait
+                    .wait_handles
+                    .iter()
+                    .map(|handle| format!("0x{handle:08x}"))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                format!(
+                    "id={} tid={} kind={:?} timeout={} started={} handles=[{}]",
+                    wait.wait_id,
+                    wait.thread_id,
+                    wait.kind,
+                    wait.timeout_ms,
+                    wait.wait_started_ms,
+                    handles
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(";")
+    };
+    let handle_detail = kernel.describe_handle(handle);
+    let detail = Some(format!(
+        "blocking_wait id={wait_id} thread={thread_id} handle=0x{handle:08x} timeout={timeout} tick={wait_started_ms} return_pc=0x{return_pc:08x} handle_detail={handle_detail} active_waits=[{active_waits}]"
+    ));
+    annotate_blocking_single_wait_import_records(&mut last_imports.borrow_mut(), detail.clone());
+    annotate_blocking_single_wait_import_records(&mut import_milestones.borrow_mut(), detail);
+}
+
+#[cfg(feature = "unicorn")]
+fn annotate_blocking_single_wait_import_records(
+    records: &mut [UnicornLastImport],
+    detail: Option<String>,
+) {
+    if let Some(import) = records.iter_mut().rev().find(|import| {
+        import.kind == crate::emulator::imports::ImportModuleKind::Coredll
+            && import.ordinal == Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT)
+            && import.result.is_none()
+    }) {
+        import.detail = detail;
+    }
 }
 
 // CE MIPS32 CONTEXT (winnt.h CONTEXT_R4000, CONTEXT32_LENGTH = 0x130):
@@ -21725,6 +21862,8 @@ mod wait_scheduler_tests {
             .unwrap();
 
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -21739,6 +21878,8 @@ mod wait_scheduler_tests {
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
             &[event, 500],
+            &last_imports,
+            &import_milestones,
             thread_id,
             &blocked_waits,
             &pending_returns,
