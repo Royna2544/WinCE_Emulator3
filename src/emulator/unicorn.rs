@@ -3495,12 +3495,14 @@ impl UnicornMips {
         _active_process_id: u32,
         active_thread_ids: &[u32],
     ) -> bool {
-        active_thread_ids.contains(&parked.thread_id)
-            || parked
-                .cpu
-                .tracked_thread_ids()
+        let mut parked_thread_ids = parked.cpu.tracked_thread_ids();
+        if parked.thread_id != 0 && !parked_thread_ids.contains(&parked.thread_id) {
+            parked_thread_ids.push(parked.thread_id);
+        }
+        !parked_thread_ids.is_empty()
+            && parked_thread_ids
                 .into_iter()
-                .any(|thread_id| active_thread_ids.contains(&thread_id))
+                .all(|thread_id| active_thread_ids.contains(&thread_id))
     }
 
     fn parked_process_matches_current_active(
@@ -3979,6 +3981,7 @@ impl UnicornMips {
         #[cfg(feature = "unicorn")]
         {
             parked.cpu.blocked_guest_thread.is_some()
+                || parked.cpu.blocked_modal_message_box.is_some()
                 || !parked.cpu.blocked_wait_threads.is_empty()
                 || parked.cpu.blocked_send_message_timeout.is_some()
         }
@@ -4185,9 +4188,9 @@ impl UnicornMips {
             incoming_thread_ids = next_cpu.tracked_thread_ids();
         }
         let requeue_outgoing = requeue_current
-            && !outgoing_thread_ids
+            && outgoing_thread_ids
                 .iter()
-                .any(|thread_id| incoming_thread_ids.contains(thread_id));
+                .any(|thread_id| !incoming_thread_ids.contains(thread_id));
         let current = requeue_outgoing.then(|| self.park_current_process(kernel));
         kernel.set_process_module_base(module_base);
         kernel.set_process_module_path(module_path);
@@ -27086,8 +27089,8 @@ mod guest_thread_stack_tests {
         active.current_thread_id = 17;
 
         let mut modal_cpu = UnicornMips::new()?;
-        modal_cpu.set_initial_thread_id(3);
-        modal_cpu.current_thread_id = 3;
+        modal_cpu.set_initial_thread_id(17);
+        modal_cpu.current_thread_id = 17;
         active.parked_child_processes.push_back(ParkedProcess {
             application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
             process_handle: None,
@@ -28385,6 +28388,9 @@ mod guest_thread_stack_tests {
         });
 
         assert_eq!(UnicornMips::parked_process_thread_exit_code(&parked), None);
+        assert!(UnicornMips::active_matching_parked_process_should_remain(
+            &parked
+        ));
 
         Ok(())
     }
