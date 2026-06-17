@@ -44167,12 +44167,13 @@ fn alpha_blend_raw<M: CoredllGuestMemory>(
     // Only handle memory-DC src; fall back to plain copy for screen src.
     if kernel.resources.is_memory_dc(src_hdc)
         && let Some(src_bmp_h) = kernel.resources.selected_bitmap(src_hdc)
-        && let Some(src_bmp) = kernel.resources.bitmap(src_bmp_h).cloned()
+        && let Some(mut src_bmp) = kernel.resources.bitmap(src_bmp_h).cloned()
         && src_bmp.bits_ptr != 0
         && src_bmp.width > 0
         && src_bmp.height > 0
         && src_bmp.width_bytes > 0
     {
+        apply_mono_ddb_source_colors(kernel, dst_hdc, &mut src_bmp);
         if !alpha_blend_source_rect_in_bitmap(&src_bmp, src_x, src_y, src_width, src_height) {
             kernel
                 .threads
@@ -44200,6 +44201,8 @@ fn alpha_blend_raw<M: CoredllGuestMemory>(
                 let dst_rect = blt_destination_rect(dst_x, dst_y, dst_width, dst_height);
                 let x_map = ce_gpe_stretch_source_map(dst_width, src_width);
                 let y_map = ce_gpe_stretch_source_map(dst_height, src_height);
+                let mono_destination_bk_rgb =
+                    mono_ddb_destination_bk_rgb(kernel, src_hdc, &dst_bmp);
                 for clip in hdc_clip_rects(kernel, dst_hdc, dst_rect, dst_bmp.width, dst_bmp.height)
                 {
                     for y in clip.top..clip.bottom {
@@ -44236,14 +44239,25 @@ fn alpha_blend_raw<M: CoredllGuestMemory>(
                             ) else {
                                 continue;
                             };
-                            let _ = write_bitmap_pixel_rgba(
-                                memory,
-                                &dst_bmp,
-                                x,
-                                y,
-                                pixel.rgb,
-                                pixel.alpha,
-                            );
+                            if is_mono_ddb_bitmap(&dst_bmp) {
+                                let _ = write_blt_bitmap_pixel_rgb(
+                                    memory,
+                                    &dst_bmp,
+                                    x,
+                                    y,
+                                    pixel.rgb,
+                                    mono_destination_bk_rgb,
+                                );
+                            } else {
+                                let _ = write_bitmap_pixel_rgba(
+                                    memory,
+                                    &dst_bmp,
+                                    x,
+                                    y,
+                                    pixel.rgb,
+                                    pixel.alpha,
+                                );
+                            }
                         }
                     }
                 }

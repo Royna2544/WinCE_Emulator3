@@ -12834,6 +12834,215 @@ fn coredll_raw_alpha_blend_applies_source_constant_alpha_between_selected_dibs()
 }
 
 #[test]
+fn coredll_raw_alpha_blend_maps_mono_ddb_source_with_destination_text_colors() -> Result<()> {
+    const RED_COLORREF: u32 = 0x0000_00ff;
+    const GREEN_COLORREF: u32 = 0x0000_ff00;
+
+    fn blend_function(source_alpha: u8) -> u32 {
+        u32::from(source_alpha) << 16
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    let src_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+    let mono_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_BITMAP,
+        [2, 1, 1, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateBitmap(1bpp) did not return a bitmap: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [src_dc, mono_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    let mono_bits = kernel
+        .resources
+        .bitmap(mono_bitmap)
+        .map(|bitmap| bitmap.bits_ptr)
+        .expect("selected mono DDB should still be tracked");
+    assert_ne!(mono_bits, 0);
+    memory.write_u8(mono_bits, 0x40)?; // black then white, MSB first.
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_TEXT_COLOR,
+            [dst_dc, RED_COLORREF],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_COLOR,
+            [dst_dc, GREEN_COLORREF],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ALPHA_BLEND,
+            [dst_dc, 0, 0, 2, 1, src_dc, 0, 0, 2, 1, blend_function(0xff)],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0xf800);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0x07e0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_alpha_blend_maps_color_source_to_mono_ddb_with_source_bk_color() -> Result<()> {
+    const GREEN_COLORREF: u32 = 0x0000_ff00;
+
+    fn blend_function(source_alpha: u8) -> u32 {
+        u32::from(source_alpha) << 16
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let dst_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+    let mono_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_BITMAP,
+        [2, 1, 1, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateBitmap(1bpp) did not return a bitmap: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [dst_dc, mono_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    let mono_bits = kernel
+        .resources
+        .bitmap(mono_bitmap)
+        .map(|bitmap| bitmap.bits_ptr)
+        .expect("selected mono DDB should still be tracked");
+    assert_ne!(mono_bits, 0);
+    memory.write_u8(mono_bits, 0x00)?;
+
+    let (src_dc, _src_bitmap, src_bits, src_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    write_rgb565(&mut memory, src_bits, src_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, src_bits, src_stride, 1, 0, 0x07e0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_COLOR,
+            [src_dc, GREEN_COLORREF],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ALPHA_BLEND,
+            [dst_dc, 0, 0, 2, 1, src_dc, 0, 0, 2, 1, blend_function(0xff)],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(memory.read_u8(mono_bits)?, 0x40);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_alpha_blend_uses_ce_gpe_stretch_sampling_between_selected_dibs() -> Result<()> {
     const DISPPERF_ROP_ALPHA_BLEND: u32 = 0x0000_cccc;
 
