@@ -46967,10 +46967,51 @@ fn rgb_to_masks(
     )
 }
 
+fn invert_rect_framebuffer(
+    kernel: &CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    rect: Rect,
+) {
+    let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, rect) else {
+        return;
+    };
+    let info = framebuffer.info();
+    let bytes_per_pixel = info.format.bytes_per_pixel();
+    for rect in clips {
+        let screen_rect = rect.offset(client_origin.x, client_origin.y);
+        let left = screen_rect.left.max(0).min(info.width as i32);
+        let top = screen_rect.top.max(0).min(info.height as i32);
+        let right = screen_rect.right.max(0).min(info.width as i32);
+        let bottom = screen_rect.bottom.max(0).min(info.height as i32);
+        if right <= left || bottom <= top {
+            continue;
+        }
+        for screen_y in top..bottom {
+            for screen_x in left..right {
+                let offset = screen_y as usize * info.stride + screen_x as usize * bytes_per_pixel;
+                let dst = framebuffer_pixel_rgb(
+                    info.format,
+                    &framebuffer.pixels()[offset..offset + bytes_per_pixel],
+                );
+                let pixel = pixel_bytes_for_rgb(info.format, [!dst[0], !dst[1], !dst[2]]);
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
+                    .copy_from_slice(&pixel[..bytes_per_pixel]);
+            }
+        }
+        framebuffer.mark_dirty(FramebufferRect::new(
+            left as u32,
+            top as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        ));
+    }
+}
+
 fn invert_rect_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
-    _framebuffer: Option<&mut dyn Framebuffer>,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
@@ -46986,8 +47027,11 @@ fn invert_rect_raw<M: CoredllGuestMemory>(
         return false;
     };
     if !kernel.resources.is_memory_dc(hdc) {
+        if let Some(framebuffer) = framebuffer {
+            invert_rect_framebuffer(kernel, framebuffer, hdc, rect);
+        }
         kernel.threads.set_last_error(thread_id, 0);
-        return true; // no-op for screen DCs in current model
+        return true;
     }
     let Some(dst_bmp) = selected_bitmap_object(kernel, hdc) else {
         kernel.threads.set_last_error(thread_id, 0);
