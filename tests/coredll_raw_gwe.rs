@@ -50227,6 +50227,8 @@ fn coredll_raw_image_list_draw_validates_handle_and_hdc() -> Result<()> {
 #[test]
 fn coredll_raw_image_list_copy_preserves_destination_slot_rect() -> Result<()> {
     const ILC_COLOR16: u32 = 0x0010;
+    const ILC_MASK: u32 = 0x0001;
+    const ILD_MASK: u32 = 0x0010;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -50245,12 +50247,22 @@ fn coredll_raw_image_list_copy_preserves_destination_slot_rect() -> Result<()> {
         }
     }
 
+    let mask_bits = 0x2_f000;
+    memory.map_bytes(mask_bits, 8);
+    memory.write_bytes(mask_bits, &[0x70, 0, 0, 0, 0x80, 0, 0, 0]);
+    let source_mask = kernel.resources.create_bitmap(4, -2, 1, 1, mask_bits);
+    kernel
+        .resources
+        .bitmap_mut(source_mask)
+        .unwrap()
+        .color_table = vec![[0x00, 0x00, 0x00, 0], [0xff, 0xff, 0xff, 0]];
+
     let list = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
         thread_id,
         ORD_IMAGE_LIST_CREATE,
-        [2, 2, ILC_COLOR16, 2, 0],
+        [2, 2, ILC_COLOR16 | ILC_MASK, 2, 0],
     ) {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),
@@ -50265,7 +50277,7 @@ fn coredll_raw_image_list_copy_preserves_destination_slot_rect() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_ADD,
-            [list, source_bitmap, 0],
+            [list, source_bitmap, source_mask],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(0),
@@ -50289,10 +50301,37 @@ fn coredll_raw_image_list_copy_preserves_destination_slot_rect() -> Result<()> {
         }
     ));
     assert_eq!(
-        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 1),
         0x07e0,
-        "slot 1 initially draws the second source strip"
+        "slot 1 initially draws the second source strip through its own mask"
     );
+
+    for y in 0..2 {
+        for x in 0..4 {
+            memory.write_u16(dst_bits + y * dst_stride + x * 2, 0xffff)?;
+        }
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [list, 1, dst_dc, 0, 0, ILD_MASK],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0xffff,
+        "slot 1 initially draws its own white mask pixel"
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0xffff);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), 0);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -50332,6 +50371,33 @@ fn coredll_raw_image_list_copy_preserves_destination_slot_rect() -> Result<()> {
         0xf800,
         "CE imagelist.cpp::Copy copies pixels from the source slot into the destination slot"
     );
+
+    for y in 0..2 {
+        for x in 0..4 {
+            memory.write_u16(dst_bits + y * dst_stride + x * 2, 0xffff)?;
+        }
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [list, 1, dst_dc, 0, 0, ILD_MASK],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0,
+        "CE imagelist.cpp::Copy copies the source slot mask into the destination slot"
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0xffff);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), 0xffff);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0);
 
     let image_info = 0x2_1a00_u32;
     memory.map_words(image_info, 8);
