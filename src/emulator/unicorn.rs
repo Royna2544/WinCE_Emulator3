@@ -3533,6 +3533,9 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
+        if self.complete_saved_guest_thread_exit(kernel) {
+            return false;
+        }
         let Some(exit_code) = self.active_process_thread_exit_code() else {
             return false;
         };
@@ -3561,6 +3564,98 @@ impl UnicornMips {
         });
         kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer);
         self.switch_to_next_parked_process(kernel, false)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn complete_saved_guest_thread_exit(&mut self, kernel: &mut CeKernel) -> bool {
+        let Some(saved) = self.saved_context.as_ref() else {
+            return false;
+        };
+        if saved.pc != THREAD_EXIT_STUB_ADDR {
+            return false;
+        }
+
+        let thread_id = self.current_thread_id;
+        if thread_id == 0 || thread_id == MAIN_GUEST_THREAD_ID {
+            return false;
+        }
+        let Some(thread_handle) = kernel.guest_thread_handle_by_id(thread_id) else {
+            return false;
+        };
+
+        let exit_code = saved.regs.regs[2];
+        self.remove_stale_blocked_waits_for_thread(kernel, thread_id);
+        self.remove_stale_blocked_get_message_for_thread(kernel, thread_id);
+        self.remove_stale_displaced_get_messages_for_thread(kernel, thread_id);
+        self.remove_persisted_suspended_guest_thread(thread_id);
+        self.self_suspended_guest_threads.remove(&thread_id);
+        self.pending_guest_thread_returns
+            .retain(|callout| callout.worker_thread_id != thread_id);
+        self.running_guest_thread
+            .take_if(|(running_thread_id, _)| *running_thread_id == thread_id);
+        self.guest_thread_stack_slots.remove(&thread_id);
+        let _ = kernel.mark_guest_thread_exited(thread_handle, exit_code);
+        self.saved_context = None;
+        self.current_thread_id = self.initial_thread_id;
+
+        tracing::debug!(
+            target: "ce.imports",
+            thread_id,
+            handle = format_args!("0x{thread_handle:08x}"),
+            exit_code = format_args!("0x{exit_code:08x}"),
+            "guest thread exited through saved raw thread-exit stub"
+        );
+        true
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn remove_stale_blocked_waits_for_thread(&mut self, kernel: &mut CeKernel, thread_id: u32) {
+        let mut removed_wait_ids = Vec::new();
+        self.blocked_wait_threads.retain(|blocked| {
+            let keep = blocked.thread_id != thread_id;
+            if !keep {
+                removed_wait_ids.push(blocked.wait_id);
+            }
+            keep
+        });
+        for wait_id in removed_wait_ids {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+        }
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn remove_stale_blocked_get_message_for_thread(
+        &mut self,
+        kernel: &mut CeKernel,
+        thread_id: u32,
+    ) {
+        if self
+            .blocked_guest_thread
+            .as_ref()
+            .is_some_and(|blocked| blocked.thread_id == thread_id)
+            && let Some(blocked) = self.blocked_guest_thread.take()
+        {
+            let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+        }
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn remove_stale_displaced_get_messages_for_thread(
+        &mut self,
+        kernel: &mut CeKernel,
+        thread_id: u32,
+    ) {
+        let mut removed_wait_ids = Vec::new();
+        self.displaced_blocked_get_messages.retain(|blocked| {
+            let keep = blocked.thread_id != thread_id;
+            if !keep {
+                removed_wait_ids.push(blocked.wait_id);
+            }
+            keep
+        });
+        for wait_id in removed_wait_ids {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+        }
     }
 
     #[cfg(feature = "unicorn")]
@@ -24290,6 +24385,157 @@ mod wait_scheduler_tests {
             kernel.select_ready_blocked_waiter(0, now, |blocked, _| blocked.id == wait_b),
             Some(wait_b)
         );
+    }
+
+    #[test]
+    fn saved_thread_exit_stub_retires_worker_and_cleans_stale_scheduler_state()
+    -> crate::error::Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new()?;
+        let (thread_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let other_thread_id = thread_id + 1;
+        let event_a = kernel.create_event_w(None, true, false);
+        let event_b = kernel.create_event_w(None, true, true);
+        let event_c = kernel.create_event_w(None, true, false);
+        let wait_a = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            vec![event_a],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let wait_b = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let wait_c = kernel.register_blocked_waiter(
+            other_thread_id,
+            0x108,
+            vec![event_b],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let wait_d = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            vec![event_c],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+
+        scheduler.set_initial_thread_id(super::MAIN_GUEST_THREAD_ID);
+        scheduler.current_thread_id = thread_id;
+        scheduler.running_guest_thread = None;
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[2] = 0x44;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: super::THREAD_EXIT_STUB_ADDR,
+            regs,
+        });
+        scheduler.last_debug = Some(super::UnicornDebugSnapshot {
+            pc: super::THREAD_EXIT_STUB_ADDR,
+            v0: 0x44,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        scheduler.blocked_wait_threads = vec![
+            BlockedWaitThread {
+                wait_id: wait_a,
+                thread_id,
+                thread_handle,
+                wait_handles: vec![event_a],
+                kind: BlockedWaitKind::Kernel,
+                wait_started_ms: 0,
+                timeout_ms: crate::ce::timer::INFINITE,
+                regs: super::MipsGuestContext::zero(),
+                return_pc: 0,
+            },
+            BlockedWaitThread {
+                wait_id: wait_c,
+                thread_id: other_thread_id,
+                thread_handle: 0x108,
+                wait_handles: vec![event_b],
+                kind: BlockedWaitKind::Kernel,
+                wait_started_ms: 0,
+                timeout_ms: crate::ce::timer::INFINITE,
+                regs: super::MipsGuestContext::zero(),
+                return_pc: 0,
+            },
+        ];
+        scheduler.blocked_guest_thread = Some(super::BlockedGuestThread {
+            wait_id: wait_b,
+            thread_id,
+            thread_handle,
+            regs: super::MipsGuestContext::zero(),
+            import_pc: 0x0040_1000,
+            return_pc: 0x0040_1004,
+            msg_ptr: 0,
+            hwnd: None,
+            min_msg: 0,
+            max_msg: 0,
+        });
+        scheduler.displaced_blocked_get_messages = vec![super::BlockedGuestThread {
+            wait_id: wait_d,
+            thread_id,
+            thread_handle,
+            regs: super::MipsGuestContext::zero(),
+            import_pc: 0x0040_2000,
+            return_pc: 0x0040_2004,
+            msg_ptr: 0,
+            hwnd: None,
+            min_msg: 0,
+            max_msg: 0,
+        }];
+        scheduler.suspended_guest_thread = Some(SuspendedGuestThread {
+            thread_id,
+            thread_handle: Some(thread_handle),
+            regs: super::MipsGuestContext::zero(),
+            pc: 0x0040_4000,
+        });
+        scheduler
+            .guest_thread_stack_slots
+            .insert(thread_id, thread_id);
+
+        assert!(scheduler.complete_saved_guest_thread_exit(&mut kernel));
+        assert_eq!(kernel.guest_thread_exit_code(thread_handle), Some(0x44));
+        assert_eq!(scheduler.current_thread_id(), super::MAIN_GUEST_THREAD_ID);
+        assert!(scheduler.saved_context.is_none());
+        assert!(scheduler.blocked_guest_thread.is_none());
+        assert!(scheduler.displaced_blocked_get_messages.is_empty());
+        assert!(scheduler.suspended_guest_thread.is_none());
+        assert!(!scheduler.guest_thread_stack_slots.contains_key(&thread_id));
+        assert_eq!(scheduler.blocked_wait_threads.len(), 1);
+        assert_eq!(scheduler.blocked_wait_threads[0].wait_id, wait_c);
+        let now = kernel.timers.tick_count();
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(0, now, |blocked, _| blocked.id == wait_a),
+            None
+        );
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(0, now, |blocked, _| blocked.id == wait_b),
+            None
+        );
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(0, now, |blocked, _| blocked.id == wait_d),
+            None
+        );
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(0, now, |blocked, _| blocked.id == wait_c),
+            Some(wait_c)
+        );
+        Ok(())
     }
 
     #[test]
