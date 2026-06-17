@@ -141,6 +141,15 @@ Regenerated on 2026-06-11 from current source and test coverage.
   parsed GPS position after startup. In the latest
   trace-mode splash/resource-loading run no serial or sensor handles opened at
   all, so queued NMEA alone is not evidence that REST injection failed.
+- Continue from the no-hook blocked-thread reentry fix: the old
+  `pc=0x00001054` crash no longer reproduces in the latest live run, real
+  splash artwork renders, REST taps are consumed by `0x00020008`, and remote
+  location input drains into open `COM7:`. Next, trace why the main process
+  remains in kernel waits on events `0x000010b8`, `0x000010b0`, and
+  `0x0000103c` while hidden map/search child windows exist. Keep this generic:
+  identify the real CE wait/event or message transition that should hide,
+  destroy, or demote the owned splash popup rather than adding app-specific
+  policy.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or a
   real caller trace before adding accelerometer commands; do not use the
   unverified `0xb100...` family as SMB380 evidence.

@@ -29,6 +29,7 @@
 // - GET /api/v1/debug/processes.txt returns recent process/thread ops.
 // - GET /api/v1/debug/processes-live.txt returns live process/thread ops.
 // - GET /api/v1/debug/sends.txt returns synchronous SendMessage state.
+// - GET /api/v1/debug/handles.txt returns live kernel handle/wait state.
 // - GET /api/v1/debug/pending-wndproc.txt returns pending WNDPROC callouts.
 // - GET /api/v1/debug/wndproc.txt returns recent WNDPROC call/return traces.
 // - GET /api/v1/debug/imports.txt returns recent import calls.
@@ -493,6 +494,7 @@ impl RemoteServer {
                 self.latest_debug_text("processes-live").into()
             }
             ("GET", "/api/v1/debug/sends.txt") => self.latest_debug_text("sends").into(),
+            ("GET", "/api/v1/debug/handles.txt") => self.latest_debug_text("handles").into(),
             ("GET", "/api/v1/debug/pending-wndproc.txt") => {
                 self.latest_debug_text("pending-wndproc").into()
             }
@@ -588,6 +590,7 @@ impl RemoteServer {
                     "debugProcesses": "GET /api/v1/debug/processes.txt",
                     "debugProcessesLive": "GET /api/v1/debug/processes-live.txt",
                     "debugSends": "GET /api/v1/debug/sends.txt",
+                    "debugHandles": "GET /api/v1/debug/handles.txt",
                     "debugPendingWndProc": "GET /api/v1/debug/pending-wndproc.txt",
                     "debugWndProc": "GET /api/v1/debug/wndproc.txt",
                     "debugImports": "GET /api/v1/debug/imports.txt",

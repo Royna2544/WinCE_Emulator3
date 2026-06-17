@@ -32,6 +32,14 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   remaining risk is a missing CE UI state transition, timer/message behavior, or
   app-side readiness signal rather than a synthetic dialog or SD-card read-only
   failure.
+- The prior no-hook crash where the guest returned through handle-like
+  `pc=0x00001054` is no longer reproduced after filtering blocked scheduler
+  contexts out of direct receiver-work eligibility, but this is only validated
+  against the current iNavi startup path. The release run now survives into the
+  real splash/resource state, and `/api/v1/debug/handles.txt` identifies
+  `0x1054` as a guest event handle. Broader reentrant wait combinations should
+  still be treated as scheduler-risk until covered by more live and focused
+  tests.
 - The latest live scheduler cleanup prevents a real guest thread exit from
   leaving stale waits behind at `THREAD_EXIT_STUB_ADDR`, and host wall-clock
   slice stops now remove stale blocked-wait records for the thread that actually

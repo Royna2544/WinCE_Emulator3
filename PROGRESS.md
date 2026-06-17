@@ -15,6 +15,37 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: direct receiver-work eligibility now excludes
+  threads that already have a blocked scheduler context. This prevents the
+  live pump from treating messages on a blocked `Sleep`/kernel-wait thread as
+  permission to reenter that thread's guest stack directly; blocked
+  `GetMessage`/wait paths still resume through their existing unblock logic.
+  The same slice keeps the recovered guest-thread stack anchoring below the
+  live stack pointer, ignores self-`ResumeThread` callouts, and leaves an
+  env-gated `WINCE_EMU_STACK_WRITE_TRACE_*` diagnostic hook for future stack
+  overwrite investigations.
+- `src/ce/kernel.rs`, `src/main.rs`, and `src/remote_server.rs`: the remote
+  debug surface now publishes `/api/v1/debug/handles.txt`, including handle
+  descriptions, waiter IDs, blocked waits, and serial RX/TX queue lengths.
+  This made the former `0x1054` crash value identifiable as a guest event
+  handle rather than a code address.
+- Validation for the blocked-thread receiver-work slice: `cargo fmt --
+  src\emulator\unicorn.rs`, focused `cargo test --features
+  "win32-desktop,unicorn"
+  blocked_wait_thread_does_not_directly_advertise_receiver_work`, focused
+  `resume_thread_callout_ignores_current_running_thread_handle`, focused
+  `first_guest_thread_slot_anchors_below_live_stack_pointer`, and
+  `cargo build --release --features "win32-desktop,unicorn"` passed.
+  A no-hook live launch on `192.168.0.39:8765` survived past the former
+  `FETCH_UNMAPPED pc=0x00001054` crash window, reached real iNavi SE splash
+  artwork and map/resource child-window creation, served a 116 KB
+  `/api/v1/frame.jpg`, and kept stderr empty. Remote `location` control input
+  drained through the existing generic NMEA path into open `COM7:` (`rx=174`,
+  `queued_serial_bytes=0`), and a center tap posted and was consumed as
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP` by the real owned splash popup
+  `0x00020008`. The remaining blocker is the guest's own startup/readiness
+  wait/event transition, not black framebuffer output, REST input delivery,
+  or missing serial injection.
 - `src/emulator/unicorn.rs`: host wall-clock slice stops now purge any stale
   blocked-wait, blocked `GetMessage`, or displaced `GetMessage` record for the
   thread that just executed. A thread that ran guest code to the slice boundary

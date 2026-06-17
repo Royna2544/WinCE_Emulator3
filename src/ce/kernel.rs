@@ -3459,6 +3459,131 @@ impl CeKernel {
         out
     }
 
+    pub fn handle_debug_text(&self) -> String {
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "  handles: count={} blocked_waiters={}",
+            self.handles.len(),
+            self.scheduler.waiter_count()
+        );
+        if self.handles.is_empty() {
+            let _ = writeln!(out, "    none");
+        } else {
+            for (handle, object) in self.handles.iter() {
+                let waiters = self.scheduler.waiter_ids_for_handle(handle);
+                let waiter_text = if waiters.is_empty() {
+                    "none".to_owned()
+                } else {
+                    waiters
+                        .iter()
+                        .map(|wait_id| wait_id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                let ready_text = self
+                    .scheduler
+                    .blocked_waits()
+                    .filter(|wait| wait.wait_handles.contains(&handle))
+                    .map(|wait| {
+                        format!(
+                            "id{}:tid{}:{}",
+                            wait.id,
+                            wait.thread_id,
+                            self.is_wait_ready(handle, wait.thread_id)
+                                .map(|ready| ready.to_string())
+                                .unwrap_or_else(|| "invalid".to_owned())
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let ready_text = if ready_text.is_empty() {
+                    "none".to_owned()
+                } else {
+                    ready_text.join(",")
+                };
+                let _ = writeln!(
+                    out,
+                    "    0x{handle:08x} {} waiters={} ready_by_waiter={}",
+                    self.handle_debug_description(handle, object),
+                    waiter_text,
+                    ready_text
+                );
+            }
+        }
+
+        out.push_str("  blocked waits:\n");
+        let waits = self.scheduler.blocked_waits().collect::<Vec<_>>();
+        if waits.is_empty() {
+            let _ = writeln!(out, "    none");
+        } else {
+            for wait in waits {
+                let handles = wait
+                    .wait_handles
+                    .iter()
+                    .map(|handle| format!("0x{handle:08x}:{}", self.describe_handle(*handle)))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                let _ = writeln!(
+                    out,
+                    "    id={} tid={} thread_handle=0x{:08x} kind={:?} timeout={} started={} handles=[{}]",
+                    wait.id,
+                    wait.thread_id,
+                    wait.thread_handle,
+                    wait.kind,
+                    wait.timeout_ms,
+                    wait.wait_started_ms,
+                    handles
+                );
+            }
+        }
+        out
+    }
+
+    fn handle_debug_description(&self, handle: u32, object: &KernelObject) -> String {
+        match object {
+            KernelObject::Thread(thread) => format!(
+                "thread(id={},start=0x{:08x},param=0x{:08x},priority={},signaled={},suspend={},exit=0x{:08x})",
+                thread.thread_id,
+                thread.start_address,
+                thread.parameter,
+                thread.priority,
+                thread.signaled,
+                thread.suspend_count,
+                thread.exit_code
+            ),
+            KernelObject::Device(device) => {
+                let (rx, tx) = device.queue_lengths();
+                format!(
+                    "device(name={},kind={:?},backend={:?},host={},serial={},rx={},tx={})",
+                    device.guest_name,
+                    device.kind,
+                    device.backend,
+                    device.host.as_deref().unwrap_or("<none>"),
+                    device.is_serial(),
+                    rx,
+                    tx
+                )
+            }
+            KernelObject::FileMapping(mapping) => format!(
+                "mapping(name={},size={},protect=0x{:08x},file_id={},views={},closed={})",
+                mapping.name.as_deref().unwrap_or("<unnamed>"),
+                mapping.size,
+                mapping.protect,
+                mapping
+                    .file_id
+                    .map(|file_id| file_id.to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+                mapping.views.len(),
+                mapping.closed
+            ),
+            KernelObject::Process(process) => format!(
+                "process(id={},signaled={},exit=0x{:08x})",
+                process.process_id, process.signaled, process.exit_code
+            ),
+            _ => self.handles.describe_handle(handle),
+        }
+    }
+
     pub fn file_io_stats(&self) -> FileIoStats {
         self.files.io_stats()
     }

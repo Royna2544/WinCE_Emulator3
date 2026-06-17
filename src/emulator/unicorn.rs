@@ -2863,7 +2863,10 @@ impl UnicornMips {
             .cpu
             .tracked_thread_ids()
             .into_iter()
-            .any(|thread_id| Self::thread_has_visible_receiver_work(thread_id, kernel))
+            .any(|thread_id| {
+                !parked.cpu.thread_has_blocked_scheduler_context(thread_id)
+                    && Self::thread_has_visible_receiver_work(thread_id, kernel)
+            })
     }
 
     #[cfg(feature = "unicorn")]
@@ -2872,33 +2875,40 @@ impl UnicornMips {
             .cpu
             .tracked_thread_ids()
             .into_iter()
-            .any(|thread_id| Self::thread_has_receiver_work(thread_id, kernel))
+            .any(|thread_id| {
+                !parked.cpu.thread_has_blocked_scheduler_context(thread_id)
+                    && Self::thread_has_receiver_work(thread_id, kernel)
+            })
     }
 
     #[cfg(feature = "unicorn")]
     pub fn active_process_has_visible_receiver_work(&self, kernel: &CeKernel) -> bool {
-        self.tracked_thread_ids()
-            .into_iter()
-            .any(|thread_id| Self::thread_has_visible_receiver_work(thread_id, kernel))
+        self.tracked_thread_ids().into_iter().any(|thread_id| {
+            !self.thread_has_blocked_scheduler_context(thread_id)
+                && Self::thread_has_visible_receiver_work(thread_id, kernel)
+        })
     }
 
     #[cfg(feature = "unicorn")]
     pub fn current_thread_has_visible_receiver_work(&self, kernel: &CeKernel) -> bool {
-        Self::thread_has_visible_receiver_work(self.current_thread_id, kernel)
+        !self.thread_has_blocked_scheduler_context(self.current_thread_id)
+            && Self::thread_has_visible_receiver_work(self.current_thread_id, kernel)
     }
 
     #[cfg(feature = "unicorn")]
     pub fn active_process_has_receiver_work(&self, kernel: &CeKernel) -> bool {
-        self.tracked_thread_ids()
-            .into_iter()
-            .any(|thread_id| Self::thread_has_receiver_work(thread_id, kernel))
+        self.tracked_thread_ids().into_iter().any(|thread_id| {
+            !self.thread_has_blocked_scheduler_context(thread_id)
+                && Self::thread_has_receiver_work(thread_id, kernel)
+        })
     }
 
     #[cfg(feature = "unicorn")]
     pub fn active_process_has_ready_receiver_work(&self, kernel: &CeKernel) -> bool {
-        self.tracked_thread_ids()
-            .into_iter()
-            .any(|thread_id| Self::thread_has_ready_receiver_work(thread_id, kernel))
+        self.tracked_thread_ids().into_iter().any(|thread_id| {
+            !self.thread_has_blocked_scheduler_context(thread_id)
+                && Self::thread_has_ready_receiver_work(thread_id, kernel)
+        })
     }
 
     #[cfg(feature = "unicorn")]
@@ -2914,9 +2924,10 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn active_process_has_visible_queued_receiver_work(&self, kernel: &CeKernel) -> bool {
-        self.tracked_thread_ids()
-            .into_iter()
-            .any(|thread_id| Self::thread_has_visible_queued_receiver_work(thread_id, kernel))
+        self.tracked_thread_ids().into_iter().any(|thread_id| {
+            !self.thread_has_blocked_scheduler_context(thread_id)
+                && Self::thread_has_visible_queued_receiver_work(thread_id, kernel)
+        })
     }
 
     #[cfg(feature = "unicorn")]
@@ -4124,7 +4135,10 @@ impl UnicornMips {
                 .cpu
                 .tracked_thread_ids()
                 .into_iter()
-                .any(|thread_id| Self::thread_has_ready_receiver_work(thread_id, kernel))
+                .any(|thread_id| {
+                    !parked.cpu.thread_has_blocked_scheduler_context(thread_id)
+                        && Self::thread_has_ready_receiver_work(thread_id, kernel)
+                })
     }
 
     #[cfg(feature = "unicorn")]
@@ -5077,6 +5091,14 @@ impl UnicornMips {
         let inavi_slot_static_watch_addr = std::env::var("WINCE_EMU_SLOT_TRACE_ADDR")
             .ok()
             .and_then(|value| parse_optional_u32(&value));
+        let stack_write_trace_addr = std::env::var("WINCE_EMU_STACK_WRITE_TRACE_ADDR")
+            .ok()
+            .and_then(|value| parse_optional_u32(&value));
+        let stack_write_trace_len: u32 = std::env::var("WINCE_EMU_STACK_WRITE_TRACE_LEN")
+            .ok()
+            .and_then(|value| parse_optional_u32(&value))
+            .filter(|value| *value != 0)
+            .unwrap_or(4);
         let fast_start_enabled = std::env::var_os("WINCE_EMU_FAST_START").is_some()
             && (!live_pump || std::env::var_os("WINCE_EMU_FAST_START_LIVE").is_some());
         let stop_pc = limits.stop_pc;
@@ -8214,6 +8236,30 @@ impl UnicornMips {
                 },
             )
             .map_err(|err| Error::Backend(format!("install resource-ready watch hook: {err:?}")))?;
+        }
+        if let Some(addr) = stack_write_trace_addr {
+            let end = addr
+                .saturating_add(stack_write_trace_len.saturating_sub(1))
+                .max(addr);
+            uc.add_mem_hook(
+                HookType::MEM_WRITE,
+                u64::from(addr),
+                u64::from(end),
+                move |uc, _access, address, size, value| {
+                    let pc = read_mips_reg(uc, RegisterMIPS::PC);
+                    let ra = read_mips_reg(uc, RegisterMIPS::RA);
+                    let sp = read_mips_reg(uc, RegisterMIPS::SP);
+                    let instruction = read_unicorn_u32(uc, pc).unwrap_or(0);
+                    eprintln!(
+                        "stack-write-trace pc=0x{pc:08x} ra=0x{ra:08x} sp=0x{sp:08x} insn=0x{instruction:08x} addr=0x{:08x} size={} value=0x{:08x}",
+                        address as u32,
+                        size,
+                        value as u32
+                    );
+                    true
+                },
+            )
+            .map_err(|err| Error::Backend(format!("install stack write trace hook: {err:?}")))?;
         }
         uc.add_mem_hook(
             HookType::MEM_UNMAPPED | HookType::MEM_PROT,
@@ -25576,8 +25622,9 @@ fn try_enter_create_thread_callout<D>(
     *current_thread_id.borrow_mut() = worker_thread_id;
     let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
+    let active_stack_pointer = read_mips_reg(uc, RegisterMIPS::SP);
     let stack_slot = assign_guest_thread_stack_slot(stack_slots, worker_thread_id);
-    let worker_stack = guest_thread_stack_top(process_stack_top, stack_slot);
+    let worker_stack = guest_thread_stack_top(process_stack_top, active_stack_pointer, stack_slot);
     let writes = [
         uc.reg_write(RegisterMIPS::PC, u64::from(start_address)),
         uc.reg_write(RegisterMIPS::RA, u64::from(GUEST_THREAD_RETURN_STUB_ADDR)),
@@ -25623,22 +25670,29 @@ fn try_enter_resumed_thread_callout<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
+    let active_running_thread = *running_thread.borrow();
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_RESUME_THREAD)
         || result == u32::MAX
         || process_stack_top == 0
-        || running_thread.borrow().is_some()
     {
         return false;
     }
+    if active_running_thread.is_some_and(|(thread_id, _)| thread_id != creator_thread_id) {
+        return false;
+    }
     let thread_handle = args.first().copied().unwrap_or(0);
+    if active_running_thread.is_some_and(|(thread_id, handle)| {
+        thread_id == creator_thread_id && handle == thread_handle
+    }) {
+        return false;
+    }
     if result == 1
         && let Some(resumed) = self_suspended_threads.borrow_mut().remove(&thread_handle)
     {
         let mut creator = SuspendedGuestThread {
             thread_id: creator_thread_id,
-            thread_handle: running_thread
-                .borrow()
+            thread_handle: active_running_thread
                 .and_then(|(id, handle)| (id == creator_thread_id).then_some(handle)),
             regs: capture_mips_gprs(uc),
             pc: read_mips_reg(uc, RegisterMIPS::RA),
@@ -25656,7 +25710,8 @@ fn try_enter_resumed_thread_callout<D>(
 
     let mut creator = SuspendedGuestThread {
         thread_id: creator_thread_id,
-        thread_handle: None,
+        thread_handle: active_running_thread
+            .and_then(|(id, handle)| (id == creator_thread_id).then_some(handle)),
         regs: capture_mips_gprs(uc),
         pc: read_mips_reg(uc, RegisterMIPS::RA),
     };
@@ -25666,8 +25721,10 @@ fn try_enter_resumed_thread_callout<D>(
     let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
 
+    let active_stack_pointer = read_mips_reg(uc, RegisterMIPS::SP);
     let worker_stack = guest_thread_stack_top(
         process_stack_top,
+        active_stack_pointer,
         assign_guest_thread_stack_slot(stack_slots, worker_thread_id),
     );
     let writes = [
@@ -26477,9 +26534,18 @@ fn write_unicorn_message<D>(
 }
 
 #[cfg(feature = "unicorn")]
-fn guest_thread_stack_top(process_stack_top: u32, stack_slot: u32) -> u32 {
+fn guest_thread_stack_top(
+    process_stack_top: u32,
+    active_stack_pointer: u32,
+    stack_slot: u32,
+) -> u32 {
+    let anchor = if active_stack_pointer == 0 {
+        process_stack_top
+    } else {
+        process_stack_top.min(active_stack_pointer)
+    };
     let offset = GUEST_THREAD_STACK_SLOT_SIZE.saturating_mul(stack_slot.max(1).saturating_add(1));
-    process_stack_top.wrapping_sub(offset) & !0x7
+    anchor.wrapping_sub(offset) & !0x7
 }
 
 #[cfg(feature = "unicorn")]
@@ -26590,7 +26656,7 @@ mod guest_thread_stack_tests {
     fn eighth_guest_thread_slot_keeps_stack_headroom() {
         let process_stack_top = 0x7fff_0000;
         let process_stack_base = process_stack_top - GUEST_STACK_MIN_RESERVE;
-        let eighth_stack = guest_thread_stack_top(process_stack_top, 8);
+        let eighth_stack = guest_thread_stack_top(process_stack_top, process_stack_top, 8);
 
         assert!(eighth_stack >= process_stack_base + GUEST_THREAD_STACK_SLOT_SIZE);
     }
@@ -26598,12 +26664,61 @@ mod guest_thread_stack_tests {
     #[test]
     fn first_guest_thread_slot_skips_main_thread_stack_band() {
         let process_stack_top = 0x8000_0000;
-        let first_stack = guest_thread_stack_top(process_stack_top, 1);
+        let first_stack = guest_thread_stack_top(process_stack_top, process_stack_top, 1);
 
         assert_eq!(
             first_stack,
             process_stack_top - GUEST_THREAD_STACK_SLOT_SIZE * 2
         );
+    }
+
+    #[test]
+    fn first_guest_thread_slot_anchors_below_live_stack_pointer() {
+        let process_stack_top = 0x8000_0000;
+        let active_sp = 0x7ffd_f248;
+        let first_stack = guest_thread_stack_top(process_stack_top, active_sp, 1);
+
+        assert_eq!(first_stack, active_sp - GUEST_THREAD_STACK_SLOT_SIZE * 2);
+    }
+
+    #[test]
+    fn resume_thread_callout_ignores_current_running_thread_handle() {
+        let config = crate::config::RuntimeConfig::load_default().unwrap();
+        let kernel = CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let thread_id = 7;
+        let thread_handle = 0x0000_1050;
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let self_suspended_threads = std::rc::Rc::new(std::cell::RefCell::new(BTreeMap::new()));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+        let stack_slots = std::rc::Rc::new(std::cell::RefCell::new(BTreeMap::new()));
+
+        assert!(!try_enter_resumed_thread_callout(
+            &kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_RESUME_THREAD),
+            &[thread_handle],
+            1,
+            thread_id,
+            0x8000_0000,
+            &current_thread_id,
+            &suspended_thread,
+            &self_suspended_threads,
+            &running_thread,
+            &stack_slots,
+        ));
+
+        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert!(suspended_thread.borrow().is_none());
+        assert!(stack_slots.borrow().is_empty());
     }
 
     #[test]
@@ -28187,6 +28302,52 @@ mod guest_thread_stack_tests {
         assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
         assert!(scheduler.rotate_to_active_visible_receiver_thread(&kernel, &[]));
         assert_eq!(scheduler.current_thread_id, target_thread);
+
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_wait_thread_does_not_directly_advertise_receiver_work() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let thread_id = 7;
+        let thread_handle = 0x107;
+
+        scheduler.set_initial_thread_id(thread_id);
+        scheduler.current_thread_id = thread_id;
+        scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            wait_id: 1,
+            thread_id,
+            thread_handle,
+            wait_handles: Vec::new(),
+            kind: BlockedWaitKind::Sleep,
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0010_2000,
+        });
+
+        let hwnd = kernel.create_window_ex_w(
+            thread_id,
+            "VISIBLE_TARGET",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_LBUTTONDOWN, 1, 0));
+
+        assert!(UnicornMips::thread_has_visible_receiver_work(
+            thread_id, &kernel
+        ));
+        assert!(scheduler.thread_has_blocked_scheduler_context(thread_id));
+        assert!(!scheduler.current_thread_has_visible_receiver_work(&kernel));
+        assert!(!scheduler.active_process_has_visible_receiver_work(&kernel));
+        assert!(!scheduler.active_process_has_receiver_work(&kernel));
+        assert!(!scheduler.active_process_has_ready_receiver_work(&kernel));
+        assert!(!scheduler.active_process_has_visible_queued_receiver_work(&kernel));
 
         Ok(())
     }
@@ -32540,7 +32701,6 @@ fn memory_ranges_overlap(left_addr: u32, left_len: u32, right_addr: u32, right_l
     left_addr < right_end && right_addr < left_end
 }
 
-#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn parse_optional_u32(value: &str) -> Option<u32> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
