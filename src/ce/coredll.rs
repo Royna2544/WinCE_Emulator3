@@ -8100,7 +8100,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE => Some(CoredllValue::Bool(
-            image_list_set_drag_cursor_raw(kernel, thread_id, args),
+            image_list_set_drag_cursor_raw(kernel, memory, thread_id, args),
         )),
         ORD_IMAGE_LIST_SET_OVERLAY_IMAGE => Some(CoredllValue::Bool(
             image_list_set_overlay_image_raw(kernel, memory, thread_id, args),
@@ -33395,16 +33395,43 @@ fn image_list_begin_drag_raw<M: CoredllGuestMemory>(
     }
 }
 
-fn image_list_set_drag_cursor_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn image_list_set_drag_cursor_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
     let handle = raw_arg(args, 0);
     let index = raw_i32_arg(args, 1);
     let hotspot_x = raw_i32_arg(args, 2);
     let hotspot_y = raw_i32_arg(args, 3);
-    match kernel
+    let old_internal_owned_bitmaps: Vec<(u32, Vec<u32>)> = kernel
         .resources
-        .set_image_list_drag_cursor(handle, index, hotspot_x, hotspot_y)
-    {
+        .image_list_drag_internal_handles()
+        .into_iter()
+        .map(|handle| (handle, image_list_owned_bitmap_handles(kernel, handle)))
+        .collect();
+    let composed = compose_image_list_drag_cursor_image(
+        kernel, memory, thread_id, handle, index, hotspot_x, hotspot_y,
+    );
+    let result = if let Some((images, cloned_bitmaps)) = composed {
+        let result = kernel
+            .resources
+            .set_image_list_drag_cursor_with_images(handle, index, hotspot_x, hotspot_y, images);
+        if !matches!(result, Some(true)) {
+            for bitmap in cloned_bitmaps {
+                delete_owned_bitmap(kernel, bitmap);
+            }
+        }
+        result
+    } else {
+        kernel
+            .resources
+            .set_image_list_drag_cursor(handle, index, hotspot_x, hotspot_y)
+    };
+    match result {
         Some(true) => {
+            delete_removed_image_list_drag_owned_bitmaps(kernel, old_internal_owned_bitmaps);
             kernel.threads.set_last_error(thread_id, 0);
             true
         }
@@ -33419,6 +33446,164 @@ fn image_list_set_drag_cursor_raw(kernel: &mut CeKernel, thread_id: u32, args: &
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
             false
+        }
+    }
+}
+
+fn compose_image_list_drag_cursor_image<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    index: i32,
+    hotspot_x: i32,
+    hotspot_y: i32,
+) -> Option<(Vec<crate::ce::resource::ImageListImage>, Vec<u32>)> {
+    if index < 0 {
+        return None;
+    }
+    let dither_handle = kernel.resources.image_list_drag_dither_handle()?;
+    let dither = kernel.resources.image_list(dither_handle)?.clone();
+    let cursor = kernel.resources.image_list(handle)?.clone();
+    let dither_image = dither.images.first()?.clone();
+    let cursor_image = cursor.images.get(index as usize)?.clone();
+    image_list_image_bitmap_handles(kernel, &dither_image)?;
+    image_list_image_bitmap_handles(kernel, &cursor_image)?;
+
+    let left = 0_i64.min(i64::from(hotspot_x));
+    let top = 0_i64.min(i64::from(hotspot_y));
+    let right = i64::from(dither.width).max(i64::from(hotspot_x) + i64::from(cursor.width));
+    let bottom = i64::from(dither.height).max(i64::from(hotspot_y) + i64::from(cursor.height));
+    let width = i32::try_from((right - left).max(1)).ok()?;
+    let height = i32::try_from((bottom - top).max(1)).ok()?;
+    let bits_pixel = image_list_image_bitmap_handles(kernel, &dither_image)
+        .and_then(|(bitmap, _)| kernel.resources.bitmap(bitmap))
+        .map(|bitmap| bitmap.bits_pixel)
+        .unwrap_or(32);
+    let bitmap = create_blank_owned_bitmap(kernel, memory, thread_id, width, height, bits_pixel)?;
+    let bitmap_obj = kernel.resources.bitmap(bitmap).cloned()?;
+    let base_x = i32::try_from(-left).ok()?;
+    let base_y = i32::try_from(-top).ok()?;
+    let cursor_x = i32::try_from(i64::from(hotspot_x) - left).ok()?;
+    let cursor_y = i32::try_from(i64::from(hotspot_y) - top).ok()?;
+    let base_color_table =
+        (!dither.color_table.is_empty()).then_some(dither.color_table.as_slice());
+    let cursor_color_table =
+        (!cursor.color_table.is_empty()).then_some(cursor.color_table.as_slice());
+    if !render_image_list_image_to_bitmap(
+        kernel,
+        memory,
+        &bitmap_obj,
+        base_x,
+        base_y,
+        dither.width,
+        dither.height,
+        &dither_image,
+        base_color_table,
+    ) || !render_image_list_image_to_bitmap(
+        kernel,
+        memory,
+        &bitmap_obj,
+        cursor_x,
+        cursor_y,
+        cursor.width,
+        cursor.height,
+        &cursor_image,
+        cursor_color_table,
+    ) {
+        delete_owned_bitmap(kernel, bitmap);
+        return None;
+    }
+    Some((
+        vec![crate::ce::resource::ImageListImage {
+            bitmap,
+            mask: 0,
+            icon: 0,
+            transparent_color: None,
+            source_x: 0,
+            source_y: 0,
+        }],
+        vec![bitmap],
+    ))
+}
+
+fn render_image_list_image_to_bitmap<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    dst_bitmap: &crate::ce::resource::BitmapObject,
+    dst_x: i32,
+    dst_y: i32,
+    width: i32,
+    height: i32,
+    image: &crate::ce::resource::ImageListImage,
+    image_color_table: Option<&[[u8; 4]]>,
+) -> bool {
+    let Some((bitmap_handle, mask_handle)) = image_list_image_bitmap_handles(kernel, image) else {
+        return false;
+    };
+    let Some(src_bitmap) = kernel.resources.bitmap(bitmap_handle) else {
+        return false;
+    };
+    let Some(src_bytes) = read_bitmap_object_bytes(memory, src_bitmap) else {
+        return false;
+    };
+    let mask_bitmap_bytes = if mask_handle != 0 {
+        kernel
+            .resources
+            .bitmap(mask_handle)
+            .and_then(|mask| read_bitmap_object_bytes(memory, mask).map(|bytes| (mask, bytes)))
+    } else {
+        None
+    };
+    let clip = Rect::from_origin_size(0, 0, dst_bitmap.width, dst_bitmap.height);
+    draw_bitmap_bytes_to_bitmap(
+        memory,
+        dst_bitmap,
+        dst_x,
+        dst_y,
+        width,
+        height,
+        image.source_x,
+        image.source_y,
+        width,
+        height,
+        src_bitmap,
+        &src_bytes,
+        image_color_table,
+        mask_bitmap_bytes
+            .as_ref()
+            .map(|(mask, bytes)| (*mask, bytes.as_slice())),
+        image.transparent_color.map(colorref_rgb),
+        None,
+        None,
+        None,
+        clip,
+    );
+    true
+}
+
+fn delete_removed_image_list_drag_owned_bitmaps(
+    kernel: &mut CeKernel,
+    old_owned_bitmaps: Vec<(u32, Vec<u32>)>,
+) {
+    if old_owned_bitmaps.is_empty() {
+        return;
+    }
+    let current_handles: BTreeSet<u32> = kernel
+        .resources
+        .image_list_drag_internal_handles()
+        .into_iter()
+        .collect();
+    let old_owned_bitmaps: Vec<u32> = old_owned_bitmaps
+        .into_iter()
+        .filter(|(handle, _)| !current_handles.contains(handle))
+        .flat_map(|(_, bitmaps)| bitmaps)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    for bitmap in old_owned_bitmaps {
+        if !kernel.resources.image_list_bitmap_referenced(bitmap) {
+            delete_owned_bitmap(kernel, bitmap);
         }
     }
 }

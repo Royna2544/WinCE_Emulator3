@@ -1387,6 +1387,15 @@ impl ResourceSystem {
         self.image_lists.get_mut(&handle)
     }
 
+    pub fn image_list_bitmap_referenced(&self, bitmap: u32) -> bool {
+        bitmap != 0
+            && self.image_lists.values().any(|list| {
+                list.images
+                    .iter()
+                    .any(|image| image.bitmap == bitmap || image.mask == bitmap)
+            })
+    }
+
     pub fn set_image_list_size(&mut self, handle: u32, width: i32, height: i32) -> Option<bool> {
         let list = self.image_lists.get_mut(&handle)?;
         if list.width == width && list.height == height {
@@ -2028,6 +2037,40 @@ impl ResourceSystem {
         Some(true)
     }
 
+    pub fn set_image_list_drag_cursor_with_images(
+        &mut self,
+        handle: u32,
+        index: i32,
+        hotspot_x: i32,
+        hotspot_y: i32,
+        images: Vec<ImageListImage>,
+    ) -> Option<bool> {
+        self.image_lists.get(&handle)?;
+        if self.image_list_drag.is_none() {
+            return Some(true);
+        }
+        if !self.image_list_has_index(handle, index) || images.is_empty() {
+            return Some(false);
+        }
+        let dither = self.image_list_drag_dither;
+        if dither == 0 || !self.image_lists.contains_key(&dither) {
+            return Some(false);
+        }
+        let merged =
+            self.merge_image_list_images(dither, 0, handle, index, hotspot_x, hotspot_y)?;
+        if let Some(list) = self.image_lists.get_mut(&merged) {
+            list.images = images;
+        }
+        if self.image_list_drag_merged != 0 {
+            self.image_lists.remove(&self.image_list_drag_merged);
+        }
+        self.image_list_drag_merged = merged;
+        let drag = self.image_list_drag.as_mut()?;
+        drag.image_list = merged;
+        drag.index = 0;
+        Some(true)
+    }
+
     pub fn image_list_drag_enter(&mut self, hwnd: u32, x: i32, y: i32) -> bool {
         if self.image_list_drag_lock_hwnd != 0 {
             return false;
@@ -2102,6 +2145,11 @@ impl ResourceSystem {
             handles.push(self.image_list_drag_merged);
         }
         handles
+    }
+
+    pub fn image_list_drag_dither_handle(&self) -> Option<u32> {
+        (self.image_list_drag.is_some() && self.image_list_drag_dither != 0)
+            .then_some(self.image_list_drag_dither)
     }
 
     pub fn image_list_drag(&self) -> Option<ImageListDragState> {
