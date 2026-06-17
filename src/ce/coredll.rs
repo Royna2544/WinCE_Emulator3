@@ -30404,6 +30404,11 @@ fn extract_pe_icon_by_id<M: CoredllGuestMemory>(
     if color_bitmap == 0 {
         return Err(PeIconExtractError::Malformed);
     }
+    if compression == BI_RGB
+        && let Some(bitmap) = kernel.resources.bitmap_mut(color_bitmap)
+    {
+        bitmap.rgb_masks = pe_icon_bi_rgb_masks(bpp);
+    }
 
     // Extract AND mask (1bpp, follows XOR pixels in RT_ICON data)
     // Only BI_RGB and BI_BITFIELDS icons have AND masks
@@ -30513,6 +30518,14 @@ fn pe_icon_and_mask_bitmap_inner<M: CoredllGuestMemory>(
 
     let handle = create_bitmap_from_dib_bytes(kernel, memory, thread_id, &mask_dib);
     (handle != 0).then_some(handle)
+}
+
+fn pe_icon_bi_rgb_masks(bits_pixel: u16) -> Option<[u32; 3]> {
+    if bits_pixel == 16 {
+        Some([0x0000_7c00, 0x0000_03e0, 0x0000_001f])
+    } else {
+        None
+    }
 }
 
 fn destroy_icon_raw(kernel: &mut CeKernel, thread_id: u32, icon: u32) -> bool {
@@ -57091,6 +57104,16 @@ const CEMATH_EXPORTS: &[(&str, u32)] = &[
 mod tests {
     use super::*;
     use crate::config::RuntimeConfig;
+
+    #[test]
+    fn pe_icon_bi_rgb_16bpp_uses_ce_555_masks() {
+        assert_eq!(
+            pe_icon_bi_rgb_masks(16),
+            Some([0x0000_7c00, 0x0000_03e0, 0x0000_001f])
+        );
+        assert_eq!(pe_icon_bi_rgb_masks(24), None);
+        assert_eq!(pe_icon_bi_rgb_masks(32), None);
+    }
 
     #[test]
     fn send_message_timeout_block_prepare_declines_zero_timeout_cross_thread() {

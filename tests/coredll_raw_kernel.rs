@@ -6133,6 +6133,11 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     )
     .unwrap();
     fs::write(
+        root.join("Docs").join("sixteen-bpp-rgb-icon.exe"),
+        pe32_with_16bpp_rgb_icon(),
+    )
+    .unwrap();
+    fs::write(
         root.join("Docs").join("bitfields-icon.exe"),
         pe32_with_16bpp_bitfields_icon(),
     )
@@ -6938,6 +6943,66 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         &masked_twentyfour_bpp_framebuffer.pixels()[twentyfour_right..twentyfour_right + 2],
         &[0x1f, 0x00],
         "24bpp RT_ICON normal draw should leave the destination behind an AND-mask pixel"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(path_ptr, r"\Docs\sixteen-bpp-rgb-icon.exe");
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let sixteen_bpp_rgb_icon = memory.read_u32(large_icon_ptr)?;
+    assert_ne!(sixteen_bpp_rgb_icon, 0);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, sixteen_bpp_rgb_icon);
+    let sixteen_bpp_rgb_color_bitmap = kernel
+        .resources
+        .icon(sixteen_bpp_rgb_icon)
+        .expect("16bpp BI_RGB PE icon")
+        .color_bitmap;
+    let sixteen_bpp_rgb_bitmap = kernel
+        .resources
+        .bitmap(sixteen_bpp_rgb_color_bitmap)
+        .expect("16bpp BI_RGB PE icon bitmap");
+    assert_eq!(sixteen_bpp_rgb_bitmap.bits_pixel, 16);
+    assert_eq!(
+        sixteen_bpp_rgb_bitmap.rgb_masks,
+        Some([0x0000_7c00, 0x0000_03e0, 0x0000_001f]),
+        "CE treats 16bpp BI_RGB DIB pixels as RGB555"
+    );
+    let mut sixteen_bpp_rgb_framebuffer = VirtualFramebuffer::new(2, 2, PixelFormat::Rgb565)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut sixteen_bpp_rgb_framebuffer),
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [hdc, 0, 0, sixteen_bpp_rgb_icon, 1, 1, 0, 0, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let sixteen_bpp_rgb_pixel = u16::from_le_bytes(
+        sixteen_bpp_rgb_framebuffer.pixels()[0..PixelFormat::Rgb565.bytes_per_pixel()]
+            .try_into()
+            .unwrap(),
+    );
+    assert_eq!(
+        sixteen_bpp_rgb_pixel, 0xf800,
+        "RGB555 BI_RGB red should render as full red in the RGB565 framebuffer"
     );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
@@ -8138,6 +8203,16 @@ fn pe32_with_24bpp_masked_icon() -> Vec<u8> {
     bytes
 }
 
+fn pe32_with_16bpp_rgb_icon() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    let icon_dib = icon_dib_16bpp_rgb(1, 1, 0x7c00);
+    put_test_u32(&mut bytes, 0x200 + 0x2a0 + 4, icon_dib.len() as u32);
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 12, 16);
+    put_test_u32(&mut bytes, 0x200 + 0x500 + 14, icon_dib.len() as u32);
+    put_test_bytes(&mut bytes, 0x200 + 0x700, &icon_dib);
+    bytes
+}
+
 fn pe32_with_16bpp_bitfields_icon() -> Vec<u8> {
     let mut bytes = pe32_with_group_icon_count(1);
     let icon_dib = icon_dib_16bpp_bitfields(1, 1, 0x7c00);
@@ -8477,6 +8552,29 @@ fn icon_dib_24bpp(
     }
     bytes.push(and_mask_first_byte);
     bytes.resize(bytes.len() + and_size.saturating_sub(1), 0);
+    bytes
+}
+
+fn icon_dib_16bpp_rgb(width: i32, height: i32, pixel: u16) -> Vec<u8> {
+    let xor_stride = (((width as usize * 16) + 31) / 32) * 4;
+    let xor_size = xor_stride * height as usize;
+    let and_stride = ((width as usize + 31) / 32) * 4;
+    let and_size = and_stride * height as usize;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&(height * 2).to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&(xor_size as u32).to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&pixel.to_le_bytes());
+    bytes.resize(bytes.len() + xor_size.saturating_sub(2), 0);
+    bytes.resize(bytes.len() + and_size, 0);
     bytes
 }
 
