@@ -49247,6 +49247,133 @@ fn coredll_raw_draw_text_w_wordbreak_draws_multiple_lines() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_draw_text_w_honors_selected_clip_region_on_selected_dib() -> Result<()> {
+    const OPAQUE: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 173_u32;
+    let (dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 96, 24);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_TEXT_COLOR,
+            [dc, 0x0000_00ff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_COLOR,
+            [dc, 0x0000_ff00],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_MODE,
+            [dc, OPAQUE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+
+    let clip = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [24, 0, 48, 16],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateRectRgn(DrawText clip) returned unexpected result: {other:?}"),
+    };
+    assert_ne!(clip, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_CLIP_RGN,
+            [dc, clip],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+
+    let rect_ptr = 0x2_0700_u32;
+    let text_ptr = 0x2_0800_u32;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 96);
+    memory.write_word(rect_ptr + 12, 16);
+    memory.write_wide_z(text_ptr, "ABCDEFGH");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_ptr, (-1i32) as u32, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+
+    let changed_pixels_in = |x0: u32, x1: u32| -> usize {
+        (0..16)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|(x, y)| rgb565_at(&memory, bits_ptr, stride, *x, *y) != 0)
+            .count()
+    };
+    assert_eq!(
+        changed_pixels_in(0, 24),
+        0,
+        "CE text.cpp::DrawTextClipRegion requires DrawText to preserve pixels left of the selected clip"
+    );
+    assert!(
+        changed_pixels_in(24, 48) > 0,
+        "DrawText should paint glyph/background pixels inside the selected clip region"
+    );
+    assert_eq!(
+        changed_pixels_in(48, 96),
+        0,
+        "CE text.cpp::DrawTextClipRegion requires DrawText to preserve pixels right of the selected clip"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     const DT_NOPREFIX: u32 = 0x0800;
     const TRANSPARENT: u32 = 1;
