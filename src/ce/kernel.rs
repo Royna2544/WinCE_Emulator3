@@ -4065,6 +4065,17 @@ impl CeKernel {
             self.post_shell_file_change_notifications(SHCNE_DELETE, Some(path), None);
             self.signal_file_change_notifications(SHCNE_DELETE, Some(path), None);
         }
+        self.push_file_trace(FileTraceRecord {
+            op: "DeleteFileW",
+            handle: None,
+            path: Some(path.to_owned()),
+            preview: None,
+            requested: None,
+            transferred: None,
+            position: None,
+            result: Some(u32::from(result.is_ok())),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
         result
     }
 
@@ -4105,6 +4116,17 @@ impl CeKernel {
                 );
             }
         }
+        self.push_file_trace(FileTraceRecord {
+            op: "MoveFileW",
+            handle: None,
+            path: Some(existing_path.to_owned()),
+            preview: Some(format!("new_path={new_path}")),
+            requested: None,
+            transferred: None,
+            position: None,
+            result: Some(u32::from(result.is_ok())),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
         result
     }
 
@@ -4126,6 +4148,17 @@ impl CeKernel {
                     .eq_ignore_ascii_case(&shell_change_parent_path(old_path)),
             );
         }
+        self.push_file_trace(FileTraceRecord {
+            op: "DeleteAndRenameFileW",
+            handle: None,
+            path: Some(old_path.to_owned()),
+            preview: Some(format!("new_path={new_path}")),
+            requested: None,
+            transferred: None,
+            position: None,
+            result: Some(u32::from(result.is_ok())),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
         result
     }
 

@@ -2690,6 +2690,7 @@ fn push_monitor_file_summary(
                 .map(|position| format!(" pos=0x{position:08x}"))
                 .unwrap_or_default();
             let detail = record.preview.as_deref().unwrap_or("");
+            let error = record.error.as_deref().unwrap_or("");
             let _ = writeln!(
                 out,
                 "    {} handle={} result={}{}{} {}",
@@ -2697,6 +2698,9 @@ fn push_monitor_file_summary(
             );
             if !detail.is_empty() {
                 let _ = writeln!(out, "      {detail}");
+            }
+            if !error.is_empty() {
+                let _ = writeln!(out, "      error={error}");
             }
         }
     }
