@@ -50523,6 +50523,28 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
     const VK_SNAPSHOT: u32 = 0x2C;
     const VK_LEFT: u32 = 0x25;
     const VK_RIGHT: u32 = 0x27;
+    const VK_HOME: u32 = 0x24;
+    const VK_END: u32 = 0x23;
+    const VK_UP: u32 = 0x26;
+    const VK_DOWN: u32 = 0x28;
+    const VK_PRIOR: u32 = 0x21;
+    const VK_NEXT: u32 = 0x22;
+    const VK_INSERT: u32 = 0x2d;
+    const VK_DELETE: u32 = 0x2e;
+    const VK_BROWSER_FORWARD: u32 = 0xa7;
+    const VK_BROWSER_REFRESH: u32 = 0xa8;
+    const VK_BROWSER_STOP: u32 = 0xa9;
+    const VK_BROWSER_SEARCH: u32 = 0xaa;
+    const VK_BROWSER_FAVORITES: u32 = 0xab;
+    const VK_BROWSER_HOME: u32 = 0xac;
+    const VK_VOLUME_MUTE: u32 = 0xad;
+    const VK_VOLUME_DOWN: u32 = 0xae;
+    const VK_VOLUME_UP: u32 = 0xaf;
+    const VK_MEDIA_PREV_TRACK: u32 = 0xb1;
+    const VK_MEDIA_STOP: u32 = 0xb2;
+    const VK_MEDIA_PLAY_PAUSE: u32 = 0xb3;
+    const VK_LAUNCH_APP1: u32 = 0xb6;
+    const VK_LAUNCH_APP2: u32 = 0xb7;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -50680,10 +50702,63 @@ fn coredll_raw_map_virtual_key_scan_code_modes_follow_ce_driver() -> Result<()> 
         returned(mvk(&mut kernel, &mut memory, 0xF2, MAPVK_VSC_TO_VK)),
         0x15
     );
+    for (scan, vk, label) in [
+        (0xE010, VK_BROWSER_SEARCH, "E010 Browser Search"),
+        (0xE015, VK_MEDIA_PREV_TRACK, "E015 Media Previous"),
+        (0xE018, VK_BROWSER_FAVORITES, "E018 Browser Favorites"),
+        (0xE01F, 0x5B, "E01F LWin"),
+        (0xE020, VK_BROWSER_REFRESH, "E020 Browser Refresh"),
+        (0xE021, VK_VOLUME_DOWN, "E021 Volume Down"),
+        (0xE023, VK_VOLUME_MUTE, "E023 Volume Mute"),
+        (0xE027, 0x5C, "E027 RWin"),
+        (0xE028, VK_BROWSER_STOP, "E028 Browser Stop"),
+        (0xE02B, VK_LAUNCH_APP2, "E02B Launch App2"),
+        (0xE02F, 0x5D, "E02F Apps"),
+        (0xE030, VK_BROWSER_FORWARD, "E030 Browser Forward"),
+        (0xE032, VK_VOLUME_UP, "E032 Volume Up"),
+        (0xE034, VK_MEDIA_PLAY_PAUSE, "E034 Media Play/Pause"),
+        (0xE03A, VK_BROWSER_HOME, "E03A Browser Home"),
+        (0xE03B, VK_MEDIA_STOP, "E03B Media Stop"),
+        (0xE040, VK_LAUNCH_APP1, "E040 Launch App1"),
+        (0xE04A, 0x6F, "E04A Divide"),
+        (0xE05A, 0x0D, "E05A Return"),
+        (0xE069, VK_END, "E069 End"),
+        (0xE06B, VK_LEFT, "E06B Left"),
+        (0xE06C, VK_HOME, "E06C Home"),
+        (0xE070, VK_INSERT, "E070 Insert"),
+        (0xE071, VK_DELETE, "E071 Delete"),
+        (0xE072, VK_DOWN, "E072 Down"),
+        (0xE074, VK_RIGHT, "E074 Right"),
+        (0xE075, VK_UP, "E075 Up"),
+        (0xE07A, VK_NEXT, "E07A PageDown"),
+        (0xE07D, VK_PRIOR, "E07D PageUp"),
+    ] {
+        assert_eq!(
+            returned(mvk(&mut kernel, &mut memory, scan, MAPVK_VSC_TO_VK)),
+            vk,
+            "{label}"
+        );
+    }
 
     assert_eq!(
         returned(mvk(&mut kernel, &mut memory, 0x1D, MAPVK_VSC_TO_VK_EX)),
         VK_LCONTROL
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xE011, MAPVK_VSC_TO_VK)),
+        VK_MENU
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xE011, MAPVK_VSC_TO_VK_EX)),
+        VK_RMENU
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xE014, MAPVK_VSC_TO_VK)),
+        VK_CONTROL
+    );
+    assert_eq!(
+        returned(mvk(&mut kernel, &mut memory, 0xE014, MAPVK_VSC_TO_VK_EX)),
+        VK_RCONTROL
     );
     assert_eq!(
         returned(mvk(&mut kernel, &mut memory, 0xE01D, MAPVK_VSC_TO_VK_EX)),

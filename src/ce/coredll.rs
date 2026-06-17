@@ -51589,13 +51589,33 @@ fn scan_code_to_vkey(scan: u32) -> u32 {
     if (scan & 0xff00) == 0xe000 {
         let scan = scan & 0x7f;
         return match scan {
+            0x10 => 0xaa, // Browser Search
+            0x11 => 0xa5, // RAlt
+            0x14 => 0xa3, // RControl
+            0x15 => 0xb1, // Media Previous Track
+            0x18 => 0xab, // Browser Favorites
+            0x1f => 0x5b, // LWin
             0x1d => 0xa3, // RControl
             0x1c => 0x0d, // Numpad Enter (same VK)
+            0x20 => 0xa8, // Browser Refresh
+            0x21 => 0xae, // Volume Down
+            0x23 => 0xad, // Volume Mute
+            0x27 => 0x5c, // RWin
+            0x28 => 0xa9, // Browser Stop
+            0x2b => 0xb7, // Launch App2
+            0x2f => 0x5d, // Apps
+            0x30 => 0xa7, // Browser Forward
+            0x32 => 0xaf, // Volume Up
+            0x34 => 0xb3, // Media Play/Pause
             0x35 => 0x6f, // Numpad /
             0x38 => 0xa5, // RAlt
+            0x3a => 0xac, // Browser Home
+            0x3b => 0xb2, // Media Stop
+            0x40 => 0xb6, // Launch App1
             0x47 => 0x24, // Home
             0x48 => 0x26, // Up
             0x49 => 0x21, // PageUp
+            0x4a => 0x6f, // Numpad /
             0x4b => 0x25, // Left
             0x4d => 0x27, // Right
             0x4f => 0x23, // End
@@ -51603,7 +51623,18 @@ fn scan_code_to_vkey(scan: u32) -> u32 {
             0x51 => 0x22, // PageDown
             0x52 => 0x2d, // Insert
             0x53 => 0x2e, // Delete
+            0x5a => 0x0d, // Numpad Enter (same VK)
+            0x69 => 0x23, // End
+            0x6b => 0x25, // Left
+            0x6c => 0x24, // Home
+            0x70 => 0x2d, // Insert
+            0x71 => 0x2e, // Delete
+            0x72 => 0x28, // Down
+            0x74 => 0x27, // Right
+            0x75 => 0x26, // Up
+            0x7a => 0x22, // PageDown
             0x7c => 0x2c, // Snapshot
+            0x7d => 0x21, // PageUp
             0x7e => 0x03, // Cancel
             _ => 0,
         };
