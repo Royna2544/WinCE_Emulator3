@@ -33496,8 +33496,8 @@ fn compose_image_list_drag_cursor_image<M: CoredllGuestMemory>(
     let cursor = kernel.resources.image_list(handle)?.clone();
     let dither_image = dither.images.first()?.clone();
     let cursor_image = cursor.images.get(index as usize)?.clone();
-    image_list_image_bitmap_handles(kernel, &dither_image)?;
-    image_list_image_bitmap_handles(kernel, &cursor_image)?;
+    let (dither_bitmap_handle, _) = image_list_image_bitmap_handles(kernel, &dither_image)?;
+    let (cursor_bitmap_handle, _) = image_list_image_bitmap_handles(kernel, &cursor_image)?;
 
     let left = 0_i64.min(i64::from(hotspot_x));
     let top = 0_i64.min(i64::from(hotspot_y));
@@ -33505,10 +33505,17 @@ fn compose_image_list_drag_cursor_image<M: CoredllGuestMemory>(
     let bottom = i64::from(dither.height).max(i64::from(hotspot_y) + i64::from(cursor.height));
     let width = i32::try_from((right - left).max(1)).ok()?;
     let height = i32::try_from((bottom - top).max(1)).ok()?;
-    let bits_pixel = image_list_image_bitmap_handles(kernel, &dither_image)
-        .and_then(|(bitmap, _)| kernel.resources.bitmap(bitmap))
+    let dither_bits_pixel = kernel
+        .resources
+        .bitmap(dither_bitmap_handle)
         .map(|bitmap| bitmap.bits_pixel)
         .unwrap_or(32);
+    let cursor_bits_pixel = kernel
+        .resources
+        .bitmap(cursor_bitmap_handle)
+        .map(|bitmap| bitmap.bits_pixel)
+        .unwrap_or(32);
+    let bits_pixel = dither_bits_pixel.max(cursor_bits_pixel).max(16);
     let bitmap = create_blank_owned_bitmap(kernel, memory, thread_id, width, height, bits_pixel)?;
     let bitmap_obj = kernel.resources.bitmap(bitmap).cloned()?;
     let base_x = i32::try_from(-left).ok()?;

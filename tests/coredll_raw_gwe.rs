@@ -50699,6 +50699,176 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pixels() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_image_list_set_drag_cursor_preserves_indexed_palettes() -> Result<()> {
+    const ILC_COLOR8: u32 = 0x0008;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 179_u32;
+
+    let base_bits = 0x2_2200_u32;
+    let cursor_bits = 0x2_2300_u32;
+    memory.map_bytes(base_bits, 4);
+    memory.write_bytes(base_bits, &[1, 0, 0, 0]);
+    memory.map_bytes(cursor_bits, 4);
+    memory.write_bytes(cursor_bits, &[1, 0, 0, 0]);
+
+    let base_bitmap = kernel.resources.create_bitmap(1, 1, 1, 8, base_bits);
+    kernel
+        .resources
+        .bitmap_mut(base_bitmap)
+        .expect("base bitmap")
+        .color_table = vec![[0, 0, 0, 0], [0, 0, 0xff, 0]];
+    let cursor_bitmap = kernel.resources.create_bitmap(1, 1, 1, 8, cursor_bits);
+    kernel
+        .resources
+        .bitmap_mut(cursor_bitmap)
+        .expect("cursor bitmap")
+        .color_table = vec![[0, 0, 0, 0], [0, 0xff, 0, 0]];
+
+    let base_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_COLOR8, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("base ImageList_Create returned unexpected result: {other:?}"),
+    };
+    let cursor_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_COLOR8, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("cursor ImageList_Create returned unexpected result: {other:?}"),
+    };
+    for (list, bitmap) in [(base_list, base_bitmap), (cursor_list, cursor_bitmap)] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_IMAGE_LIST_ADD,
+                [list, bitmap, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_BEGIN_DRAG,
+            [base_list, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            [cursor_list, 0, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let drag_point = 0x2_2400_u32;
+    let drag_hotspot = 0x2_2500_u32;
+    memory.map_words(drag_point, 2);
+    memory.map_words(drag_hotspot, 2);
+    let drag_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+        [drag_point, drag_hotspot],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_GetDragImage returned unexpected result: {other:?}"),
+    };
+    assert_eq!(kernel.resources.image_list(drag_list).unwrap().width, 2);
+    assert_eq!(kernel.resources.image_list(drag_list).unwrap().height, 1);
+    let drag_bitmap = kernel
+        .resources
+        .image_list(drag_list)
+        .and_then(|list| list.images.first())
+        .map(|image| image.bitmap)
+        .expect("composed drag bitmap");
+    assert_eq!(
+        kernel.resources.bitmap(drag_bitmap).unwrap().bits_pixel,
+        16,
+        "indexed drag merges render through a color bitmap instead of a palette-less 8bpp temp"
+    );
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [drag_list, 0, dst_dc, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0xf800);
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 0),
+        0x07e0,
+        "cursor pixels should use the cursor image list palette"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_END_DRAG,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.image_list(drag_list).is_none());
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_image_list_set_drag_cursor_composes_masked_negative_offset() -> Result<()> {
     const ILC_COLOR16: u32 = 0x0010;
     const CLR_MAGENTA: u32 = 0x00ff_00ff;
