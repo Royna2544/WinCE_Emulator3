@@ -45860,16 +45860,162 @@ fn coredll_raw_gdi_misc_draw_apis_validate_ce_pass_null_edges() -> Result<()> {
         ERROR_INVALID_PARAMETER
     );
 
+    let rect_visible_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("GET_DC failed: {other:?}"),
+    };
+    assert_ne!(rect_visible_dc, 0);
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
             ORD_RECT_VISIBLE,
-            [dc, rect_ptr],
+            [rect_visible_dc, rect_ptr],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_rect_visible_respects_bitmap_and_screen_bounds() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 131_u32;
+
+    let (mem_dc, _bits_ptr, _stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+    let rect_ptr = 0x1_2500;
+    memory.map_words(rect_ptr, 4);
+    let write_rect =
+        |memory: &mut TestGuestMemory, left: u32, top: u32, right: u32, bottom: u32| {
+            memory.write_word(rect_ptr, left);
+            memory.write_word(rect_ptr + 4, top);
+            memory.write_word(rect_ptr + 8, right);
+            memory.write_word(rect_ptr + 12, bottom);
+        };
+
+    write_rect(&mut memory, 1, 1, 3, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECT_VISIBLE,
+            [mem_dc, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    write_rect(&mut memory, 10, 10, 12, 12);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECT_VISIBLE,
+            [mem_dc, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INTERSECT_CLIP_RECT,
+            [mem_dc, 0, 0, 2, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    write_rect(&mut memory, 3, 3, 4, 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECT_VISIBLE,
+            [mem_dc, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    assert_ne!(screen_dc, 0);
+
+    write_rect(&mut memory, 0, 0, 1, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECT_VISIBLE,
+            [screen_dc, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    write_rect(&mut memory, 5000, 0, 5100, 100);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECT_VISIBLE,
+            [screen_dc, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
             ..
         }
     ));

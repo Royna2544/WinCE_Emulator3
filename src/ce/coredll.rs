@@ -43078,11 +43078,20 @@ fn rect_visible_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let Some(_rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
         return 0;
     };
+    let visible = if kernel.resources.is_memory_dc(hdc) {
+        selected_bitmap_object(kernel, hdc)
+            .map(|bitmap| {
+                !hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height).is_empty()
+            })
+            .unwrap_or(false)
+    } else {
+        hdc_framebuffer_client_clip_rects(kernel, hdc, rect).is_some()
+    };
     kernel.threads.set_last_error(thread_id, 0);
-    1
+    u32::from(visible)
 }
 
 fn def_window_proc_erasebkgnd_raw<M: CoredllGuestMemory>(
