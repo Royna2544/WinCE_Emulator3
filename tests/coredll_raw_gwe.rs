@@ -50869,6 +50869,219 @@ fn coredll_raw_image_list_set_drag_cursor_preserves_indexed_palettes() -> Result
 }
 
 #[test]
+fn coredll_raw_image_list_set_drag_cursor_composes_pseudo_icon_pixels() -> Result<()> {
+    const ILC_COLOR16: u32 = 0x0010;
+    const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 180_u32;
+
+    let (base_bitmap, base_bits, base_stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    for y in 0..2 {
+        for x in 0..2 {
+            memory.write_u16(base_bits + y * base_stride + x * 2, 0xf800)?;
+        }
+    }
+
+    let base_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_COLOR16, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("base ImageList_Create returned unexpected result: {other:?}"),
+    };
+    let cursor_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [16, 16, ILC_COLOR16, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("cursor ImageList_Create returned unexpected result: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [base_list, base_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let pseudo_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_ICON,
+        [SHELL_SYSTEM_IMAGE_LIST_HANDLE, 2, 0x0100],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_GetIcon(system pseudo) returned unexpected result: {other:?}"),
+    };
+    assert_ne!(pseudo_icon, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REPLACE_ICON,
+            [cursor_list, 0xffff_ffff, pseudo_icon],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(cursor_list)
+            .and_then(|list| list.images.first())
+            .map(|image| image.icon),
+        Some(pseudo_icon),
+        "pseudo icons stay icon-backed in ordinary image lists"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_BEGIN_DRAG,
+            [base_list, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            [cursor_list, 0, 2, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let drag_point = 0x2_2600_u32;
+    let drag_hotspot = 0x2_2700_u32;
+    memory.map_words(drag_point, 2);
+    memory.map_words(drag_hotspot, 2);
+    let drag_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+        [drag_point, drag_hotspot],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_GetDragImage returned unexpected result: {other:?}"),
+    };
+    assert_eq!(kernel.resources.image_list(drag_list).unwrap().width, 18);
+    assert_eq!(kernel.resources.image_list(drag_list).unwrap().height, 17);
+    let drag_bitmap = kernel
+        .resources
+        .image_list(drag_list)
+        .and_then(|list| list.images.first())
+        .map(|image| image.bitmap)
+        .expect("composed drag bitmap");
+    let drag_bits = kernel
+        .resources
+        .bitmap(drag_bitmap)
+        .expect("composed drag bitmap backing")
+        .bits_ptr;
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 18, 17);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [drag_list, 0, dst_dc, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0xf800,
+        "the original bitmap drag image remains in the composed output"
+    );
+    let pseudo_body = rgb565_at(&memory, dst_bits, dst_stride, 3, 2);
+    let pseudo_overlay = rgb565_at(&memory, dst_bits, dst_stride, 14, 13);
+    assert_ne!(
+        pseudo_body, 0,
+        "pseudo-icon cursor body should be rasterized into the composed drag image"
+    );
+    assert_ne!(
+        pseudo_overlay, 0,
+        "pseudo-icon cursor overlay should be rasterized into the composed drag image"
+    );
+    assert_ne!(
+        pseudo_overlay, pseudo_body,
+        "pseudo-icon cursor overlay should remain visually distinct"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_END_DRAG,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.image_list(drag_list).is_none());
+    assert!(kernel.resources.bitmap(drag_bitmap).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_image_list_set_drag_cursor_composes_masked_negative_offset() -> Result<()> {
     const ILC_COLOR16: u32 = 0x0010;
     const CLR_MAGENTA: u32 = 0x00ff_00ff;

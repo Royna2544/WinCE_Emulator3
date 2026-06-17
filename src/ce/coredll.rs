@@ -33496,8 +33496,22 @@ fn compose_image_list_drag_cursor_image<M: CoredllGuestMemory>(
     let cursor = kernel.resources.image_list(handle)?.clone();
     let dither_image = dither.images.first()?.clone();
     let cursor_image = cursor.images.get(index as usize)?.clone();
-    let (dither_bitmap_handle, _) = image_list_image_bitmap_handles(kernel, &dither_image)?;
-    let (cursor_bitmap_handle, _) = image_list_image_bitmap_handles(kernel, &cursor_image)?;
+    let (dither_image, dither_bitmap_handle, dither_owned) = image_list_composable_drag_image(
+        kernel,
+        memory,
+        thread_id,
+        &dither_image,
+        dither.width,
+        dither.height,
+    )?;
+    let (cursor_image, cursor_bitmap_handle, cursor_owned) = image_list_composable_drag_image(
+        kernel,
+        memory,
+        thread_id,
+        &cursor_image,
+        cursor.width,
+        cursor.height,
+    )?;
 
     let left = 0_i64.min(i64::from(hotspot_x));
     let top = 0_i64.min(i64::from(hotspot_y));
@@ -33548,7 +33562,13 @@ fn compose_image_list_drag_cursor_image<M: CoredllGuestMemory>(
         cursor_color_table,
     ) {
         delete_owned_bitmap(kernel, bitmap);
+        for owned in dither_owned.into_iter().chain(cursor_owned) {
+            delete_owned_bitmap(kernel, owned);
+        }
         return None;
+    }
+    for owned in dither_owned.into_iter().chain(cursor_owned) {
+        delete_owned_bitmap(kernel, owned);
     }
     Some((
         vec![crate::ce::resource::ImageListImage {
@@ -33561,6 +33581,120 @@ fn compose_image_list_drag_cursor_image<M: CoredllGuestMemory>(
         }],
         vec![bitmap],
     ))
+}
+
+fn image_list_composable_drag_image<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    image: &crate::ce::resource::ImageListImage,
+    width: i32,
+    height: i32,
+) -> Option<(crate::ce::resource::ImageListImage, u32, Vec<u32>)> {
+    if let Some((bitmap, _)) = image_list_image_bitmap_handles(kernel, image) {
+        return Some((image.clone(), bitmap, Vec::new()));
+    }
+    let bitmap =
+        create_pseudo_icon_drag_bitmap(kernel, memory, thread_id, image.icon, width, height)?;
+    Some((
+        crate::ce::resource::ImageListImage {
+            bitmap,
+            mask: 0,
+            icon: 0,
+            transparent_color: None,
+            source_x: 0,
+            source_y: 0,
+        },
+        bitmap,
+        vec![bitmap],
+    ))
+}
+
+fn create_pseudo_icon_drag_bitmap<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    icon: u32,
+    width: i32,
+    height: i32,
+) -> Option<u32> {
+    let (index, flags) = shell_pseudo_icon_index_and_flags(icon)?;
+    let bitmap = create_blank_owned_bitmap(kernel, memory, thread_id, width, height, 16)?;
+    let bitmap_obj = kernel.resources.bitmap(bitmap).cloned()?;
+    let pseudo = pseudo_image_list_draw(
+        ImageListDraw {
+            image_list: SHELL_SYSTEM_IMAGE_LIST_HANDLE,
+            index,
+            hdc: 0,
+            x: 0,
+            y: 0,
+            width,
+            height,
+            flags,
+            overlay_image: None,
+            rgb_fg: CLR_DEFAULT,
+            rgb_bk: CLR_NONE,
+            x_bitmap: 0,
+            y_bitmap: 0,
+            rop: SRCCOPY,
+        },
+        width,
+        height,
+    )?;
+    paint_pseudo_image_list_fill(memory, &bitmap_obj, pseudo.border, pseudo.border_color);
+    if let Some(body) = pseudo.body {
+        paint_pseudo_image_list_fill(memory, &bitmap_obj, body.rect, body.color);
+    }
+    if let Some(overlay) = pseudo.overlay_outer {
+        paint_pseudo_image_list_fill(memory, &bitmap_obj, overlay.rect, overlay.color);
+    }
+    if let Some(overlay) = pseudo.overlay_inner {
+        paint_pseudo_image_list_fill(memory, &bitmap_obj, overlay.rect, overlay.color);
+    }
+    Some(bitmap)
+}
+
+fn paint_pseudo_image_list_fill<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    rect: Rect,
+    color: u32,
+) {
+    let rgb = colorref_rgb(color);
+    for y in rect.top.max(0)..rect.bottom.min(bitmap.height) {
+        for x in rect.left.max(0)..rect.right.min(bitmap.width) {
+            let _ = write_bitmap_pixel_rgb(memory, bitmap, x, y, rgb);
+        }
+    }
+}
+
+fn shell_pseudo_icon_index_and_flags(icon: u32) -> Option<(i32, u32)> {
+    let overlay = (icon >> SHELL_ICON_OVERLAY_SHIFT) & 0x0f;
+    let raw = icon & !(0x0f << SHELL_ICON_OVERLAY_SHIFT);
+    if raw & 0xffff_8000 != 0x000b_8000 {
+        return None;
+    }
+    let low = raw & 0xffff;
+    let stock = low & 0x7fff;
+    let index = match stock {
+        SHELL_DOCUMENT_ICON => 0,
+        SHELL_GENERIC_FOLDER_ICON => 1,
+        SHELL_APPLICATION_ICON => 2,
+        SHELL_STORAGE_CARD_ICON => 3,
+        SHELL_NETWORK_FOLDER_ICON => 4,
+        SHELL_SHORTCUT_ICON => 5,
+        _ if low & 0xc000 == 0xc000 => (low & 0x3fff) as i32,
+        _ => return None,
+    };
+    if index < 0 || index as u32 >= SHELL_SYSTEM_IMAGE_LIST_COUNT {
+        return None;
+    }
+    let flags = if (1..=4).contains(&overlay) {
+        overlay << 8
+    } else {
+        0
+    };
+    Some((index, flags))
 }
 
 fn render_image_list_image_to_bitmap<M: CoredllGuestMemory>(
