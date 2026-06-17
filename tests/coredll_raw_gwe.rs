@@ -50425,6 +50425,268 @@ fn coredll_raw_image_list_copy_preserves_destination_slot_rect() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_image_list_copy_handles_replaced_bitmap_icons() -> Result<()> {
+    const ILC_MASK: u32 = 0x0001;
+    const ILCF_MOVE: u32 = 0x0000_0000;
+    const ILCF_SWAP: u32 = 0x0000_0001;
+    const ILD_MASK: u32 = 0x0010;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 175_u32;
+
+    fn clear_rgb565(memory: &mut TestGuestMemory, bits: u32, stride: u32, value: u16) {
+        for y in 0..2 {
+            for x in 0..2 {
+                write_rgb565(memory, bits, stride, x, y, value);
+            }
+        }
+    }
+
+    let icon_info = 0x2_3000;
+    memory.map_words(icon_info, 5);
+    let make_icon = |kernel: &mut CeKernel,
+                     memory: &mut TestGuestMemory,
+                     colors: [u16; 4],
+                     mask_rows: [u8; 2]|
+     -> Result<u32> {
+        let (_, mask_bitmap, mask_bits, mask_stride) =
+            create_selected_1bpp_dib_with_bitmap(&table, kernel, memory, thread_id, 2, 2);
+        memory.write_u8(mask_bits, mask_rows[0])?;
+        memory.write_u8(mask_bits + mask_stride, mask_rows[1])?;
+
+        let (_, color_bitmap, color_bits, color_stride) =
+            create_selected_rgb565_dib_with_bitmap(&table, kernel, memory, thread_id, 2, 2);
+        write_rgb565(memory, color_bits, color_stride, 0, 0, colors[0]);
+        write_rgb565(memory, color_bits, color_stride, 1, 0, colors[1]);
+        write_rgb565(memory, color_bits, color_stride, 0, 1, colors[2]);
+        write_rgb565(memory, color_bits, color_stride, 1, 1, colors[3]);
+
+        memory.write_word(icon_info, 1);
+        memory.write_word(icon_info + 4, 0);
+        memory.write_word(icon_info + 8, 0);
+        memory.write_word(icon_info + 12, mask_bitmap);
+        memory.write_word(icon_info + 16, color_bitmap);
+        match table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_CREATE_ICON_INDIRECT,
+            [icon_info],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(icon),
+                ..
+            } => Ok(icon),
+            other => panic!("CreateIconIndirect(bitmap-backed copy fixture) failed: {other:?}"),
+        }
+    };
+
+    let icon_a = make_icon(
+        &mut kernel,
+        &mut memory,
+        [0xf800, 0x07e0, 0x001f, 0xffff],
+        [0x00, 0x40],
+    )?;
+    let icon_b = make_icon(
+        &mut kernel,
+        &mut memory,
+        [0x07ff, 0xffe0, 0xf81f, 0x0000],
+        [0x80, 0x00],
+    )?;
+    assert_ne!(icon_a, 0);
+    assert_ne!(icon_b, 0);
+
+    let list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_MASK, 2, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(bitmap-backed copy fixture) failed: {other:?}"),
+    };
+    assert_ne!(list, 0);
+    for (expected, icon) in [(0, icon_a), (1, icon_b)] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_IMAGE_LIST_REPLACE_ICON,
+                [list, 0xffff_ffff, icon],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(index),
+                ..
+            } if index == expected
+        ));
+    }
+    for entry in &kernel.resources.image_list(list).unwrap().images {
+        assert_eq!(
+            entry.icon, 0,
+            "CE ImageList_ReplaceIcon draws real icons into image-list backing storage"
+        );
+        assert_ne!(entry.bitmap, 0);
+        assert_ne!(entry.mask, 0);
+    }
+
+    for icon in [icon_a, icon_b] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DESTROY_ICON,
+                [icon],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert!(kernel.resources.icon(icon).is_none());
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY,
+            [list, 0, list, 1, ILCF_SWAP],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    clear_rgb565(&mut memory, dst_bits, dst_stride, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [list, 0, dst_dc, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0,
+        "CE ImageList_Copy swap carries bitmap-backed icon mask transparency with slot pixels"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 0),
+        0xffe0,
+        "CE ImageList_Copy swap moves the source icon-rendered color plane"
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), 0xf81f);
+
+    clear_rgb565(&mut memory, dst_bits, dst_stride, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [list, 1, dst_dc, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0xf800,
+        "CE ImageList_Copy swap saves and restores the destination icon-rendered pixels"
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY,
+            [list, 1, list, 0, ILCF_MOVE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    clear_rgb565(&mut memory, dst_bits, dst_stride, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [list, 1, dst_dc, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0,
+        "CE ImageList_Copy move copies the bitmap-backed source mask into the destination slot"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 0),
+        0xffe0,
+        "CE ImageList_Copy move copies the bitmap-backed source color into the destination slot"
+    );
+
+    clear_rgb565(&mut memory, dst_bits, dst_stride, 0xffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [list, 1, dst_dc, 0, 0, ILD_MASK],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0xffff,
+        "CE ImageList_Copy move leaves the copied icon mask's white pixel white"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 0),
+        0,
+        "CE ImageList_Copy move copies the icon mask's black pixel"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_image_list_begin_drag_clones_source_pixels() -> Result<()> {
     const ILC_COLOR16: u32 = 0x0010;
 
