@@ -16308,8 +16308,8 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
     if owner_was_enabled.is_some() {
         let _ = kernel.enable_window(owner_hwnd, false);
     }
-    let visible_caption = "";
-    let visible_text = "";
+    let visible_caption = caption.as_str();
+    let visible_text = text.as_str();
     let window_state = create_message_box_window(
         kernel,
         thread_id,
@@ -49926,6 +49926,17 @@ fn set_pixel_raw<M: CoredllGuestMemory>(
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0xffff_ffff;
+    }
+    let visible = if kernel.resources.is_memory_dc(hdc) {
+        selected_bitmap_object(kernel, hdc)
+            .map(|bitmap| !hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height).is_empty())
+            .unwrap_or(false)
+    } else {
+        hdc_framebuffer_client_clip_rects(kernel, hdc, rect).is_some()
+    };
+    if !visible {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CLR_INVALID;
     }
     let paint = BrushPaint::Solid(color);
     if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint)

@@ -1661,7 +1661,7 @@ fn publish_remote_debug_after_scheduler_change(
         kernel,
         desktop.framebuffer(),
         snapshot.as_ref(),
-        false,
+        true,
     );
 }
 
