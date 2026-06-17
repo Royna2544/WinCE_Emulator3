@@ -51266,6 +51266,7 @@ fn coredll_raw_image_list_drag_restores_framebuffer_between_moves() -> Result<()
     framebuffer.pixels_mut().fill(0xff);
     let _ = framebuffer.take_dirty_rects();
     let thread_id = 178_u32;
+    let red_over_white_blend = 0xfbef;
 
     let (bitmap, bits, stride) =
         create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
@@ -51331,10 +51332,10 @@ fn coredll_raw_image_list_drag_restores_framebuffer_between_moves() -> Result<()
             ..
         }
     ));
-    assert_ne!(
+    assert_eq!(
         framebuffer_rgb565_at(&framebuffer, 2, 2),
-        0xffff,
-        "DragEnter should capture the background and draw the drag image"
+        red_over_white_blend,
+        "DragEnter should draw CE's high-color ILD_BLEND50 drag image over the saved screen"
     );
     assert_eq!(framebuffer_rgb565_at(&framebuffer, 4, 3), 0xffff);
 
@@ -51358,10 +51359,10 @@ fn coredll_raw_image_list_drag_restores_framebuffer_between_moves() -> Result<()
         0xffff,
         "DragMove should restore the old saved screen rectangle"
     );
-    assert_ne!(
+    assert_eq!(
         framebuffer_rgb565_at(&framebuffer, 4, 3),
-        0xffff,
-        "DragMove should draw the drag image at the new screen rectangle"
+        red_over_white_blend,
+        "DragMove should redraw the CE blended drag image at the new screen rectangle"
     );
 
     assert!(matches!(
@@ -51398,10 +51399,10 @@ fn coredll_raw_image_list_drag_restores_framebuffer_between_moves() -> Result<()
             ..
         }
     ));
-    assert_ne!(
+    assert_eq!(
         framebuffer_rgb565_at(&framebuffer, 4, 3),
-        0xffff,
-        "DragShowNolock(TRUE) should recapture and redraw the drag image"
+        red_over_white_blend,
+        "DragShowNolock(TRUE) should recapture and redraw the blended drag image"
     );
 
     assert!(matches!(
