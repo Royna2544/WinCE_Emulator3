@@ -58,8 +58,8 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
             ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
             ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
-            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
             ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMM_ASSOCIATE_CONTEXT,
             ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC, ORD_IMM_DESTROY_CONTEXT,
             ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
@@ -50682,6 +50682,192 @@ fn coredll_raw_image_list_copy_handles_replaced_bitmap_icons() -> Result<()> {
         0,
         "CE ImageList_Copy move copies the icon mask's black pixel"
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_image_list_duplicate_survives_source_destroy() -> Result<()> {
+    const ILC_COLOR16: u32 = 0x0010;
+    const ILC_MASK: u32 = 0x0001;
+    const ILD_MASK: u32 = 0x0010;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 175_u32;
+
+    let (source_bitmap, source_bits, source_stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    write_rgb565(&mut memory, source_bits, source_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, source_bits, source_stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, source_bits, source_stride, 0, 1, 0x001f);
+    write_rgb565(&mut memory, source_bits, source_stride, 1, 1, 0xffff);
+
+    let (_, mask_bitmap, mask_bits, mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    memory.write_u8(mask_bits, 0x80)?; // transparent, opaque
+    memory.write_u8(mask_bits + mask_stride, 0x00)?; // opaque, opaque
+
+    let list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_COLOR16 | ILC_MASK, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(duplicate lifetime) failed: {other:?}"),
+    };
+    assert_ne!(list, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [list, source_bitmap, mask_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    let original_entry = kernel.resources.image_list(list).unwrap().images[0].clone();
+    let duplicate = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_DUPLICATE,
+        [list],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Duplicate(lifetime) failed: {other:?}"),
+    };
+    assert_ne!(duplicate, 0);
+    assert_ne!(duplicate, list);
+    let duplicate_entry = kernel.resources.image_list(duplicate).unwrap().images[0].clone();
+    assert_ne!(
+        duplicate_entry.bitmap, original_entry.bitmap,
+        "CE ImageList_Duplicate must copy image backing instead of aliasing the source list"
+    );
+    assert_ne!(
+        duplicate_entry.mask, original_entry.mask,
+        "CE ImageList_Duplicate must copy mask backing instead of aliasing the source list"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DESTROY,
+            [list],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.image_list(list).is_none());
+    assert!(kernel.resources.bitmap(original_entry.bitmap).is_none());
+    assert!(kernel.resources.bitmap(original_entry.mask).is_none());
+    assert!(
+        kernel.resources.bitmap(duplicate_entry.bitmap).is_some(),
+        "destroying the source list must not release duplicate image backing"
+    );
+    assert!(
+        kernel.resources.bitmap(duplicate_entry.mask).is_some(),
+        "destroying the source list must not release duplicate mask backing"
+    );
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    for y in 0..2 {
+        for x in 0..2 {
+            write_rgb565(&mut memory, dst_bits, dst_stride, x, y, 0);
+        }
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [duplicate, 0, dst_dc, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0,
+        "duplicate draw should preserve the copied transparent mask pixel after source destroy"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 0),
+        0x07e0,
+        "duplicate draw should preserve copied color pixels after source destroy"
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), 0x001f);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0xffff);
+
+    for y in 0..2 {
+        for x in 0..2 {
+            write_rgb565(&mut memory, dst_bits, dst_stride, x, y, 0xffff);
+        }
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [duplicate, 0, dst_dc, 0, 0, ILD_MASK],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0xffff,
+        "duplicate mask draw should preserve copied white mask pixels after source destroy"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 0),
+        0,
+        "duplicate mask draw should preserve copied black mask pixels after source destroy"
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), 0);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DESTROY,
+            [duplicate],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.bitmap(duplicate_entry.bitmap).is_none());
+    assert!(kernel.resources.bitmap(duplicate_entry.mask).is_none());
 
     Ok(())
 }
