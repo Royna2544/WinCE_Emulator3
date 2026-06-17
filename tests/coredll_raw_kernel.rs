@@ -9095,6 +9095,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     const CLR_NONE: u32 = 0xffff_ffff;
     const CLR_DEFAULT: u32 = 0xff00_0000;
     const ILC_MASK: u32 = 0x0001;
+    const ILC_COLOR4: u32 = 0x0004;
     const ILC_COLOR8: u32 = 0x0008;
     const ILC_COLORDDB: u32 = 0x00fe;
     const ILC_COLOR24: u32 = 0x0018;
@@ -9485,6 +9486,164 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         rgb565_at(&memory, ddb_palette_dst_bits, ddb_palette_dst_stride, 0, 0),
         0x001f,
         "DDB image lists keep using each bitmap's own indexed color table"
+    );
+
+    let first_palette4_bits = 0x2_c200;
+    let second_palette4_bits = 0x2_c300;
+    memory.map_bytes(first_palette4_bits, 4);
+    memory.write_bytes(first_palette4_bits, &[0x00, 0, 0, 0]);
+    memory.map_bytes(second_palette4_bits, 4);
+    memory.write_bytes(second_palette4_bits, &[0x10, 0, 0, 0]);
+    let first_palette4_bitmap = kernel
+        .resources
+        .create_bitmap(1, 1, 1, 4, first_palette4_bits);
+    let first_palette4 = vec![[0x00, 0x00, 0xff, 0], [0x00, 0xff, 0x00, 0]];
+    kernel
+        .resources
+        .bitmap_mut(first_palette4_bitmap)
+        .unwrap()
+        .color_table = first_palette4.clone();
+    let second_palette4_bitmap = kernel
+        .resources
+        .create_bitmap(1, 1, 1, 4, second_palette4_bits);
+    kernel
+        .resources
+        .bitmap_mut(second_palette4_bitmap)
+        .unwrap()
+        .color_table = vec![[0x00, 0x00, 0x00, 0], [0xff, 0x00, 0x00, 0]];
+
+    let palette4_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_COLOR4, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create rejected CE 4bpp palette flags: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [palette4_list, first_palette4_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(palette4_list)
+            .unwrap()
+            .color_table,
+        first_palette4
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [palette4_list, second_palette4_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let (palette4_dc, palette4_dst_bits, palette4_dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [palette4_list, 1, palette4_dc, 0, 0, 1, 1, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, palette4_dst_bits, palette4_dst_stride, 0, 0),
+        0x07e0,
+        "4bpp later indexed images in a non-DDB image list draw through the latched first palette"
+    );
+
+    let palette4_ddb_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_COLORDDB, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create rejected CE DDB flags: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [palette4_ddb_list, first_palette4_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [palette4_ddb_list, second_palette4_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let (palette4_ddb_dc, palette4_ddb_dst_bits, palette4_ddb_dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [palette4_ddb_list, 1, palette4_ddb_dc, 0, 0, 1, 1, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            palette4_ddb_dst_bits,
+            palette4_ddb_dst_stride,
+            0,
+            0
+        ),
+        0x001f,
+        "4bpp DDB image lists keep using each bitmap's own indexed color table"
     );
 
     let image_list = match table.dispatch_raw_ordinal_with_memory(
