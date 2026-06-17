@@ -21384,6 +21384,176 @@ fn coredll_raw_palette_entries_round_trip_and_select() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_palette_rejects_null_bad_and_wrong_stock_handles() -> Result<()> {
+    const BLACK_PEN: u32 = 7;
+    const WHITE_BRUSH: u32 = 0;
+    const SYSTEM_FONT: u32 = 13;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let out_ptr = 0x1_1000;
+    let log_palette_ptr = 0x1_1040;
+    memory.map_bytes(out_ptr, 4);
+    memory.map_bytes(log_palette_ptr, 8);
+    memory.write_bytes(
+        log_palette_ptr,
+        &[
+            0x00, 0x03, // palVersion 0x0300
+            0x01, 0x00, // palNumEntries
+            0x10, 0x20, 0x30, 0x00,
+        ],
+    );
+
+    let stock_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [BLACK_PEN],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(BLACK_PEN) failed: {other:?}"),
+    };
+    let stock_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [WHITE_BRUSH],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(WHITE_BRUSH) failed: {other:?}"),
+    };
+    let stock_font = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [SYSTEM_FONT],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(SYSTEM_FONT) failed: {other:?}"),
+    };
+
+    for bad_palette in [0, 0x0000_0bad, stock_pen] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_NEAREST_PALETTE_INDEX,
+                [bad_palette, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(u32::MAX),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE,
+            "GetNearestPaletteIndex bad_palette={bad_palette:#x}"
+        );
+    }
+
+    for bad_palette in [0, 0x0000_0bad, stock_font] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_PALETTE_ENTRIES,
+                [bad_palette, 0, 1, out_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE,
+            "GetPaletteEntries bad_palette={bad_palette:#x}"
+        );
+    }
+
+    for bad_palette in [0, 0x0000_0bad, stock_brush] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_PALETTE_ENTRIES,
+                [bad_palette, 0, 1, out_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE,
+            "SetPaletteEntries bad_palette={bad_palette:#x}"
+        );
+    }
+
+    let valid_palette = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PALETTE,
+        [log_palette_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePalette failed: {other:?}"),
+    };
+    assert_ne!(valid_palette, 0);
+
+    for (count, entries_ptr) in [(1, 0), (0, out_ptr)] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_PALETTE_ENTRIES,
+                [valid_palette, 0, count, entries_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER,
+            "SetPaletteEntries count={count} entries_ptr={entries_ptr:#x}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_palette_ce_256_entry_create_set_get_flow() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
