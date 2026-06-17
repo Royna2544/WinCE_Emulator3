@@ -8067,7 +8067,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_IMAGE_LIST_COPY => Some(CoredllValue::Bool(image_list_copy_raw(
-            kernel, thread_id, args,
+            kernel, memory, thread_id, args,
         ))),
         ORD_IMAGE_LIST_MERGE => Some(CoredllValue::Handle(image_list_merge_raw(
             kernel, thread_id, args,
@@ -32790,33 +32790,97 @@ fn read_bitmap_object_bytes<M: CoredllGuestMemory>(
     Some(bytes)
 }
 
-fn image_list_copy_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn image_list_copy_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
     let dst_handle = raw_arg(args, 0);
     let dst_index = raw_i32_arg(args, 1);
     let src_handle = raw_arg(args, 2);
     let src_index = raw_i32_arg(args, 3);
     let flags = raw_arg(args, 4);
-    match kernel
-        .resources
-        .copy_image_list_image(dst_handle, dst_index, src_handle, src_index, flags)
+    const ILCF_SWAP: u32 = 0x0000_0001;
+    if flags & !ILCF_SWAP != 0 || dst_index < 0 || src_index < 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if kernel.resources.image_list(dst_handle).is_none()
+        || kernel.resources.image_list(src_handle).is_none()
     {
-        Some(true) => {
-            kernel.threads.set_last_error(thread_id, 0);
-            true
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if dst_handle != src_handle {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some((width, height, dst_image, src_image)) =
+        kernel.resources.image_list(dst_handle).and_then(|list| {
+            let dst = list.images.get(dst_index as usize)?.clone();
+            let src = list.images.get(src_index as usize)?.clone();
+            Some((list.width, list.height, dst, src))
+        })
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+
+    let copied = if flags & ILCF_SWAP != 0 {
+        swap_image_list_entry_pixels(kernel, memory, &dst_image, &src_image, width, height)
+    } else {
+        copy_image_list_entry_pixels(kernel, memory, &dst_image, &src_image, width, height)
+    };
+    if !copied {
+        let dst_has_pixels = image_list_image_bitmap_handles(kernel, &dst_image).is_some();
+        let src_has_pixels = image_list_image_bitmap_handles(kernel, &src_image).is_some();
+        if !dst_has_pixels || !src_has_pixels {
+            return match kernel
+                .resources
+                .copy_image_list_image(dst_handle, dst_index, src_handle, src_index, flags)
+            {
+                Some(true) => {
+                    kernel.threads.set_last_error(thread_id, 0);
+                    true
+                }
+                Some(false) => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    false
+                }
+                None => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    false
+                }
+            };
         }
-        Some(false) => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-            false
-        }
-        None => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-            false
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if let Some(list) = kernel.resources.image_list_mut(dst_handle) {
+        if flags & ILCF_SWAP != 0 {
+            list.images[dst_index as usize].transparent_color = src_image.transparent_color;
+            list.images[src_index as usize].transparent_color = dst_image.transparent_color;
+        } else {
+            list.images[dst_index as usize].transparent_color = src_image.transparent_color;
         }
     }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn image_list_copy_dither_image_raw<M: CoredllGuestMemory>(
@@ -32917,6 +32981,100 @@ fn copy_dither_image_list_bitmap_pixels<M: CoredllGuestMemory>(
     }
 }
 
+fn copy_image_list_entry_pixels<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    dst_image: &crate::ce::resource::ImageListImage,
+    src_image: &crate::ce::resource::ImageListImage,
+    width: i32,
+    height: i32,
+) -> bool {
+    let Some((dst_bitmap_handle, dst_mask_handle)) =
+        image_list_image_bitmap_handles(kernel, dst_image)
+    else {
+        return false;
+    };
+    let Some((src_bitmap_handle, src_mask_handle)) =
+        image_list_image_bitmap_handles(kernel, src_image)
+    else {
+        return false;
+    };
+    let copied = copy_image_list_bitmap_pixels(
+        kernel,
+        memory,
+        dst_bitmap_handle,
+        dst_image.source_x,
+        dst_image.source_y,
+        src_bitmap_handle,
+        src_image.source_x,
+        src_image.source_y,
+        width,
+        height,
+    );
+    if dst_mask_handle != 0 && src_mask_handle != 0 {
+        copy_image_list_bitmap_pixels(
+            kernel,
+            memory,
+            dst_mask_handle,
+            dst_image.source_x,
+            dst_image.source_y,
+            src_mask_handle,
+            src_image.source_x,
+            src_image.source_y,
+            width,
+            height,
+        );
+    }
+    copied
+}
+
+fn swap_image_list_entry_pixels<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    dst_image: &crate::ce::resource::ImageListImage,
+    src_image: &crate::ce::resource::ImageListImage,
+    width: i32,
+    height: i32,
+) -> bool {
+    let Some((dst_bitmap_handle, dst_mask_handle)) =
+        image_list_image_bitmap_handles(kernel, dst_image)
+    else {
+        return false;
+    };
+    let Some((src_bitmap_handle, src_mask_handle)) =
+        image_list_image_bitmap_handles(kernel, src_image)
+    else {
+        return false;
+    };
+    let swapped = swap_image_list_bitmap_pixels(
+        kernel,
+        memory,
+        dst_bitmap_handle,
+        dst_image.source_x,
+        dst_image.source_y,
+        src_bitmap_handle,
+        src_image.source_x,
+        src_image.source_y,
+        width,
+        height,
+    );
+    if dst_mask_handle != 0 && src_mask_handle != 0 {
+        swap_image_list_bitmap_pixels(
+            kernel,
+            memory,
+            dst_mask_handle,
+            dst_image.source_x,
+            dst_image.source_y,
+            src_mask_handle,
+            src_image.source_x,
+            src_image.source_y,
+            width,
+            height,
+        );
+    }
+    swapped
+}
+
 fn copy_dither_image_list_mask_pixels<M: CoredllGuestMemory>(
     kernel: &CeKernel,
     memory: &mut M,
@@ -33005,19 +33163,99 @@ fn copy_image_list_bitmap_pixels<M: CoredllGuestMemory>(
     src_y: i32,
     width: i32,
     height: i32,
-) {
+) -> bool {
     if width <= 0 || height <= 0 {
-        return;
+        return false;
     }
     let Some(dst_bitmap) = kernel.resources.bitmap(dst_bitmap_handle).cloned() else {
-        return;
+        return false;
     };
     let Some(src_bitmap) = kernel.resources.bitmap(src_bitmap_handle) else {
-        return;
+        return false;
     };
     let Some(src_bytes) = read_bitmap_object_bytes(memory, src_bitmap) else {
-        return;
+        return false;
     };
+    copy_image_list_bitmap_pixels_from_snapshot(
+        memory,
+        &dst_bitmap,
+        dst_x,
+        dst_y,
+        src_bitmap,
+        &src_bytes,
+        src_x,
+        src_y,
+        width,
+        height,
+    )
+}
+
+fn swap_image_list_bitmap_pixels<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    first_bitmap_handle: u32,
+    first_x: i32,
+    first_y: i32,
+    second_bitmap_handle: u32,
+    second_x: i32,
+    second_y: i32,
+    width: i32,
+    height: i32,
+) -> bool {
+    if width <= 0 || height <= 0 {
+        return false;
+    }
+    let Some(first_bitmap) = kernel.resources.bitmap(first_bitmap_handle).cloned() else {
+        return false;
+    };
+    let Some(second_bitmap) = kernel.resources.bitmap(second_bitmap_handle).cloned() else {
+        return false;
+    };
+    let Some(first_bytes) = read_bitmap_object_bytes(memory, &first_bitmap) else {
+        return false;
+    };
+    let Some(second_bytes) = read_bitmap_object_bytes(memory, &second_bitmap) else {
+        return false;
+    };
+    let second_to_first = copy_image_list_bitmap_pixels_from_snapshot(
+        memory,
+        &first_bitmap,
+        first_x,
+        first_y,
+        &second_bitmap,
+        &second_bytes,
+        second_x,
+        second_y,
+        width,
+        height,
+    );
+    let first_to_second = copy_image_list_bitmap_pixels_from_snapshot(
+        memory,
+        &second_bitmap,
+        second_x,
+        second_y,
+        &first_bitmap,
+        &first_bytes,
+        first_x,
+        first_y,
+        width,
+        height,
+    );
+    second_to_first && first_to_second
+}
+
+fn copy_image_list_bitmap_pixels_from_snapshot<M: CoredllGuestMemory>(
+    memory: &mut M,
+    dst_bitmap: &crate::ce::resource::BitmapObject,
+    dst_x: i32,
+    dst_y: i32,
+    src_bitmap: &crate::ce::resource::BitmapObject,
+    src_bytes: &[u8],
+    src_x: i32,
+    src_y: i32,
+    width: i32,
+    height: i32,
+) -> bool {
     let clip = Rect {
         left: 0,
         top: 0,
@@ -33045,6 +33283,7 @@ fn copy_image_list_bitmap_pixels<M: CoredllGuestMemory>(
         None,
         clip,
     );
+    true
 }
 
 fn image_list_merge_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
