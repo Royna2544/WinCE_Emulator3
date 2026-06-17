@@ -2994,11 +2994,22 @@ impl UnicornMips {
         target_thread_ids: &[u32],
     ) -> bool {
         let active_thread_id = self.current_thread_id;
-        let Some(resume) = self.pop_persisted_suspended_guest_thread_matching(|thread| {
-            thread.thread_id != active_thread_id
-                && (target_thread_ids.is_empty() || target_thread_ids.contains(&thread.thread_id))
-                && Self::thread_has_visible_receiver_work(thread.thread_id, kernel)
-        }) else {
+        let Some(resume) = self
+            .pop_persisted_suspended_guest_thread_matching(|thread| {
+                thread.thread_id != active_thread_id
+                    && (target_thread_ids.is_empty()
+                        || target_thread_ids.contains(&thread.thread_id))
+                    && Self::thread_has_visible_receiver_work(thread.thread_id, kernel)
+            })
+            .or_else(|| {
+                self.pop_self_suspended_guest_thread_matching(|thread| {
+                    thread.thread_id != active_thread_id
+                        && (target_thread_ids.is_empty()
+                            || target_thread_ids.contains(&thread.thread_id))
+                        && Self::thread_has_visible_receiver_work(thread.thread_id, kernel)
+                })
+            })
+        else {
             return false;
         };
         let Some(saved) = self.saved_context.take() else {
@@ -3030,6 +3041,18 @@ impl UnicornMips {
             regs: resume.regs,
         });
         true
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn pop_self_suspended_guest_thread_matching(
+        &mut self,
+        mut predicate: impl FnMut(&SuspendedGuestThread) -> bool,
+    ) -> Option<SuspendedGuestThread> {
+        let thread_id = self
+            .self_suspended_guest_threads
+            .iter()
+            .find_map(|(thread_id, thread)| predicate(thread).then_some(*thread_id))?;
+        self.self_suspended_guest_threads.remove(&thread_id)
     }
 
     #[cfg(feature = "unicorn")]
@@ -27503,6 +27526,66 @@ mod guest_thread_stack_tests {
         assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
         assert!(scheduler.rotate_to_active_visible_receiver_thread(&kernel, &[]));
         assert_eq!(scheduler.current_thread_id, target_thread);
+
+        Ok(())
+    }
+
+    #[test]
+    fn queued_input_rotates_to_self_suspended_visible_receiver_thread() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let active_thread = 17;
+        let target_thread = 1;
+
+        scheduler.set_initial_thread_id(target_thread);
+        scheduler.current_thread_id = active_thread;
+        scheduler.running_guest_thread = Some((active_thread, 0x117));
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0019_ab64,
+            regs: MipsGuestContext::zero(),
+        });
+        let mut target_regs = MipsGuestContext::zero();
+        target_regs.regs[16] = 0x1111_0001;
+        scheduler.self_suspended_guest_threads.insert(
+            target_thread,
+            SuspendedGuestThread {
+                thread_id: target_thread,
+                thread_handle: Some(0x101),
+                regs: target_regs,
+                pc: 0x0040_2000,
+            },
+        );
+
+        let hwnd = kernel.create_window_ex_w(
+            target_thread,
+            "VISIBLE_TARGET",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_LBUTTONDOWN, 1, 0));
+
+        assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
+        assert!(scheduler.rotate_to_active_visible_receiver_thread(&kernel, &[]));
+        assert_eq!(scheduler.current_thread_id, target_thread);
+        assert_eq!(scheduler.running_guest_thread, Some((target_thread, 0x101)));
+        assert!(
+            !scheduler
+                .self_suspended_guest_threads
+                .contains_key(&target_thread)
+        );
+        assert_eq!(scheduler.saved_context.as_ref().unwrap().pc, 0x0040_2000);
+        assert_eq!(
+            scheduler.saved_context.as_ref().unwrap().regs.regs[16],
+            0x1111_0001
+        );
+        assert_eq!(
+            scheduler.suspended_guest_thread.as_ref().unwrap().thread_id,
+            active_thread
+        );
 
         Ok(())
     }
