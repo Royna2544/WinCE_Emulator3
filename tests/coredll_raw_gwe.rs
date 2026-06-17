@@ -49560,7 +49560,9 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
 
 #[test]
 fn coredll_raw_draw_text_w_end_ellipsis_replaces_clipped_tail() -> Result<()> {
+    const DT_SINGLELINE: u32 = 0x0020;
     const DT_END_ELLIPSIS: u32 = 0x0000_8000;
+    const DT_WORD_ELLIPSIS: u32 = 0x0004_0000;
     const TRANSPARENT: u32 = 1;
 
     let table = CoredllExportTable::default();
@@ -49569,7 +49571,7 @@ fn coredll_raw_draw_text_w_end_ellipsis_replaces_clipped_tail() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 171_u32;
     let (dc, bits_ptr, stride) =
-        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 64, 32);
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 64, 80);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -49649,6 +49651,75 @@ fn coredll_raw_draw_text_w_end_ellipsis_replaces_clipped_tail() -> Result<()> {
         band_pixels(&memory, 0),
         band_pixels(&memory, 16),
         "DT_END_ELLIPSIS should replace the clipped tail with a fitting ellipsis"
+    );
+    write_rect(&mut memory, 32);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_long, (-1i32) as u32, rect_ptr, DT_WORD_ELLIPSIS],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        band_pixels(&memory, 0),
+        band_pixels(&memory, 32),
+        "CE DrawTextEllipsisTest expects DT_WORD_ELLIPSIS to match DT_END_ELLIPSIS"
+    );
+    write_rect(&mut memory, 48);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [
+                dc,
+                text_long,
+                (-1i32) as u32,
+                rect_ptr,
+                DT_WORD_ELLIPSIS | DT_SINGLELINE
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        band_pixels(&memory, 0),
+        band_pixels(&memory, 48),
+        "CE DrawTextEllipsisTest expects DT_WORD_ELLIPSIS|DT_SINGLELINE to match DT_END_ELLIPSIS"
+    );
+    write_rect(&mut memory, 64);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [
+                dc,
+                text_long,
+                (-1i32) as u32,
+                rect_ptr,
+                DT_END_ELLIPSIS | DT_WORD_ELLIPSIS
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        band_pixels(&memory, 0),
+        band_pixels(&memory, 64),
+        "combined DrawText ellipsis flags should keep the CE-compatible clipped tail rendering"
     );
 
     Ok(())
