@@ -3370,7 +3370,6 @@ impl UnicornMips {
             .parked_child_processes
             .borrow_mut()
             .drain(..)
-            .filter(|process| process.process_state.process_id != kernel.current_process_id())
             .collect();
         self.current_thread_id = *state.current_thread_id.borrow();
         self.pending_guest_thread_returns = state
@@ -3482,11 +3481,12 @@ impl UnicornMips {
             active_thread_ids.push(current_thread_id);
         }
         self.parked_child_processes.retain(|process| {
-            !Self::parked_process_matches_active(
+            let matches_active = Self::parked_process_matches_active(
                 process,
                 active_state.process_id,
                 &active_thread_ids,
-            ) && process.thread_id != current_thread_id
+            ) || process.thread_id == current_thread_id;
+            !matches_active || Self::active_matching_parked_process_should_remain(process)
         });
     }
 
@@ -3596,7 +3596,9 @@ impl UnicornMips {
                 }
                 continue;
             }
-            if !self.parked_process_matches_current_active(&process, kernel) {
+            if !self.parked_process_matches_current_active(&process, kernel)
+                || Self::active_matching_parked_process_should_remain(&process)
+            {
                 kept.push_back(process);
             }
         }
@@ -27116,6 +27118,57 @@ mod guest_thread_stack_tests {
 
         assert_eq!(active.parked_child_processes.len(), 1);
         assert_eq!(active.parked_child_processes[0].thread_id, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn prune_active_process_keeps_active_matching_modal_thread() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let thread_id = 3;
+        let mut memory = ModalTestMemory::default();
+        let text_ptr = 0x2000;
+        let caption_ptr = 0x2100;
+        memory.write_wide_z(text_ptr, "Route search failed");
+        memory.write_wide_z(caption_ptr, "iNavi");
+
+        let mut active = UnicornMips::new()?;
+        active.set_initial_thread_id(thread_id);
+        active.current_thread_id = thread_id;
+        let mut modal_cpu = UnicornMips::new()?;
+        modal_cpu.set_initial_thread_id(thread_id);
+        modal_cpu.current_thread_id = thread_id;
+        let modal_state = crate::ce::coredll::message_box_w_prepare(
+            &mut kernel,
+            &memory,
+            None,
+            None,
+            thread_id,
+            &[0, text_ptr, caption_ptr, 0],
+        )
+        .map_err(|result| Error::Backend(format!("prepare MessageBoxW returned {result}")))?;
+        modal_cpu.blocked_modal_message_box = Some(BlockedModalMessageBox {
+            wait_id: 1,
+            thread_id,
+            thread_handle: 0x200,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            modal_state,
+        });
+        active
+            .parked_child_processes
+            .push_back(parked_process_for_cpu(thread_id, modal_cpu));
+
+        active.prune_active_process_from_parked(&kernel);
+
+        assert_eq!(active.parked_child_processes.len(), 1);
+        assert_eq!(active.parked_child_processes[0].thread_id, thread_id);
 
         Ok(())
     }
