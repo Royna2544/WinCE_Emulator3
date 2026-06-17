@@ -12134,7 +12134,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         }
     ));
     let drag = kernel.resources.image_list_drag().unwrap();
-    assert_eq!(drag.image_list, image_list);
+    let drag_image_list = drag.image_list;
+    assert_ne!(drag_image_list, image_list);
+    assert_eq!(
+        kernel.resources.image_list_count(drag_image_list),
+        Some(1),
+        "CE BeginDrag exposes a one-image internal drag list"
+    );
     assert_eq!(drag.index, 0);
     assert_eq!(drag.hotspot_x, 2);
     assert_eq!(drag.hotspot_y, 3);
@@ -12158,7 +12164,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     );
     let drag = kernel.resources.image_list_drag().unwrap();
     assert_eq!(
-        drag.image_list, image_list,
+        drag.image_list, drag_image_list,
         "CE BeginDrag ignores a second active drag instead of replacing the current drag image"
     );
     assert_eq!(drag.index, 0);
@@ -12188,7 +12194,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),
             ..
-        } if handle == image_list
+        } if handle == drag_image_list
     ));
     assert_eq!(memory.read_i32(drag_point_ptr)?, drag_point_before_begin.0);
     assert_eq!(
@@ -12262,6 +12268,14 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
+    let merged_drag_image_list = kernel.resources.image_list_drag().unwrap().image_list;
+    assert_ne!(merged_drag_image_list, drag_image_list);
+    assert_ne!(merged_drag_image_list, duplicate);
+    assert_eq!(
+        kernel.resources.image_list_count(merged_drag_image_list),
+        Some(2),
+        "CE SetDragCursorImage merges the dither drag image and cursor image into a transient drag list"
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -12273,12 +12287,12 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),
             ..
-        } if handle == duplicate
+        } if handle == merged_drag_image_list
     ));
     assert_eq!(memory.read_i32(drag_point_ptr)?, 20);
     assert_eq!(memory.read_i32(drag_point_ptr + 4)?, 21);
-    assert_eq!(memory.read_i32(drag_hotspot_ptr)?, 4);
-    assert_eq!(memory.read_i32(drag_hotspot_ptr + 4)?, 5);
+    assert_eq!(memory.read_i32(drag_hotspot_ptr)?, 2);
+    assert_eq!(memory.read_i32(drag_hotspot_ptr + 4)?, 3);
     assert!(!kernel.resources.image_list_drag().unwrap().visible);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -12308,6 +12322,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         }
     ));
     assert!(kernel.resources.image_list_drag().is_none());
+    assert!(kernel.resources.image_list(drag_image_list).is_none());
+    assert!(
+        kernel
+            .resources
+            .image_list(merged_drag_image_list)
+            .is_none()
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

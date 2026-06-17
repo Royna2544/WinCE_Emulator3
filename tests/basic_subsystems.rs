@@ -5977,6 +5977,9 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
     // Valid.
     assert_eq!(res.begin_image_list_drag(src, 0, 3, 4), Some(true));
     let drag = res.image_list_drag().unwrap();
+    let drag_list = drag.image_list;
+    assert_ne!(drag_list, src);
+    assert_eq!(res.image_list_count(drag_list), Some(1));
     assert_eq!(drag.hotspot_x, 3);
     assert_eq!(drag.hotspot_y, 4);
     assert!(!drag.visible);
@@ -6001,6 +6004,7 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
 
     assert!(res.end_image_list_drag());
     assert!(res.image_list_drag().is_none());
+    assert!(res.image_list(drag_list).is_none());
     // Second end returns false.
     assert!(!res.end_image_list_drag());
 }
@@ -6828,11 +6832,15 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
     assert!(res.image_list_drag().is_none());
     // Start drag first.
     res.begin_image_list_drag(il_cur, 0, 1, 1);
-    // Now set_image_list_drag_cursor updates the drag state.
+    let drag_image = res.image_list_drag().unwrap().image_list;
+    // Now set_image_list_drag_cursor merges a cursor image while preserving
+    // the original drag hotspot.
     assert_eq!(res.set_image_list_drag_cursor(il_cur, 0, 7, 8), Some(true));
     let drag = res.image_list_drag().unwrap();
-    assert_eq!(drag.hotspot_x, 7);
-    assert_eq!(drag.hotspot_y, 8);
+    assert_ne!(drag.image_list, drag_image);
+    assert_eq!(res.image_list_count(drag.image_list), Some(2));
+    assert_eq!(drag.hotspot_x, 1);
+    assert_eq!(drag.hotspot_y, 1);
     res.end_image_list_drag();
 
     // image_list_icon: returns icon field if set; else synthesizes from bitmap.
@@ -10530,7 +10538,9 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     // begin_image_list_drag valid.
     assert_eq!(res.begin_image_list_drag(drag_il, 0, 4, 4), Some(true));
     let drag = res.image_list_drag().unwrap();
-    assert_eq!(drag.image_list, drag_il);
+    let drag_list = drag.image_list;
+    assert_ne!(drag_list, drag_il);
+    assert_eq!(res.image_list_count(drag_list), Some(1));
     assert_eq!(drag.hotspot_x, 4);
     assert!(!drag.visible);
     assert_eq!(res.begin_image_list_drag(drag_il, 0, 9, 9), Some(false));
@@ -10539,7 +10549,7 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
         drag.hotspot_x, 4,
         "CE BeginDrag rejects an active drag without replacing its hotspot"
     );
-    assert_eq!(drag.image_list, drag_il);
+    assert_eq!(drag.image_list, drag_list);
     assert!(res.image_list_drag_move(7, 8));
     assert_eq!(res.image_list_drag().unwrap().x, point_before_begin.0);
     assert_eq!(res.image_list_drag_position(), point_before_begin);
@@ -10567,7 +10577,15 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert!(!res.image_list_drag().unwrap().visible);
     // set_image_list_drag_cursor with valid index updates drag state.
     assert_eq!(res.set_image_list_drag_cursor(drag_il, 0, 6, 7), Some(true));
-    assert_eq!(res.image_list_drag().unwrap().hotspot_x, 6);
+    let merged_drag_list = res.image_list_drag().unwrap().image_list;
+    assert_ne!(merged_drag_list, drag_list);
+    assert_ne!(merged_drag_list, drag_il);
+    assert_eq!(res.image_list_count(merged_drag_list), Some(2));
+    assert_eq!(
+        res.image_list_drag().unwrap().hotspot_x,
+        4,
+        "CE SetDragCursorImage merges a cursor image without replacing the drag hotspot"
+    );
     // set_image_list_drag_cursor with bad index → Some(false).
     assert_eq!(
         res.set_image_list_drag_cursor(drag_il, 99, 0, 0),
@@ -10576,6 +10594,8 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     // end drag.
     assert!(res.end_image_list_drag());
     assert!(res.image_list_drag().is_none());
+    assert!(res.image_list(drag_list).is_none());
+    assert!(res.image_list(merged_drag_list).is_none());
     // second end → false.
     assert!(!res.end_image_list_drag());
 

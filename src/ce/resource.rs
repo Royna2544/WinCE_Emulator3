@@ -478,6 +478,8 @@ pub struct ResourceSystem {
     image_list_drag_hotspot_x: i32,
     image_list_drag_hotspot_y: i32,
     image_list_drag_lock_hwnd: u32,
+    image_list_drag_dither: u32,
+    image_list_drag_merged: u32,
 }
 
 impl Default for ResourceSystem {
@@ -511,6 +513,8 @@ impl Default for ResourceSystem {
             image_list_drag_hotspot_x: 0,
             image_list_drag_hotspot_y: 0,
             image_list_drag_lock_hwnd: 0,
+            image_list_drag_dither: 0,
+            image_list_drag_merged: 0,
         }
     }
 }
@@ -1405,6 +1409,8 @@ impl ResourceSystem {
                 .is_some_and(|drag| drag.image_list == handle)
         {
             self.image_list_drag = None;
+            self.image_list_drag_dither = 0;
+            self.image_list_drag_merged = 0;
         }
         removed
     }
@@ -1943,11 +1949,14 @@ impl ResourceSystem {
         if !self.image_list_has_index(handle, index) {
             return Some(false);
         }
+        let drag_list = self.create_image_list_drag_clone(handle, index)?;
         self.image_list_drag_hotspot_x = hotspot_x;
         self.image_list_drag_hotspot_y = hotspot_y;
+        self.image_list_drag_dither = drag_list;
+        self.image_list_drag_merged = 0;
         self.image_list_drag = Some(ImageListDragState {
-            image_list: handle,
-            index,
+            image_list: drag_list,
+            index: 0,
             hotspot_x,
             hotspot_y,
             lock_hwnd: self.image_list_drag_lock_hwnd,
@@ -1972,11 +1981,19 @@ impl ResourceSystem {
         if !self.image_list_has_index(handle, index) {
             return Some(false);
         }
+        let dither = self.image_list_drag_dither;
+        if dither == 0 || !self.image_lists.contains_key(&dither) {
+            return Some(false);
+        }
+        let merged =
+            self.merge_image_list_images(dither, 0, handle, index, hotspot_x, hotspot_y)?;
+        if self.image_list_drag_merged != 0 {
+            self.image_lists.remove(&self.image_list_drag_merged);
+        }
+        self.image_list_drag_merged = merged;
         let drag = self.image_list_drag.as_mut()?;
-        drag.image_list = handle;
-        drag.index = index;
-        drag.hotspot_x = hotspot_x;
-        drag.hotspot_y = hotspot_y;
+        drag.image_list = merged;
+        drag.index = 0;
         Some(true)
     }
 
@@ -2029,7 +2046,18 @@ impl ResourceSystem {
     }
 
     pub fn end_image_list_drag(&mut self) -> bool {
-        self.image_list_drag.take().is_some()
+        if self.image_list_drag.take().is_none() {
+            return false;
+        }
+        if self.image_list_drag_merged != 0 {
+            self.image_lists.remove(&self.image_list_drag_merged);
+        }
+        if self.image_list_drag_dither != 0 {
+            self.image_lists.remove(&self.image_list_drag_dither);
+        }
+        self.image_list_drag_merged = 0;
+        self.image_list_drag_dither = 0;
+        true
     }
 
     pub fn image_list_drag(&self) -> Option<ImageListDragState> {
@@ -2053,6 +2081,32 @@ impl ResourceSystem {
                 .image_lists
                 .get(&handle)
                 .is_some_and(|list| (index as usize) < list.images.len())
+    }
+
+    fn create_image_list_drag_clone(&mut self, handle: u32, index: i32) -> Option<u32> {
+        const ILC_SHARED: u32 = 0x0100;
+        let source = self.image_lists.get(&handle)?;
+        let image = source.images.get(index as usize)?.clone();
+        let new_handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.image_lists.insert(
+            new_handle,
+            ImageListObject {
+                handle: new_handle,
+                width: source.width,
+                height: source.height,
+                flags: source.flags | ILC_SHARED,
+                grow: 0,
+                bk_color: source.bk_color,
+                color_table: source.color_table.clone(),
+                colors_set: source.colors_set,
+                images: vec![image],
+                overlays: BTreeMap::new(),
+                last_draw: None,
+                last_dither_copy: None,
+            },
+        );
+        Some(new_handle)
     }
 
     pub fn create_font(
