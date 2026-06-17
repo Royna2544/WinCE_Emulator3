@@ -8082,25 +8082,42 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_IMAGE_LIST_DRAG_ENTER => Some(CoredllValue::Bool(image_list_drag_enter_raw(
-            kernel, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_IMAGE_LIST_DRAG_LEAVE => Some(CoredllValue::Bool(image_list_drag_leave_raw(
-            kernel, thread_id, args,
+            kernel,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_IMAGE_LIST_DRAG_MOVE => Some(CoredllValue::Bool(image_list_drag_move_raw(
-            kernel, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK => Some(CoredllValue::Bool(image_list_drag_show_raw(
-            kernel, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_IMAGE_LIST_END_DRAG => Some(CoredllValue::Bool(image_list_end_drag_raw(
-            kernel, thread_id,
+            kernel,
+            framebuffer,
+            thread_id,
         ))),
         ORD_IMAGE_LIST_GET_DRAG_IMAGE => Some(CoredllValue::Handle(image_list_get_drag_image_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE => Some(CoredllValue::Bool(
-            image_list_set_drag_cursor_raw(kernel, memory, thread_id, args),
+            image_list_set_drag_cursor_raw(kernel, memory, framebuffer, thread_id, args),
         )),
         ORD_IMAGE_LIST_SET_OVERLAY_IMAGE => Some(CoredllValue::Bool(
             image_list_set_overlay_image_raw(kernel, memory, thread_id, args),
@@ -33398,6 +33415,7 @@ fn image_list_begin_drag_raw<M: CoredllGuestMemory>(
 fn image_list_set_drag_cursor_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
@@ -33405,6 +33423,7 @@ fn image_list_set_drag_cursor_raw<M: CoredllGuestMemory>(
     let index = raw_i32_arg(args, 1);
     let hotspot_x = raw_i32_arg(args, 2);
     let hotspot_y = raw_i32_arg(args, 3);
+    let mut framebuffer = framebuffer;
     let old_internal_owned_bitmaps: Vec<(u32, Vec<u32>)> = kernel
         .resources
         .image_list_drag_internal_handles()
@@ -33431,7 +33450,17 @@ fn image_list_set_drag_cursor_raw<M: CoredllGuestMemory>(
     };
     match result {
         Some(true) => {
+            let is_visible = kernel
+                .resources
+                .image_list_drag()
+                .is_some_and(|drag| drag.visible);
+            if is_visible {
+                image_list_drag_restore_framebuffer(kernel, &mut framebuffer);
+            }
             delete_removed_image_list_drag_owned_bitmaps(kernel, old_internal_owned_bitmaps);
+            if is_visible {
+                image_list_drag_render_framebuffer(kernel, memory, &mut framebuffer);
+            }
             kernel.threads.set_last_error(thread_id, 0);
             true
         }
@@ -33608,12 +33637,113 @@ fn delete_removed_image_list_drag_owned_bitmaps(
     }
 }
 
-fn image_list_drag_enter_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn image_list_drag_restore_framebuffer(
+    kernel: &mut CeKernel,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+) {
+    let Some(backing_store) = kernel.resources.take_image_list_drag_backing_store() else {
+        return;
+    };
+    let Some(framebuffer) = framebuffer.as_deref_mut() else {
+        return;
+    };
+    restore_framebuffer_rect(
+        framebuffer,
+        &FramebufferBackingStore {
+            rect: backing_store.rect,
+            row_stride: backing_store.row_stride,
+            pixels: backing_store.pixels,
+        },
+    );
+}
+
+fn image_list_drag_draw_params(kernel: &CeKernel) -> Option<(ImageListDraw, Rect)> {
+    const ILD_BLEND50: u32 = 0x0004;
+    let drag = kernel.resources.image_list_drag()?;
+    if !drag.visible {
+        return None;
+    }
+    let list = kernel.resources.image_list(drag.image_list)?;
+    let hwnd = if drag.lock_hwnd != 0 {
+        drag.lock_hwnd
+    } else {
+        kernel.gwe.get_desktop_window()
+    };
+    let origin = kernel
+        .gwe
+        .client_to_screen(hwnd, Point { x: 0, y: 0 })
+        .unwrap_or(Point { x: 0, y: 0 });
+    let client_rect = Rect::from_origin_size(
+        drag.x.saturating_sub(drag.hotspot_x),
+        drag.y.saturating_sub(drag.hotspot_y),
+        list.width,
+        list.height,
+    );
+    let screen_rect = client_rect.offset(origin.x, origin.y);
+    Some((
+        normalize_image_list_draw(
+            kernel,
+            ImageListDraw {
+                image_list: drag.image_list,
+                index: drag.index,
+                hdc: paint_hdc_for_hwnd(hwnd),
+                x: client_rect.left,
+                y: client_rect.top,
+                width: list.width,
+                height: list.height,
+                flags: ILD_BLEND50,
+                overlay_image: None,
+                rgb_fg: CLR_NONE,
+                rgb_bk: CLR_NONE,
+                x_bitmap: 0,
+                y_bitmap: 0,
+                rop: 0,
+            },
+        ),
+        screen_rect,
+    ))
+}
+
+fn image_list_drag_render_framebuffer<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+) {
+    let Some(framebuffer) = framebuffer.as_deref_mut() else {
+        kernel.resources.set_image_list_drag_backing_store(None);
+        return;
+    };
+    let Some((draw, screen_rect)) = image_list_drag_draw_params(kernel) else {
+        kernel.resources.set_image_list_drag_backing_store(None);
+        return;
+    };
+    let backing_store = capture_framebuffer_rect(&*framebuffer, screen_rect).map(|backing_store| {
+        crate::ce::resource::ImageListDragBackingStore {
+            rect: backing_store.rect,
+            row_stride: backing_store.row_stride,
+            pixels: backing_store.pixels,
+        }
+    });
+    kernel
+        .resources
+        .set_image_list_drag_backing_store(backing_store);
+    render_image_list_draw_framebuffer(kernel, memory, Some(framebuffer), draw);
+}
+
+fn image_list_drag_enter_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let mut framebuffer = framebuffer;
     if kernel.resources.image_list_drag_enter(
         raw_arg(args, 0),
         raw_i32_arg(args, 1),
         raw_i32_arg(args, 2),
     ) {
+        image_list_drag_render_framebuffer(kernel, memory, &mut framebuffer);
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -33624,11 +33754,28 @@ fn image_list_drag_enter_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]
     }
 }
 
-fn image_list_drag_move_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn image_list_drag_move_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let was_visible = kernel
+        .resources
+        .image_list_drag()
+        .is_some_and(|drag| drag.visible);
+    let mut framebuffer = framebuffer;
+    if was_visible {
+        image_list_drag_restore_framebuffer(kernel, &mut framebuffer);
+    }
     if kernel
         .resources
         .image_list_drag_move(raw_i32_arg(args, 0), raw_i32_arg(args, 1))
     {
+        if was_visible {
+            image_list_drag_render_framebuffer(kernel, memory, &mut framebuffer);
+        }
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -33639,8 +33786,18 @@ fn image_list_drag_move_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32])
     }
 }
 
-fn image_list_drag_leave_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
-    if kernel.resources.image_list_drag_leave(raw_arg(args, 0)) {
+fn image_list_drag_leave_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let mut framebuffer = framebuffer;
+    let hwnd = raw_arg(args, 0);
+    if kernel.resources.image_list_drag_lock_hwnd() == hwnd {
+        image_list_drag_restore_framebuffer(kernel, &mut framebuffer);
+    }
+    if kernel.resources.image_list_drag_leave(hwnd) {
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -33651,8 +33808,26 @@ fn image_list_drag_leave_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]
     }
 }
 
-fn image_list_drag_show_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
-    if kernel.resources.image_list_drag_show(raw_arg(args, 0) != 0) {
+fn image_list_drag_show_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let visible = raw_arg(args, 0) != 0;
+    let was_visible = kernel
+        .resources
+        .image_list_drag()
+        .is_some_and(|drag| drag.visible);
+    let mut framebuffer = framebuffer;
+    if was_visible && !visible {
+        image_list_drag_restore_framebuffer(kernel, &mut framebuffer);
+    }
+    if kernel.resources.image_list_drag_show(visible) {
+        if visible && !was_visible {
+            image_list_drag_render_framebuffer(kernel, memory, &mut framebuffer);
+        }
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -33663,7 +33838,13 @@ fn image_list_drag_show_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32])
     }
 }
 
-fn image_list_end_drag_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+fn image_list_end_drag_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+) -> bool {
+    let mut framebuffer = framebuffer;
+    image_list_drag_restore_framebuffer(kernel, &mut framebuffer);
     let owned_bitmaps: Vec<u32> = kernel
         .resources
         .image_list_drag_internal_handles()

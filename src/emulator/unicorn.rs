@@ -2479,18 +2479,20 @@ impl UnicornMips {
                         || (nested_stack_candidate
                             && (send_message_without_restore || {
                                 let pending_module =
-                                    mapped_blob_module_for_pc(mapped_blobs, pending.wndproc);
+                                    mapped_blob_module_index_for_pc(mapped_blobs, pending.wndproc);
                                 let same_wndproc_module =
-                                    pending_module.as_ref().is_none_or(|module| {
+                                    pending_module.is_none_or(|module_index| {
                                         let mut frame_modules =
                                             [pc, ra].into_iter().filter_map(|addr| {
-                                                mapped_blob_module_for_pc(mapped_blobs, addr)
+                                                mapped_blob_module_index_for_pc(mapped_blobs, addr)
                                             });
                                         let mut saw_mapped_frame = false;
-                                        let same = frame_modules.any(|frame_module| {
+                                        let same = frame_modules.any(|frame_index| {
                                             saw_mapped_frame = true;
-                                            &frame_module == module
-                                                || frame_module.starts_with("image:")
+                                            frame_index == module_index
+                                                || mapped_blobs.get(frame_index).is_some_and(
+                                                    |blob| blob.name.starts_with("image:"),
+                                                )
                                         });
                                         same || !saw_mapped_frame
                                     });
@@ -12076,8 +12078,8 @@ fn compact_mapped_blob_name(name: &str) -> String {
 }
 
 #[cfg(feature = "unicorn")]
-fn mapped_blob_module_for_pc(mapped_blobs: &[MappedBlob], pc: u32) -> Option<String> {
-    for blob in mapped_blobs {
+fn mapped_blob_module_index_for_pc(mapped_blobs: &[MappedBlob], pc: u32) -> Option<usize> {
+    for (index, blob) in mapped_blobs.iter().enumerate() {
         if !(blob.name.starts_with("image:") || blob.name.starts_with("dll:")) {
             continue;
         }
@@ -12085,10 +12087,17 @@ fn mapped_blob_module_for_pc(mapped_blobs: &[MappedBlob], pc: u32) -> Option<Str
             continue;
         };
         if offset < blob.bytes.len() as u32 {
-            return Some(compact_mapped_blob_name(&blob.name));
+            return Some(index);
         }
     }
     None
+}
+
+#[cfg(feature = "unicorn")]
+fn mapped_blob_module_for_pc(mapped_blobs: &[MappedBlob], pc: u32) -> Option<String> {
+    mapped_blob_module_index_for_pc(mapped_blobs, pc)
+        .and_then(|index| mapped_blobs.get(index))
+        .map(|blob| compact_mapped_blob_name(&blob.name))
 }
 
 fn write_call_target_import(

@@ -355,6 +355,13 @@ pub struct ImageListDragState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageListDragBackingStore {
+    pub rect: Rect,
+    pub row_stride: usize,
+    pub pixels: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FontObject {
     pub handle: u32,
     pub logfont_ptr: u32,
@@ -480,6 +487,7 @@ pub struct ResourceSystem {
     image_list_drag_lock_hwnd: u32,
     image_list_drag_dither: u32,
     image_list_drag_merged: u32,
+    image_list_drag_backing_store: Option<ImageListDragBackingStore>,
 }
 
 impl Default for ResourceSystem {
@@ -515,6 +523,7 @@ impl Default for ResourceSystem {
             image_list_drag_lock_hwnd: 0,
             image_list_drag_dither: 0,
             image_list_drag_merged: 0,
+            image_list_drag_backing_store: None,
         }
     }
 }
@@ -1420,6 +1429,7 @@ impl ResourceSystem {
             self.image_list_drag = None;
             self.image_list_drag_dither = 0;
             self.image_list_drag_merged = 0;
+            self.image_list_drag_backing_store = None;
         }
         removed
     }
@@ -1963,6 +1973,7 @@ impl ResourceSystem {
         self.image_list_drag_hotspot_y = hotspot_y;
         self.image_list_drag_dither = drag_list;
         self.image_list_drag_merged = 0;
+        self.image_list_drag_backing_store = None;
         self.image_list_drag = Some(ImageListDragState {
             image_list: drag_list,
             index: 0,
@@ -1994,6 +2005,7 @@ impl ResourceSystem {
         self.image_list_drag_hotspot_y = hotspot_y;
         self.image_list_drag_dither = drag_list;
         self.image_list_drag_merged = 0;
+        self.image_list_drag_backing_store = None;
         self.image_list_drag = Some(ImageListDragState {
             image_list: drag_list,
             index: 0,
@@ -2131,6 +2143,7 @@ impl ResourceSystem {
         }
         self.image_list_drag_merged = 0;
         self.image_list_drag_dither = 0;
+        self.image_list_drag_backing_store = None;
         true
     }
 
@@ -2154,6 +2167,21 @@ impl ResourceSystem {
 
     pub fn image_list_drag(&self) -> Option<ImageListDragState> {
         self.image_list_drag
+    }
+
+    pub fn image_list_drag_lock_hwnd(&self) -> u32 {
+        self.image_list_drag_lock_hwnd
+    }
+
+    pub fn set_image_list_drag_backing_store(
+        &mut self,
+        backing_store: Option<ImageListDragBackingStore>,
+    ) {
+        self.image_list_drag_backing_store = backing_store;
+    }
+
+    pub fn take_image_list_drag_backing_store(&mut self) -> Option<ImageListDragBackingStore> {
+        self.image_list_drag_backing_store.take()
     }
 
     pub fn image_list_drag_position(&self) -> (i32, i32) {

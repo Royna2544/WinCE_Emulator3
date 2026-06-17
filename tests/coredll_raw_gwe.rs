@@ -55,12 +55,14 @@ use wince_emulation_v3::{
             ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT, ORD_GET_WINDOW_THREAD_PROCESS_ID,
             ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL, ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD,
             ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
-            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAW,
-            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_END_DRAG,
-            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO,
-            ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
-            ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
-            ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
+            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
+            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
+            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
+            ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMM_ASSOCIATE_CONTEXT,
+            ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC, ORD_IMM_DESTROY_CONTEXT,
+            ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
             ORD_IMM_ENUM_REGISTER_WORD_W, ORD_IMM_ESCAPE_W, ORD_IMM_GENERATE_MESSAGE,
             ORD_IMM_GET_CANDIDATE_LIST_COUNT_W, ORD_IMM_GET_CANDIDATE_LIST_W,
             ORD_IMM_GET_CANDIDATE_WINDOW, ORD_IMM_GET_COMPOSITION_FONT_W,
@@ -50865,6 +50867,193 @@ fn coredll_raw_image_list_set_drag_cursor_composes_masked_negative_offset() -> R
         }
     ));
     assert!(kernel.resources.image_list(drag_list).is_none());
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_image_list_drag_restores_framebuffer_between_moves() -> Result<()> {
+    const ILC_COLOR16: u32 = 0x0010;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let mut framebuffer = VirtualFramebuffer::new(8, 8, PixelFormat::Rgb565)?;
+    framebuffer.pixels_mut().fill(0xff);
+    let _ = framebuffer.take_dirty_rects();
+    let thread_id = 178_u32;
+
+    let (bitmap, bits, stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    for y in 0..2 {
+        for x in 0..2 {
+            memory.write_u16(bits + y * stride + x * 2, 0xf800)?;
+        }
+    }
+
+    let list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_COLOR16, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create returned unexpected result: {other:?}"),
+    };
+    assert_ne!(list, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [list, bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_BEGIN_DRAG,
+            [list, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let desktop = kernel.gwe.get_desktop_window();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_ENTER,
+            [desktop, 2, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_ne!(
+        framebuffer_rgb565_at(&framebuffer, 2, 2),
+        0xffff,
+        "DragEnter should capture the background and draw the drag image"
+    );
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 4, 3), 0xffff);
+
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_MOVE,
+            [4, 3],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        framebuffer_rgb565_at(&framebuffer, 2, 2),
+        0xffff,
+        "DragMove should restore the old saved screen rectangle"
+    );
+    assert_ne!(
+        framebuffer_rgb565_at(&framebuffer, 4, 3),
+        0xffff,
+        "DragMove should draw the drag image at the new screen rectangle"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        framebuffer_rgb565_at(&framebuffer, 4, 3),
+        0xffff,
+        "DragShowNolock(FALSE) should restore the saved screen rectangle"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
+            [1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_ne!(
+        framebuffer_rgb565_at(&framebuffer, 4, 3),
+        0xffff,
+        "DragShowNolock(TRUE) should recapture and redraw the drag image"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_LEAVE,
+            [desktop],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        framebuffer_rgb565_at(&framebuffer, 4, 3),
+        0xffff,
+        "DragLeave should hide the drag image and restore the background"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_END_DRAG,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
 
     Ok(())
 }
