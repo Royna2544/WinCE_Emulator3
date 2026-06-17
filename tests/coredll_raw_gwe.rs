@@ -10697,6 +10697,65 @@ fn coredll_raw_mask_blt_allows_null_source_for_source_free_rop4() -> Result<()> 
 }
 
 #[test]
+fn coredll_raw_mask_blt_null_mask_uses_foreground_rop_with_bad_source() -> Result<()> {
+    const BLACKNESS: u32 = 0x0000_0042;
+    const SRCCOPY: u32 = 0x00cc_0020;
+    fn makerop4(foreground: u32, background: u32) -> u32 {
+        foreground | ((background << 8) & 0xff00_0000)
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+
+    for y in 0..4 {
+        for x in 0..4 {
+            write_rgb565(&mut memory, dst_bits, dst_stride, x, y, 0xffff);
+        }
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MASK_BLT,
+            [
+                dst_dc,
+                0,
+                0,
+                4,
+                4,
+                0x1234_5678,
+                0,
+                0,
+                0,
+                0,
+                0,
+                makerop4(BLACKNESS, SRCCOPY),
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    for y in 0..4 {
+        for x in 0..4 {
+            assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, x, y), 0x0000);
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_mask_blt_copies_selected_dib_through_1bpp_mask() -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
     const DSTCOPY: u32 = 0x00aa_0000;

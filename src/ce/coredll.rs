@@ -43653,7 +43653,12 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    let source_needed = mask_blt_rop4_needs_source(rop4);
+    let foreground_rop = mask_blt_rop3(rop4, true);
+    let source_needed = if mask_handle == 0 {
+        bitmap_rop_needs_source(Some(foreground_rop))
+    } else {
+        mask_blt_rop4_needs_source(rop4)
+    };
     if source_needed && !is_valid_hdc(kernel, src) {
         kernel
             .threads
@@ -43693,6 +43698,25 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
+    }
+    if mask_handle == 0 {
+        return bit_blt_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            &[
+                dst,
+                dst_x as u32,
+                dst_y as u32,
+                width as u32,
+                height as u32,
+                src,
+                src_x as u32,
+                src_y as u32,
+                foreground_rop,
+            ],
+        );
     }
     let copy_all = source_needed
         && (mask_handle == 0 || rop4 == SRCCOPY || rop4 == makerop4(SRCCOPY, SRCCOPY));
