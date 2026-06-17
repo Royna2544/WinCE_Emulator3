@@ -49657,6 +49657,7 @@ fn coredll_raw_draw_text_w_end_ellipsis_replaces_clipped_tail() -> Result<()> {
 #[test]
 fn coredll_raw_draw_text_w_expand_tabs_uses_default_tab_stops() -> Result<()> {
     const DT_EXPANDTABS: u32 = 0x0040;
+    const DT_TABSTOP: u32 = 0x0080;
     const TRANSPARENT: u32 = 1;
 
     let table = CoredllExportTable::default();
@@ -49665,7 +49666,7 @@ fn coredll_raw_draw_text_w_expand_tabs_uses_default_tab_stops() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 172_u32;
     let (dc, bits_ptr, stride) =
-        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 96, 48);
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 96, 64);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -49713,6 +49714,11 @@ fn coredll_raw_draw_text_w_expand_tabs_uses_default_tab_stops() -> Result<()> {
         (y0..y0 + 16)
             .flat_map(|y| (0..96).map(move |x| rgb565_at(memory, bits_ptr, stride, x, y)))
             .collect()
+    };
+    let rightmost_painted_x = |memory: &TestGuestMemory, y0: u32| -> Option<u32> {
+        (0..96)
+            .rev()
+            .find(|x| (y0..y0 + 16).any(|y| rgb565_at(memory, bits_ptr, stride, *x, y) != 0))
     };
 
     write_rect(&mut memory, 0);
@@ -49766,6 +49772,44 @@ fn coredll_raw_draw_text_w_expand_tabs_uses_default_tab_stops() -> Result<()> {
         band_pixels(&memory, 0),
         band_pixels(&memory, 32),
         "expanded tabs should not collapse to a single fallback-width blank"
+    );
+    write_rect(&mut memory, 48);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [
+                dc,
+                text_tab,
+                (-1i32) as u32,
+                rect_ptr,
+                DT_EXPANDTABS | DT_TABSTOP | (10 << 8)
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_ne!(
+        band_pixels(&memory, 0),
+        band_pixels(&memory, 48),
+        "custom ten-column DT_TABSTOP should not use the default eight-column tab stop"
+    );
+    let default_right = rightmost_painted_x(&memory, 0).expect("default tab should paint text");
+    let single_right =
+        rightmost_painted_x(&memory, 32).expect("single-space text should paint text");
+    let custom_right =
+        rightmost_painted_x(&memory, 48).expect("custom tab-stop text should paint text");
+    assert!(
+        custom_right > default_right,
+        "custom ten-column DT_TABSTOP should place the trailing glyph after the default tab stop: custom={custom_right}, default={default_right}, single={single_right}"
+    );
+    assert!(
+        default_right > single_right,
+        "default DT_EXPANDTABS should advance farther than a single fallback blank: custom={custom_right}, default={default_right}, single={single_right}"
     );
 
     Ok(())

@@ -49132,6 +49132,18 @@ const DT_NOPREFIX: u32 = 0x0800;
 const DT_END_ELLIPSIS: u32 = 0x0000_8000;
 const DT_WORD_ELLIPSIS: u32 = 0x0004_0000;
 
+fn draw_text_format_flags(format: u32) -> u32 {
+    if format & DT_TABSTOP != 0 {
+        format & !0x0000_ff00
+    } else {
+        format
+    }
+}
+
+fn draw_text_has_flag(format: u32, flag: u32) -> bool {
+    draw_text_format_flags(format) & flag != 0
+}
+
 #[derive(Clone, Copy)]
 struct DrawTextLine {
     start: usize,
@@ -49186,7 +49198,7 @@ fn layout_draw_text_lines(
     if char_count == 0 {
         return Vec::new();
     }
-    if format & DT_SINGLELINE != 0 {
+    if draw_text_has_flag(format, DT_SINGLELINE) {
         return vec![DrawTextLine {
             start: 0,
             count: char_count,
@@ -49194,7 +49206,7 @@ fn layout_draw_text_lines(
         }];
     }
 
-    let wordbreak = format & DT_WORDBREAK != 0 && rect_width > 0;
+    let wordbreak = draw_text_has_flag(format, DT_WORDBREAK) && rect_width > 0;
     let mut lines = Vec::new();
     let mut line_start = 0usize;
     let mut i = 0usize;
@@ -49266,7 +49278,7 @@ struct DrawTextProcessed {
 }
 
 fn draw_text_processed_units(units: &[u16], format: u32) -> DrawTextProcessed {
-    if format & DT_NOPREFIX != 0 {
+    if draw_text_has_flag(format, DT_NOPREFIX) {
         return DrawTextProcessed {
             units: units.to_vec(),
             prefix_underline: vec![false; units.len()],
@@ -49313,7 +49325,8 @@ fn apply_draw_text_ellipsis(
     rect_width: i32,
     format: u32,
 ) -> DrawTextProcessed {
-    if rect_width <= 0 || format & (DT_END_ELLIPSIS | DT_WORD_ELLIPSIS) == 0 {
+    if rect_width <= 0 || draw_text_format_flags(format) & (DT_END_ELLIPSIS | DT_WORD_ELLIPSIS) == 0
+    {
         return processed;
     }
     if measure_draw_text_units_width(kernel, hdc, &processed.units, format) <= rect_width {
@@ -49423,7 +49436,7 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     let total_h = cell_h.saturating_mul(visible_line_count.min(i32::MAX as usize) as i32);
     let max_line_w = lines.iter().map(|line| line.width).max().unwrap_or(0);
 
-    if format & DT_CALCRECT != 0 {
+    if draw_text_has_flag(format, DT_CALCRECT) {
         let measured = Rect {
             left: rect.left,
             top: rect.top,
@@ -49437,16 +49450,16 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
         return total_h.max(0) as u32;
     }
 
-    let clip = if format & DT_NOCLIP == 0 {
+    let clip = if !draw_text_has_flag(format, DT_NOCLIP) {
         Some(rect)
     } else {
         None
     };
-    let base_y = if format & DT_SINGLELINE != 0 {
+    let base_y = if draw_text_has_flag(format, DT_SINGLELINE) {
         let rect_h = (rect.bottom - rect.top).max(0);
-        if format & DT_BOTTOM != 0 {
+        if draw_text_has_flag(format, DT_BOTTOM) {
             rect.bottom - cell_h
-        } else if format & DT_VCENTER != 0 {
+        } else if draw_text_has_flag(format, DT_VCENTER) {
             rect.top + (rect_h - cell_h) / 2
         } else {
             rect.top
@@ -49456,12 +49469,12 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     };
 
     for (line_index, line) in lines.iter().enumerate() {
-        let x = match format & (DT_CENTER | DT_RIGHT) {
+        let x = match draw_text_format_flags(format) & (DT_CENTER | DT_RIGHT) {
             DT_RIGHT => rect.right - line.width,
             DT_CENTER => rect.left + (rect_w - line.width) / 2,
             _ => rect.left,
         };
-        let y = if format & DT_SINGLELINE != 0 {
+        let y = if draw_text_has_flag(format, DT_SINGLELINE) {
             base_y
         } else {
             base_y.saturating_add(cell_h.saturating_mul(line_index as i32))
