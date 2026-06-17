@@ -43653,10 +43653,11 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    if !is_valid_hdc(kernel, src) {
+    let source_needed = mask_blt_rop4_needs_source(rop4);
+    if source_needed && !is_valid_hdc(kernel, src) {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
     if mask_x < 0 || mask_y < 0 {
@@ -43693,7 +43694,8 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    let copy_all = mask_handle == 0 || rop4 == SRCCOPY || rop4 == makerop4(SRCCOPY, SRCCOPY);
+    let copy_all = source_needed
+        && (mask_handle == 0 || rop4 == SRCCOPY || rop4 == makerop4(SRCCOPY, SRCCOPY));
     if copy_all {
         let bitblt_rop = if rop4 == makerop4(SRCCOPY, SRCCOPY) {
             SRCCOPY
@@ -43720,14 +43722,26 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
     }
 
     if !kernel.resources.is_memory_dc(dst)
-        && kernel.resources.is_memory_dc(src)
+        && (!source_needed || kernel.resources.is_memory_dc(src))
         && let Some(framebuffer) = framebuffer
-        && let Some(src_bmp_h) = kernel.resources.selected_bitmap(src)
-        && let Some(src_bmp) = kernel.resources.bitmap(src_bmp_h).cloned()
         && let Some(mask_bmp) = kernel.resources.bitmap(mask_handle).cloned()
-        && let Some(src_bytes) = read_bitmap_object_bytes(memory, &src_bmp)
         && let Some(mask_bytes) = read_bitmap_object_bytes(memory, &mask_bmp)
     {
+        let src_bitmap_and_bytes = if source_needed {
+            kernel
+                .resources
+                .selected_bitmap(src)
+                .and_then(|src_bmp_h| kernel.resources.bitmap(src_bmp_h).cloned())
+                .and_then(|src_bmp| {
+                    read_bitmap_object_bytes(memory, &src_bmp).map(|src_bytes| (src_bmp, src_bytes))
+                })
+        } else {
+            None
+        };
+        if source_needed && src_bitmap_and_bytes.is_none() {
+            kernel.threads.set_last_error(thread_id, 0);
+            return true;
+        }
         let brush = mask_blt_rop4_needs_pattern(rop4)
             .then(|| selected_brush_pixel_source(kernel, memory, dst))
             .flatten();
@@ -43744,8 +43758,9 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
             src_y,
             mask_x,
             mask_y,
-            &src_bmp,
-            &src_bytes,
+            src_bitmap_and_bytes
+                .as_ref()
+                .map(|(bitmap, bytes)| (bitmap, bytes.as_slice())),
             &mask_bmp,
             &mask_bytes,
             rop4,
@@ -43756,19 +43771,12 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
         return true;
     }
 
-    if !kernel.resources.is_memory_dc(src) || !kernel.resources.is_memory_dc(dst) {
+    if !kernel.resources.is_memory_dc(dst) || (source_needed && !kernel.resources.is_memory_dc(src))
+    {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
-    let Some(src_bmp_h) = kernel.resources.selected_bitmap(src) else {
-        kernel.threads.set_last_error(thread_id, 0);
-        return true;
-    };
     let Some(dst_bmp_h) = kernel.resources.selected_bitmap(dst) else {
-        kernel.threads.set_last_error(thread_id, 0);
-        return true;
-    };
-    let Some(src_bmp) = kernel.resources.bitmap(src_bmp_h).cloned() else {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     };
@@ -43780,10 +43788,21 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     };
-    let Some(src_bytes) = read_bitmap_object_bytes(memory, &src_bmp) else {
+    let src_bitmap_and_bytes = if source_needed {
+        kernel
+            .resources
+            .selected_bitmap(src)
+            .and_then(|src_bmp_h| kernel.resources.bitmap(src_bmp_h).cloned())
+            .and_then(|src_bmp| {
+                read_bitmap_object_bytes(memory, &src_bmp).map(|src_bytes| (src_bmp, src_bytes))
+            })
+    } else {
+        None
+    };
+    if source_needed && src_bitmap_and_bytes.is_none() {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
-    };
+    }
     let Some(mask_bytes) = read_bitmap_object_bytes(memory, &mask_bmp) else {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
@@ -43807,8 +43826,13 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
                 let sy = src_y + dst_rel_y;
                 let mx = mask_x + dst_rel_x;
                 let my = mask_y + dst_rel_y;
-                let Some(src_rgb) = bitmap_pixel_rgb(&src_bmp, &src_bytes, sx, sy) else {
-                    continue;
+                let src_rgb = if let Some((src_bmp, src_bytes)) = src_bitmap_and_bytes.as_ref() {
+                    let Some(src_rgb) = bitmap_pixel_rgb(src_bmp, src_bytes, sx, sy) else {
+                        continue;
+                    };
+                    src_rgb
+                } else {
+                    [0, 0, 0]
                 };
                 let mask_is_foreground = bitmap_pixel_rgb(&mask_bmp, &mask_bytes, mx, my)
                     .is_some_and(|rgb| rgb != [0, 0, 0]);
@@ -43846,8 +43870,7 @@ fn mask_blt_src_to_framebuffer<M: CoredllGuestMemory>(
     src_y: i32,
     mask_x: i32,
     mask_y: i32,
-    src_bmp: &crate::ce::resource::BitmapObject,
-    src_bytes: &[u8],
+    src: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     mask_bmp: &crate::ce::resource::BitmapObject,
     mask_bytes: &[u8],
     rop4: u32,
@@ -43884,8 +43907,13 @@ fn mask_blt_src_to_framebuffer<M: CoredllGuestMemory>(
                 let sy = src_y + dst_rel_y;
                 let mx = mask_x + dst_rel_x;
                 let my = mask_y + dst_rel_y;
-                let Some(src_rgb) = bitmap_pixel_rgb(src_bmp, src_bytes, sx, sy) else {
-                    continue;
+                let src_rgb = if let Some((src_bmp, src_bytes)) = src {
+                    let Some(src_rgb) = bitmap_pixel_rgb(src_bmp, src_bytes, sx, sy) else {
+                        continue;
+                    };
+                    src_rgb
+                } else {
+                    [0, 0, 0]
                 };
                 let mask_is_foreground = bitmap_pixel_rgb(mask_bmp, mask_bytes, mx, my)
                     .is_some_and(|rgb| rgb != [0, 0, 0]);
@@ -43975,6 +44003,11 @@ fn mask_blt_rop3(rop4: u32, foreground: bool) -> u32 {
 fn mask_blt_rop4_needs_pattern(rop4: u32) -> bool {
     bitmap_rop_needs_pattern(Some(mask_blt_rop3(rop4, true)))
         || bitmap_rop_needs_pattern(Some(mask_blt_rop3(rop4, false)))
+}
+
+fn mask_blt_rop4_needs_source(rop4: u32) -> bool {
+    bitmap_rop_needs_source(Some(mask_blt_rop3(rop4, true)))
+        || bitmap_rop_needs_source(Some(mask_blt_rop3(rop4, false)))
 }
 
 fn bit_blt_raw<M: CoredllGuestMemory>(
@@ -44880,6 +44913,10 @@ fn bitmap_rop_needs_destination(rop: Option<u32>) -> bool {
 
 fn bitmap_rop_needs_pattern(rop: Option<u32>) -> bool {
     rop.is_some_and(|rop| rop3_depends_on_input(rop3_byte(rop), 0x04))
+}
+
+fn bitmap_rop_needs_source(rop: Option<u32>) -> bool {
+    rop.is_some_and(|rop| rop3_depends_on_input(rop3_byte(rop), 0x02))
 }
 
 fn apply_bitmap_rop(

@@ -10495,7 +10495,7 @@ fn coredll_raw_mask_blt_validates_ce_mask_parameters() -> Result<()> {
     ));
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
-        ERROR_INVALID_HANDLE
+        ERROR_INVALID_PARAMETER
     );
 
     assert!(matches!(
@@ -10564,6 +10564,70 @@ fn coredll_raw_mask_blt_validates_ce_mask_parameters() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_mask_blt_allows_null_source_for_source_free_rop4() -> Result<()> {
+    const BLACKNESS: u32 = 0x0000_0042;
+    const WHITENESS: u32 = 0x00ff_0062;
+    fn makerop4(foreground: u32, background: u32) -> u32 {
+        foreground | ((background << 8) & 0xff00_0000)
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+    let (_mask_dc, mask_bitmap, mask_bits, mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+
+    for y in 0..4 {
+        for x in 0..4 {
+            write_rgb565(&mut memory, dst_bits, dst_stride, x, y, 0x001f);
+        }
+    }
+    memory.write_u8(mask_bits, 0xc0)?;
+    memory.write_u8(mask_bits + mask_stride, 0xc0)?;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MASK_BLT,
+            [
+                dst_dc,
+                0,
+                0,
+                4,
+                4,
+                0,
+                0,
+                0,
+                mask_bitmap,
+                0,
+                0,
+                makerop4(BLACKNESS, WHITENESS),
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    for y in 0..4 {
+        for x in 0..4 {
+            let expected = if x < 2 && y < 2 { 0x0000 } else { 0xffff };
+            assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, x, y), expected);
+        }
+    }
 
     Ok(())
 }
