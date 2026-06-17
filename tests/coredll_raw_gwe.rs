@@ -4891,8 +4891,10 @@ fn coredll_raw_fill_rect_tiles_pattern_brush_on_framebuffer() -> Result<()> {
     memory.write_word(rect_ptr + 8, 5);
     memory.write_word(rect_ptr + 12, 4);
 
-    let (_pattern_dc, pattern_bitmap, pattern_bits, pattern_stride) =
-        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let pattern_bits = 0x1_0400;
+    let pattern_stride = 4;
+    memory.map_halfwords(pattern_bits, 4);
+    let pattern_bitmap = kernel.resources.create_bitmap(2, 2, 1, 16, pattern_bits);
     write_rgb565(&mut memory, pattern_bits, pattern_stride, 0, 0, 0xf800);
     write_rgb565(&mut memory, pattern_bits, pattern_stride, 1, 0, 0x07e0);
     write_rgb565(&mut memory, pattern_bits, pattern_stride, 0, 1, 0x001f);
@@ -4910,6 +4912,23 @@ fn coredll_raw_fill_rect_tiles_pattern_brush_on_framebuffer() -> Result<()> {
         } => handle,
         other => panic!("CreatePatternBrush did not return a brush: {other:?}"),
     };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [pattern_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(
+        kernel.resources.bitmap(pattern_bitmap).is_none(),
+        "CreatePatternBrush should keep private backing after caller bitmap deletion"
+    );
     let screen_dc = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -4953,10 +4972,10 @@ fn coredll_raw_fill_rect_tiles_pattern_brush_on_framebuffer() -> Result<()> {
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
-    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 1), 0xffff);
-    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 1), 0x001f);
-    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 2), 0x07e0);
-    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 2), 0xf800);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 1), 0x07e0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 1), 0xf800);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 2), 0xffff);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 2), 0x001f);
     assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), 0x0000);
     assert_eq!(
         framebuffer.dirty_rects(),
