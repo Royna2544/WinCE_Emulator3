@@ -44026,7 +44026,14 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
     let src_x = raw_i32_arg(args, 6);
     let src_y = raw_i32_arg(args, 7);
     let rop = raw_arg(args, 8);
-    if !is_valid_hdc(kernel, dst) || !is_valid_hdc(kernel, src) {
+    if !is_valid_hdc(kernel, dst) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let source_needed = bitmap_rop_needs_source(Some(rop));
+    if source_needed && !is_valid_hdc(kernel, src) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -44050,7 +44057,8 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    if is_supported_source_bitmap_rop(rop)
+    if source_needed
+        && is_supported_source_bitmap_rop(rop)
         && kernel.resources.is_memory_dc(src)
         && let Some(src_bitmap_handle) = kernel.resources.selected_bitmap(src)
         && let Some(src_bitmap) = kernel.resources.bitmap(src_bitmap_handle).cloned()
@@ -44120,12 +44128,29 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                 );
             }
         }
-    } else if rop == DSTINVERT {
+    } else if !source_needed || rop == DSTINVERT {
         let dst_rect = blt_destination_rect(dst_x, dst_y, width, height);
-        if !invert_bitmap_rect_for_hdc(kernel, memory, dst, dst_rect)
-            && let Some(framebuffer) = framebuffer
-        {
-            invert_framebuffer_rect_for_hdc(kernel, framebuffer, dst, dst_rect);
+        if rop == DSTINVERT {
+            if !invert_bitmap_rect_for_hdc(kernel, memory, dst, dst_rect)
+                && let Some(framebuffer) = framebuffer
+            {
+                invert_framebuffer_rect_for_hdc(kernel, framebuffer, dst, dst_rect);
+            }
+        } else {
+            let _ = pat_blt_raw(
+                kernel,
+                memory,
+                framebuffer,
+                thread_id,
+                &[
+                    dst,
+                    dst_x as u32,
+                    dst_y as u32,
+                    width as u32,
+                    height as u32,
+                    rop,
+                ],
+            );
         }
     }
     kernel.record_display_perf_gpe(rop, false, false);
@@ -44151,7 +44176,14 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
     let src_width = raw_i32_arg(args, 8);
     let src_height = raw_i32_arg(args, 9);
     let rop = raw_arg(args, 10);
-    if !is_valid_hdc(kernel, dst) || !is_valid_hdc(kernel, src) {
+    if !is_valid_hdc(kernel, dst) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let source_needed = bitmap_rop_needs_source(Some(rop));
+    if source_needed && !is_valid_hdc(kernel, src) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -44175,7 +44207,8 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    if is_supported_source_bitmap_rop(rop)
+    if source_needed
+        && is_supported_source_bitmap_rop(rop)
         && kernel.resources.is_memory_dc(src)
         && let Some(src_bitmap_handle) = kernel.resources.selected_bitmap(src)
         && let Some(src_bitmap) = kernel.resources.bitmap(src_bitmap_handle).cloned()
@@ -44257,6 +44290,21 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
         {
             invert_framebuffer_rect_for_hdc(kernel, framebuffer, dst, dst_rect);
         }
+    } else if !source_needed {
+        let _ = pat_blt_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            &[
+                dst,
+                dst_x as u32,
+                dst_y as u32,
+                dst_width as u32,
+                dst_height as u32,
+                rop,
+            ],
+        );
     }
     kernel.record_display_perf_gpe(rop, true, false);
     kernel.threads.set_last_error(thread_id, 0);

@@ -9811,6 +9811,70 @@ fn coredll_raw_blt_validates_ce_hdc_and_rop_edges() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_blt_allows_bad_source_for_source_free_blackness_rop() -> Result<()> {
+    const BLACKNESS: u32 = 0x0000_0042;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, _dst_bitmap, dst_bits, dst_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 2);
+
+    for y in 0..2 {
+        for x in 0..4 {
+            write_rgb565(&mut memory, dst_bits, dst_stride, x, y, 0xffff);
+        }
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BIT_BLT,
+            [dst_dc, 0, 0, 2, 2, 0x1234_5678, 0, 0, BLACKNESS],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    for y in 0..2 {
+        for x in 0..2 {
+            assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, x, y), 0x0000);
+        }
+        for x in 2..4 {
+            assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, x, y), 0xffff);
+        }
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRETCH_BLT,
+            [dst_dc, 2, 0, 2, 2, 0x8765_4321, 0, 0, 2, 2, BLACKNESS],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    for y in 0..2 {
+        for x in 0..4 {
+            assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, x, y), 0x0000);
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_bitblt_mirrors_negative_destination_width_between_selected_dibs() -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
 
