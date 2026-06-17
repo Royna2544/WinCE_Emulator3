@@ -49042,6 +49042,8 @@ fn coredll_raw_gdi_load_bitmap_w_returns_zero_without_module() -> Result<()> {
 
 #[test]
 fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
+    const DT_CALCRECT: u32 = 0x0400;
+
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
@@ -49109,6 +49111,116 @@ fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
             }
         ),
         "DRAW_TEXT_W with count=5 must return text height (16)"
+    );
+
+    memory.write_wide_z(text_ptr, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 10);
+    memory.write_word(rect_ptr + 12, 10);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DRAW_TEXT_W,
+                [dc, text_ptr, 26_u32, rect_ptr, DT_CALCRECT],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(16),
+                ..
+            }
+        ),
+        "DRAW_TEXT_W with DT_CALCRECT must return measured text height"
+    );
+    assert_eq!(memory.read_u32(rect_ptr)?, 0);
+    assert_eq!(memory.read_u32(rect_ptr + 4)?, 0);
+    assert!(
+        memory.read_u32(rect_ptr + 8)? > 10,
+        "DT_CALCRECT should expand rc.right like CE text.cpp::passNull2DrawText"
+    );
+    assert!(
+        memory.read_u32(rect_ptr + 12)? > 10,
+        "DT_CALCRECT should expand rc.bottom like CE text.cpp::passNull2DrawText"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_draw_text_w_wordbreak_draws_multiple_lines() -> Result<()> {
+    const DT_WORDBREAK: u32 = 0x0010;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 142_u32;
+    let (dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 48, 40);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_TEXT_COLOR,
+            [dc, 0x0000_00ff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+
+    let text_ptr = 0x2_0500_u32;
+    let rect_ptr = 0x2_0600_u32;
+    memory.write_wide_z(text_ptr, "AB CD");
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 39);
+    memory.write_word(rect_ptr + 12, 40);
+
+    let result = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DRAW_TEXT_W,
+        [dc, text_ptr, (-1i32) as u32, rect_ptr, DT_WORDBREAK],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } => value,
+        other => panic!("DrawTextW returned unexpected dispatch result: {other:?}"),
+    };
+    assert_eq!(
+        result,
+        32,
+        "DrawTextW should return two CE default text heights, last_error={}",
+        kernel.threads.get_last_error(thread_id)
+    );
+
+    let red_pixels_in_band = |memory: &TestGuestMemory, y0: u32, y1: u32| -> usize {
+        (y0..y1)
+            .flat_map(|y| (0..48).map(move |x| (x, y)))
+            .filter(|(x, y)| rgb565_at(memory, bits_ptr, stride, *x, *y) == 0xf800)
+            .count()
+    };
+    assert!(
+        red_pixels_in_band(&memory, 0, 16) > 0,
+        "first DrawTextW word-wrapped line should render in the top text band"
+    );
+    assert!(
+        red_pixels_in_band(&memory, 16, 32) > 0,
+        "second DrawTextW word-wrapped line should render one text height lower"
+    );
+    assert_eq!(
+        red_pixels_in_band(&memory, 32, 40),
+        0,
+        "word wrapping should not draw a third line for 'AB CD'"
     );
 
     Ok(())

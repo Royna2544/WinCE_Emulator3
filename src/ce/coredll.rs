@@ -2202,10 +2202,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 2),
         ))),
         ORD_EVENT_MODIFY => {
+            let trace_detail = Some(raw_context_trace_detail(context));
             let ok = match raw_arg(args, 1) {
-                EVENT_PULSE => kernel.pulse_event(raw_arg(args, 0)),
-                EVENT_RESET => kernel.reset_event(raw_arg(args, 0)),
-                EVENT_SET => kernel.set_event(raw_arg(args, 0)),
+                EVENT_PULSE => kernel.pulse_event_with_trace_detail(raw_arg(args, 0), trace_detail),
+                EVENT_RESET => kernel.reset_event_with_trace_detail(raw_arg(args, 0), trace_detail),
+                EVENT_SET => kernel.set_event_with_trace_detail(raw_arg(args, 0), trace_detail),
                 _ => {
                     kernel
                         .threads
@@ -2221,7 +2222,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(ok))
         }
         ORD_CREATE_EVENT_W => Some(CoredllValue::Handle(create_event_w_raw(
-            kernel, memory, thread_id, args,
+            kernel, memory, context, thread_id, args,
         ))),
         ORD_OPEN_EVENT_W => Some(CoredllValue::Handle(open_event_w_raw(
             kernel, memory, thread_id, args,
@@ -23008,6 +23009,7 @@ fn create_mutex_w_raw<M: CoredllGuestMemory>(
 fn create_event_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
@@ -23023,7 +23025,12 @@ fn create_event_w_raw<M: CoredllGuestMemory>(
         };
         Some(name)
     };
-    let handle = kernel.create_event_w(name, raw_arg(args, 1) != 0, raw_arg(args, 2) != 0);
+    let handle = kernel.create_event_w_with_trace_detail(
+        name,
+        raw_arg(args, 1) != 0,
+        raw_arg(args, 2) != 0,
+        Some(raw_context_trace_detail(context)),
+    );
     kernel.threads.set_last_error(thread_id, 0);
     handle
 }
@@ -49121,6 +49128,149 @@ const DT_NOCLIP: u32 = 0x0100;
 const DT_CALCRECT: u32 = 0x0400;
 const DT_NOPREFIX: u32 = 0x0800;
 
+#[derive(Clone, Copy)]
+struct DrawTextLine {
+    start: usize,
+    count: usize,
+    width: i32,
+}
+
+fn draw_text_line_width<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    hdc: u32,
+    text_ptr: u32,
+    start: usize,
+    count: usize,
+) -> i32 {
+    if count == 0 {
+        0
+    } else {
+        measure_text_width(
+            kernel,
+            memory,
+            hdc,
+            text_ptr.wrapping_add((start as u32).saturating_mul(2)),
+            count.min(u32::MAX as usize) as u32,
+            0,
+        )
+    }
+}
+
+fn push_draw_text_line<M: CoredllGuestMemory>(
+    lines: &mut Vec<DrawTextLine>,
+    kernel: &CeKernel,
+    memory: &M,
+    hdc: u32,
+    text_ptr: u32,
+    start: usize,
+    end: usize,
+    width: Option<i32>,
+) {
+    let count = end.saturating_sub(start);
+    let width =
+        width.unwrap_or_else(|| draw_text_line_width(kernel, memory, hdc, text_ptr, start, count));
+    lines.push(DrawTextLine {
+        start,
+        count,
+        width,
+    });
+}
+
+fn layout_draw_text_lines<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    hdc: u32,
+    text_ptr: u32,
+    char_count: usize,
+    rect_width: i32,
+    format: u32,
+) -> Vec<DrawTextLine> {
+    if char_count == 0 {
+        return Vec::new();
+    }
+    if format & DT_SINGLELINE != 0 {
+        return vec![DrawTextLine {
+            start: 0,
+            count: char_count,
+            width: draw_text_line_width(kernel, memory, hdc, text_ptr, 0, char_count),
+        }];
+    }
+
+    let wordbreak = format & DT_WORDBREAK != 0 && rect_width > 0;
+    let mut lines = Vec::new();
+    let mut line_start = 0usize;
+    let mut i = 0usize;
+    let mut last_space: Option<(usize, usize, i32)> = None;
+
+    while i < char_count {
+        let unit = memory
+            .read_u16(text_ptr.wrapping_add((i as u32).saturating_mul(2)))
+            .unwrap_or(0);
+        if unit == b'\r' as u16 || unit == b'\n' as u16 {
+            push_draw_text_line(
+                &mut lines, kernel, memory, hdc, text_ptr, line_start, i, None,
+            );
+            i += 1;
+            if unit == b'\r' as u16 && i < char_count {
+                let next = memory
+                    .read_u16(text_ptr.wrapping_add((i as u32).saturating_mul(2)))
+                    .unwrap_or(0);
+                if next == b'\n' as u16 {
+                    i += 1;
+                }
+            }
+            line_start = i;
+            last_space = None;
+            continue;
+        }
+
+        let candidate_count = i + 1 - line_start;
+        let candidate_width =
+            draw_text_line_width(kernel, memory, hdc, text_ptr, line_start, candidate_count);
+        if unit == b' ' as u16 || unit == b'\t' as u16 {
+            let before_space_width =
+                draw_text_line_width(kernel, memory, hdc, text_ptr, line_start, i - line_start);
+            last_space = Some((i, i + 1, before_space_width));
+        }
+
+        if wordbreak && candidate_width > rect_width && i > line_start {
+            if let Some((space_index, after_space, before_space_width)) = last_space {
+                if after_space > line_start && after_space <= i {
+                    push_draw_text_line(
+                        &mut lines,
+                        kernel,
+                        memory,
+                        hdc,
+                        text_ptr,
+                        line_start,
+                        space_index,
+                        Some(before_space_width),
+                    );
+                    line_start = after_space;
+                    i = line_start;
+                    last_space = None;
+                    continue;
+                }
+            }
+            push_draw_text_line(
+                &mut lines, kernel, memory, hdc, text_ptr, line_start, i, None,
+            );
+            line_start = i;
+            last_space = None;
+            continue;
+        }
+        i += 1;
+    }
+
+    if line_start < char_count || lines.is_empty() {
+        push_draw_text_line(
+            &mut lines, kernel, memory, hdc, text_ptr, line_start, char_count, None,
+        );
+    }
+    lines
+}
+
 fn draw_text_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -49163,37 +49313,62 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
         return 0;
     }
 
-    let metrics = selected_text_metrics(kernel, hdc);
-    let cell_h = metrics.as_ref().map(|m| m.height).unwrap_or(16).max(1);
+    let Some(metrics) = selected_text_metrics(kernel, hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let cell_h = metrics.height.max(1);
+    let rect_w = (rect.right - rect.left).max(0);
+    let lines = layout_draw_text_lines(kernel, memory, hdc, text_ptr, char_count, rect_w, format);
+    let total_h = cell_h.saturating_mul(lines.len().min(i32::MAX as usize) as i32);
+    let max_line_w = lines.iter().map(|line| line.width).max().unwrap_or(0);
 
-    if format & DT_CALCRECT == 0 {
-        let clip = if format & DT_NOCLIP == 0 {
-            Some(rect)
-        } else {
-            None
+    if format & DT_CALCRECT != 0 {
+        let measured = Rect {
+            left: rect.left,
+            top: rect.top,
+            right: rect.left.saturating_add(max_line_w),
+            bottom: rect.top.saturating_add(total_h),
         };
+        if !write_guest_rect(kernel, memory, thread_id, rect_ptr, measured) {
+            return 0;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return total_h.max(0) as u32;
+    }
 
-        // Horizontal alignment within the rect
-        let text_w = measure_text_width(kernel, memory, hdc, text_ptr, char_count as u32, 0);
-        let rect_w = (rect.right - rect.left).max(0);
-        let x = match format & (DT_CENTER | DT_RIGHT) {
-            DT_RIGHT => rect.right - text_w,
-            DT_CENTER => rect.left + (rect_w - text_w) / 2,
-            _ => rect.left,
-        };
-        // Vertical alignment: DT_VCENTER/DT_BOTTOM only apply with DT_SINGLELINE
-        let y = if format & DT_SINGLELINE != 0 {
-            let rect_h = (rect.bottom - rect.top).max(0);
-            if format & DT_BOTTOM != 0 {
-                rect.bottom - cell_h
-            } else if format & DT_VCENTER != 0 {
-                rect.top + (rect_h - cell_h) / 2
-            } else {
-                rect.top
-            }
+    let clip = if format & DT_NOCLIP == 0 {
+        Some(rect)
+    } else {
+        None
+    };
+    let base_y = if format & DT_SINGLELINE != 0 {
+        let rect_h = (rect.bottom - rect.top).max(0);
+        if format & DT_BOTTOM != 0 {
+            rect.bottom - cell_h
+        } else if format & DT_VCENTER != 0 {
+            rect.top + (rect_h - cell_h) / 2
         } else {
             rect.top
+        }
+    } else {
+        rect.top
+    };
+
+    for (line_index, line) in lines.iter().enumerate() {
+        let x = match format & (DT_CENTER | DT_RIGHT) {
+            DT_RIGHT => rect.right - line.width,
+            DT_CENTER => rect.left + (rect_w - line.width) / 2,
+            _ => rect.left,
         };
+        let y = if format & DT_SINGLELINE != 0 {
+            base_y
+        } else {
+            base_y.saturating_add(cell_h.saturating_mul(line_index as i32))
+        };
+        let line_ptr = text_ptr.wrapping_add((line.start as u32).saturating_mul(2));
 
         if let Some(fb) = framebuffer.as_deref_mut() {
             draw_ext_text_glyphs_to_framebuffer(
@@ -49203,8 +49378,8 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
                 hdc,
                 x,
                 y,
-                text_ptr,
-                char_count as u32,
+                line_ptr,
+                line.count.min(u32::MAX as usize) as u32,
                 0,
                 clip,
             );
@@ -49215,8 +49390,8 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
                 hdc,
                 x,
                 y,
-                text_ptr,
-                char_count as u32,
+                line_ptr,
+                line.count.min(u32::MAX as usize) as u32,
                 0,
                 clip,
             );
@@ -49224,7 +49399,7 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     }
 
     kernel.threads.set_last_error(thread_id, 0);
-    cell_h as u32
+    total_h.max(0) as u32
 }
 
 // Render FONT_8X8 glyphs into the selected bitmap of a memory DC.

@@ -828,6 +828,13 @@ fn wait_result_to_wake_reason(result: u32) -> SchedulerWakeReason {
     }
 }
 
+fn append_trace_detail(base: String, extra: Option<String>) -> String {
+    match extra {
+        Some(extra) if !extra.is_empty() => format!("{base}/{extra}"),
+        _ => base,
+    }
+}
+
 const MAXIMUM_WAIT_OBJECTS: usize = 64;
 pub const CE_SYS_HANDLE_BASE: u32 = 64;
 pub const CE_SH_CURTHREAD: u32 = 1;
@@ -5023,9 +5030,20 @@ impl CeKernel {
         manual_reset: bool,
         initial_state: bool,
     ) -> u32 {
+        self.create_event_w_with_trace_detail(name, manual_reset, initial_state, None)
+    }
+
+    pub fn create_event_w_with_trace_detail(
+        &mut self,
+        name: Option<String>,
+        manual_reset: bool,
+        initial_state: bool,
+        trace_detail: Option<String>,
+    ) -> u32 {
         let handle = self
             .handles
             .create_event(name.clone(), manual_reset, initial_state);
+        let detail = append_trace_detail(self.describe_handle(handle), trace_detail);
         self.record_event_trace(EventTraceRecord {
             op: "CreateEventW",
             handle: Some(handle),
@@ -5033,7 +5051,7 @@ impl CeKernel {
             manual_reset: Some(manual_reset),
             signaled: Some(initial_state),
             result: Some(handle != 0),
-            detail: Some(self.describe_handle(handle)),
+            detail: Some(detail),
         });
         handle
     }
@@ -5292,10 +5310,19 @@ impl CeKernel {
     }
 
     pub fn set_event(&mut self, handle: u32) -> bool {
+        self.set_event_with_trace_detail(handle, None)
+    }
+
+    pub fn set_event_with_trace_detail(
+        &mut self,
+        handle: u32,
+        trace_detail: Option<String>,
+    ) -> bool {
         let success = self.handles.set_event(handle);
         if success {
             self.queue_object_wake_candidates(handle);
         }
+        let detail = append_trace_detail(self.describe_handle(handle), trace_detail);
         self.record_event_trace(EventTraceRecord {
             op: "SetEvent",
             handle: Some(handle),
@@ -5303,13 +5330,22 @@ impl CeKernel {
             manual_reset: None,
             signaled: None,
             result: Some(success),
-            detail: Some(self.describe_handle(handle)),
+            detail: Some(detail),
         });
         success
     }
 
     pub fn reset_event(&mut self, handle: u32) -> bool {
+        self.reset_event_with_trace_detail(handle, None)
+    }
+
+    pub fn reset_event_with_trace_detail(
+        &mut self,
+        handle: u32,
+        trace_detail: Option<String>,
+    ) -> bool {
         let success = self.handles.reset_event(handle);
+        let detail = append_trace_detail(self.describe_handle(handle), trace_detail);
         self.record_event_trace(EventTraceRecord {
             op: "ResetEvent",
             handle: Some(handle),
@@ -5317,12 +5353,20 @@ impl CeKernel {
             manual_reset: None,
             signaled: None,
             result: Some(success),
-            detail: Some(self.describe_handle(handle)),
+            detail: Some(detail),
         });
         success
     }
 
     pub fn pulse_event(&mut self, handle: u32) -> bool {
+        self.pulse_event_with_trace_detail(handle, None)
+    }
+
+    pub fn pulse_event_with_trace_detail(
+        &mut self,
+        handle: u32,
+        trace_detail: Option<String>,
+    ) -> bool {
         let (manual_reset, wait_ids) = match self.handles.get(handle) {
             Ok(KernelObject::Event(event)) => {
                 let mut wait_ids = self.scheduler.waiter_ids_for_handle(handle);
@@ -5332,6 +5376,7 @@ impl CeKernel {
                 (event.manual_reset, wait_ids)
             }
             _ => {
+                let detail = append_trace_detail(self.describe_handle(handle), trace_detail);
                 self.record_event_trace(EventTraceRecord {
                     op: "PulseEvent",
                     handle: Some(handle),
@@ -5339,7 +5384,7 @@ impl CeKernel {
                     manual_reset: None,
                     signaled: None,
                     result: Some(false),
-                    detail: Some(self.describe_handle(handle)),
+                    detail: Some(detail),
                 });
                 return false;
             }
@@ -5354,6 +5399,7 @@ impl CeKernel {
             }
             let _ = self.handles.reset_event(handle);
         }
+        let detail = append_trace_detail(self.describe_handle(handle), trace_detail);
         self.record_event_trace(EventTraceRecord {
             op: "PulseEvent",
             handle: Some(handle),
@@ -5361,7 +5407,7 @@ impl CeKernel {
             manual_reset: Some(manual_reset),
             signaled: Some(false),
             result: Some(success),
-            detail: Some(self.describe_handle(handle)),
+            detail: Some(detail),
         });
         success
     }
