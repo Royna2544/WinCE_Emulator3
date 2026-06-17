@@ -25,11 +25,13 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   proof that device-notification consumers observe startup attach events in the
   same order and wake cadence as CE while the owned splash popup remains visible.
 - iNavi fast live startup now clears the heavy map/search DB I/O phase quickly
-  with the generic large read-only memory backing, but the app-owned splash
-  window still remains visible after loader waiters drain. Remote touch is
-  delivered to the real popup window, so the remaining risk is a missing CE UI
-  state transition, timer/message behavior, or app-side readiness signal rather
-  than a synthetic dialog or SD-card read-only failure.
+  with the generic large read-only memory backing and the host idle-slice guard
+  now prevents stale parked `GetMessage` waiters from forcing 100 ms active CPU
+  slices, but the app-owned splash window still remains visible after loader
+  waiters drain. Remote touch is delivered to the real popup window, so the
+  remaining risk is a missing CE UI state transition, timer/message behavior, or
+  app-side readiness signal rather than a synthetic dialog or SD-card read-only
+  failure.
 - The latest live scheduler cleanup prevents a real guest thread exit from
   leaving stale waits behind at `THREAD_EXIT_STUB_ADDR`, but it does not prove
   the post-splash route flow complete. The current run still shows the splash
@@ -149,11 +151,12 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
 - The earlier startup-slow path caused by existing read/write map/search files
   taking the host-file path has been reduced by bounded writable memory backing:
   in the fresh live run, host reads flattened around 2.0 MiB while memory-backed
-  opens rose during resource/map loading. The remaining visible symptom is not a
-  black splash or missing touch delivery. The real splash popup
-  `0x00020008` remains topmost and receives the remote tap messages, so the
-  underlying map child windows cannot react until the app hides, destroys, or
-  demotes that owned popup.
+  opens rose during resource/map loading. The later false 100 ms live-pump
+  slicing from stale parked message waiters is also closed. The remaining
+  visible symptom is not a black splash or missing touch delivery. The real
+  splash popup `0x00020008` remains topmost and receives the remote tap
+  messages, so the underlying map child windows cannot react until the app
+  hides, destroys, or demotes that owned popup.
 - Hidden Happyway child scheduling remains incomplete. The real modal dialog
   can be dismissed and its framebuffer pixels restore correctly, but
   `happyway_win.exe` may remain parked with stale modal/close state while iNavi

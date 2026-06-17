@@ -78,9 +78,11 @@ Regenerated on 2026-06-11 from current source and test coverage.
   iNavi CPU run exits via the CE current-process pseudo-handle (`0x42`) with
   code `3` at `mfcce400.dll+0xd674`; with `WINCE_EMU_FAST_START=1` it stays in
   startup. `WINCE_EMU_FAST_START_LIVE=1` now allows testing that behavior in
-  live-pump mode; detached `drive97` proves the optimized remote listener,
-  touch drain, and splash rendering path are usable, but the rendered-map
-  transition still needs proof.
+  live-pump mode. The host idle message-poll throttle has been narrowed so
+  stale parked `GetMessage` waiters no longer force 100 ms slices while active
+  guest CPU context is still runnable; current live runs reach `COM7:` and
+  map/search DB work quickly under the normal remote host launch. Continue from
+  the rendered-map transition and non-fast-start exit split.
 - Continue the remote-driven iNavi startup investigation from the current
   resource/map-loading state: the Happyway `MessageBoxW` is dismissed through
   the real button, stale unowned modal waits no longer rotate the active
@@ -119,9 +121,11 @@ Regenerated on 2026-06-11 from current source and test coverage.
   `COM7:`. After the bounded writable memory-backing change, the previous
   read/write search-DB host-read churn is no longer the active bottleneck:
   repeated live drive posts left `host_file_read_bytes` flat at about 2.0 MiB
-  while memory-backed opens continued rising. The current UI block is still the
-  owned `afx:10000:3:0:b5000:0` splash popup (`0x00020008`) staying visible
-  above the created map child windows and consuming touch.
+  while memory-backed opens continued rising. The host idle-slice guard now also
+  removes the later false 100 ms slice throttle from stale parked message
+  waiters. The current UI block is still the owned `afx:10000:3:0:b5000:0`
+  splash popup (`0x00020008`) staying visible above the created map child
+  windows and consuming touch.
 - Continue the Happyway hidden-child scheduling investigation: modal dismissal
   and framebuffer restoration are fixed, and the active-process self-park
   duplicate is filtered, but `happyway_win.exe` can still remain parked with

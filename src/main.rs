@@ -957,10 +957,20 @@ fn should_run_active_visible_work_for_live_message_waiter(
 }
 
 fn host_idle_message_poll_slice(cpu: &UnicornMips, desktop: DesktopMode) -> bool {
-    desktop == DesktopMode::Host
-        && cpu
-            .last_debug_snapshot()
-            .is_some_and(snapshot_is_idle_message_wait_only)
+    should_use_host_idle_message_poll_slice(
+        desktop,
+        cpu.has_saved_context(),
+        cpu.last_debug_snapshot()
+            .is_some_and(snapshot_is_idle_message_wait_only),
+    )
+}
+
+fn should_use_host_idle_message_poll_slice(
+    desktop: DesktopMode,
+    has_saved_context: bool,
+    idle_message_wait_only: bool,
+) -> bool {
+    desktop == DesktopMode::Host && !has_saved_context && idle_message_wait_only
 }
 
 fn should_idle_host_message_pump(
@@ -3977,6 +3987,30 @@ mod tests {
             ),
             (LIVE_VISIBLE_WORK_RUN_SLICE_MS, true)
         );
+    }
+
+    #[test]
+    fn host_idle_message_poll_slice_requires_no_saved_context() {
+        assert!(should_use_host_idle_message_poll_slice(
+            DesktopMode::Host,
+            false,
+            true,
+        ));
+        assert!(!should_use_host_idle_message_poll_slice(
+            DesktopMode::Host,
+            true,
+            true,
+        ));
+        assert!(!should_use_host_idle_message_poll_slice(
+            DesktopMode::Virtual,
+            false,
+            true,
+        ));
+        assert!(!should_use_host_idle_message_poll_slice(
+            DesktopMode::Host,
+            false,
+            false,
+        ));
     }
 
     #[test]

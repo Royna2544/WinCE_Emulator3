@@ -15,6 +15,25 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/main.rs`: host live-pump idle message polling now requires that the CPU
+  has no saved active guest context before forcing the 100 ms host message-poll
+  slice. A stale parked `GetMessage` waiter from another thread no longer
+  throttles active guest CPU work such as iNavi resource/map startup decoding.
+- Validation for the host idle-slice guard: `rustfmt --edition 2024 --check
+  src\main.rs`, focused `cargo test --features unicorn,trace,win32-desktop
+  host_idle_message_poll_slice_requires_no_saved_context -- --nocapture`,
+  `git diff --check -- src\main.rs`, and `cargo build --release --features
+  unicorn,trace,win32-desktop --bin wince_emulation_v3` passed. Full
+  `cargo fmt --check` still reports unrelated pre-existing formatting drift in
+  `src\ce\coredll.rs`.
+- Live validation on `192.168.0.39:8765` after the host idle-slice guard:
+  within the first sampled slice the emulator stopped after about 30 seconds
+  instead of the prior about-100 ms host-idle slices, reached `COM7:` open plus
+  map/search DB activity, and after remote GPS posts showed queued remote bytes
+  drained into the open `COM7:` handle (`rx=2088`, `queued_serial_bytes=0`).
+  The remaining UI blocker is unchanged: the real app-owned splash popup
+  `0x00020008` stays topmost and receives touch messages while hidden map child
+  windows exist underneath.
 - `src/ce/kernel.rs` and `tests/basic_subsystems.rs`: remote serial/GPS
   payloads now drain into the matching open serial device as soon as the REST
   control message is dispatched, and payloads queued before the guest opens the
