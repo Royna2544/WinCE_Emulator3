@@ -14250,6 +14250,41 @@ fn format_wait_handles_ready(kernel: &CeKernel, thread_id: u32, handles: &[u32])
 }
 
 #[cfg(feature = "unicorn")]
+fn format_wait_raw_args(args: &[u32]) -> String {
+    (0..4)
+        .map(|index| {
+            format!(
+                "a{index}=0x{:08x}",
+                args.get(index).copied().unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(feature = "unicorn")]
+fn format_unicorn_word_window<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    ptr: u32,
+    words_before: u32,
+    word_count: u32,
+) -> String {
+    let start = ptr.wrapping_sub(words_before.saturating_mul(4));
+    (0..word_count)
+        .map(|index| {
+            let offset = index.saturating_mul(4);
+            let addr = start.wrapping_add(offset);
+            let rel = (offset as i64) - i64::from(words_before.saturating_mul(4));
+            match read_unicorn_u32(uc, addr) {
+                Some(value) => format!("{rel:+}=0x{value:08x}"),
+                None => format!("{rel:+}=<?>"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(feature = "unicorn")]
 fn unicorn_blocked_wait_snapshots(kernel: &CeKernel) -> Vec<UnicornBlockedWaitSnapshot> {
     kernel
         .blocked_waiters()
@@ -16063,6 +16098,11 @@ fn try_block_wait_for_multiple_objects<D>(
     let wait_started_ms = kernel.timers.tick_count();
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let wait_arg_detail = format!(
+        "args=[{}]/handles_ptr=0x{handles_ptr:08x}/handle_words=[{}]",
+        format_wait_raw_args(args),
+        format_unicorn_word_window(uc, handles_ptr, 2, count.saturating_add(2))
+    );
     if running_thread.borrow().is_some()
         && suspended_thread.borrow().is_none()
         && try_complete_current_multiple_wait_timeout(
@@ -16096,7 +16136,7 @@ fn try_block_wait_for_multiple_objects<D>(
             None,
             None,
             format!(
-                "id={wait_id}/thread={thread_id}/thread_handle=0x{:08x}/count={count}/timeout={timeout}/return_pc=0x{return_pc:08x}/handles=[{}]/source=pending_return",
+                "id={wait_id}/thread={thread_id}/thread_handle=0x{:08x}/count={count}/timeout={timeout}/return_pc=0x{return_pc:08x}/handles=[{}]/{wait_arg_detail}/source=pending_return",
                 callout.thread_handle,
                 format_wait_handles_ready(kernel, thread_id, &wait_handles)
             ),
@@ -16149,7 +16189,7 @@ fn try_block_wait_for_multiple_objects<D>(
             None,
             None,
             format!(
-                "id={wait_id}/thread={thread_id}/thread_handle=0x{thread_handle:08x}/count={count}/timeout={timeout}/return_pc=0x{return_pc:08x}/handles=[{}]/source=running_thread",
+                "id={wait_id}/thread={thread_id}/thread_handle=0x{thread_handle:08x}/count={count}/timeout={timeout}/return_pc=0x{return_pc:08x}/handles=[{}]/{wait_arg_detail}/source=running_thread",
                 format_wait_handles_ready(kernel, thread_id, &wait_handles)
             ),
         );

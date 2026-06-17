@@ -769,7 +769,7 @@ pub struct DeviceTraceRecord {
 const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 const PROCESS_TRACE_LIMIT: usize = 128;
-const EVENT_TRACE_LIMIT: usize = 4096;
+const EVENT_TRACE_LIMIT: usize = 65536;
 const MESSAGE_TRACE_LIMIT: usize = 2048;
 const DEVICE_TRACE_LIMIT: usize = 512;
 const SHCNE_RENAMEITEM: u32 = 0x0000_0001;
