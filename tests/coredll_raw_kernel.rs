@@ -9107,6 +9107,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     const ILC_MIRROR: u32 = 0x2000;
     const ILC_VIRTUAL: u32 = 0x8000;
     const ILC_WIN95: u32 = ILC_MASK | ILC_COLORDDB | ILC_SHARED | ILC_PALETTE;
+    const ILD_MASK: u32 = 0x0010;
     const ILD_IMAGE: u32 = 0x0020;
 
     let table = CoredllExportTable::default();
@@ -12459,6 +12460,291 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         rgb565_at(&memory, dither_bits, dither_stride, 1, 0),
         0x07e0,
         "CopyDitherImage should mutate the destination bitmap instead of replacing metadata only"
+    );
+
+    let dither_offset_dst_bits = 0x2_d000;
+    let dither_offset_dst_mask_bits = 0x2_d100;
+    let dither_offset_src_bits = 0x2_d200;
+    let dither_offset_src_mask_bits = 0x2_d300;
+    memory.map_bytes(dither_offset_dst_bits, 24);
+    memory.map_bytes(dither_offset_dst_mask_bits, 12);
+    memory.map_bytes(dither_offset_src_bits, 8);
+    memory.map_bytes(dither_offset_src_mask_bits, 8);
+    for row in 0..3 {
+        for col in 0..3 {
+            memory.write_bytes(
+                dither_offset_dst_bits + row * 8 + col * 2,
+                &0xf800u16.to_le_bytes(),
+            );
+        }
+        memory.write_bytes(dither_offset_dst_mask_bits + row * 4, &[0xff, 0, 0, 0]);
+    }
+    memory.write_bytes(dither_offset_src_bits, &0x07e0u16.to_le_bytes());
+    memory.write_bytes(dither_offset_src_bits + 2, &0x001fu16.to_le_bytes());
+    memory.write_bytes(dither_offset_src_bits + 4, &0xf81fu16.to_le_bytes());
+    memory.write_bytes(dither_offset_src_bits + 6, &0xffffu16.to_le_bytes());
+    memory.write_bytes(dither_offset_src_mask_bits, &[0, 0, 0, 0, 0, 0, 0, 0]);
+    let dither_offset_dst_bitmap =
+        kernel
+            .resources
+            .create_bitmap(3, -3, 1, 16, dither_offset_dst_bits);
+    let dither_offset_dst_mask =
+        kernel
+            .resources
+            .create_bitmap(3, -3, 1, 1, dither_offset_dst_mask_bits);
+    let dither_offset_src_bitmap =
+        kernel
+            .resources
+            .create_bitmap(2, -2, 1, 16, dither_offset_src_bits);
+    let dither_offset_src_mask =
+        kernel
+            .resources
+            .create_bitmap(2, -2, 1, 1, dither_offset_src_mask_bits);
+    kernel
+        .resources
+        .bitmap_mut(dither_offset_dst_mask)
+        .unwrap()
+        .color_table = vec![[0x00, 0x00, 0x00, 0], [0xff, 0xff, 0xff, 0]];
+    kernel
+        .resources
+        .bitmap_mut(dither_offset_src_mask)
+        .unwrap()
+        .color_table = vec![[0x00, 0x00, 0x00, 0], [0xff, 0xff, 0xff, 0]];
+    let dither_offset_dst = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [3, 3, ILC_MASK, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(dither offset dst) failed: {other:?}"),
+    };
+    let dither_offset_src = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_MASK, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(dither offset src) failed: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [
+                dither_offset_dst,
+                dither_offset_dst_bitmap,
+                dither_offset_dst_mask
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [
+                dither_offset_src,
+                dither_offset_src_bitmap,
+                dither_offset_src_mask
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
+            [dither_offset_dst, 0, 1, 1, dither_offset_src, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let (dither_offset_image_dc, dither_offset_image_bits, dither_offset_image_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 3, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [
+                dither_offset_dst,
+                0,
+                dither_offset_image_dc,
+                0,
+                0,
+                3,
+                3,
+                0,
+                0,
+                ILD_IMAGE,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_image_bits,
+            dither_offset_image_stride,
+            0,
+            0
+        ),
+        0xf800,
+        "CopyDitherImage should leave pixels outside the offset copy rectangle unchanged"
+    );
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_image_bits,
+            dither_offset_image_stride,
+            1,
+            1
+        ),
+        0x07e0,
+        "CopyDitherImage should place source pixels at the CE destination offset"
+    );
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_image_bits,
+            dither_offset_image_stride,
+            2,
+            1
+        ),
+        0x001f,
+        "CopyDitherImage should copy the source top row at the destination offset"
+    );
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_image_bits,
+            dither_offset_image_stride,
+            1,
+            2
+        ),
+        0xf81f,
+        "CopyDitherImage should copy the source bottom row at the destination offset"
+    );
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_image_bits,
+            dither_offset_image_stride,
+            2,
+            2
+        ),
+        0xffff,
+        "CopyDitherImage should preserve all copied source pixels inside the offset rectangle"
+    );
+
+    let (dither_offset_mask_dc, dither_offset_mask_bits, dither_offset_mask_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 3, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [
+                dither_offset_dst,
+                0,
+                dither_offset_mask_dc,
+                0,
+                0,
+                3,
+                3,
+                0,
+                0,
+                ILD_MASK,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_mask_bits,
+            dither_offset_mask_stride,
+            0,
+            0
+        ),
+        0xffff,
+        "CopyDitherImage should leave destination mask pixels outside the offset copy unchanged"
+    );
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_mask_bits,
+            dither_offset_mask_stride,
+            1,
+            1
+        ),
+        0xffff,
+        "CopyDitherImage should OR the first copied mask pixel with CE's 50% dither pattern"
+    );
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_mask_bits,
+            dither_offset_mask_stride,
+            2,
+            1
+        ),
+        0x0000,
+        "CopyDitherImage should keep the alternating dither mask pixel black"
+    );
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_mask_bits,
+            dither_offset_mask_stride,
+            1,
+            2
+        ),
+        0x0000,
+        "CopyDitherImage should keep the opposite alternating dither mask pixel black"
+    );
+    assert_eq!(
+        rgb565_at(
+            &memory,
+            dither_offset_mask_bits,
+            dither_offset_mask_stride,
+            2,
+            2
+        ),
+        0xffff,
+        "CopyDitherImage should produce the second white checkerboard mask pixel"
     );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
