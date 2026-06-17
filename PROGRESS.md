@@ -15,6 +15,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/emulator/unicorn.rs`: host wall-clock slice stops now purge any stale
+  blocked-wait, blocked `GetMessage`, or displaced `GetMessage` record for the
+  thread that just executed. A thread that ran guest code to the slice boundary
+  can no longer remain simultaneously listed as a scheduler-blocked waiter.
+- Validation for the stale active-wait cleanup: `rustfmt --edition 2024 --check
+  src\emulator\unicorn.rs`, focused `cargo test --lib --features
+  unicorn,trace,win32-desktop stale_blocked -- --nocapture`, `git diff --check
+  -- src\emulator\unicorn.rs`, and `cargo build --release --features
+  unicorn,trace,win32-desktop --bin wince_emulation_v3` passed. Live validation
+  on `192.168.0.39:8765` after relaunch showed `cpu blocked waits: none` for
+  the running thread 17 while `COM7:` opened and remote GPS bytes drained into
+  the serial handle. The remaining blocker is the real owned splash popup above
+  hidden map children, with thread 16 still waiting on the unsignaled manual
+  event pair.
 - `src/main.rs`: host live-pump idle message polling now requires that the CPU
   has no saved active guest context before forcing the 100 ms host message-poll
   slice. A stale parked `GetMessage` waiter from another thread no longer

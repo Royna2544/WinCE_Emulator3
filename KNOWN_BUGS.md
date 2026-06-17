@@ -33,11 +33,13 @@ Regenerated on 2026-06-11 from current source and test evidence. Items here are 
   app-side readiness signal rather than a synthetic dialog or SD-card read-only
   failure.
 - The latest live scheduler cleanup prevents a real guest thread exit from
-  leaving stale waits behind at `THREAD_EXIT_STUB_ADDR`, but it does not prove
-  the post-splash route flow complete. The current run still shows the splash
-  popup above hidden map children, and serial/GPS delivery remains suspicious:
-  remote sensor posts increment the serial signal counters while no serial wait
-  candidates are selected for guest consumption.
+  leaving stale waits behind at `THREAD_EXIT_STUB_ADDR`, and host wall-clock
+  slice stops now remove stale blocked-wait records for the thread that actually
+  executed. This closes the impossible thread-17 active-and-blocked debug state.
+  It does not prove the post-splash route flow complete: the current run still
+  shows the owned splash popup above hidden map children, and thread 16 remains
+  parked on an unsignaled manual event pair while remote GPS bytes drain into
+  the open `COM7:` serial handle without a guest serial-read waiter.
 - Direct CE `FSDMGR_GetRegistryFlag @18`, `FSDMGR_GetRegistryString @19`, and
   `FSDMGR_GetRegistryValue @20` imports are covered for the missing-registry
   fail-closed path and output clearing; real logical-disk registry-root lookup

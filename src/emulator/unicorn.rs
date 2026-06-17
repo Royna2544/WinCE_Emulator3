@@ -8320,6 +8320,24 @@ impl UnicornMips {
             }
         }
         let snapshot_context = capture_saved_cpu_context(&uc);
+        if host_wall_clock_stop.borrow().is_some() {
+            let executed_thread_id = *current_thread_id.borrow();
+            remove_stale_blocked_waits_for_thread(
+                kernel,
+                &blocked_wait_threads,
+                executed_thread_id,
+            );
+            remove_stale_blocked_get_message_for_thread(
+                kernel,
+                &blocked_guest_thread,
+                executed_thread_id,
+            );
+            remove_stale_displaced_get_messages_for_thread(
+                kernel,
+                &displaced_blocked_get_messages,
+                executed_thread_id,
+            );
+        }
         let pc_region = self.address_region_label(snapshot_pc, kernel);
         let ra_region = self.address_region_label(snapshot_ra, kernel);
         let thread_state = describe_guest_thread_state(
