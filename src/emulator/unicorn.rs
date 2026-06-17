@@ -26470,8 +26470,8 @@ fn write_unicorn_message<D>(
 }
 
 #[cfg(feature = "unicorn")]
-fn guest_thread_stack_top(process_stack_top: u32, thread_id: u32) -> u32 {
-    let offset = GUEST_THREAD_STACK_SLOT_SIZE.saturating_mul(thread_id.max(1));
+fn guest_thread_stack_top(process_stack_top: u32, stack_slot: u32) -> u32 {
+    let offset = GUEST_THREAD_STACK_SLOT_SIZE.saturating_mul(stack_slot.max(1).saturating_add(1));
     process_stack_top.wrapping_sub(offset) & !0x7
 }
 
@@ -26586,6 +26586,17 @@ mod guest_thread_stack_tests {
         let eighth_stack = guest_thread_stack_top(process_stack_top, 8);
 
         assert!(eighth_stack >= process_stack_base + GUEST_THREAD_STACK_SLOT_SIZE);
+    }
+
+    #[test]
+    fn first_guest_thread_slot_skips_main_thread_stack_band() {
+        let process_stack_top = 0x8000_0000;
+        let first_stack = guest_thread_stack_top(process_stack_top, 1);
+
+        assert_eq!(
+            first_stack,
+            process_stack_top - GUEST_THREAD_STACK_SLOT_SIZE * 2
+        );
     }
 
     #[test]
