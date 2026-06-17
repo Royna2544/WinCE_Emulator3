@@ -49249,30 +49249,45 @@ fn layout_draw_text_lines(
     lines
 }
 
-fn draw_text_processed_units(units: &[u16], format: u32) -> Vec<u16> {
+struct DrawTextProcessed {
+    units: Vec<u16>,
+    prefix_underline: Vec<bool>,
+}
+
+fn draw_text_processed_units(units: &[u16], format: u32) -> DrawTextProcessed {
     if format & DT_NOPREFIX != 0 {
-        return units.to_vec();
+        return DrawTextProcessed {
+            units: units.to_vec(),
+            prefix_underline: vec![false; units.len()],
+        };
     }
     let mut out = Vec::with_capacity(units.len());
+    let mut prefix_underline = Vec::with_capacity(units.len());
     let mut index = 0usize;
     while index < units.len() {
         if units[index] == b'&' as u16 {
             if index + 1 < units.len() && units[index + 1] == b'&' as u16 {
                 out.push(b'&' as u16);
+                prefix_underline.push(false);
                 index += 2;
             } else {
                 index += 1;
                 if index < units.len() {
                     out.push(units[index]);
+                    prefix_underline.push(true);
                     index += 1;
                 }
             }
         } else {
             out.push(units[index]);
+            prefix_underline.push(false);
             index += 1;
         }
     }
-    out
+    DrawTextProcessed {
+        units: out,
+        prefix_underline,
+    }
 }
 
 fn draw_text_w_raw<M: CoredllGuestMemory>(
@@ -49333,7 +49348,8 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     };
     let cell_h = metrics.height.max(1);
     let rect_w = (rect.right - rect.left).max(0);
-    let units = draw_text_processed_units(&raw_units, format);
+    let processed = draw_text_processed_units(&raw_units, format);
+    let units = processed.units;
     let lines = layout_draw_text_lines(kernel, hdc, &units, rect_w, format);
     let visible_line_count = if lines.is_empty() && !raw_units.is_empty() {
         1
@@ -49388,11 +49404,30 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
         };
         let line_end = line.start.saturating_add(line.count).min(units.len());
         let line_units = &units[line.start..line_end];
+        let line_prefix_underline = &processed.prefix_underline[line.start..line_end];
 
         if let Some(fb) = framebuffer.as_deref_mut() {
-            draw_text_units_to_framebuffer(kernel, fb, hdc, x, y, line_units, clip);
+            draw_text_units_to_framebuffer(
+                kernel,
+                fb,
+                hdc,
+                x,
+                y,
+                line_units,
+                line_prefix_underline,
+                clip,
+            );
         } else if kernel.resources.is_memory_dc(hdc) {
-            draw_text_units_to_bitmap(kernel, memory, hdc, x, y, line_units, clip);
+            draw_text_units_to_bitmap(
+                kernel,
+                memory,
+                hdc,
+                x,
+                y,
+                line_units,
+                line_prefix_underline,
+                clip,
+            );
         }
     }
 
@@ -49430,6 +49465,7 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
     x: i32,
     y: i32,
     units: &[u16],
+    prefix_underline: &[bool],
     clip: Option<Rect>,
 ) {
     if !kernel.resources.is_memory_dc(hdc) {
@@ -49477,7 +49513,7 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
     let mut cursor_x = x;
     let mut previous_char_width = 0;
 
-    for unit in units.iter().copied() {
+    for (char_idx, unit) in units.iter().copied().enumerate() {
         let char_width = metrics.char_width(unit);
         let advance = text_advance_with_extra(char_width, previous_char_width, text_char_extra);
 
@@ -49530,6 +49566,20 @@ fn draw_text_units_to_bitmap<M: CoredllGuestMemory>(
             }
         }
 
+        if (metrics.underline || prefix_underline.get(char_idx).copied().unwrap_or(false))
+            && advance > 0
+        {
+            let underline_y = y.saturating_add(metrics.ascent.max(1));
+            if underline_y >= 0 && underline_y < bm_h {
+                for sx in cursor_x.max(0)..cursor_x.saturating_add(advance).min(bm_w) {
+                    if !clip_rects_contain_point(&clips, sx, underline_y) {
+                        continue;
+                    }
+                    let _ = write_bitmap_pixel_rgb(memory, &bitmap, sx, underline_y, rgb);
+                }
+            }
+        }
+
         cursor_x += advance;
         previous_char_width = char_width;
     }
@@ -49542,6 +49592,7 @@ fn draw_text_units_to_framebuffer(
     x: i32,
     y: i32,
     units: &[u16],
+    prefix_underline: &[bool],
     clip: Option<Rect>,
 ) {
     let state = kernel.resources.dc_state(hdc).unwrap_or_default();
@@ -49591,7 +49642,7 @@ fn draw_text_units_to_framebuffer(
     let mut previous_char_width = 0;
     let mut any_pixel = false;
 
-    for unit in units.iter().copied() {
+    for (char_idx, unit) in units.iter().copied().enumerate() {
         let char_width = metrics.char_width(unit);
         let advance = text_advance_with_extra(char_width, previous_char_width, text_char_extra);
 
@@ -49644,6 +49695,22 @@ fn draw_text_units_to_framebuffer(
                             any_pixel = true;
                         }
                     }
+                }
+            }
+        }
+
+        if (metrics.underline || prefix_underline.get(char_idx).copied().unwrap_or(false))
+            && advance > 0
+        {
+            let underline_y = screen_y0.saturating_add(metrics.ascent.max(1));
+            if underline_y >= 0 && underline_y < fb_h {
+                for sx in cursor_x.max(0)..cursor_x.saturating_add(advance).min(fb_w) {
+                    if !clip_rects_contain_point(&screen_clips, sx, underline_y) {
+                        continue;
+                    }
+                    let off = underline_y as usize * stride + sx as usize * bpp;
+                    fb.pixels_mut()[off..off + bpp].copy_from_slice(&pixel[..bpp]);
+                    any_pixel = true;
                 }
             }
         }
@@ -49788,6 +49855,18 @@ fn draw_ext_text_glyphs_to_bitmap<M: CoredllGuestMemory>(
                             let _ = write_bitmap_pixel_rgb(memory, &bitmap, sx, sy, rgb);
                         }
                     }
+                }
+            }
+        }
+
+        if metrics.underline && advance > 0 {
+            let underline_y = y.saturating_add(metrics.ascent.max(1));
+            if underline_y >= 0 && underline_y < bm_h {
+                for sx in cursor_x.max(0)..cursor_x.saturating_add(advance).min(bm_w) {
+                    if !clip_rects_contain_point(&clips, sx, underline_y) {
+                        continue;
+                    }
+                    let _ = write_bitmap_pixel_rgb(memory, &bitmap, sx, underline_y, rgb);
                 }
             }
         }
@@ -50448,6 +50527,20 @@ fn draw_ext_text_glyphs_to_framebuffer<M: CoredllGuestMemory>(
                             any_pixel = true;
                         }
                     }
+                }
+            }
+        }
+
+        if metrics.underline && advance > 0 {
+            let underline_y = screen_y0.saturating_add(metrics.ascent.max(1));
+            if underline_y >= 0 && underline_y < fb_h {
+                for sx in cursor_x.max(0)..cursor_x.saturating_add(advance).min(fb_w) {
+                    if !clip_rects_contain_point(&screen_clips, sx, underline_y) {
+                        continue;
+                    }
+                    let off = underline_y as usize * stride + sx as usize * bpp;
+                    fb.pixels_mut()[off..off + bpp].copy_from_slice(&pixel[..bpp]);
+                    any_pixel = true;
                 }
             }
         }

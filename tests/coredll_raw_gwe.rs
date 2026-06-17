@@ -49311,13 +49311,45 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     let text_literal_amp = 0x2_0a00_u32;
     let text_prefixed_x = 0x2_0b00_u32;
     let text_literal_x = 0x2_0c00_u32;
+    let underline_logfont_ptr = 0x2_0d00_u32;
     memory.write_wide_z(text_prefix_only, "&");
     memory.write_wide_z(text_escaped_amp, "&&");
     memory.write_wide_z(text_literal_amp, "&");
     memory.write_wide_z(text_prefixed_x, "&X");
     memory.write_wide_z(text_literal_x, "X");
+    memory.map_bytes(underline_logfont_ptr, 92);
+    let mut underline_logfont = [0u8; 92];
+    underline_logfont[21] = 1;
+    memory.write_bytes(underline_logfont_ptr, &underline_logfont);
+    let underline_font = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FONT_INDIRECT_W,
+        [underline_logfont_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFontIndirectW(underline) returned unexpected result: {other:?}"),
+    };
+    assert_ne!(underline_font, 0);
 
     write_rect(&mut memory, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [dc, underline_font],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -49408,7 +49440,7 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     assert_eq!(
         band_pixels(&memory, 48),
         band_pixels(&memory, 0),
-        "prefixed character should render like the character with DT_NOPREFIX"
+        "prefixed character should render like the character with an underlined font"
     );
 
     Ok(())
