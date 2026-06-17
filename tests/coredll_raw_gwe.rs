@@ -49113,6 +49113,26 @@ fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
         "DRAW_TEXT_W with count=5 must return text height (16)"
     );
 
+    // CE text.cpp::passNull2Text expects a valid zero-length DrawText call to
+    // succeed with the sentinel return value 1.
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DRAW_TEXT_W,
+                [dc, text_ptr, 0_u32, rect_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
+        ),
+        "DRAW_TEXT_W with count=0 must return CE sentinel success value 1"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     memory.write_wide_z(text_ptr, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
     memory.write_word(rect_ptr, 0);
     memory.write_word(rect_ptr + 4, 0);

@@ -49304,7 +49304,7 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     };
     if char_count == 0 {
         kernel.threads.set_last_error(thread_id, 0);
-        return 0;
+        return 1;
     }
     if hdc_has_readonly_selected_bitmap(kernel, hdc) {
         kernel
