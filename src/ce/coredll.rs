@@ -46917,7 +46917,21 @@ fn rgb_from_color_table_override(
         .color_table
         .get(index as usize)
         .map(|entry| [entry[2], entry[1], entry[0]])
-        .unwrap_or([index, index, index])
+        .unwrap_or_else(|| fallback_indexed_rgb(bitmap, index))
+}
+
+fn fallback_indexed_rgb(bitmap: &crate::ce::resource::BitmapObject, index: u8) -> [u8; 3] {
+    let Some(max_index) = 1u16
+        .checked_shl(u32::from(bitmap.bits_pixel))
+        .and_then(|count| count.checked_sub(1))
+    else {
+        return [index, index, index];
+    };
+    if max_index == 0 || max_index > u16::from(u8::MAX) {
+        return [index, index, index];
+    }
+    let value = ((u16::from(index) * u16::from(u8::MAX)) / max_index) as u8;
+    [value, value, value]
 }
 
 fn nearest_color_table_index(bitmap: &crate::ce::resource::BitmapObject, rgb: [u8; 3]) -> u8 {
@@ -47837,7 +47851,7 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let Some((dest_ptr, storage_size, bits_writable)) =
+    let Some((dest_ptr, storage_size, bits_writable, width_bytes, height, top_down)) =
         kernel.resources.bitmap(bitmap).and_then(|bitmap| {
             let width_bytes = u32::try_from(bitmap.width_bytes).ok()?;
             let height = u32::try_from(bitmap.height).ok()?;
@@ -47845,6 +47859,9 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
                 bitmap.bits_ptr,
                 width_bytes.checked_mul(height)?,
                 bitmap.bits_writable,
+                width_bytes,
+                height,
+                bitmap.top_down,
             ))
         })
     else {
@@ -47867,7 +47884,7 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
     let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, bits_ptr, copy_count) else {
         return 0;
     };
-    let (dest_ptr, already_written) = if dest_ptr == 0 {
+    let allocated_ptr = if dest_ptr == 0 {
         let Some(allocated) =
             kernel
                 .memory
@@ -47878,7 +47895,16 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
             return 0;
         };
-        if !write_guest_bytes(kernel, memory, thread_id, allocated, &bytes) {
+        if !write_bitmap_bits_from_set_bitmap_bits(
+            kernel,
+            memory,
+            thread_id,
+            allocated,
+            width_bytes,
+            height,
+            top_down,
+            &bytes,
+        ) {
             let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, allocated);
             return 0;
         }
@@ -47886,15 +47912,82 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
             bitmap.bits_ptr = allocated;
             bitmap.bits_owned = true;
         }
-        (allocated, true)
+        Some(allocated)
     } else {
-        (dest_ptr, false)
+        None
     };
-    if !already_written && !write_guest_bytes(kernel, memory, thread_id, dest_ptr, &bytes) {
+    if allocated_ptr.is_none()
+        && !write_bitmap_bits_from_set_bitmap_bits(
+            kernel,
+            memory,
+            thread_id,
+            dest_ptr,
+            width_bytes,
+            height,
+            top_down,
+            &bytes,
+        )
+    {
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
     copy_count
+}
+
+fn write_bitmap_bits_from_set_bitmap_bits<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest_ptr: u32,
+    width_bytes: u32,
+    height: u32,
+    top_down: bool,
+    bytes: &[u8],
+) -> bool {
+    if top_down || height <= 1 {
+        return write_guest_bytes(kernel, memory, thread_id, dest_ptr, bytes);
+    }
+    let Ok(width_bytes_usize) = usize::try_from(width_bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if width_bytes_usize == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    for (source_row, chunk) in bytes.chunks(width_bytes_usize).enumerate() {
+        let Ok(source_row) = u32::try_from(source_row) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        if source_row >= height {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        let dest_row = height - 1 - source_row;
+        let Some(row_offset) = dest_row.checked_mul(width_bytes) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        if !write_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            dest_ptr.wrapping_add(row_offset),
+            chunk,
+        ) {
+            return false;
+        }
+    }
+    true
 }
 
 fn get_pixel_raw<M: CoredllGuestMemory>(
