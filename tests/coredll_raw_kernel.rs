@@ -12144,6 +12144,31 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_IMAGE_LIST_BEGIN_DRAG,
+            [duplicate, 1, 8, 9],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    let drag = kernel.resources.image_list_drag().unwrap();
+    assert_eq!(
+        drag.image_list, image_list,
+        "CE BeginDrag ignores a second active drag instead of replacing the current drag image"
+    );
+    assert_eq!(drag.index, 0);
+    assert_eq!(drag.hotspot_x, 2);
+    assert_eq!(drag.hotspot_y, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_IMAGE_LIST_DRAG_MOVE,
             [6, 7],
         ),

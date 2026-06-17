@@ -10533,6 +10533,13 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(drag.image_list, drag_il);
     assert_eq!(drag.hotspot_x, 4);
     assert!(!drag.visible);
+    assert_eq!(res.begin_image_list_drag(drag_il, 0, 9, 9), Some(false));
+    let drag = res.image_list_drag().unwrap();
+    assert_eq!(
+        drag.hotspot_x, 4,
+        "CE BeginDrag rejects an active drag without replacing its hotspot"
+    );
+    assert_eq!(drag.image_list, drag_il);
     assert!(res.image_list_drag_move(7, 8));
     assert_eq!(res.image_list_drag().unwrap().x, point_before_begin.0);
     assert_eq!(res.image_list_drag_position(), point_before_begin);

@@ -1937,6 +1937,9 @@ impl ResourceSystem {
         hotspot_x: i32,
         hotspot_y: i32,
     ) -> Option<bool> {
+        if self.image_list_drag.is_some() {
+            return Some(false);
+        }
         if !self.image_list_has_index(handle, index) {
             return Some(false);
         }
