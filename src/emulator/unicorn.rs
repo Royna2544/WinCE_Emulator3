@@ -3868,6 +3868,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn parked_process_thread_exit_code(process: &ParkedProcess) -> Option<u32> {
+        if process.cpu.blocked_modal_message_box.is_some() {
+            return None;
+        }
         process.cpu.last_debug_snapshot().and_then(|snapshot| {
             (snapshot.thread_exit_reached || snapshot.pc == THREAD_EXIT_STUB_ADDR)
                 .then_some(snapshot.v0)
@@ -26496,6 +26499,52 @@ fn release_guest_thread_stack_slot(stack_slots: &GuestThreadStackSlots, thread_i
 mod guest_thread_stack_tests {
     use super::*;
 
+    #[derive(Default)]
+    struct ModalTestMemory {
+        bytes: BTreeMap<u32, u8>,
+    }
+
+    impl ModalTestMemory {
+        fn write_wide_z(&mut self, addr: u32, value: &str) {
+            for (index, unit) in value.encode_utf16().chain(std::iter::once(0)).enumerate() {
+                let addr = addr + index as u32 * 2;
+                self.bytes.insert(addr, (unit & 0xff) as u8);
+                self.bytes.insert(addr + 1, (unit >> 8) as u8);
+            }
+        }
+    }
+
+    impl CoredllGuestMemory for ModalTestMemory {
+        fn read_u8(&self, addr: u32) -> Result<u8> {
+            Ok(self.bytes.get(&addr).copied().unwrap_or(0))
+        }
+
+        fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+            self.bytes.insert(addr, value);
+            Ok(())
+        }
+
+        fn read_u32(&self, addr: u32) -> Result<u32> {
+            let mut bytes = [0; 4];
+            self.read_bytes(addr, &mut bytes)?;
+            Ok(u32::from_le_bytes(bytes))
+        }
+
+        fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+            self.write_bytes(addr, &value.to_le_bytes())
+        }
+
+        fn read_u16(&self, addr: u32) -> Result<u16> {
+            let mut bytes = [0; 2];
+            self.read_bytes(addr, &mut bytes)?;
+            Ok(u16::from_le_bytes(bytes))
+        }
+
+        fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+            self.write_bytes(addr, &value.to_le_bytes())
+        }
+    }
+
     fn resumable_cpu(thread_id: u32, pc: u32) -> Result<UnicornMips> {
         let mut cpu = UnicornMips::new()?;
         cpu.set_initial_thread_id(thread_id);
@@ -26505,6 +26554,29 @@ mod guest_thread_stack_tests {
             regs: MipsGuestContext::zero(),
         });
         Ok(cpu)
+    }
+
+    fn parked_process_for_cpu(thread_id: u32, cpu: UnicornMips) -> ParkedProcess {
+        ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 67,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id,
+            cpu: Box::new(cpu),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        }
     }
 
     #[test]
@@ -28203,6 +28275,57 @@ mod guest_thread_stack_tests {
                 &parked, &kernel
             ));
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn parked_modal_message_box_does_not_report_thread_exit() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let thread_id = 5;
+        let mut memory = ModalTestMemory::default();
+        let text_ptr = 0x2000;
+        let caption_ptr = 0x2100;
+        memory.write_wide_z(text_ptr, "Route search failed");
+        memory.write_wide_z(caption_ptr, "iNavi");
+
+        let mut cpu = UnicornMips::new()?;
+        cpu.set_initial_thread_id(thread_id);
+        cpu.current_thread_id = thread_id;
+        cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            ra: THREAD_EXIT_STUB_ADDR,
+            v0: 0x1234,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        let mut parked = parked_process_for_cpu(thread_id, cpu);
+
+        assert_eq!(
+            UnicornMips::parked_process_thread_exit_code(&parked),
+            Some(0x1234)
+        );
+
+        let modal_state = crate::ce::coredll::message_box_w_prepare(
+            &mut kernel,
+            &memory,
+            None,
+            None,
+            thread_id,
+            &[0, text_ptr, caption_ptr, 0],
+        )
+        .map_err(|result| Error::Backend(format!("prepare MessageBoxW returned {result}")))?;
+        parked.cpu.blocked_modal_message_box = Some(BlockedModalMessageBox {
+            wait_id: 1,
+            thread_id,
+            thread_handle: 0x200,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            modal_state,
+        });
+
+        assert_eq!(UnicornMips::parked_process_thread_exit_code(&parked), None);
 
         Ok(())
     }

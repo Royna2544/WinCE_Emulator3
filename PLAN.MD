@@ -24,6 +24,7 @@ Regenerated on 2026-06-11 from the current `src/` and `tests/` implementation st
 3. Finish modal UI and cross-thread message semantics.
    - Extend `SendMessageTimeout` beyond current timeout/destroyed-target cases into nested sends, reentrant waits, abort-if-hung edge cases, and `ReplyMessage` parity.
    - Keep menu and message-box behavior aligned with CE blocking, owner-window, and command-routing expectations.
+   - Parked Unicorn processes blocked in a CE `MessageBoxW` modal wait now stay non-terminal even when their last debug snapshot sits at `THREAD_EXIT_STUB_ADDR`; `parked_modal_message_box_does_not_report_thread_exit` covers this iNavi runtime edge.
 
 4. Complete shell notification behavior.
    - Verify `Shell_NotifyIcon` and `SHNotification*` data lifetimes, update/remove paths, taskbar-visible state, and COM notification callback dispatch in integrated runtime scenarios.
