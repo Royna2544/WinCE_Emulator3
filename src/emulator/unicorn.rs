@@ -3492,10 +3492,10 @@ impl UnicornMips {
 
     fn parked_process_matches_active(
         parked: &ParkedProcess,
-        active_process_id: u32,
+        _active_process_id: u32,
         active_thread_ids: &[u32],
     ) -> bool {
-        parked.process_state.process_id == active_process_id
+        active_thread_ids.contains(&parked.thread_id)
             || parked
                 .cpu
                 .tracked_thread_ids()
@@ -27067,6 +27067,52 @@ mod guest_thread_stack_tests {
         active.prune_active_process_from_parked(&kernel);
 
         assert!(active.parked_child_processes.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn prune_active_process_keeps_same_process_distinct_thread() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+
+        let mut active = UnicornMips::new()?;
+        active.set_initial_thread_id(17);
+        active.current_thread_id = 17;
+
+        let mut modal_cpu = UnicornMips::new()?;
+        modal_cpu.set_initial_thread_id(3);
+        modal_cpu.current_thread_id = 3;
+        active.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 67,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: 3,
+            cpu: Box::new(modal_cpu),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        active.prune_active_process_from_parked(&kernel);
+
+        assert_eq!(active.parked_child_processes.len(), 1);
+        assert_eq!(active.parked_child_processes[0].thread_id, 3);
 
         Ok(())
     }
