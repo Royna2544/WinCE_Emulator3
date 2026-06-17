@@ -13555,8 +13555,11 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
     const ILC_COLOR16: u32 = 0x0010;
     const ILC_MASK: u32 = 0x0001;
     const ILD_TRANSPARENT: u32 = 0x0001;
+    const ILD_BLEND25: u32 = 0x0002;
     const ILD_BLEND50: u32 = 0x0004;
     const ILD_BLEND75: u32 = 0x0008;
+    const ILD_SELECTED: u32 = ILD_BLEND50;
+    const ILD_FOCUS: u32 = ILD_BLEND25;
     const ILD_MASK: u32 = 0x0010;
     const ILD_IMAGE: u32 = 0x0020;
     const ILD_ROP: u32 = 0x0040;
@@ -13797,6 +13800,55 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         rgb565_at(&memory, bits_ptr, stride, 2, 1),
         0x3de0,
         "ILD_BLEND75 should enter CE's blend path instead of drawing unchanged green"
+    );
+
+    // CE commctrl.h aliases ILD_SELECTED to ILD_BLEND50 and ILD_FOCUS to
+    // ILD_BLEND25; both should flow through the same image-list blend branch.
+    memory.write_word(PARAMS_PTR + 16, 0); // x=0
+    memory.write_word(PARAMS_PTR + 20, 1); // y=1
+    memory.write_word(PARAMS_PTR + 24, 1); // cx=1
+    memory.write_word(PARAMS_PTR + 28, 1); // cy=1
+    memory.write_word(PARAMS_PTR + 32, 1); // xBitmap=1 -> green source pixel
+    memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk
+    memory.write_word(PARAMS_PTR + 44, 0x0000_00ff); // rgbFg=red COLORREF
+    memory.write_word(PARAMS_PTR + 48, ILD_SELECTED); // fStyle=ILD_BLEND50 alias
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 0, 1),
+        0x7be0,
+        "ILD_SELECTED should behave as CE's ILD_BLEND50 alias"
+    );
+    memory.write_word(PARAMS_PTR + 16, 1); // x=1
+    memory.write_word(PARAMS_PTR + 48, ILD_FOCUS); // fStyle=ILD_BLEND25 alias
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 1, 1),
+        0x3de0,
+        "ILD_FOCUS should behave as CE's ILD_BLEND25 alias"
     );
 
     // rgbFg=CLR_NONE follows CE's destination-blend branch for 16-bit image lists:
