@@ -46084,6 +46084,122 @@ fn coredll_raw_pat_blt_applies_source_free_pattern_destination_rop3() -> Result<
 }
 
 #[test]
+fn coredll_raw_pat_blt_with_null_brush_is_successful_noop() -> Result<()> {
+    const NULL_BRUSH: u32 = 5;
+    const PATINVERT: u32 = 0x005a_0049;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 142_u32;
+
+    let null_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [NULL_BRUSH],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("GetStockObject(NULL_BRUSH) did not return a handle: {other:?}"),
+    };
+    assert_ne!(null_brush, 0);
+
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    memory.write_bytes(bits_ptr, &[0xff, 0xff, 0x00, 0x00]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, null_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } if h != 0
+    ));
+
+    kernel.threads.set_last_error(thread_id, 0xdead);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAT_BLT,
+            [mem_dc, 0, 0, 2, 1, PATINVERT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0xffff);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 0), 0x0000);
+
+    let mut framebuffer = VirtualFramebuffer::new(2, 1, PixelFormat::Rgb565)?;
+    framebuffer.pixels_mut()[0..2].copy_from_slice(&0xffff_u16.to_le_bytes());
+    framebuffer.pixels_mut()[2..4].copy_from_slice(&0x0000_u16.to_le_bytes());
+    let _ = framebuffer.take_dirty_rects();
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    assert_ne!(screen_dc, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [screen_dc, null_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } if h != 0
+    ));
+
+    kernel.threads.set_last_error(thread_id, 0xbeef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_PAT_BLT,
+            [screen_dc, 0, 0, 2, 1, PATINVERT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), 0xffff);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 0), 0x0000);
+    assert!(framebuffer.take_dirty_rects().is_empty());
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_pat_blt_rejects_readonly_selected_bitmap() -> Result<()> {
     const BLACKNESS: u32 = 0x0000_0042;
 
