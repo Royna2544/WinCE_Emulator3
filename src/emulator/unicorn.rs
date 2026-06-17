@@ -18396,7 +18396,8 @@ fn scheduler_blocked_msg_wait_has_input(
             }
         }
         crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => {
-            kernel.thread_has_pending_sent_message(blocked.thread_id)
+            kernel.thread_has_modal_dialog_result(blocked.thread_id)
+                || kernel.thread_has_pending_sent_message(blocked.thread_id)
                 || kernel.gwe.has_message_filtered(
                     blocked.thread_id,
                     None,
@@ -18461,7 +18462,8 @@ fn scheduler_blocked_wait_is_ready(
                 kernel.sent_message_result_ready(send_id)
             }
             crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => {
-                kernel.thread_has_pending_sent_message(blocked.thread_id)
+                kernel.thread_has_modal_dialog_result(blocked.thread_id)
+                    || kernel.thread_has_pending_sent_message(blocked.thread_id)
                     || kernel.gwe.has_message_filtered(
                         blocked.thread_id,
                         None,

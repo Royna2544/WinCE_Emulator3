@@ -5801,6 +5801,12 @@ impl CeKernel {
         self.modal_dialog_results.remove(&(thread_id, dialog_hwnd))
     }
 
+    pub(crate) fn thread_has_modal_dialog_result(&self, thread_id: u32) -> bool {
+        self.modal_dialog_results
+            .keys()
+            .any(|(result_thread_id, _)| *result_thread_id == thread_id)
+    }
+
     pub fn blocked_waiter(&self, wait_id: u64) -> Option<&SchedulerBlockedWait> {
         self.scheduler.blocked_wait(wait_id)
     }
@@ -7656,7 +7662,6 @@ impl CeKernel {
         };
         self.modal_dialog_results
             .insert((thread_id, dialog_hwnd), command);
-        let _ = self.remove_blocked_waiter(wait_id);
         let removed_get_message_waits =
             self.remove_dialog_get_message_waiters(thread_id, dialog_hwnd);
         self.record_message_trace(MessageTraceRecord {
@@ -9429,10 +9434,9 @@ mod tests {
             kernel.drain_remote_input_to_thread_window(thread_id, Some(dialog)),
             2
         );
-        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(kernel.blocked_waiter(wait_id).is_some());
         assert!(kernel.blocked_waiter(dialog_get_message_wait_id).is_none());
-        assert_eq!(kernel.take_modal_dialog_result(thread_id, dialog), Some(1));
-        assert_eq!(kernel.take_modal_dialog_result(thread_id, dialog), None);
+        assert!(kernel.thread_has_modal_dialog_result(thread_id));
         assert!(kernel.gwe.is_window(dialog));
         assert!(kernel.gwe.is_window(button));
         assert!(kernel.gwe.update_rect(background).is_none());
@@ -9446,11 +9450,16 @@ mod tests {
                     } => kernel
                         .gwe
                         .has_message_filtered(blocked.thread_id, hwnd, min_msg, max_msg),
+                    SchedulerBlockedWaitKind::ModalMessageBox => {
+                        kernel.thread_has_modal_dialog_result(blocked.thread_id)
+                    }
                     _ => false,
                 }
             });
         assert_ne!(ready, Some(background_wait_id));
-        assert!(ready.is_none());
+        assert_eq!(ready, Some(wait_id));
+        assert_eq!(kernel.take_modal_dialog_result(thread_id, dialog), Some(1));
+        assert_eq!(kernel.take_modal_dialog_result(thread_id, dialog), None);
         Ok(())
     }
 
