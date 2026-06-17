@@ -306,10 +306,17 @@ impl Scheduler {
     }
 
     pub fn waiter_ids_for_handle(&self, handle: u32) -> Vec<u64> {
-        self.wait_queues
-            .get(&handle)
-            .map(|queue| queue.iter().copied().collect())
-            .unwrap_or_default()
+        let mut ids = BTreeSet::new();
+        if let Some(queue) = self.wait_queues.get(&handle) {
+            ids.extend(queue.iter().copied());
+        }
+        ids.extend(
+            self.blocked_waits
+                .values()
+                .filter(|wait| wait.wait_handles.contains(&handle))
+                .map(|wait| wait.id),
+        );
+        ids.into_iter().collect()
     }
 
     pub fn message_waiter_ids_for_thread(&self, thread_id: u32) -> Vec<u64> {
@@ -489,6 +496,26 @@ mod tests {
         assert_eq!(scheduler.waiter_count(), 0);
         assert!(scheduler.waiter_ids_for_handle(0x200).is_empty());
         assert!(scheduler.waiter_ids_for_handle(0x204).is_empty());
+    }
+
+    #[test]
+    fn scheduler_waiter_lookup_falls_back_to_live_waits_when_index_is_stale() {
+        let mut scheduler = Scheduler::default();
+        let wait_id = scheduler.register_blocked_wait(
+            7,
+            0x107,
+            vec![0x200, 0x204],
+            SchedulerBlockedWaitKind::Kernel,
+            10,
+            50,
+        );
+
+        scheduler.wait_queues.clear();
+
+        assert_eq!(scheduler.waiter_ids_for_handle(0x200), vec![wait_id]);
+        assert_eq!(scheduler.waiter_ids_for_handle(0x204), vec![wait_id]);
+        assert!(scheduler.waiter_ids_for_handle(0x208).is_empty());
+        assert_eq!(scheduler.queue_pending_wake_ids([wait_id]), 1);
     }
 
     #[test]
