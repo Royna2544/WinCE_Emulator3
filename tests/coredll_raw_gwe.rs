@@ -49257,7 +49257,7 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 143_u32;
     let (dc, bits_ptr, stride) =
-        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 32, 96);
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 96, 128);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -49291,7 +49291,7 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     let write_rect = |memory: &mut TestGuestMemory, top: u32| {
         memory.write_word(rect_ptr, 0);
         memory.write_word(rect_ptr + 4, top);
-        memory.write_word(rect_ptr + 8, 32);
+        memory.write_word(rect_ptr + 8, 96);
         memory.write_word(rect_ptr + 12, top + 16);
     };
     let red_pixels_in_band = |memory: &TestGuestMemory, y0: u32, y1: u32| -> usize {
@@ -49302,7 +49302,7 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     };
     let band_pixels = |memory: &TestGuestMemory, y0: u32| -> Vec<u16> {
         (y0..y0 + 16)
-            .flat_map(|y| (0..32).map(move |x| rgb565_at(memory, bits_ptr, stride, x, y)))
+            .flat_map(|y| (0..96).map(move |x| rgb565_at(memory, bits_ptr, stride, x, y)))
             .collect()
     };
 
@@ -49311,12 +49311,16 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
     let text_literal_amp = 0x2_0a00_u32;
     let text_prefixed_x = 0x2_0b00_u32;
     let text_literal_x = 0x2_0c00_u32;
-    let underline_logfont_ptr = 0x2_0d00_u32;
+    let text_multi_prefixed = 0x2_0d00_u32;
+    let text_multi_last_prefixed = 0x2_0e00_u32;
+    let underline_logfont_ptr = 0x2_0f00_u32;
     memory.write_wide_z(text_prefix_only, "&");
     memory.write_wide_z(text_escaped_amp, "&&");
     memory.write_wide_z(text_literal_amp, "&");
     memory.write_wide_z(text_prefixed_x, "&X");
     memory.write_wide_z(text_literal_x, "X");
+    memory.write_wide_z(text_multi_prefixed, "&X&b&c&d&e&f&g&h");
+    memory.write_wide_z(text_multi_last_prefixed, "Xbcdefg&h");
     memory.map_bytes(underline_logfont_ptr, 92);
     let mut underline_logfont = [0u8; 92];
     underline_logfont[21] = 1;
@@ -49515,6 +49519,40 @@ fn coredll_raw_draw_text_w_prefix_escapes_ampersands() -> Result<()> {
         band_pixels(&memory, 64),
         band_pixels(&memory, 80),
         "R2_NOP should suppress the accelerator underline while preserving the text glyph"
+    );
+
+    write_rect(&mut memory, 96);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_multi_prefixed, u32::MAX, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    write_rect(&mut memory, 112);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_multi_last_prefixed, u32::MAX, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(16),
+            ..
+        }
+    ));
+    assert_eq!(
+        band_pixels(&memory, 96),
+        band_pixels(&memory, 112),
+        "CE DrawTextPrefixTest keeps only the final accelerator underline in a prefixed run"
     );
 
     Ok(())

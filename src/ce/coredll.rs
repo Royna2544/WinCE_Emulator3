@@ -49263,6 +49263,7 @@ fn draw_text_processed_units(units: &[u16], format: u32) -> DrawTextProcessed {
     }
     let mut out = Vec::with_capacity(units.len());
     let mut prefix_underline = Vec::with_capacity(units.len());
+    let mut last_prefixed_index: Option<usize> = None;
     let mut index = 0usize;
     while index < units.len() {
         if units[index] == b'&' as u16 {
@@ -49273,8 +49274,12 @@ fn draw_text_processed_units(units: &[u16], format: u32) -> DrawTextProcessed {
             } else {
                 index += 1;
                 if index < units.len() {
+                    if let Some(previous) = last_prefixed_index {
+                        prefix_underline[previous] = false;
+                    }
                     out.push(units[index]);
                     prefix_underline.push(true);
+                    last_prefixed_index = Some(prefix_underline.len() - 1);
                     index += 1;
                 }
             }
