@@ -60,9 +60,9 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
             ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
             ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
-            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMM_ASSOCIATE_CONTEXT,
-            ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC, ORD_IMM_DESTROY_CONTEXT,
-            ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
+            ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
             ORD_IMM_ENUM_REGISTER_WORD_W, ORD_IMM_ESCAPE_W, ORD_IMM_GENERATE_MESSAGE,
             ORD_IMM_GET_CANDIDATE_LIST_COUNT_W, ORD_IMM_GET_CANDIDATE_LIST_W,
             ORD_IMM_GET_CANDIDATE_WINDOW, ORD_IMM_GET_COMPOSITION_FONT_W,
@@ -50868,6 +50868,167 @@ fn coredll_raw_image_list_duplicate_survives_source_destroy() -> Result<()> {
     ));
     assert!(kernel.resources.bitmap(duplicate_entry.bitmap).is_none());
     assert!(kernel.resources.bitmap(duplicate_entry.mask).is_none());
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_image_list_all_white_overlay_is_zero_sized() -> Result<()> {
+    const ILC_COLOR16: u32 = 0x0010;
+    const ILC_MASK: u32 = 0x0001;
+    const ILD_TRANSPARENT: u32 = 0x0001;
+    const INDEXTOOVERLAYMASK_1: u32 = 0x0100;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 176_u32;
+
+    let (base_bitmap, base_bits, base_stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    write_rgb565(&mut memory, base_bits, base_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, base_bits, base_stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, base_bits, base_stride, 0, 1, 0x001f);
+    write_rgb565(&mut memory, base_bits, base_stride, 1, 1, 0xffff);
+
+    let (_, base_mask, base_mask_bits, base_mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    memory.write_u8(base_mask_bits, 0x00)?;
+    memory.write_u8(base_mask_bits + base_mask_stride, 0x00)?;
+
+    let (overlay_bitmap, overlay_bits, overlay_stride) =
+        create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    for y in 0..2 {
+        for x in 0..2 {
+            write_rgb565(&mut memory, overlay_bits, overlay_stride, x, y, 0xffe0);
+        }
+    }
+    let (_, overlay_mask, overlay_mask_bits, overlay_mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    memory.write_u8(overlay_mask_bits, 0xc0)?;
+    memory.write_u8(overlay_mask_bits + overlay_mask_stride, 0xc0)?;
+
+    let list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_COLOR16 | ILC_MASK, 2, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(all-white overlay) failed: {other:?}"),
+    };
+    assert_ne!(list, 0);
+    for (expected, bitmap, mask) in [
+        (0, base_bitmap, base_mask),
+        (1, overlay_bitmap, overlay_mask),
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_IMAGE_LIST_ADD,
+                [list, bitmap, mask],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(index),
+                ..
+            } if index == expected
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            [list, 1, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let overlay = kernel
+        .resources
+        .image_list(list)
+        .and_then(|list| list.overlays.get(&1).copied())
+        .expect("overlay record");
+    assert_eq!(overlay.image_index, 1);
+    assert_eq!(overlay.x, 0);
+    assert_eq!(overlay.y, 0);
+    assert_eq!(
+        (overlay.width, overlay.height),
+        (0, 0),
+        "CE imagelist.cpp records an all-white overlay mask as an empty overlay rectangle"
+    );
+    assert_eq!(overlay.flags, 0);
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 2);
+    for y in 0..2 {
+        for x in 0..4 {
+            write_rgb565(&mut memory, dst_bits, dst_stride, x, y, 0x001f);
+        }
+    }
+
+    let draw_params = 0x2_9000_u32;
+    memory.map_words(draw_params, 14);
+    memory.write_word(draw_params, 56);
+    memory.write_word(draw_params + 4, list);
+    memory.write_word(draw_params + 8, 0);
+    memory.write_word(draw_params + 12, dst_dc);
+    memory.write_word(draw_params + 16, 1);
+    memory.write_word(draw_params + 20, 0);
+    memory.write_word(draw_params + 24, 0);
+    memory.write_word(draw_params + 28, 0);
+    memory.write_word(draw_params + 32, 0);
+    memory.write_word(draw_params + 36, 0);
+    memory.write_word(draw_params + 40, 0xffff_ffff);
+    memory.write_word(draw_params + 44, 0xffff_ffff);
+    memory.write_word(draw_params + 48, INDEXTOOVERLAYMASK_1);
+    memory.write_word(draw_params + 52, 0x00cc_0020);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [draw_params],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0x001f);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0xf800);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 2, 0), 0x07e0);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 3, 0), 0x001f);
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 1),
+        0x001f,
+        "base image draw still respects its own color plane while the empty overlay paints nothing extra"
+    );
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 2, 1), 0xffff);
+
+    assert_eq!(
+        memory.read_i32(draw_params + 8)?,
+        1,
+        "CE DrawIndirect mutates the caller params to the overlay image index"
+    );
+    assert_eq!(memory.read_i32(draw_params + 16)?, 1);
+    assert_eq!(memory.read_i32(draw_params + 20)?, 0);
+    assert_eq!(memory.read_i32(draw_params + 24)?, 0);
+    assert_eq!(memory.read_i32(draw_params + 28)?, 0);
+    assert_eq!(memory.read_u32(draw_params + 48)?, ILD_TRANSPARENT);
 
     Ok(())
 }

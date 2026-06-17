@@ -32461,6 +32461,9 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
     if let Some(overlay_record) = overlay_record
         && let Some(overlay) = list.images.get(overlay_record.image_index as usize)
     {
+        if overlay_record.width <= 0 || overlay_record.height <= 0 {
+            return true;
+        }
         let mut overlay = overlay.clone();
         overlay.source_x = overlay.source_x.saturating_add(overlay_record.x);
         overlay.source_y = overlay.source_y.saturating_add(overlay_record.y);
@@ -32582,6 +32585,9 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     if let Some(overlay_record) = overlay_record
         && let Some(overlay) = list.images.get(overlay_record.image_index as usize)
     {
+        if overlay_record.width <= 0 || overlay_record.height <= 0 {
+            return true;
+        }
         let mut overlay = overlay.clone();
         overlay.source_x = overlay.source_x.saturating_add(overlay_record.x);
         overlay.source_y = overlay.source_y.saturating_add(overlay_record.y);
