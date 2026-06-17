@@ -5966,7 +5966,11 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
     assert_eq!(res.copy_image_list_image(dst, 0, src, 0, 0), Some(false));
     assert_eq!(res.copy_image_list_image(src, 1, src, 0, 0), Some(true));
     assert_eq!(res.image_list_count(src), Some(3));
-    assert_eq!(res.image_list_info(src, 1).unwrap().left, 0);
+    assert_eq!(
+        res.image_list_info(src, 1).unwrap().left,
+        16,
+        "CE ImageList_Copy preserves the destination slot rectangle"
+    );
     // Negative indexes return Some(false).
     assert_eq!(res.copy_image_list_image(dst, -1, src, -1, 0), Some(false));
 
@@ -10414,7 +10418,10 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(res.copy_image_list_image(src, 1, src, 0, 0), Some(true));
     let copied_info = res.image_list_info(src, 1).unwrap();
     assert_eq!(copied_info.bitmap, bmp_a);
-    assert_eq!(copied_info.left, 0);
+    assert_eq!(
+        copied_info.left, 16,
+        "CE ImageList_Copy preserves the destination slot rectangle"
+    );
     assert_eq!(res.image_list_count(src), Some(2));
     // Negative src_index → Some(false).
     assert_eq!(

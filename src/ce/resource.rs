@@ -296,6 +296,20 @@ fn remove_image_list_image_at(list: &mut ImageListObject, index: usize) {
     list.images.remove(index);
 }
 
+fn copy_image_list_image_payload(dst: &mut ImageListImage, src: &ImageListImage) {
+    dst.bitmap = src.bitmap;
+    dst.mask = src.mask;
+    dst.icon = src.icon;
+    dst.transparent_color = src.transparent_color;
+}
+
+fn swap_image_list_image_payload(first: &mut ImageListImage, second: &mut ImageListImage) {
+    std::mem::swap(&mut first.bitmap, &mut second.bitmap);
+    std::mem::swap(&mut first.mask, &mut second.mask);
+    std::mem::swap(&mut first.icon, &mut second.icon);
+    std::mem::swap(&mut first.transparent_color, &mut second.transparent_color);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageListImageInfo {
     pub bitmap: u32,
@@ -1750,11 +1764,19 @@ impl ResourceSystem {
             return Some(false);
         }
         if flags & ILCF_SWAP != 0 {
-            list.images.swap(dst_index, src_index);
+            if dst_index != src_index {
+                let (first_index, second_index) = if dst_index < src_index {
+                    (dst_index, src_index)
+                } else {
+                    (src_index, dst_index)
+                };
+                let (first, rest) = list.images.split_at_mut(second_index);
+                swap_image_list_image_payload(&mut first[first_index], &mut rest[0]);
+            }
             return Some(true);
         }
         let image = list.images[src_index].clone();
-        list.images[dst_index] = image;
+        copy_image_list_image_payload(&mut list.images[dst_index], &image);
         Some(true)
     }
 

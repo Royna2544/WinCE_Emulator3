@@ -12504,6 +12504,13 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
             ));
         }
     }
+    {
+        let list = kernel.resources.image_list_mut(list_a).unwrap();
+        list.images[0].source_x = 11;
+        list.images[0].source_y = 12;
+        list.images[1].source_x = 21;
+        list.images[1].source_y = 22;
+    }
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -12579,6 +12586,23 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
         kernel.resources.image_list(list_a).unwrap().images[1].icon,
         0x000b_8101
     );
+    assert_eq!(
+        kernel.resources.image_list(list_a).unwrap().images[0].source_x,
+        11,
+        "CE ImageList_Copy swaps payload pixels/icons without swapping destination slot rectangles"
+    );
+    assert_eq!(
+        kernel.resources.image_list(list_a).unwrap().images[0].source_y,
+        12
+    );
+    assert_eq!(
+        kernel.resources.image_list(list_a).unwrap().images[1].source_x,
+        21
+    );
+    assert_eq!(
+        kernel.resources.image_list(list_a).unwrap().images[1].source_y,
+        22
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -12601,6 +12625,13 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
     );
     assert_eq!(list_a_after_self_move.images[0].icon, 0x000b_8101);
     assert_eq!(list_a_after_self_move.images[1].icon, 0x000b_8101);
+    assert_eq!(list_a_after_self_move.images[0].source_x, 11);
+    assert_eq!(list_a_after_self_move.images[0].source_y, 12);
+    assert_eq!(
+        list_a_after_self_move.images[1].source_x, 21,
+        "CE ImageList_Copy move preserves the destination slot rectangle"
+    );
+    assert_eq!(list_a_after_self_move.images[1].source_y, 22);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
