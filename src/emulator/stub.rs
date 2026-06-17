@@ -283,6 +283,10 @@ impl CpuBackend for UnicornMips {
         "  parked processes: none\n".to_owned()
     }
 
+    fn blocked_wait_debug_text(&self, _kernel: &CeKernel) -> String {
+        "  cpu blocked waits: none\n".to_owned()
+    }
+
     fn has_ready_parked_send_unblock(&self, _kernel: &CeKernel) -> bool {
         false
     }

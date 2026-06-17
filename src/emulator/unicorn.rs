@@ -3761,6 +3761,31 @@ impl UnicornMips {
         let Some(launch) = Self::active_process_launch_from_trace(kernel) else {
             return None;
         };
+        let terminal_detail = self
+            .last_debug_snapshot()
+            .map(|snapshot| {
+                format!(
+                    "active_terminal_child_return pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} v0=0x{:08x} thread_exit_reached={} saved_context={} running_thread={} pending_thread_returns={} blocked_guest_thread={} blocked_wait_threads={} blocked_send_timeout={} module={}",
+                    snapshot.pc,
+                    snapshot.ra,
+                    snapshot.sp,
+                    snapshot.v0,
+                    snapshot.thread_exit_reached,
+                    self.saved_context.is_some(),
+                    self.running_guest_thread.is_some(),
+                    self.pending_guest_thread_returns.len(),
+                    self.blocked_guest_thread.is_some(),
+                    self.blocked_wait_threads.len(),
+                    self.blocked_send_message_timeout.is_some(),
+                    kernel.process_module_path(),
+                )
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "active_terminal_child_return snapshot=none module={}",
+                    kernel.process_module_path()
+                )
+            });
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessChildReturned",
             application: launch.application.clone(),
@@ -3775,7 +3800,7 @@ impl UnicornMips {
             thread_id: Some(launch.thread_id),
             result: Some(exit_code),
             error: None,
-            detail: Some("active_terminal_child_return".to_owned()),
+            detail: Some(terminal_detail),
         });
         let modal_state = self.take_terminal_blocked_modal(kernel);
         kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer);
@@ -8733,6 +8758,10 @@ impl super::cpu::CpuBackend for UnicornMips {
 
     fn parked_process_debug_text(&self, kernel: &crate::ce::kernel::CeKernel) -> String {
         self.parked_process_debug_text(kernel)
+    }
+
+    fn blocked_wait_debug_text(&self, kernel: &crate::ce::kernel::CeKernel) -> String {
+        self.blocked_wait_debug_text(kernel)
     }
 
     fn has_ready_parked_send_unblock(&self, kernel: &crate::ce::kernel::CeKernel) -> bool {

@@ -31,6 +31,7 @@ pub trait CpuBackend: Clone + std::fmt::Debug {
 
     fn has_parked_child_processes(&self) -> bool;
     fn parked_process_debug_text(&self, kernel: &CeKernel) -> String;
+    fn blocked_wait_debug_text(&self, kernel: &CeKernel) -> String;
     fn has_ready_parked_send_unblock(&self, kernel: &CeKernel) -> bool;
     fn has_ready_parked_wait_unblock(&self, kernel: &CeKernel) -> bool;
     fn rotate_to_ready_parked_wait(&mut self, kernel: &mut CeKernel) -> bool;
