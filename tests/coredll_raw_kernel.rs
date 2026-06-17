@@ -6108,6 +6108,11 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     )
     .unwrap();
     fs::write(
+        root.join("Docs").join("core-header-icon.exe"),
+        pe32_with_core_header_icon(),
+    )
+    .unwrap();
+    fs::write(
         root.join("Docs").join("two-bpp-icon.exe"),
         pe32_with_2bpp_icon(),
     )
@@ -6621,6 +6626,69 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         &one_bpp_framebuffer.pixels()[one_bpp_right..one_bpp_right + 2],
         &[0x00, 0xf8],
         "1bpp RT_ICON draw should decode the following zero palette bit"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(path_ptr, r"\Docs\core-header-icon.exe");
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let core_header_icon = memory.read_u32(large_icon_ptr)?;
+    assert_ne!(core_header_icon, 0);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, core_header_icon);
+    let core_header_color_bitmap = kernel
+        .resources
+        .icon(core_header_icon)
+        .expect("BITMAPCOREHEADER PE icon")
+        .color_bitmap;
+    let core_header_bitmap = kernel
+        .resources
+        .bitmap(core_header_color_bitmap)
+        .expect("BITMAPCOREHEADER PE icon bitmap");
+    assert_eq!(core_header_bitmap.bits_pixel, 1);
+    assert_eq!(
+        core_header_bitmap.color_table,
+        vec![[0x00, 0x00, 0xff, 0], [0x00, 0xff, 0x00, 0]],
+        "BITMAPCOREHEADER RT_ICON RGBTRIPLE table should be preserved"
+    );
+    let mut core_header_framebuffer = VirtualFramebuffer::new(4, 2, PixelFormat::Rgb565)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut core_header_framebuffer),
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [hdc, 1, 0, core_header_icon, 2, 1, 0, 0, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let core_header_left = PixelFormat::Rgb565.bytes_per_pixel();
+    let core_header_right = core_header_left + PixelFormat::Rgb565.bytes_per_pixel();
+    assert_eq!(
+        &core_header_framebuffer.pixels()[core_header_left..core_header_left + 2],
+        &[0xe0, 0x07],
+        "BITMAPCOREHEADER RT_ICON draw should decode the high-bit palette index"
+    );
+    assert_eq!(
+        &core_header_framebuffer.pixels()[core_header_right..core_header_right + 2],
+        &[0x00, 0xf8],
+        "BITMAPCOREHEADER RT_ICON draw should decode the following zero palette bit"
     );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
@@ -8148,6 +8216,17 @@ fn pe32_with_1bpp_icon() -> Vec<u8> {
     bytes
 }
 
+fn pe32_with_core_header_icon() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    let icon_dib = icon_dib_core_1bpp(2, 1, 0x80);
+    put_test_u8(&mut bytes, 0x200 + 0x500 + 6, 2);
+    put_test_u32(&mut bytes, 0x200 + 0x2a0 + 4, icon_dib.len() as u32);
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 12, 1);
+    put_test_u32(&mut bytes, 0x200 + 0x500 + 14, icon_dib.len() as u32);
+    put_test_bytes(&mut bytes, 0x200 + 0x700, &icon_dib);
+    bytes
+}
+
 fn pe32_with_2bpp_icon() -> Vec<u8> {
     let mut bytes = pe32_with_group_icon_count(1);
     let icon_dib = icon_dib_2bpp(2, 1, 2, 1);
@@ -8460,6 +8539,25 @@ fn icon_dib_1bpp(width: i32, height: i32, row_bits: u8) -> Vec<u8> {
     bytes.extend_from_slice(&0u32.to_le_bytes());
     bytes.extend_from_slice(&[0x00, 0x00, 0xff, 0x00]);
     bytes.extend_from_slice(&[0x00, 0xff, 0x00, 0x00]);
+    bytes.push(row_bits);
+    bytes.resize(bytes.len() + xor_size.saturating_sub(1), 0);
+    bytes.resize(bytes.len() + and_size, 0);
+    bytes
+}
+
+fn icon_dib_core_1bpp(width: u16, height: u16, row_bits: u8) -> Vec<u8> {
+    let xor_stride = ((width as usize + 31) / 32) * 4;
+    let xor_size = xor_stride * height as usize;
+    let and_stride = ((width as usize + 31) / 32) * 4;
+    let and_size = and_stride * height as usize;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&12u32.to_le_bytes());
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&(height * 2).to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&[0x00, 0x00, 0xff]);
+    bytes.extend_from_slice(&[0x00, 0xff, 0x00]);
     bytes.push(row_bits);
     bytes.resize(bytes.len() + xor_size.saturating_sub(1), 0);
     bytes.resize(bytes.len() + and_size, 0);

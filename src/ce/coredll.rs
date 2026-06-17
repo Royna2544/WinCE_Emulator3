@@ -30379,26 +30379,46 @@ fn extract_pe_icon_by_id<M: CoredllGuestMemory>(
         .get(icon_offset..icon_end)
         .ok_or(PeIconExtractError::Malformed)?;
 
-    // RT_ICON data is a DIB - BITMAPINFOHEADER + color table + XOR mask + AND mask
+    // RT_ICON data is a DIB - bitmap header + color table + XOR mask + AND mask
     // The height in the header is 2*h (XOR + AND masks stacked), fix it for color bitmap
-    if icon_bytes.len() < 40 {
+    let header_size = read_le_u32(icon_bytes, 0).ok_or(PeIconExtractError::Malformed)?;
+    if icon_bytes.len() < header_size as usize {
         return Err(PeIconExtractError::Malformed);
     }
-    let actual_width = read_le_i32(icon_bytes, 4).ok_or(PeIconExtractError::Malformed)?;
-    let dib_height = read_le_u32(icon_bytes, 8).ok_or(PeIconExtractError::Malformed)?;
+    let (actual_width, dib_height, bpp, compression) = match header_size {
+        12 => (
+            read_le_u16(icon_bytes, 4).ok_or(PeIconExtractError::Malformed)? as i32,
+            u32::from(read_le_u16(icon_bytes, 6).ok_or(PeIconExtractError::Malformed)?),
+            read_le_u16(icon_bytes, 10).ok_or(PeIconExtractError::Malformed)?,
+            BI_RGB,
+        ),
+        40..=124 => (
+            read_le_i32(icon_bytes, 4).ok_or(PeIconExtractError::Malformed)?,
+            read_le_u32(icon_bytes, 8).ok_or(PeIconExtractError::Malformed)?,
+            read_le_u16(icon_bytes, 14).ok_or(PeIconExtractError::Malformed)?,
+            read_le_u32(icon_bytes, 16).unwrap_or(BI_RGB),
+        ),
+        _ => return Err(PeIconExtractError::Malformed),
+    };
     let actual_height = (dib_height / 2) as i32;
-    let bpp = read_le_u16(icon_bytes, 14).ok_or(PeIconExtractError::Malformed)?;
-    let compression = read_le_u32(icon_bytes, 16).unwrap_or(0);
     if actual_width <= 0 || actual_height <= 0 || dib_height % 2 != 0 || bpp == 0 {
         return Err(PeIconExtractError::Malformed);
     }
 
     // Create a copy of the icon DIB with corrected height for the color bitmap
     let mut color_dib: Vec<u8> = icon_bytes.to_vec();
-    color_dib
-        .get_mut(8..12)
-        .ok_or(PeIconExtractError::Malformed)?
-        .copy_from_slice(&(actual_height as u32).to_le_bytes());
+    if header_size == 12 {
+        let height = u16::try_from(actual_height).map_err(|_| PeIconExtractError::Malformed)?;
+        color_dib
+            .get_mut(6..8)
+            .ok_or(PeIconExtractError::Malformed)?
+            .copy_from_slice(&height.to_le_bytes());
+    } else {
+        color_dib
+            .get_mut(8..12)
+            .ok_or(PeIconExtractError::Malformed)?
+            .copy_from_slice(&(actual_height as u32).to_le_bytes());
+    }
 
     let color_bitmap = create_bitmap_from_dib_bytes(kernel, memory, thread_id, &color_dib);
     if color_bitmap == 0 {
@@ -30417,6 +30437,7 @@ fn extract_pe_icon_by_id<M: CoredllGuestMemory>(
         memory,
         thread_id,
         icon_bytes,
+        header_size,
         actual_width,
         actual_height,
         bpp,
@@ -30442,6 +30463,7 @@ fn pe_icon_and_mask_bitmap<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     icon_bytes: &[u8],
+    header_size: u32,
     width: i32,
     height: i32,
     bpp: u16,
@@ -30452,6 +30474,7 @@ fn pe_icon_and_mask_bitmap<M: CoredllGuestMemory>(
         memory,
         thread_id,
         icon_bytes,
+        header_size,
         width,
         height,
         bpp,
@@ -30465,23 +30488,33 @@ fn pe_icon_and_mask_bitmap_inner<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     icon_bytes: &[u8],
+    header_size: u32,
     width: i32,
     height: i32,
     bpp: u16,
     compression: u32,
 ) -> Option<u32> {
     const BI_BITFIELDS: u32 = 3;
-    let header_size = 40usize;
+    let header_size = header_size as usize;
     // BI_BITFIELDS adds 12 bytes of RGB masks between header and pixel data
-    let bitfields_bytes: usize = if compression == BI_BITFIELDS { 12 } else { 0 };
+    let bitfields_bytes: usize = if compression == BI_BITFIELDS && header_size == 40 {
+        12
+    } else {
+        0
+    };
     let color_entries: usize = if bpp <= 8 { 1 << bpp } else { 0 };
-    let used_entries = read_le_u32(icon_bytes, 32).map(|n| n as usize).unwrap_or(0);
+    let used_entries = if header_size >= 40 {
+        read_le_u32(icon_bytes, 32).map(|n| n as usize).unwrap_or(0)
+    } else {
+        0
+    };
     let actual_color_entries = if used_entries > 0 && used_entries < color_entries {
         used_entries
     } else {
         color_entries
     };
-    let color_table_bytes = actual_color_entries * 4;
+    let color_entry_bytes = if header_size == 12 { 3 } else { 4 };
+    let color_table_bytes = actual_color_entries.checked_mul(color_entry_bytes)?;
     let xor_stride = ((width as usize)
         .checked_mul(bpp as usize)?
         .checked_add(31)?
