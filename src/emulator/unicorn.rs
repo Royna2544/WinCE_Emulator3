@@ -701,6 +701,11 @@ enum FsdmgrFileLockOperation {
         length_low: u32,
         explicit_offset: Option<(u32, u32)>,
     },
+    RemoveExact {
+        length_low: u32,
+        length_high: u32,
+        overlapped_ptr: u32,
+    },
     RemoveAll,
 }
 
@@ -33182,6 +33187,19 @@ fn is_fsdmgr_remove_file_lock_ex_import(
 }
 
 #[cfg(feature = "unicorn")]
+fn is_fsdmgr_remove_file_lock_import(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    name: Option<&str>,
+) -> bool {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Fsdmgr {
+        return false;
+    }
+    matches!(ordinal, Some(28))
+        || name.is_some_and(|name| name.eq_ignore_ascii_case("FSDMGR_RemoveFileLock"))
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_fsdmgr_file_lock_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
@@ -33193,7 +33211,9 @@ fn try_enter_fsdmgr_file_lock_callout<D>(
     use unicorn_engine::RegisterMIPS;
 
     let test_lock_import = is_fsdmgr_test_file_lock_import(module_kind, ordinal, name);
+    let remove_exact_import = is_fsdmgr_remove_file_lock_import(module_kind, ordinal, name);
     if test_lock_import.is_none()
+        && !remove_exact_import
         && !is_fsdmgr_remove_file_lock_ex_import(module_kind, ordinal, name)
     {
         return false;
@@ -33220,6 +33240,11 @@ fn try_enter_fsdmgr_file_lock_callout<D>(
                 explicit_offset,
             }
         }
+        None if remove_exact_import => FsdmgrFileLockOperation::RemoveExact {
+            length_low: args.get(4).copied().unwrap_or(0),
+            length_high: args.get(5).copied().unwrap_or(0),
+            overlapped_ptr: args.get(6).copied().unwrap_or(0),
+        },
         None => FsdmgrFileLockOperation::RemoveAll,
     };
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
@@ -33480,6 +33505,132 @@ fn fsdmgr_guest_remove_file_lock_ex_result<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn fsdmgr_guest_remove_file_lock_result<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    state: &PendingFsdmgrFileLockReturn,
+) -> u32 {
+    const ERROR_INVALID_HANDLE: u32 = 6;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+    const ERROR_LOCK_VIOLATION: u32 = 33;
+    const FILE_LOCK_STATE_CQUEUE_OFFSET: u32 = 24;
+    const FILE_LOCK_STATE_LOCK_CONTAINER_OFFSET: u32 = 28;
+    let FsdmgrFileLockOperation::RemoveExact {
+        length_low,
+        length_high,
+        overlapped_ptr,
+    } = state.operation
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+
+    let Some(file_lock_state_ptr) = read_unicorn_u32_result(uc, state.file_lock_state_ptr_slot)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if file_lock_state_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let lock_container_ptr =
+        file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_LOCK_CONTAINER_OFFSET);
+    let Some(lock_container) = read_unicorn_u32_result(uc, lock_container_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if lock_container == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if overlapped_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let mut overlapped = [0u8; 20];
+    if uc
+        .mem_read(u64::from(overlapped_ptr), &mut overlapped)
+        .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let start_low = u32::from_le_bytes(overlapped[8..12].try_into().unwrap());
+    let start_high = u32::from_le_bytes(overlapped[12..16].try_into().unwrap());
+    let start = u64::from(start_low) | (u64::from(start_high) << 32);
+    let length = u64::from(length_low) | (u64::from(length_high) << 32);
+
+    match kernel.unlock_file_range(state.file_handle, start, length) {
+        Ok(FileLockStatus::Success) => {}
+        Ok(FileLockStatus::Conflict) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_LOCK_VIOLATION);
+            return 0;
+        }
+        Ok(FileLockStatus::InvalidParameter) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
+        }
+    }
+
+    let Some(queue_count) = read_unicorn_u32_result(
+        uc,
+        file_lock_state_ptr.wrapping_add(FILE_LOCK_STATE_CQUEUE_OFFSET),
+    ) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if queue_count == 0 {
+        match kernel.file_handle_has_locks(state.file_handle) {
+            Ok(false) => {
+                if !write_unicorn_u32_result(uc, lock_container_ptr, 0) {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    return 0;
+                }
+            }
+            Ok(true) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return 0;
+            }
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    1
+}
+
+#[cfg(feature = "unicorn")]
 fn enter_fsdmgr_release_file_lock_state<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     state: &mut PendingFsdmgrFileLockReturn,
@@ -33546,6 +33697,9 @@ fn handle_fsdmgr_file_lock_return_stub<D>(
             state.api_result = match state.operation {
                 FsdmgrFileLockOperation::Test { .. } => {
                     fsdmgr_guest_file_lock_test_result(kernel, uc, thread_id, state)
+                }
+                FsdmgrFileLockOperation::RemoveExact { .. } => {
+                    fsdmgr_guest_remove_file_lock_result(kernel, uc, thread_id, state)
                 }
                 FsdmgrFileLockOperation::RemoveAll => {
                     fsdmgr_guest_remove_file_lock_ex_result(kernel, uc, thread_id, state)
@@ -39390,6 +39544,21 @@ mod unicorn_tests {
             ),
             None
         );
+        assert!(super::is_fsdmgr_remove_file_lock_import(
+            ImportModuleKind::Fsdmgr,
+            Some(28),
+            None,
+        ));
+        assert!(super::is_fsdmgr_remove_file_lock_import(
+            ImportModuleKind::Fsdmgr,
+            None,
+            Some("FSDMGR_RemoveFileLock"),
+        ));
+        assert!(!super::is_fsdmgr_remove_file_lock_import(
+            ImportModuleKind::Coredll,
+            Some(28),
+            Some("FSDMGR_RemoveFileLock"),
+        ));
         assert!(super::is_fsdmgr_remove_file_lock_ex_import(
             ImportModuleKind::Fsdmgr,
             Some(29),
@@ -39482,6 +39651,99 @@ mod unicorn_tests {
 
         let _ = kernel.close_handle(file);
         let _ = kernel.close_handle(peer);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fsdmgr_remove_file_lock_callout_unlocks_exact_range_and_clears_container() {
+        use crate::ce::file::{CREATE_ALWAYS, FileLockStatus, GENERIC_READ, GENERIC_WRITE};
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, Prot::ALL).unwrap();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "wince_fsdmgr_unicorn_remove_file_lock_{}",
+                std::process::id()
+            ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        kernel.mount_guest_root("\\ResidentFlash", root.clone());
+
+        let file = kernel
+            .create_file_w(
+                "\\ResidentFlash\\remove-exact-lock.bin",
+                GENERIC_READ | GENERIC_WRITE,
+                CREATE_ALWAYS,
+            )
+            .unwrap();
+        assert_eq!(
+            kernel.lock_file_range(file, 16, 4, true).unwrap(),
+            FileLockStatus::Success
+        );
+
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let return_pc = 0x0040_5100;
+        let acquire = 0x0040_5200;
+        let release = 0x0040_5300;
+        let file_lock_state = 0x3000_0300;
+        let overlapped = 0x3000_0400;
+        write_u32(&mut uc, u64::from(overlapped + 8), 16);
+        write_u32(&mut uc, u64::from(overlapped + 12), 0);
+        uc.reg_write(RegisterMIPS::SP, 0x3000_0900).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0x9999_0101).unwrap();
+        assert!(super::try_enter_fsdmgr_file_lock_callout(
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Fsdmgr,
+            Some(28),
+            None,
+            &[acquire, release, file, 0, 4, 0, overlapped],
+            &pending,
+        ));
+        let slot = 0x3000_0900 - super::WNDPROC_CALL_FRAME_BYTES;
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, acquire);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, file);
+        assert_eq!(uc.reg_read(RegisterMIPS::A1).unwrap() as u32, slot);
+
+        write_u32(&mut uc, u64::from(slot), file_lock_state);
+        write_u32(&mut uc, u64::from(file_lock_state + 24), 0);
+        write_u32(&mut uc, u64::from(file_lock_state + 28), 0x1234_5678);
+        uc.reg_write(RegisterMIPS::V0, 1).unwrap();
+        assert!(super::handle_fsdmgr_file_lock_return_stub(
+            &mut kernel,
+            &mut uc,
+            9,
+            &pending,
+        ));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, release);
+        assert_eq!(kernel.file_handle_has_locks(file).unwrap(), false);
+        let mut container = [0u8; 4];
+        uc.mem_read(u64::from(file_lock_state + 28), &mut container)
+            .unwrap();
+        assert_eq!(
+            u32::from_le_bytes(container),
+            0,
+            "CE clears pvLockContainer when exact unlock empties the container"
+        );
+
+        uc.reg_write(RegisterMIPS::V0, 1).unwrap();
+        assert!(super::handle_fsdmgr_file_lock_return_stub(
+            &mut kernel,
+            &mut uc,
+            9,
+            &pending,
+        ));
+        assert!(pending.borrow().is_empty());
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x9999_0101);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        assert_eq!(kernel.threads.get_last_error(9), 0);
+
+        let _ = kernel.close_handle(file);
         let _ = std::fs::remove_dir_all(root);
     }
 
