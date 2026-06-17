@@ -16099,9 +16099,10 @@ fn try_block_wait_for_multiple_objects<D>(
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
     let wait_arg_detail = format!(
-        "args=[{}]/handles_ptr=0x{handles_ptr:08x}/handle_words=[{}]",
+        "args=[{}]/handles_ptr=0x{handles_ptr:08x}/handle_words=[{}]/sp_words=[{}]",
         format_wait_raw_args(args),
-        format_unicorn_word_window(uc, handles_ptr, 2, count.saturating_add(2))
+        format_unicorn_word_window(uc, handles_ptr, 2, count.saturating_add(2)),
+        format_unicorn_word_window(uc, regs.regs[29], 0, 16)
     );
     if running_thread.borrow().is_some()
         && suspended_thread.borrow().is_none()
