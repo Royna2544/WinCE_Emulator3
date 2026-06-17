@@ -33273,6 +33273,13 @@ fn copy_image_list_bitmap_pixels_from_snapshot<M: CoredllGuestMemory>(
     width: i32,
     height: i32,
 ) -> bool {
+    if dst_bitmap.bits_pixel == src_bitmap.bits_pixel
+        && matches!(dst_bitmap.bits_pixel, 1 | 2 | 4 | 8)
+    {
+        return copy_indexed_bitmap_pixels_from_snapshot(
+            memory, dst_bitmap, dst_x, dst_y, src_bitmap, src_bytes, src_x, src_y, width, height,
+        );
+    }
     let clip = Rect {
         left: 0,
         top: 0,
@@ -33301,6 +33308,140 @@ fn copy_image_list_bitmap_pixels_from_snapshot<M: CoredllGuestMemory>(
         clip,
     );
     true
+}
+
+fn copy_indexed_bitmap_pixels_from_snapshot<M: CoredllGuestMemory>(
+    memory: &mut M,
+    dst_bitmap: &crate::ce::resource::BitmapObject,
+    dst_x: i32,
+    dst_y: i32,
+    src_bitmap: &crate::ce::resource::BitmapObject,
+    src_bytes: &[u8],
+    src_x: i32,
+    src_y: i32,
+    width: i32,
+    height: i32,
+) -> bool {
+    for row in 0..height {
+        let dy = dst_y.saturating_add(row);
+        let sy = src_y.saturating_add(row);
+        for col in 0..width {
+            let dx = dst_x.saturating_add(col);
+            let sx = src_x.saturating_add(col);
+            if dx < 0
+                || dy < 0
+                || sx < 0
+                || sy < 0
+                || dx >= dst_bitmap.width
+                || dy >= dst_bitmap.height
+                || sx >= src_bitmap.width
+                || sy >= src_bitmap.height
+            {
+                continue;
+            }
+            let Some(index) = bitmap_index_pixel_from_snapshot(src_bitmap, src_bytes, sx, sy)
+            else {
+                return false;
+            };
+            if write_bitmap_index_pixel(memory, dst_bitmap, dx, dy, index).is_err() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn bitmap_index_pixel_from_snapshot(
+    bitmap: &crate::ce::resource::BitmapObject,
+    bytes: &[u8],
+    x: i32,
+    y: i32,
+) -> Option<u8> {
+    if x < 0 || y < 0 || x >= bitmap.width || y >= bitmap.height {
+        return None;
+    }
+    let row = if bitmap.top_down {
+        y
+    } else {
+        bitmap.height - 1 - y
+    } as usize;
+    let x = x as usize;
+    let row_start = row.checked_mul(bitmap.width_bytes as usize)?;
+    match bitmap.bits_pixel {
+        8 => bytes.get(row_start + x).copied(),
+        4 => bytes
+            .get(row_start + (x / 2))
+            .copied()
+            .map(|byte| if x % 2 == 0 { byte >> 4 } else { byte & 0x0f }),
+        2 => bytes.get(row_start + (x / 4)).copied().map(|byte| {
+            let shift = 6 - ((x % 4) * 2);
+            (byte >> shift) & 0x03
+        }),
+        1 => bytes.get(row_start + (x / 8)).copied().map(|byte| {
+            if byte & (0x80u8 >> (x % 8)) != 0 {
+                1
+            } else {
+                0
+            }
+        }),
+        _ => None,
+    }
+}
+
+fn write_bitmap_index_pixel<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    x: i32,
+    y: i32,
+    index: u8,
+) -> Result<()> {
+    if x < 0 || y < 0 || x >= bitmap.width || y >= bitmap.height {
+        return Ok(());
+    }
+    let row = if bitmap.top_down {
+        y
+    } else {
+        bitmap.height - 1 - y
+    } as u32;
+    let x = x as u32;
+    let row_start = row.saturating_mul(bitmap.width_bytes as u32);
+    match bitmap.bits_pixel {
+        8 => memory.write_u8(
+            bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x),
+            index,
+        ),
+        4 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x / 2);
+            let mut byte = memory.read_u8(addr).unwrap_or(0);
+            let index = index & 0x0f;
+            if x % 2 == 0 {
+                byte = (byte & 0x0f) | (index << 4);
+            } else {
+                byte = (byte & 0xf0) | index;
+            }
+            memory.write_u8(addr, byte)
+        }
+        2 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x / 4);
+            let mut byte = memory.read_u8(addr).unwrap_or(0);
+            let shift = 6 - ((x % 4) * 2);
+            let index = (index & 0x03) << shift;
+            byte = (byte & !(0x03 << shift)) | index;
+            memory.write_u8(addr, byte)
+        }
+        1 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x / 8);
+            let mut byte = memory.read_u8(addr).unwrap_or(0);
+            let mask = 0x80u8 >> (x % 8);
+            if index & 1 != 0 {
+                byte |= mask;
+            } else {
+                byte &= !mask;
+            }
+            memory.write_u8(addr, byte)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn image_list_merge_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {

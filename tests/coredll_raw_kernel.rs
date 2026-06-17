@@ -12624,6 +12624,123 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
 }
 
 #[test]
+fn image_list_copy_preserves_indexed_pixel_indices() -> Result<()> {
+    const ILC_COLOR8: u32 = 0x0008;
+    const ILCF_MOVE: u32 = 0x0000_0000;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+
+    let dst_bits = 0x2_d000;
+    let src_bits = 0x2_d100;
+    memory.map_bytes(dst_bits, 4);
+    memory.write_bytes(dst_bits, &[0, 0, 0, 0]);
+    memory.map_bytes(src_bits, 4);
+    memory.write_bytes(src_bits, &[1, 0, 0, 0]);
+
+    let dst_bitmap = kernel.resources.create_bitmap(1, 1, 1, 8, dst_bits);
+    let first_palette = vec![[0x00, 0x00, 0xff, 0], [0x00, 0xff, 0x00, 0]];
+    kernel.resources.bitmap_mut(dst_bitmap).unwrap().color_table = first_palette;
+    let src_bitmap = kernel.resources.create_bitmap(1, 1, 1, 8, src_bits);
+    kernel.resources.bitmap_mut(src_bitmap).unwrap().color_table =
+        vec![[0x00, 0x00, 0x00, 0], [0xff, 0x00, 0x00, 0]];
+
+    let image_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_COLOR8, 2, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create rejected CE 8bpp palette flags: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [image_list, dst_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [image_list, src_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    let stored_dst_bitmap = kernel.resources.image_list(image_list).unwrap().images[0].bitmap;
+    let stored_dst_bits = kernel
+        .resources
+        .bitmap(stored_dst_bitmap)
+        .expect("image-list copy stores owned bitmaps")
+        .bits_ptr;
+    assert_eq!(memory.read_u8(stored_dst_bits)?, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY,
+            [image_list, 0, image_list, 1, ILCF_MOVE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        memory.read_u8(stored_dst_bits)?,
+        1,
+        "CE ImageList_Copy BitBlts indexed slots as raw indices instead of palette-converted RGB"
+    );
+
+    let (dc, draw_bits, draw_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 1, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [image_list, 0, dc, 0, 0, 1, 1, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, draw_bits, draw_stride, 0, 0),
+        0x07e0,
+        "the copied raw index should render through the list's first latched palette"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<()> {
     // IMAGELISTDRAWPARAMS layout (4 bytes each, 14 fields = 56 bytes):
     // @0 cbSize @4 himl @8 i @12 hdcDst @16 x @20 y @24 cx @28 cy
