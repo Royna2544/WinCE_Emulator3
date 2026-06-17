@@ -5918,6 +5918,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_CREATE_PATTERN_BRUSH => Some(CoredllValue::Handle(create_pattern_brush_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
         ))),
@@ -41661,8 +41662,20 @@ fn create_solid_brush_raw(kernel: &mut CeKernel, color: u32) -> u32 {
     kernel.resources.create_brush(color)
 }
 
-fn create_pattern_brush_raw(kernel: &mut CeKernel, thread_id: u32, bitmap: u32) -> u32 {
-    let Some(handle) = kernel.resources.create_pattern_brush(bitmap) else {
+fn create_pattern_brush_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    bitmap: u32,
+) -> u32 {
+    let Some(bitmap) = clone_bitmap_for_pattern_brush(kernel, memory, thread_id, bitmap) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let Some(handle) = kernel.resources.create_owned_pattern_brush(bitmap) else {
+        delete_owned_bitmap(kernel, bitmap);
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -41670,6 +41683,53 @@ fn create_pattern_brush_raw(kernel: &mut CeKernel, thread_id: u32, bitmap: u32) 
     };
     kernel.threads.set_last_error(thread_id, 0);
     handle
+}
+
+fn clone_bitmap_for_pattern_brush<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    bitmap: u32,
+) -> Option<u32> {
+    let source = kernel.resources.bitmap(bitmap)?.clone();
+    let bits_ptr = if source.bits_ptr != 0 {
+        let bytes = read_bitmap_object_bytes(memory, &source)?;
+        let Some(bits_ptr) =
+            kernel
+                .memory
+                .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, bytes.len() as u32)
+        else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return None;
+        };
+        if !write_guest_bytes(kernel, memory, thread_id, bits_ptr, &bytes) {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+            return None;
+        }
+        bits_ptr
+    } else {
+        0
+    };
+    let height = if source.top_down {
+        -source.height
+    } else {
+        source.height
+    };
+    let clone = kernel.resources.create_owned_bitmap_with_masks(
+        source.width,
+        height,
+        source.planes,
+        source.bits_pixel,
+        bits_ptr,
+        source.rgb_masks,
+    );
+    if let Some(clone_bitmap) = kernel.resources.bitmap_mut(clone) {
+        clone_bitmap.color_table = source.color_table;
+        clone_bitmap.alpha_mask = source.alpha_mask;
+    }
+    Some(clone)
 }
 
 fn create_dib_pattern_brush_pt_raw<M: CoredllGuestMemory>(
