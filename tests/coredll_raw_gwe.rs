@@ -3996,6 +3996,94 @@ fn coredll_raw_fill_rect_paints_selected_memory_dib() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_fill_rect_with_null_brush_succeeds_without_painting() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 4);
+    memory.write_word(rect_ptr + 12, 4);
+
+    let null_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [5],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(NULL_BRUSH) did not return a handle: {other:?}"),
+    };
+    assert_ne!(null_brush, 0);
+
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+    write_rgb565(&mut memory, bits_ptr, stride, 1, 1, 0xf800);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FILL_RECT,
+            [mem_dc, rect_ptr, null_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 1), 0xf800);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+
+    let mut framebuffer = VirtualFramebuffer::new(4, 4, PixelFormat::Rgb565)?;
+    for pixel in framebuffer.pixels_mut().chunks_exact_mut(2) {
+        pixel.copy_from_slice(&0x07e0u16.to_le_bytes());
+    }
+    let _ = framebuffer.take_dirty_rects();
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a desktop HDC: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_FILL_RECT,
+            [screen_dc, rect_ptr, null_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), 0x07e0);
+    assert!(framebuffer.dirty_rects().is_empty());
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_fill_rgn_reports_ce_handle_errors_and_paints() -> Result<()> {
     const BLACK_PEN: u32 = 7;
 

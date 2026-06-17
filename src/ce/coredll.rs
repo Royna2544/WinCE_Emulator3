@@ -43633,12 +43633,14 @@ fn fill_bitmap_rect_for_hdc<M: CoredllGuestMemory>(
         return true;
     };
     let pattern = match &paint {
+        BrushPaint::Null => None,
         BrushPaint::Solid(_) => None,
         BrushPaint::Pattern(pattern) => {
             bitmap_pattern_bytes(memory, pattern).map(|bytes| (pattern.clone(), bytes))
         }
     };
     let solid = match &paint {
+        BrushPaint::Null => None,
         BrushPaint::Solid(colorref) => Some(colorref_rgb(*colorref)),
         BrushPaint::Pattern(_) => None,
     };
@@ -43937,6 +43939,7 @@ fn brush_colorref(kernel: &CeKernel, brush: u32) -> Option<u32> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BrushPaint {
+    Null,
     Solid(u32),
     Pattern(crate::ce::resource::BitmapObject),
 }
@@ -43958,6 +43961,9 @@ impl BrushPixelSource {
 }
 
 fn brush_paint(kernel: &CeKernel, brush: u32) -> Option<BrushPaint> {
+    if Some(brush) == stock_object_handle(5) {
+        return Some(BrushPaint::Null);
+    }
     if let Some(color) = brush_colorref(kernel, brush) {
         return Some(BrushPaint::Solid(color));
     }
@@ -43985,6 +43991,7 @@ fn selected_brush_pixel_source<M: CoredllGuestMemory>(
         .map(|state| state.brush_origin)
         .unwrap_or(Point { x: 0, y: 0 });
     match selected_brush_paint(kernel, hdc)? {
+        BrushPaint::Null => None,
         BrushPaint::Solid(colorref) => Some(BrushPixelSource {
             solid: Some(colorref_rgb(colorref)),
             pattern: None,
@@ -48681,6 +48688,7 @@ fn ellipse_raw<M: CoredllGuestMemory>(
                             }
                             for x in x_start..x_end {
                                 let rgb = match paint {
+                                    BrushPaint::Null => continue,
                                     BrushPaint::Solid(colorref) => colorref_rgb(*colorref),
                                     BrushPaint::Pattern(_) => {
                                         if let Some((pat, bytes)) = pattern.as_ref() {
@@ -48999,6 +49007,7 @@ fn round_rect_raw<M: CoredllGuestMemory>(
                             }
                             for x in x_start..x_end {
                                 let rgb = match paint {
+                                    BrushPaint::Null => continue,
                                     BrushPaint::Solid(colorref) => colorref_rgb(*colorref),
                                     BrushPaint::Pattern(_) => {
                                         if let Some((pat, bytes)) = pattern.as_ref() {
@@ -49374,12 +49383,14 @@ fn fill_bitmap_polygon<M: CoredllGuestMemory>(
     fill_mode: i32,
 ) {
     let pattern = match &paint {
+        BrushPaint::Null => None,
         BrushPaint::Solid(_) => None,
         BrushPaint::Pattern(pattern) => {
             bitmap_pattern_bytes(memory, pattern).map(|bytes| (pattern.clone(), bytes))
         }
     };
     let solid = match &paint {
+        BrushPaint::Null => None,
         BrushPaint::Solid(colorref) => Some(colorref_rgb(*colorref)),
         BrushPaint::Pattern(_) => None,
     };
