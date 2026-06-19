@@ -46501,13 +46501,19 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
             };
             let blended = apply_ild_blend(rgb, blend, dst_rgb, dst_rel_x, dst_rel_y);
             let result = apply_bitmap_rop(blended, dst_rgb, pattern_rgb, rop);
-            let source_alpha =
-                if dst.bits_pixel == 32 && blend.is_none() && brush.is_none() && rop.is_none() {
-                    alpha_from_src_bitmap(src, src_bytes, source_x, source_y)
-                } else {
-                    None
-                };
-            if let Some(alpha) = source_alpha {
+            let source_alpha = if dst.bits_pixel == 32
+                && transparent_rgb.is_none()
+                && blend.is_none()
+                && brush.is_none()
+                && rop.is_none()
+            {
+                alpha_from_src_bitmap(src, src_bytes, source_x, source_y)
+            } else {
+                None
+            };
+            let transparent_alpha =
+                (dst.bits_pixel == 32 && transparent_rgb.is_some()).then_some(0);
+            if let Some(alpha) = source_alpha.or(transparent_alpha) {
                 let _ = write_bitmap_pixel_rgba(memory, dst, x, y, result, alpha);
             } else {
                 let _ =

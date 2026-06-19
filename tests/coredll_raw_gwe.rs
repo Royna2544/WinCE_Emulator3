@@ -15909,7 +15909,7 @@ fn coredll_raw_transparent_image_simple_source_offset_framebuffer() -> Result<()
 }
 
 #[test]
-fn coredll_raw_transparent_image_preserves_alpha_dib_pixel_dword() -> Result<()> {
+fn coredll_raw_transparent_image_truncates_alpha_dib_pixel_dword() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
@@ -15937,7 +15937,10 @@ fn coredll_raw_transparent_image_preserves_alpha_dib_pixel_dword() -> Result<()>
         }
     ));
 
-    assert_eq!(memory.read_bytes(bits + 4, 4), source.to_le_bytes());
+    assert_eq!(
+        memory.read_bytes(bits + 4, 4),
+        (source & 0x00ff_ffff).to_le_bytes()
+    );
     assert_eq!(stride, 8);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
@@ -18389,9 +18392,9 @@ fn coredll_raw_transparent_image_mirrors_negative_extents_between_selected_dibs(
     assert_eq!(
         memory.read_bytes(dst_bits, (dst_stride * 2) as usize),
         vec![
-            0x00, 0x00, 0xff, 0xff, // red
-            0x00, 0xff, 0x00, 0xff, // green
-            0xff, 0x00, 0x00, 0xff, // blue
+            0x00, 0x00, 0xff, 0x00, // red, copied with alpha truncated
+            0x00, 0xff, 0x00, 0x00, // green, copied with alpha truncated
+            0xff, 0x00, 0x00, 0x00, // blue, copied with alpha truncated
             0xff, 0xff, 0xff, 0xff, // skipped transparent magenta
         ]
     );

@@ -40,6 +40,9 @@ notes when it is still needed for implementation.
   `BltAlphaDIBTest(EPatBlt)` is now covered for alpha-bearing solid and
   pattern brushes on selected 32 bpp DIBs; CE leaves the resulting alpha bytes
   undefined but requires the `PatBlt(PATCOPY)` calls to succeed.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `BltAlphaDIBTest(ETransparentImage)` now follows CE's 32 bpp DIB behavior:
+  transparent copies preserve RGB while truncating the destination alpha byte.
 
 ## Active Roadmap
 
