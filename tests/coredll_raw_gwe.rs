@@ -9193,12 +9193,61 @@ fn coredll_raw_create_compatible_bitmap_matches_ce_depth_and_zero_size() -> Resu
         .resources
         .bitmap(display_bitmap)
         .expect("display-compatible bitmap");
+    let display_bits_ptr = display.bits_ptr;
     assert_eq!(display.width, 3);
     assert_eq!(display.height, 2);
     assert_eq!(
         display.bits_pixel, 16,
         "CE CreateCompatibleBitmap(primary hdc) follows display depth"
     );
+    assert!(
+        display.dib_section,
+        "CE primary-compatible bitmaps report a DIBSECTION through GetObject"
+    );
+    assert_eq!(
+        display.rgb_masks,
+        Some([0x0000_f800, 0x0000_07e0, 0x0000_001f])
+    );
+
+    const DIBSECTION_SIZE: u32 = 84;
+    const BI_BITFIELDS: u32 = 3;
+    let object_out = 0x0005_0000;
+    memory.map_bytes(object_out, DIBSECTION_SIZE);
+    memory.map_words(object_out, DIBSECTION_SIZE / 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OBJECT_W,
+            [display_bitmap, DIBSECTION_SIZE, object_out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(DIBSECTION_SIZE),
+            ..
+        }
+    ));
+    let dib_object = memory.read_bytes(object_out, DIBSECTION_SIZE as usize);
+    let u16_at =
+        |offset: usize| u16::from_le_bytes(dib_object[offset..offset + 2].try_into().unwrap());
+    let u32_at =
+        |offset: usize| u32::from_le_bytes(dib_object[offset..offset + 4].try_into().unwrap());
+    let i32_at =
+        |offset: usize| i32::from_le_bytes(dib_object[offset..offset + 4].try_into().unwrap());
+    assert_eq!(i32_at(4), 3);
+    assert_eq!(i32_at(8), 2);
+    assert_eq!(u16_at(16), 1);
+    assert_eq!(u16_at(18), 16);
+    assert_eq!(u32_at(20), display_bits_ptr);
+    assert_eq!(u32_at(24), 40);
+    assert_eq!(i32_at(28), 3);
+    assert_eq!(i32_at(32), 2);
+    assert_eq!(u16_at(36), 1);
+    assert_eq!(u16_at(38), 16);
+    assert_eq!(u32_at(40), BI_BITFIELDS);
+    assert_eq!(u32_at(64), 0x0000_f800);
+    assert_eq!(u32_at(68), 0x0000_07e0);
+    assert_eq!(u32_at(72), 0x0000_001f);
 
     let memory_dc = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,

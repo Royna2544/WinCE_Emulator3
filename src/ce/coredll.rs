@@ -41265,6 +41265,8 @@ fn create_compatible_bitmap_raw(
     width: i32,
     height: i32,
 ) -> u32 {
+    const DISPLAY_RGB565_MASKS: [u32; 3] = [0x0000_f800, 0x0000_07e0, 0x0000_001f];
+
     if hdc == 0 {
         kernel
             .threads
@@ -41283,6 +41285,7 @@ fn create_compatible_bitmap_raw(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    let display_compatible = width > 0 && height > 0 && !kernel.resources.is_memory_dc(hdc);
     let (width, height, bits_pixel) = if width == 0 || height == 0 {
         (1, 1, 1)
     } else {
@@ -41317,9 +41320,16 @@ fn create_compatible_bitmap_raw(
         return 0;
     };
     kernel.threads.set_last_error(thread_id, 0);
-    kernel
+    let bitmap = kernel
         .resources
-        .create_owned_bitmap(width, height, 1, bits_pixel, bits_ptr)
+        .create_owned_bitmap(width, height, 1, bits_pixel, bits_ptr);
+    if display_compatible && bits_pixel == 16 {
+        if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
+            object.dib_section = true;
+            object.rgb_masks = Some(DISPLAY_RGB565_MASKS);
+        }
+    }
+    bitmap
 }
 
 fn create_dib_section_raw<M: CoredllGuestMemory>(

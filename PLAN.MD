@@ -47,6 +47,10 @@ notes when it is still needed for implementation.
   `OddCreatecompatibleBitmapTest` is now covered for primary-display depth,
   compatible-DC stock monochrome depth, and CE's 1x1 monochrome fallback when
   `CreateCompatibleBitmap` receives a zero width or height.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `CreateCompatibleBitmapDIBSECTIONTest` is now covered for primary-display
+  compatible bitmaps: `GetObject` returns a `DIBSECTION` with CE-style RGB565
+  `BI_BITFIELDS` masks.
 
 ## Active Roadmap
 
