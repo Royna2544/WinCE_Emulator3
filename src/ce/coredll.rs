@@ -35054,8 +35054,13 @@ fn create_bitmap_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return 0;
         };
-        let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, bits_ptr, storage_size)
-        else {
+        let Some(source_size) = bitmap_word_aligned_byte_count(width, height, bits_pixel) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, bits_ptr, source_size) else {
             return 0;
         };
         let Some(owned_bits) =
@@ -35074,6 +35079,7 @@ fn create_bitmap_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             owned_bits,
+            bitmap_word_aligned_width_bytes(width, bits_pixel),
             width_bytes,
             height.unsigned_abs(),
             height < 0,
@@ -35185,6 +35191,21 @@ fn bitmap_byte_count(width: i32, height: i32, bits_pixel: u16) -> Option<u32> {
         .checked_div(32)?
         .checked_mul(4)?;
     let bytes = row_bytes.checked_mul(height)?;
+    (bytes <= u64::from(u32::MAX)).then_some(bytes as u32)
+}
+
+fn bitmap_word_aligned_width_bytes(width: i32, bits_pixel: u16) -> u32 {
+    let bits_per_row = u64::from(width.unsigned_abs()) * u64::from(bits_pixel);
+    let row_bytes = bits_per_row.div_ceil(16).saturating_mul(2);
+    row_bytes.min(u64::from(u32::MAX)) as u32
+}
+
+fn bitmap_word_aligned_byte_count(width: i32, height: i32, bits_pixel: u16) -> Option<u32> {
+    if width == 0 || height == 0 || bits_pixel == 0 {
+        return None;
+    }
+    let row_bytes = u64::from(bitmap_word_aligned_width_bytes(width, bits_pixel));
+    let bytes = row_bytes.checked_mul(u64::from(height.unsigned_abs()))?;
     (bytes <= u64::from(u32::MAX)).then_some(bytes as u32)
 }
 
@@ -48083,19 +48104,29 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let Some((dest_ptr, storage_size, bits_writable, width_bytes, height, top_down)) =
-        kernel.resources.bitmap(bitmap).and_then(|bitmap| {
-            let width_bytes = u32::try_from(bitmap.width_bytes).ok()?;
-            let height = u32::try_from(bitmap.height).ok()?;
-            Some((
-                bitmap.bits_ptr,
-                width_bytes.checked_mul(height)?,
-                bitmap.bits_writable,
-                width_bytes,
-                height,
-                bitmap.top_down,
-            ))
-        })
+    let Some((
+        dest_ptr,
+        dest_storage_size,
+        source_storage_size,
+        bits_writable,
+        source_width_bytes,
+        width_bytes,
+        height,
+        top_down,
+    )) = kernel.resources.bitmap(bitmap).and_then(|bitmap| {
+        let width_bytes = u32::try_from(bitmap.width_bytes).ok()?;
+        let height = u32::try_from(bitmap.height).ok()?;
+        Some((
+            bitmap.bits_ptr,
+            width_bytes.checked_mul(height)?,
+            bitmap_word_aligned_byte_count(bitmap.width, bitmap.height, bitmap.bits_pixel)?,
+            bitmap.bits_writable,
+            bitmap_word_aligned_width_bytes(bitmap.width, bitmap.bits_pixel),
+            width_bytes,
+            height,
+            bitmap.top_down,
+        ))
+    })
     else {
         kernel
             .threads
@@ -48108,11 +48139,11 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
-    if storage_size == 0 {
+    if dest_storage_size == 0 {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
-    let copy_count = byte_count.min(storage_size);
+    let copy_count = byte_count.min(source_storage_size);
     let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, bits_ptr, copy_count) else {
         return 0;
     };
@@ -48120,7 +48151,7 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
         let Some(allocated) =
             kernel
                 .memory
-                .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, storage_size)
+                .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, dest_storage_size)
         else {
             kernel
                 .threads
@@ -48132,6 +48163,7 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             allocated,
+            source_width_bytes,
             width_bytes,
             height,
             top_down,
@@ -48154,6 +48186,7 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             dest_ptr,
+            source_width_bytes,
             width_bytes,
             height,
             top_down,
@@ -48171,25 +48204,26 @@ fn write_bitmap_bits_from_set_bitmap_bits<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     dest_ptr: u32,
-    width_bytes: u32,
+    source_width_bytes: u32,
+    dest_width_bytes: u32,
     height: u32,
     top_down: bool,
     bytes: &[u8],
 ) -> bool {
-    if top_down || height <= 1 {
+    if source_width_bytes == dest_width_bytes && (top_down || height <= 1) {
         return write_guest_bytes(kernel, memory, thread_id, dest_ptr, bytes);
     }
-    let Ok(width_bytes_usize) = usize::try_from(width_bytes) else {
+    let Ok(source_width_bytes_usize) = usize::try_from(source_width_bytes) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
-    if width_bytes_usize == 0 {
+    if source_width_bytes_usize == 0 {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
-    for (source_row, chunk) in bytes.chunks(width_bytes_usize).enumerate() {
+    for (source_row, chunk) in bytes.chunks(source_width_bytes_usize).enumerate() {
         let Ok(source_row) = u32::try_from(source_row) else {
             kernel
                 .threads
@@ -48202,8 +48236,12 @@ fn write_bitmap_bits_from_set_bitmap_bits<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return false;
         }
-        let dest_row = height - 1 - source_row;
-        let Some(row_offset) = dest_row.checked_mul(width_bytes) else {
+        let dest_row = if top_down {
+            source_row
+        } else {
+            height - 1 - source_row
+        };
+        let Some(row_offset) = dest_row.checked_mul(dest_width_bytes) else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);

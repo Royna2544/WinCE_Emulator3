@@ -50758,6 +50758,186 @@ fn coredll_raw_create_bitmap_copies_initial_bits() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_create_bitmap_and_set_bitmap_bits_preserve_ce_square_rows() -> Result<()> {
+    const SRCCOPY: u32 = 0x00cc_0020;
+
+    fn word_aligned_stride(width: usize, bits_pixel: u32) -> usize {
+        ((width * bits_pixel as usize).div_ceil(16)) * 2
+    }
+
+    fn square_bits(bits_pixel: u32) -> Vec<u8> {
+        let width = 16_usize;
+        let height = 16_usize;
+        let stride = word_aligned_stride(width, bits_pixel);
+        let mut bytes = vec![0; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let white = (y < 8 && x < 8) || (y >= 8 && x >= 8);
+                if !white {
+                    continue;
+                }
+                let row = y * stride;
+                match bits_pixel {
+                    1 => bytes[row + x / 8] |= 0x80 >> (x % 8),
+                    2 => bytes[row + x / 4] |= 0x03 << (6 - (x % 4) * 2),
+                    4 => bytes[row + x / 2] |= if x % 2 == 0 { 0xf0 } else { 0x0f },
+                    8 => bytes[row + x] = 0xff,
+                    16 => bytes[row + x * 2..row + x * 2 + 2]
+                        .copy_from_slice(&0xffff_u16.to_le_bytes()),
+                    24 => bytes[row + x * 3..row + x * 3 + 3].copy_from_slice(&[0xff, 0xff, 0xff]),
+                    32 => bytes[row + x * 4..row + x * 4 + 4]
+                        .copy_from_slice(&[0xff, 0xff, 0xff, 0x00]),
+                    _ => unreachable!("unsupported test depth"),
+                }
+            }
+        }
+        bytes
+    }
+
+    fn assert_square_pattern(
+        memory: &TestGuestMemory,
+        bits_ptr: u32,
+        stride: u32,
+        bits_pixel: u32,
+        mode: &str,
+    ) {
+        assert_eq!(
+            rgb565_at(memory, bits_ptr, stride, 0, 0),
+            0xffff,
+            "{mode} {bits_pixel}bpp top-left square"
+        );
+        assert_eq!(
+            rgb565_at(memory, bits_ptr, stride, 8, 0),
+            0x0000,
+            "{mode} {bits_pixel}bpp top-right square"
+        );
+        assert_eq!(
+            rgb565_at(memory, bits_ptr, stride, 0, 8),
+            0x0000,
+            "{mode} {bits_pixel}bpp bottom-left square"
+        );
+        assert_eq!(
+            rgb565_at(memory, bits_ptr, stride, 8, 8),
+            0xffff,
+            "{mode} {bits_pixel}bpp bottom-right square"
+        );
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 136_u32;
+
+    for (case_index, bits_pixel) in [1_u32, 2, 4, 8, 16, 24, 32].into_iter().enumerate() {
+        let source = square_bits(bits_pixel);
+
+        for use_set_bitmap_bits in [false, true] {
+            let source_ptr =
+                0x1_0800 + (case_index as u32) * 0x1000 + u32::from(use_set_bitmap_bits) * 0x800;
+            memory.map_bytes(source_ptr, source.len() as u32);
+            memory.write_bytes(source_ptr, &source);
+
+            let bitmap = match table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CREATE_BITMAP,
+                [
+                    16,
+                    16,
+                    1,
+                    bits_pixel,
+                    if use_set_bitmap_bits { 0 } else { source_ptr },
+                ],
+            ) {
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(handle),
+                    ..
+                } => handle,
+                other => panic!("CreateBitmap({bits_pixel}bpp) returned unexpected: {other:?}"),
+            };
+            assert_ne!(bitmap, 0);
+
+            if use_set_bitmap_bits {
+                assert!(
+                    matches!(
+                        table.dispatch_raw_ordinal_with_memory(
+                            &mut kernel,
+                            &mut memory,
+                            thread_id,
+                            ORD_SET_BITMAP_BITS,
+                            [bitmap, source.len() as u32, source_ptr],
+                        ),
+                        CoredllDispatch::Returned {
+                            value: CoredllValue::U32(copied),
+                            ..
+                        } if copied == source.len() as u32
+                    ),
+                    "SetBitmapBits({bits_pixel}bpp) should consume CE WORD-aligned square rows"
+                );
+            }
+
+            let src_dc = match table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CREATE_COMPATIBLE_DC,
+                [0],
+            ) {
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(handle),
+                    ..
+                } => handle,
+                other => panic!("CreateCompatibleDC returned unexpected: {other:?}"),
+            };
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_SELECT_OBJECT,
+                    [src_dc, bitmap],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(handle),
+                    ..
+                } if handle != 0
+            ));
+
+            let (dst_dc, dst_bits, dst_stride) =
+                create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 16);
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_BIT_BLT,
+                    [dst_dc, 0, 0, 16, 16, src_dc, 0, 0, SRCCOPY],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(true),
+                    ..
+                }
+            ));
+            assert_square_pattern(
+                &memory,
+                dst_bits,
+                dst_stride,
+                bits_pixel,
+                if use_set_bitmap_bits {
+                    "SetBitmapBits"
+                } else {
+                    "CreateBitmap"
+                },
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_gdi_create_rect_rgn_indirect_and_set_rect_rgn() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

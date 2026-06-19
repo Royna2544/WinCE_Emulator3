@@ -77,6 +77,10 @@ notes when it is still needed for implementation.
   DIBSECTION surfaces across 1/2/4/8/16/24/32 bpp and display-compatible
   bitmaps place the copied source bytes on CE's logical top row.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `CreateBitmapSquares*` is now covered for `CreateBitmap(..., lpBits)` and
+  `SetBitmapBits`: caller-provided DDB bits use CE's WORD-aligned source rows
+  while emulator-owned bitmap storage can keep its DWORD-aligned stride.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
   `BltFromMonochromeTest` is now covered for additional source creation
   variants: `CreateCompatibleBitmap` mono DDB sources remap through destination
   text/background colors, while 1 bpp DIBSECTION sources keep their own
