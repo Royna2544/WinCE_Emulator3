@@ -41462,7 +41462,7 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    if color_usage == DIB_PAL_COLORS && header.bits_pixel != 8 {
+    if color_usage == DIB_PAL_COLORS && header.bits_pixel > 8 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
