@@ -5862,6 +5862,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_CREATE_BITMAP => Some(CoredllValue::Handle(create_bitmap_raw(
             kernel,
+            memory,
             thread_id,
             raw_i32_arg(args, 0),
             raw_i32_arg(args, 1),
@@ -34920,8 +34921,9 @@ fn packed_dib_byte_count_from_guest<M: CoredllGuestMemory>(
     bits_offset.checked_add(byte_count)
 }
 
-fn create_bitmap_raw(
+fn create_bitmap_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     width: i32,
     height: i32,
@@ -34935,11 +34937,51 @@ fn create_bitmap_raw(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let (width, height, planes, bits_pixel) = if width == 0 || height == 0 {
-        (1, 1, 1, 1)
+    let (width, height, planes, bits_pixel, bits_ptr) = if width == 0 || height == 0 {
+        (1, 1, 1, 1, 0)
     } else {
-        (width, height, planes, bits_pixel)
+        (width, height, planes, bits_pixel, bits_ptr)
     };
+    if bits_ptr != 0 {
+        let Some(storage_size) = bitmap_byte_count(width, height, bits_pixel) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, bits_ptr, storage_size)
+        else {
+            return 0;
+        };
+        let Some(owned_bits) =
+            kernel
+                .memory
+                .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, storage_size)
+        else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        };
+        let width_bytes = storage_size / height.unsigned_abs().max(1);
+        if !write_bitmap_bits_from_set_bitmap_bits(
+            kernel,
+            memory,
+            thread_id,
+            owned_bits,
+            width_bytes,
+            height.unsigned_abs(),
+            height < 0,
+            &bytes,
+        ) {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, owned_bits);
+            return 0;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return kernel
+            .resources
+            .create_owned_bitmap(width, height, planes, bits_pixel, owned_bits);
+    }
     kernel.threads.set_last_error(thread_id, 0);
     kernel
         .resources

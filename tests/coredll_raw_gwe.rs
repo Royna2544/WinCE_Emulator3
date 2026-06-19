@@ -50261,6 +50261,54 @@ fn coredll_raw_gdi_create_bitmap_and_get_object_w() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_create_bitmap_copies_initial_bits() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 136_u32;
+    let source_ptr = 0x1_0500;
+    memory.map_bytes(source_ptr, 4);
+    memory.write_bytes(source_ptr, &[0x00, 0xf8, 0xe0, 0x07]);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_BITMAP,
+        [2, 1, 1, 16, source_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CREATE_BITMAP with lpBits returned unexpected: {other:?}"),
+    };
+    assert_ne!(bitmap, 0);
+
+    let object = kernel
+        .resources
+        .bitmap(bitmap)
+        .expect("CreateBitmap object");
+    let bitmap_bits = object.bits_ptr;
+    assert_ne!(bitmap_bits, 0);
+    assert_ne!(
+        bitmap_bits, source_ptr,
+        "draw.cpp CreateBitmapBitsTest uses caller-provided bits; CE copies them into bitmap storage"
+    );
+    assert!(object.bits_owned);
+
+    memory.write_bytes(source_ptr, &[0x00, 0x00, 0x00, 0x00]);
+    assert_eq!(
+        memory.read_bytes(bitmap_bits, 4),
+        [0x00, 0xf8, 0xe0, 0x07],
+        "mutating the caller lpBits buffer must not mutate the bitmap"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_gdi_create_rect_rgn_indirect_and_set_rect_rgn() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

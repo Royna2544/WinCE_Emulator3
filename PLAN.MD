@@ -63,6 +63,10 @@ notes when it is still needed for implementation.
   `BitmapGetDIBColorTable` is now covered for indexed `CreateBitmap` DDBs:
   `GetDIBColorTable` reports CE's default grayscale table, while
   `SetDIBColorTable` still rejects non-DIBSECTION DDBs.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `CreateBitmapBitsTest` is now covered for caller-provided initial bits:
+  `CreateBitmap(..., lpBits)` copies the source bytes into owned bitmap
+  storage instead of aliasing the caller buffer.
 
 ## Active Roadmap
 
