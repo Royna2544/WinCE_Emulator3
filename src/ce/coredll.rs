@@ -41265,13 +41265,42 @@ fn create_compatible_bitmap_raw(
     width: i32,
     height: i32,
 ) -> u32 {
-    if hdc == 0 || width <= 0 || height <= 0 {
+    if hdc == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let Some(byte_count) = bitmap_byte_count(width, height, 32) else {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if width < 0 || height < 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let (width, height, bits_pixel) = if width == 0 || height == 0 {
+        (1, 1, 1)
+    } else {
+        let bits_pixel = kernel
+            .resources
+            .selected_bitmap(hdc)
+            .and_then(|bitmap| kernel.resources.bitmap(bitmap))
+            .map(|bitmap| bitmap.bits_pixel)
+            .unwrap_or_else(|| {
+                if kernel.resources.is_memory_dc(hdc) {
+                    1
+                } else {
+                    16
+                }
+            });
+        (width, height, bits_pixel)
+    };
+    let Some(byte_count) = bitmap_byte_count(width, height, bits_pixel) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -41290,7 +41319,7 @@ fn create_compatible_bitmap_raw(
     kernel.threads.set_last_error(thread_id, 0);
     kernel
         .resources
-        .create_owned_bitmap(width, height, 1, 32, bits_ptr)
+        .create_owned_bitmap(width, height, 1, bits_pixel, bits_ptr)
 }
 
 fn create_dib_section_raw<M: CoredllGuestMemory>(

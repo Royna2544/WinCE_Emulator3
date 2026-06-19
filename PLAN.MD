@@ -43,6 +43,10 @@ notes when it is still needed for implementation.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
   `BltAlphaDIBTest(ETransparentImage)` now follows CE's 32 bpp DIB behavior:
   transparent copies preserve RGB while truncating the destination alpha byte.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `OddCreatecompatibleBitmapTest` is now covered for primary-display depth,
+  compatible-DC stock monochrome depth, and CE's 1x1 monochrome fallback when
+  `CreateCompatibleBitmap` receives a zero width or height.
 
 ## Active Roadmap
 

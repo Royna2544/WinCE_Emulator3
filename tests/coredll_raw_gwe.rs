@@ -9155,6 +9155,136 @@ fn coredll_raw_delete_object_frees_owned_compatible_bitmap_bits() -> Result<()> 
 }
 
 #[test]
+fn coredll_raw_create_compatible_bitmap_matches_ce_depth_and_zero_size() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+
+    let display_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_BITMAP,
+        [screen_dc, 3, 2],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleBitmap(display) returned unexpected: {other:?}"),
+    };
+    let display = kernel
+        .resources
+        .bitmap(display_bitmap)
+        .expect("display-compatible bitmap");
+    assert_eq!(display.width, 3);
+    assert_eq!(display.height, 2);
+    assert_eq!(
+        display.bits_pixel, 16,
+        "CE CreateCompatibleBitmap(primary hdc) follows display depth"
+    );
+
+    let memory_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [screen_dc],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC did not return a handle: {other:?}"),
+    };
+    let stock_compatible = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_BITMAP,
+        [memory_dc, 40, 40],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleBitmap(memory dc) returned unexpected: {other:?}"),
+    };
+    let stock = kernel
+        .resources
+        .bitmap(stock_compatible)
+        .expect("stock-compatible bitmap");
+    assert_eq!(stock.width, 40);
+    assert_eq!(stock.height, 40);
+    assert_eq!(
+        stock.bits_pixel, 1,
+        "CE compatible DCs start with a monochrome stock bitmap selected"
+    );
+
+    for (width, height) in [(0, 40), (40, 0)] {
+        let bitmap = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_COMPATIBLE_BITMAP,
+            [screen_dc, width, height],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("CreateCompatibleBitmap({width}, {height}) returned {other:?}"),
+        };
+        let object = kernel
+            .resources
+            .bitmap(bitmap)
+            .expect("zero-sized compatible bitmap should be created");
+        assert_eq!(object.width, 1);
+        assert_eq!(object.height, 1);
+        assert_eq!(
+            object.bits_pixel, 1,
+            "CE zero-sized compatible bitmaps fall back to the stock 1x1 mono shape"
+        );
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_COMPATIBLE_BITMAP,
+            [0, 1, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_bitblt_copies_selected_dib_to_attached_framebuffer() -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
 
