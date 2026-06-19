@@ -90,6 +90,11 @@ notes when it is still needed for implementation.
   variants: `CreateCompatibleBitmap` mono DDB destinations map source pixels
   through the source background color, while 1 bpp DIBSECTION destinations map
   directly through their black/white palette.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`:
+  `passNull2Font` is now covered for `EnumFontsW`,
+  `EnumFontFamiliesW`, and `EnumFontFamiliesExW` raw validation: bad HDCs
+  report `ERROR_INVALID_HANDLE`, null callbacks or null `LOGFONTW` inputs
+  report `ERROR_INVALID_PARAMETER`, and valid non-Unicorn fallbacks succeed.
 
 ## Active Roadmap
 

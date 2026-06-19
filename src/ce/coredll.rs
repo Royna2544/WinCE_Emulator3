@@ -6784,8 +6784,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_ENUM_FONTS_W | ORD_ENUM_FONT_FAMILIES_W | ORD_ENUM_FONT_FAMILIES_EX_W => {
             // Unicorn callout (try_enter_enum_font_families_callout) dispatches the
             // guest callback and never returns here; this path is the non-Unicorn fallback.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
+            Some(CoredllValue::Bool(enum_font_families_raw(
+                kernel,
+                thread_id,
+                export.ordinal,
+                args,
+            )))
         }
         ORD_ENUM_SYSTEM_LOCALES_W | ORD_ENUM_SYSTEM_CODE_PAGES_W => {
             // Unicorn callout (try_enter_locale_enum_callout) dispatches the guest
@@ -40870,6 +40874,39 @@ fn release_dc_raw(kernel: &CeKernel, hwnd: u32, hdc: u32) -> u32 {
     }
 }
 
+fn enum_font_families_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    ordinal: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    let filter = raw_arg(args, 1);
+    let callback = raw_arg(args, 2);
+
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if callback == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if ordinal == ORD_ENUM_FONT_FAMILIES_EX_W && filter == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn get_device_caps_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, index: u32) -> u32 {
     if hdc != 0 && !is_valid_hdc(kernel, hdc) {
         kernel
@@ -56996,6 +57033,8 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetClipRgn",
     "MaskBlt",
     // Font utilities
+    "EnumFontsW",
+    "EnumFontFamiliesW",
     "EnumFontFamiliesExW",
     "GetFontData",
     "GetOutlineTextMetricsW",

@@ -24,6 +24,7 @@ use wince_emulation_v3::{
             ORD_DRAW_EDGE, ORD_DRAW_FOCUS_RECT, ORD_DRAW_FRAME_CONTROL, ORD_DRAW_ICON_EX,
             ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W, ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE,
             ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT,
+            ORD_ENUM_FONT_FAMILIES_EX_W, ORD_ENUM_FONT_FAMILIES_W, ORD_ENUM_FONTS_W,
             ORD_ENUM_WINDOWS, ORD_EQUAL_RECT, ORD_EQUAL_RGN, ORD_EXCLUDE_CLIP_RECT, ORD_EXT_ESCAPE,
             ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FILL_RGN, ORD_FIND_RESOURCE,
             ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W, ORD_FLUSH_VIEW_OF_FILE, ORD_GET_ACTIVE_WINDOW,
@@ -20430,6 +20431,113 @@ fn coredll_raw_create_pen_indirect_reads_logpen() -> Result<()> {
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_enum_font_validation_matches_ce_pass_null() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let logfont_ptr = 0x1_0000;
+    let callback = 0x0010_2000;
+    let bad_hdc = 0x1234_5678;
+    let bad_hdc_2 = 0x0000_0001;
+    memory.map_bytes(logfont_ptr, 92);
+
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC(NULL) did not return a handle: {other:?}"),
+    };
+    assert_ne!(hdc, 0);
+
+    macro_rules! assert_enum_font_call {
+        ($ordinal:expr, [$($arg:expr),* $(,)?], $expected:expr, $last_error:expr) => {{
+            kernel.threads.set_last_error(thread_id, 0);
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    $ordinal,
+                    [$($arg),*],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(value),
+                    ..
+                } if value == $expected
+            ));
+            assert_eq!(kernel.threads.get_last_error(thread_id), $last_error);
+        }};
+    }
+
+    for ordinal in [ORD_ENUM_FONT_FAMILIES_W, ORD_ENUM_FONTS_W] {
+        assert_enum_font_call!(ordinal, [0, 0, 0, 0], false, ERROR_INVALID_HANDLE);
+        assert_enum_font_call!(ordinal, [hdc, 0, 0, 0], false, ERROR_INVALID_PARAMETER);
+        assert_enum_font_call!(ordinal, [0, 0, callback, 0], false, ERROR_INVALID_HANDLE);
+        assert_enum_font_call!(
+            ordinal,
+            [bad_hdc, 0, callback, 0],
+            false,
+            ERROR_INVALID_HANDLE
+        );
+        assert_enum_font_call!(
+            ordinal,
+            [bad_hdc_2, 0, callback, 0],
+            false,
+            ERROR_INVALID_HANDLE
+        );
+        assert_enum_font_call!(ordinal, [hdc, 0, callback, 0], true, 0);
+    }
+
+    assert_enum_font_call!(
+        ORD_ENUM_FONT_FAMILIES_EX_W,
+        [0, logfont_ptr, callback, 0, 0],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_enum_font_call!(
+        ORD_ENUM_FONT_FAMILIES_EX_W,
+        [bad_hdc, logfont_ptr, callback, 0, 0],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_enum_font_call!(
+        ORD_ENUM_FONT_FAMILIES_EX_W,
+        [bad_hdc_2, logfont_ptr, callback, 0, 0],
+        false,
+        ERROR_INVALID_HANDLE
+    );
+    assert_enum_font_call!(
+        ORD_ENUM_FONT_FAMILIES_EX_W,
+        [hdc, logfont_ptr, 0, 0, 0],
+        false,
+        ERROR_INVALID_PARAMETER
+    );
+    assert_enum_font_call!(
+        ORD_ENUM_FONT_FAMILIES_EX_W,
+        [hdc, 0, callback, 0, 0],
+        false,
+        ERROR_INVALID_PARAMETER
+    );
+    assert_enum_font_call!(
+        ORD_ENUM_FONT_FAMILIES_EX_W,
+        [hdc, logfont_ptr, callback, 0, 0],
+        true,
+        0
     );
 
     Ok(())
