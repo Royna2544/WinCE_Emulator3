@@ -47806,7 +47806,14 @@ fn get_dib_color_table_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
-    if start_index >= bitmap.color_table.len() {
+    let default_color_table;
+    let color_table = if bitmap.color_table.is_empty() && bitmap.bits_pixel <= 8 {
+        default_color_table = default_indexed_color_table(bitmap.bits_pixel);
+        default_color_table.as_slice()
+    } else {
+        bitmap.color_table.as_slice()
+    };
+    if start_index >= color_table.len() {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -47815,8 +47822,8 @@ fn get_dib_color_table_raw<M: CoredllGuestMemory>(
     let copy_count = usize::try_from(entries)
         .ok()
         .unwrap_or(usize::MAX)
-        .min(bitmap.color_table.len() - start_index);
-    let bytes: Vec<u8> = bitmap.color_table[start_index..start_index + copy_count]
+        .min(color_table.len() - start_index);
+    let bytes: Vec<u8> = color_table[start_index..start_index + copy_count]
         .iter()
         .flat_map(|entry| entry.iter().copied())
         .collect();

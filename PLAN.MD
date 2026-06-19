@@ -59,6 +59,10 @@ notes when it is still needed for implementation.
   `CreateBitmap0SizeTest` and `CreateBitmapNegSize` are now covered:
   zero-width/zero-height `CreateBitmap` calls return CE's 1x1 monochrome
   fallback, while negative dimensions still fail.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `BitmapGetDIBColorTable` is now covered for indexed `CreateBitmap` DDBs:
+  `GetDIBColorTable` reports CE's default grayscale table, while
+  `SetDIBColorTable` still rejects non-DIBSECTION DDBs.
 
 ## Active Roadmap
 

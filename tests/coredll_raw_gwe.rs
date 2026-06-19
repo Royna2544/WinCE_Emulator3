@@ -50482,6 +50482,107 @@ fn coredll_raw_dib_color_table_validates_ce_pass_null_edges() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_create_bitmap_indexed_ddbs_report_default_color_table() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 137_u32;
+
+    let mem_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC did not return a handle: {other:?}"),
+    };
+    let colors = 0x1_6000;
+    memory.map_bytes(colors, 1024);
+
+    for bits_pixel in [1_u32, 2, 4, 8] {
+        let bitmap = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_BITMAP,
+            [4, 4, 1, bits_pixel, 0],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("CreateBitmap({bits_pixel}bpp) returned unexpected: {other:?}"),
+        };
+        assert_ne!(bitmap, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SELECT_OBJECT,
+                [mem_dc, bitmap],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle != 0
+        ));
+
+        let entries = 1_u32 << bits_pixel;
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_DIBCOLOR_TABLE,
+                [mem_dc, 0, entries, colors],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(count),
+                ..
+            } if count == entries
+        ));
+        let divisor = (entries - 1).max(1);
+        for index in [0, entries - 1] {
+            let value = ((index * 255) / divisor) as u8;
+            let offset = (index * 4) as u32;
+            assert_eq!(
+                memory.read_bytes(colors + offset, 4),
+                [value, value, value, 0],
+                "CE BitmapGetDIBColorTable default entry {index} for {bits_pixel}bpp"
+            );
+        }
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_DIBCOLOR_TABLE,
+                [mem_dc, 0, entries, colors],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE,
+            "CE rejects SetDIBColorTable on non-DIBSECTION CreateBitmap DDBs"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_gdi_set_bitmap_bits_validates_params() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
