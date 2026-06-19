@@ -41285,14 +41285,22 @@ fn create_compatible_bitmap_raw(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let display_compatible = width > 0 && height > 0 && !kernel.resources.is_memory_dc(hdc);
-    let (width, height, bits_pixel) = if width == 0 || height == 0 {
-        (1, 1, 1)
-    } else {
-        let bits_pixel = kernel
+    let selected_bitmap = if width > 0 && height > 0 {
+        kernel
             .resources
             .selected_bitmap(hdc)
             .and_then(|bitmap| kernel.resources.bitmap(bitmap))
+            .cloned()
+    } else {
+        None
+    };
+    let display_compatible =
+        selected_bitmap.is_none() && width > 0 && height > 0 && !kernel.resources.is_memory_dc(hdc);
+    let (width, height, bits_pixel) = if width == 0 || height == 0 {
+        (1, 1, 1)
+    } else {
+        let bits_pixel = selected_bitmap
+            .as_ref()
             .map(|bitmap| bitmap.bits_pixel)
             .unwrap_or_else(|| {
                 if kernel.resources.is_memory_dc(hdc) {
@@ -41323,8 +41331,12 @@ fn create_compatible_bitmap_raw(
     let bitmap = kernel
         .resources
         .create_owned_bitmap(width, height, 1, bits_pixel, bits_ptr);
-    if display_compatible && bits_pixel == 16 {
-        if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
+    if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
+        if let Some(source) = selected_bitmap {
+            object.rgb_masks = source.rgb_masks;
+            object.alpha_mask = source.alpha_mask;
+            object.color_table = source.color_table;
+        } else if display_compatible && bits_pixel == 16 {
             object.dib_section = true;
             object.rgb_masks = Some(DISPLAY_RGB565_MASKS);
         }

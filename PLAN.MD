@@ -51,6 +51,10 @@ notes when it is still needed for implementation.
   `CreateCompatibleBitmapDIBSECTIONTest` is now covered for primary-display
   compatible bitmaps: `GetObject` returns a `DIBSECTION` with CE-style RGB565
   `BI_BITFIELDS` masks.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `CreateCompatibleToDibTest` is now covered for selected indexed DIB
+  metadata: compatible bitmaps inherit the selected DIB color table so
+  subsequent drawing/blits preserve the same palette semantics.
 
 ## Active Roadmap
 

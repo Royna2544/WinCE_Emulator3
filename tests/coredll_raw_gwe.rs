@@ -9334,6 +9334,77 @@ fn coredll_raw_create_compatible_bitmap_matches_ce_depth_and_zero_size() -> Resu
 }
 
 #[test]
+fn coredll_raw_create_compatible_bitmap_preserves_selected_dib_color_table() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let (dib_dc, dib_bitmap, _, _) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+    let custom_table = [[0x55, 0x55, 0x55, 0x00], [0xaa, 0xaa, 0xaa, 0x00]];
+    let color_table_ptr = 0x0005_0100;
+    memory.map_bytes(color_table_ptr, 8);
+    memory.write_bytes(
+        color_table_ptr,
+        &custom_table
+            .iter()
+            .flat_map(|entry| entry.iter().copied())
+            .collect::<Vec<_>>(),
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DIBCOLOR_TABLE,
+            [dib_dc, 0, 2, color_table_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel
+            .resources
+            .bitmap(dib_bitmap)
+            .expect("selected DIB")
+            .color_table,
+        custom_table.to_vec()
+    );
+
+    let compatible_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_BITMAP,
+        [dib_dc, 4, 4],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleBitmap(selected DIB) returned unexpected: {other:?}"),
+    };
+    let compatible = kernel
+        .resources
+        .bitmap(compatible_bitmap)
+        .expect("DIB-compatible bitmap");
+    assert_eq!(compatible.width, 4);
+    assert_eq!(compatible.height, 4);
+    assert_eq!(compatible.bits_pixel, 1);
+    assert_eq!(
+        compatible.color_table,
+        custom_table.to_vec(),
+        "CE CreateCompatibleToDibTest relies on compatible bitmaps inheriting the selected DIB palette"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_bitblt_copies_selected_dib_to_attached_framebuffer() -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
 
