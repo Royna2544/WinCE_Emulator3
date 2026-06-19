@@ -49940,14 +49940,16 @@ fn set_pixel_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return CLR_INVALID;
     }
-    let paint = BrushPaint::Solid(color);
-    if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint)
-        && let Some(framebuffer) = framebuffer
-    {
-        fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, color);
+    let realized = color & 0x00ff_ffff;
+    if kernel.resources.is_memory_dc(hdc) {
+        if let Some(bitmap) = selected_bitmap_object(kernel, hdc) {
+            let _ = write_bitmap_pixel_rgba(memory, &bitmap, x, y, colorref_rgb(realized), 0);
+        }
+    } else if let Some(framebuffer) = framebuffer {
+        fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, realized);
     }
     kernel.threads.set_last_error(thread_id, 0);
-    color
+    realized
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

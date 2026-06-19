@@ -46790,6 +46790,124 @@ fn coredll_raw_set_pixel_rejects_selected_bitmap_boundaries() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_get_pixel_truncates_32bpp_dib_alpha() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 146_u32;
+    let (dc, _bitmap, bits_ptr, _stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 1, 1);
+
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp::GetPixelAlphaDIBTest.
+    for color in [
+        0x0033_2211u32,
+        0x0133_2211,
+        0x0233_2211,
+        0x7f33_2211,
+        0x8033_2211,
+        0x8133_2211,
+        0xfd33_2211,
+        0xfe33_2211,
+        0xff33_2211,
+    ] {
+        memory.write_bytes(
+            bits_ptr,
+            &[
+                ((color >> 16) & 0xff) as u8,
+                ((color >> 8) & 0xff) as u8,
+                (color & 0xff) as u8,
+                ((color >> 24) & 0xff) as u8,
+            ],
+        );
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_PIXEL,
+                [dc, 0, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(value),
+                ..
+            } if value == (color & 0x00ff_ffff)
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_pixel_ignores_32bpp_dib_alpha_byte() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 147_u32;
+    let (dc, _bitmap, bits_ptr, _stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 1, 1);
+
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp::SetPixelAlphaDIBTest.
+    for color in [
+        0x0033_2211u32,
+        0x0133_2211,
+        0x0233_2211,
+        0x7f33_2211,
+        0x8033_2211,
+        0x8133_2211,
+        0xfd33_2211,
+        0xfe33_2211,
+        0xff33_2211,
+    ] {
+        memory.write_bytes(bits_ptr, &[0xff, 0xff, 0xff, 0xff]);
+        let expected = color & 0x00ff_ffff;
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_PIXEL,
+                [dc, 0, 0, color],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(value),
+                ..
+            } if value == expected
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+        assert_eq!(
+            memory.read_bytes(bits_ptr, 4),
+            vec![
+                ((color >> 16) & 0xff) as u8,
+                ((color >> 8) & 0xff) as u8,
+                (color & 0xff) as u8,
+                0,
+            ]
+        );
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_PIXEL,
+                [dc, 0, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(value),
+                ..
+            } if value == expected
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_line_to_rejects_readonly_selected_bitmap() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
