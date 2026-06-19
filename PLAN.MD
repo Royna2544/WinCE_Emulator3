@@ -81,6 +81,11 @@ notes when it is still needed for implementation.
   variants: `CreateCompatibleBitmap` mono DDB sources remap through destination
   text/background colors, while 1 bpp DIBSECTION sources keep their own
   black/white color table.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `BltToMonochromeTest` is now covered for additional BitBlt destination
+  variants: `CreateCompatibleBitmap` mono DDB destinations map source pixels
+  through the source background color, while 1 bpp DIBSECTION destinations map
+  directly through their black/white palette.
 
 ## Active Roadmap
 
