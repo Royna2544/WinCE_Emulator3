@@ -51103,6 +51103,260 @@ fn coredll_raw_set_bitmap_bits_one_pixel_matches_createbitmap_depths() -> Result
 }
 
 #[test]
+fn coredll_raw_set_bitmap_bits_one_pixel_matches_dibsection_depths() -> Result<()> {
+    const DIB_RGB_COLORS: u32 = 0;
+    const SRCCOPY: u32 = 0x00cc_0020;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 141_u32;
+
+    let info = 0x1_4000;
+    let bits_out = 0x1_4100;
+    memory.map_bytes(info, 40);
+    memory.map_words(bits_out, 1);
+
+    for (case_index, (bits_pixel, bytes, white_run)) in [
+        (1_u16, &[0xff_u8][..], 8_u32),
+        (2, &[0xff][..], 4),
+        (4, &[0xff][..], 2),
+        (8, &[0xff][..], 1),
+        (16, &[0xff, 0xff][..], 1),
+        (24, &[0xff, 0xff, 0xff][..], 1),
+        (32, &[0xff, 0xff, 0xff, 0x00][..], 1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut header = [0u8; 40];
+        header[0..4].copy_from_slice(&40u32.to_le_bytes());
+        header[4..8].copy_from_slice(&16i32.to_le_bytes());
+        header[8..12].copy_from_slice(&16i32.to_le_bytes());
+        header[12..14].copy_from_slice(&1u16.to_le_bytes());
+        header[14..16].copy_from_slice(&bits_pixel.to_le_bytes());
+        header[16..20].copy_from_slice(&0u32.to_le_bytes());
+        memory.write_bytes(info, &header);
+        memory.write_word(info, 40);
+        memory.write_word(bits_out, 0);
+
+        let bitmap = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_DIBSECTION,
+            [0, info, DIB_RGB_COLORS, bits_out, 0, 0],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("CREATE_DIBSECTION {bits_pixel}bpp failed: {other:?}"),
+        };
+        assert_ne!(bitmap, 0);
+
+        let source_ptr = 0x1_4200 + (case_index as u32) * 0x100;
+        memory.map_bytes(source_ptr, 4);
+        memory.write_bytes(source_ptr, bytes);
+
+        assert!(
+            matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_SET_BITMAP_BITS,
+                    [bitmap, bytes.len() as u32, source_ptr],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::U32(copied),
+                    ..
+                } if copied == bytes.len() as u32
+            ),
+            "SET_BITMAP_BITS {bits_pixel}bpp DIBSection should copy CE one-pixel byte count"
+        );
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+        let src_dc = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_COMPATIBLE_DC,
+            [0],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("CREATE_COMPATIBLE_DC failed: {other:?}"),
+        };
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SELECT_OBJECT,
+                [src_dc, bitmap],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle != 0
+        ));
+
+        let (dst_dc, dst_bits, dst_stride) =
+            create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 16);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_BIT_BLT,
+                [dst_dc, 0, 0, 16, 16, src_dc, 0, 0, SRCCOPY],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+
+        for x in 0..white_run {
+            assert_eq!(
+                rgb565_at(&memory, dst_bits, dst_stride, x, 0),
+                0xffff,
+                "{bits_pixel}bpp DIBSection SetBitmapBits should light logical top-row pixel {x}"
+            );
+        }
+        if white_run < 16 {
+            assert_eq!(
+                rgb565_at(&memory, dst_bits, dst_stride, white_run, 0),
+                0x0000,
+                "{bits_pixel}bpp DIBSection SetBitmapBits should leave the next top-row pixel black"
+            );
+        }
+        assert_eq!(
+            rgb565_at(&memory, dst_bits, dst_stride, 0, 15),
+            0x0000,
+            "{bits_pixel}bpp DIBSection SetBitmapBits should not place first source bytes on the bottom row"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_bitmap_bits_one_pixel_matches_display_compatible_bitmap() -> Result<()> {
+    const SRCCOPY: u32 = 0x00cc_0020;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 141_u32;
+
+    let screen_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GET_DC(NULL) failed: {other:?}"),
+    };
+    assert_ne!(screen_dc, 0);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_BITMAP,
+        [screen_dc, 16, 16],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CREATE_COMPATIBLE_BITMAP(display) failed: {other:?}"),
+    };
+    assert_ne!(bitmap, 0);
+
+    let source_ptr = 0x1_5000;
+    memory.map_bytes(source_ptr, 2);
+    memory.write_bytes(source_ptr, &[0xff, 0xff]);
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_BITMAP_BITS,
+                [bitmap, 2, source_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(2),
+                ..
+            }
+        ),
+        "SET_BITMAP_BITS on display-compatible bitmap should copy one RGB565 pixel"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let src_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CREATE_COMPATIBLE_DC failed: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [src_dc, bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 16);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BIT_BLT,
+            [dst_dc, 0, 0, 16, 16, src_dc, 0, 0, SRCCOPY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0xffff);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0x0000);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 15), 0x0000);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_set_bitmap_bits_rejects_readonly_loaded_bitmap() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

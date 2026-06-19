@@ -72,6 +72,10 @@ notes when it is still needed for implementation.
   covered for indexed `CreateDIBSection(DIB_PAL_COLORS)` surfaces: 1/2/4/8 bpp
   DIBSections create successfully and round-trip mutable color tables, while
   truecolor `DIB_PAL_COLORS` still fails.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `SetBitmapBitsOnePixel` is now covered beyond `CreateBitmap`: bottom-up
+  DIBSECTION surfaces across 1/2/4/8/16/24/32 bpp and display-compatible
+  bitmaps place the copied source bytes on CE's logical top row.
 
 ## Active Roadmap
 
