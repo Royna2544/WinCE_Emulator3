@@ -16044,6 +16044,163 @@ fn coredll_raw_blt_alpha_dib_copy_ops_preserve_32bpp_alpha() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_pat_blt_alpha_dib_brushes_succeed_without_defined_alpha_result() -> Result<()> {
+    const PATCOPY: u32 = 0x00f0_0021;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dc, bitmap, bits, stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    assert_eq!(stride, 8);
+
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp::BltAlphaDIBTest(EPatBlt):
+    // CE treats the destination alpha result as undefined, but alpha-bearing
+    // solid and pattern brushes must still be accepted by PatBlt.
+    let solid_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0xaa33_2211],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    assert_ne!(solid_brush, 0);
+    let stock_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SELECT_OBJECT,
+        [dc, solid_brush],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("SelectObject(solid brush) did not return a handle: {other:?}"),
+    };
+    assert_ne!(stock_brush, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAT_BLT,
+            [dc, 1, 0, 1, 1, PATCOPY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [dc, stock_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == solid_brush
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [solid_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    memory.write_bytes(bits, &[0x11, 0x22, 0x33, 0xaa]);
+    let pattern_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PATTERN_BRUSH,
+        [bitmap],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePatternBrush did not return a brush: {other:?}"),
+    };
+    assert_ne!(pattern_brush, 0);
+    let stock_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SELECT_OBJECT,
+        [dc, pattern_brush],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("SelectObject(pattern brush) did not return a handle: {other:?}"),
+    };
+    assert_ne!(stock_brush, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAT_BLT,
+            [dc, 1, 0, 1, 1, PATCOPY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [dc, stock_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == pattern_brush
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [pattern_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_paletted_dib_duplicate_rgb_keys() -> Result<()> {
     const WHITE565: u16 = 0xffff;
     const RED565: u16 = 0xf800;

@@ -36,6 +36,10 @@ notes when it is still needed for implementation.
   `BltAlphaDIBTest` is now covered for BitBlt, StretchBlt, and MaskBlt
   selected 32 bpp DIB copy paths, preserving source alpha bytes through
   SRCCOPY-style DIB-to-DIB transfers.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `BltAlphaDIBTest(EPatBlt)` is now covered for alpha-bearing solid and
+  pattern brushes on selected 32 bpp DIBs; CE leaves the resulting alpha bytes
+  undefined but requires the `PatBlt(PATCOPY)` calls to succeed.
 
 ## Active Roadmap
 
