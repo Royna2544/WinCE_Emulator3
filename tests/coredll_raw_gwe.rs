@@ -6691,6 +6691,27 @@ fn coredll_raw_create_compatible_dc_accepts_null_screen_dc() -> Result<()> {
     assert!(kernel.resources.is_memory_dc(mem_dc));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
+    for bad_hdc in [0x1234_5678, 0x0000_0001] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CREATE_COMPATIBLE_DC,
+                [bad_hdc],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
+    }
+
     Ok(())
 }
 

@@ -95,6 +95,10 @@ notes when it is still needed for implementation.
   `EnumFontFamiliesW`, and `EnumFontFamiliesExW` raw validation: bad HDCs
   report `ERROR_INVALID_HANDLE`, null callbacks or null `LOGFONTW` inputs
   report `ERROR_INVALID_PARAMETER`, and valid non-Unicorn fallbacks succeed.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`:
+  `passNull2DC(ECreateCompatibleDC)` is now covered for the CE invalid-source
+  HDC cases: `CreateCompatibleDC(NULL)` still creates a screen-compatible
+  memory DC, while bad nonzero HDCs fail with `ERROR_INVALID_HANDLE`.
 
 ## Active Roadmap
 

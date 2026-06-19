@@ -41452,7 +41452,12 @@ fn is_privileged_display_escape(escape: u32) -> bool {
 }
 
 fn create_compatible_dc_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
-    let _ = hdc;
+    if hdc != 0 && !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     kernel.threads.set_last_error(thread_id, 0);
     kernel.resources.create_compatible_dc()
 }
