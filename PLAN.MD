@@ -55,6 +55,10 @@ notes when it is still needed for implementation.
   `CreateCompatibleToDibTest` is now covered for selected indexed DIB
   metadata: compatible bitmaps inherit the selected DIB color table so
   subsequent drawing/blits preserve the same palette semantics.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `CreateBitmap0SizeTest` and `CreateBitmapNegSize` are now covered:
+  zero-width/zero-height `CreateBitmap` calls return CE's 1x1 monochrome
+  fallback, while negative dimensions still fail.
 
 ## Active Roadmap
 

@@ -50013,23 +50013,59 @@ fn coredll_raw_gdi_create_bitmap_and_get_object_w() -> Result<()> {
     memory.map_bytes(out_ptr, 96);
     memory.map_words(out_ptr, 24);
 
-    // Invalid params: width=0 → ERROR_INVALID_PARAMETER.
-    assert!(
-        matches!(
-            table.dispatch_raw_ordinal_with_memory(
-                &mut kernel,
-                &mut memory,
-                thread_id,
-                ORD_CREATE_BITMAP,
-                [0_u32, 0, 0, 0, 0],
-            ),
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp::CreateBitmap0SizeTest:
+    // CE accepts a zero width or height and returns a stock-shaped 1x1 mono bitmap.
+    for args in [[0_u32, 100, 1, 16, 0], [100, 0, 1, 32, 0]] {
+        let zero_sized = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_BITMAP,
+            args,
+        ) {
             CoredllDispatch::Returned {
-                value: CoredllValue::Handle(0),
+                value: CoredllValue::Handle(handle),
                 ..
-            }
-        ),
-        "CREATE_BITMAP with zero dims must return 0"
-    );
+            } => handle,
+            other => panic!("CREATE_BITMAP zero-size fallback returned unexpected: {other:?}"),
+        };
+        let object = kernel
+            .resources
+            .bitmap(zero_sized)
+            .expect("zero-size CreateBitmap fallback");
+        assert_eq!(object.width, 1);
+        assert_eq!(object.height, 1);
+        assert_eq!(object.planes, 1);
+        assert_eq!(object.bits_pixel, 1);
+    }
+
+    for args in [
+        [(-1_i32) as u32, 10, 1, 1, 0],
+        [10, (-1_i32) as u32, 1, 1, 0],
+        [10, 10, 0, 1, 0],
+        [10, 10, 1, 0, 0],
+    ] {
+        assert!(
+            matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_CREATE_BITMAP,
+                    args,
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(0),
+                    ..
+                }
+            ),
+            "CREATE_BITMAP invalid args {args:?} must return 0"
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
+    }
 
     // Valid params.
     let bitmap = match table.dispatch_raw_ordinal_with_memory(

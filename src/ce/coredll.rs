@@ -34929,12 +34929,17 @@ fn create_bitmap_raw(
     bits_pixel: u16,
     bits_ptr: u32,
 ) -> u32 {
-    if width <= 0 || height == 0 || planes == 0 || bits_pixel == 0 {
+    if width < 0 || height < 0 || planes == 0 || bits_pixel == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    let (width, height, planes, bits_pixel) = if width == 0 || height == 0 {
+        (1, 1, 1, 1)
+    } else {
+        (width, height, planes, bits_pixel)
+    };
     kernel.threads.set_last_error(thread_id, 0);
     kernel
         .resources
