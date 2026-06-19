@@ -76,6 +76,11 @@ notes when it is still needed for implementation.
   `SetBitmapBitsOnePixel` is now covered beyond `CreateBitmap`: bottom-up
   DIBSECTION surfaces across 1/2/4/8/16/24/32 bpp and display-compatible
   bitmaps place the copied source bytes on CE's logical top row.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `BltFromMonochromeTest` is now covered for additional source creation
+  variants: `CreateCompatibleBitmap` mono DDB sources remap through destination
+  text/background colors, while 1 bpp DIBSECTION sources keep their own
+  black/white color table.
 
 ## Active Roadmap
 
