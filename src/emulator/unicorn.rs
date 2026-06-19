@@ -1979,6 +1979,21 @@ impl UnicornMips {
                 .any(|blocked| blocked.thread_id == thread_id)
     }
 
+    #[cfg(feature = "unicorn")]
+    fn thread_has_non_send_blocked_scheduler_context(&self, thread_id: u32) -> bool {
+        self.blocked_guest_thread
+            .as_ref()
+            .is_some_and(|blocked| blocked.thread_id == thread_id)
+            || self
+                .displaced_blocked_get_messages
+                .iter()
+                .any(|blocked| blocked.thread_id == thread_id)
+            || self.blocked_wait_threads.iter().any(|blocked| {
+                blocked.thread_id == thread_id
+                    && !matches!(blocked.kind, BlockedWaitKind::SendMessage { .. })
+            })
+    }
+
     #[cfg(not(feature = "unicorn"))]
     pub fn complete_active_process_thread_exit_with_framebuffer(
         &mut self,
@@ -2884,7 +2899,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     pub fn active_process_has_visible_receiver_work(&self, kernel: &CeKernel) -> bool {
         self.tracked_thread_ids().into_iter().any(|thread_id| {
-            !self.thread_has_blocked_scheduler_context(thread_id)
+            !self.thread_has_non_send_blocked_scheduler_context(thread_id)
                 && Self::thread_has_visible_receiver_work(thread_id, kernel)
         })
     }
@@ -2898,7 +2913,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     pub fn active_process_has_receiver_work(&self, kernel: &CeKernel) -> bool {
         self.tracked_thread_ids().into_iter().any(|thread_id| {
-            !self.thread_has_blocked_scheduler_context(thread_id)
+            !self.thread_has_non_send_blocked_scheduler_context(thread_id)
                 && Self::thread_has_receiver_work(thread_id, kernel)
         })
     }
@@ -2906,7 +2921,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     pub fn active_process_has_ready_receiver_work(&self, kernel: &CeKernel) -> bool {
         self.tracked_thread_ids().into_iter().any(|thread_id| {
-            !self.thread_has_blocked_scheduler_context(thread_id)
+            !self.thread_has_non_send_blocked_scheduler_context(thread_id)
                 && Self::thread_has_ready_receiver_work(thread_id, kernel)
         })
     }
@@ -2925,7 +2940,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     pub fn active_process_has_visible_queued_receiver_work(&self, kernel: &CeKernel) -> bool {
         self.tracked_thread_ids().into_iter().any(|thread_id| {
-            !self.thread_has_blocked_scheduler_context(thread_id)
+            !self.thread_has_non_send_blocked_scheduler_context(thread_id)
                 && Self::thread_has_visible_queued_receiver_work(thread_id, kernel)
         })
     }
