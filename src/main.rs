@@ -645,7 +645,8 @@ fn run_cpu_loop(
             args.desktop,
             args.remote_server.is_some(),
             host_idle_message_poll_slice(cpu, args.desktop),
-            cpu.active_process_has_visible_receiver_work(kernel),
+            cpu.active_process_has_visible_receiver_work(kernel)
+                || cpu.active_process_has_receiver_work(kernel),
         );
         let instruction_limit = effective_instruction_limit(
             args.cpu_instruction_limit,
@@ -1225,11 +1226,11 @@ fn effective_wall_clock_limit_ms(
     desktop: DesktopMode,
     remote_server_enabled: bool,
     idle_message_poll_slice: bool,
-    active_visible_receiver_work: bool,
+    active_receiver_work: bool,
 ) -> (u64, bool) {
-    let visible_work_slice =
-        active_visible_receiver_work && (desktop == DesktopMode::Host || remote_server_enabled);
-    if visible_work_slice {
+    let active_receiver_work_slice =
+        active_receiver_work && (desktop == DesktopMode::Host || remote_server_enabled);
+    if active_receiver_work_slice {
         if explicit_limit_ms == 0 {
             return (LIVE_VISIBLE_WORK_RUN_SLICE_MS, true);
         }

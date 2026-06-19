@@ -11984,6 +11984,17 @@ fn set_comm_state_raw<M: CoredllGuestMemory>(
     true
 }
 
+fn format_comm_timeouts_detail(timeouts: &CommTimeouts) -> String {
+    format!(
+        "ri:{}/rtm:{}/rtc:{}/wtm:{}/wtc:{}",
+        timeouts.read_interval_timeout,
+        timeouts.read_total_timeout_multiplier,
+        timeouts.read_total_timeout_constant,
+        timeouts.write_total_timeout_multiplier,
+        timeouts.write_total_timeout_constant
+    )
+}
+
 fn get_comm_timeouts_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -12038,6 +12049,17 @@ fn get_comm_timeouts_raw<M: CoredllGuestMemory>(
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_comm_trace(
+        "GetCommTimeouts",
+        handle,
+        0,
+        None,
+        20,
+        true,
+        20,
+        Some(format_comm_timeouts_detail(&timeouts)),
+        None,
+    );
     true
 }
 
@@ -12092,6 +12114,17 @@ fn set_comm_timeouts_raw<M: CoredllGuestMemory>(
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_comm_trace(
+        "SetCommTimeouts",
+        handle,
+        20,
+        Some(format!("ptr=0x{timeouts_ptr:08x}")),
+        0,
+        true,
+        0,
+        None,
+        Some(format_comm_timeouts_detail(&timeouts)),
+    );
     true
 }
 
@@ -12121,6 +12154,33 @@ fn clear_comm_error_raw<M: CoredllGuestMemory>(
         {
             return false;
         }
+        kernel.record_comm_trace(
+            "ClearCommError",
+            handle,
+            0,
+            None,
+            12,
+            true,
+            12,
+            Some(format!("errors=0/rx={rx_len}/tx={tx_len}")),
+            Some(format!(
+                "errors_ptr=0x{errors_ptr:08x}/stat_ptr=0x{stat_ptr:08x}"
+            )),
+        );
+    } else {
+        kernel.record_comm_trace(
+            "ClearCommError",
+            handle,
+            0,
+            None,
+            0,
+            true,
+            0,
+            None,
+            Some(format!(
+                "errors_ptr=0x{errors_ptr:08x}/stat_ptr=0x{stat_ptr:08x}"
+            )),
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
@@ -12140,6 +12200,17 @@ fn purge_comm_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32, flags: u32
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_comm_trace(
+        "PurgeComm",
+        handle,
+        4,
+        Some(format!("flags=0x{flags:08x}")),
+        0,
+        true,
+        0,
+        None,
+        None,
+    );
     true
 }
 
@@ -12157,6 +12228,17 @@ fn set_comm_mask_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32, mask: u
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_comm_trace(
+        "SetCommMask",
+        handle,
+        4,
+        Some(format!("mask=0x{mask:08x}")),
+        0,
+        true,
+        0,
+        None,
+        None,
+    );
     true
 }
 
@@ -12183,6 +12265,17 @@ fn get_comm_mask_raw<M: CoredllGuestMemory>(
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_comm_trace(
+        "GetCommMask",
+        handle,
+        0,
+        None,
+        4,
+        true,
+        4,
+        Some(format!("mask=0x{mask:08x}")),
+        Some(format!("out_ptr=0x{out_ptr:08x}")),
+    );
     true
 }
 
@@ -12204,6 +12297,18 @@ fn wait_comm_event_raw<M: CoredllGuestMemory>(
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
+    let ready = kernel.serial_comm_event_ready(handle);
+    kernel.record_comm_trace(
+        "WaitCommEvent",
+        handle,
+        0,
+        None,
+        4,
+        true,
+        4,
+        Some(format!("event=0x{event:08x}")),
+        Some(format!("out_ptr=0x{out_ptr:08x}/ready={ready}")),
+    );
     true
 }
 

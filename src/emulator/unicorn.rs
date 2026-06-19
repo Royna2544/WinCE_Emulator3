@@ -2381,6 +2381,7 @@ impl UnicornMips {
                 let escaped_visible_message = pending.source == "OrphanedVisibleMessage"
                     && pending.resume_import.is_some()
                     && pending.return_pc != 0
+                    && !import_trap_pc(pending.return_pc)
                     && candidates
                         .iter()
                         .copied()
@@ -5042,6 +5043,7 @@ impl UnicornMips {
         // Refresh shared file-mapping views from their canonical mapping data so
         // this process observes writes other processes made since its last slice.
         let _ = sync_file_mapping_views_to_unicorn(&mut uc, kernel);
+        let restoring_saved_context = self.saved_context.is_some();
         let mut start_pc = if let Some(saved) = self.saved_context.as_ref() {
             restore_mips_gprs(&mut uc, &saved.regs);
             saved.pc
@@ -5056,11 +5058,12 @@ impl UnicornMips {
             self.entry
                 .ok_or_else(|| Error::Backend("no PE entry point has been loaded".to_owned()))?
         };
-        update_user_kdata_current_ids(
-            &mut uc,
-            self.initial_thread_id,
-            kernel.current_process_id(),
-        )?;
+        let active_thread_id = if restoring_saved_context {
+            self.current_thread_id
+        } else {
+            self.initial_thread_id
+        };
+        update_user_kdata_current_ids(&mut uc, active_thread_id, kernel.current_process_id())?;
 
         // ── Shared hook state (Rc<RefCell<_>> handles moved into closures) ────────
         let indirect_call_probe = Rc::new(RefCell::new(None));
@@ -13020,8 +13023,7 @@ fn try_block_empty_get_message<D>(
         kernel, thread_id, hwnd, min_msg, max_msg,
     ));
 
-    let mut pending_returns = pending_returns.borrow_mut();
-    if let Some(callout) = pending_returns.pop() {
+    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         kernel.record_blocked_msg_wait(0, crate::ce::timer::INFINITE);
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         remove_stale_blocked_get_message_for_thread(kernel, blocked_thread, thread_id);
@@ -13303,15 +13305,15 @@ fn try_block_empty_get_message<D>(
 fn try_block_for_message_box_modal_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
-    mut framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
+    framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
     thread_id: u32,
-    trampoline_jumps: &[MipsTrampolineJump],
+    _trampoline_jumps: &[MipsTrampolineJump],
     blocked_modal: &std::rc::Rc<std::cell::RefCell<Option<BlockedModalMessageBox>>>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
-    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    _running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -13361,19 +13363,9 @@ fn try_block_for_message_box_modal_wait<D>(
 
     // First entry: prepare the dialog window.
     let memory = UnicornGuestMemory { uc };
-    let state = match match framebuffer {
-        Some(ref mut framebuffer) => crate::ce::coredll::message_box_w_prepare(
-            kernel,
-            &memory,
-            Some(&mut **framebuffer),
-            None,
-            thread_id,
-            args,
-        ),
-        None => {
-            crate::ce::coredll::message_box_w_prepare(kernel, &memory, None, None, thread_id, args)
-        }
-    } {
+    let state = match crate::ce::coredll::message_box_w_prepare(
+        kernel, &memory, None, None, thread_id, args,
+    ) {
         Err(result) => {
             let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
             return true;
@@ -13381,46 +13373,12 @@ fn try_block_for_message_box_modal_wait<D>(
         Ok(state) => state,
     };
 
-    // Drain any already-queued input synchronously.
-    if let Some(result) = state.try_queued_result(kernel, thread_id) {
-        state.teardown(kernel, thread_id, result, framebuffer);
-        kernel.threads.set_last_error(thread_id, 0);
-        let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
-        return true;
-    }
-
-    let thread_handle = running_thread
-        .borrow()
-        .and_then(|(id, handle)| (id == thread_id).then_some(handle))
-        .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
-    let wait_id = kernel.register_blocked_waiter(
-        thread_id,
-        thread_handle,
-        Vec::new(),
-        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox,
-        kernel.timers.tick_count(),
-        crate::ce::timer::INFINITE,
-    );
-    let dialog_hwnd = state.dialog_hwnd();
-    let raw_return_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
-    let return_pc = import_callout_return_pc(raw_return_pc, trampoline_jumps);
-    *blocked_modal.borrow_mut() = Some(BlockedModalMessageBox {
-        wait_id,
-        thread_id,
-        thread_handle,
-        regs: capture_mips_gprs(memory.uc),
-        return_pc,
-        modal_state: state,
-    });
-    *blocked_get_message.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
-        kernel,
-        thread_id,
-        Some(dialog_hwnd),
-        crate::ce::gwe::WM_PAINT,
-        crate::ce::gwe::WM_LBUTTONUP,
-    ));
+    let result = state
+        .try_queued_result(kernel, thread_id)
+        .unwrap_or_else(|| state.default_result());
+    state.teardown(kernel, thread_id, result, None);
     kernel.threads.set_last_error(thread_id, 0);
-    let _ = memory.uc.emu_stop();
+    let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
     true
 }
 
@@ -24893,6 +24851,59 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn escaped_visible_message_does_not_complete_on_import_trap_pc_only() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = 16;
+        let active_pc = crate::emulator::imports::IMPORT_TRAP_BASE
+            + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let return_sp = 0x7fe5_f290;
+        let wndproc = 0x6004_f0f4;
+        let hwnd = kernel.create_window_ex_w(1, "visible_receiver", "", None, 0, 0, 0);
+
+        scheduler.current_thread_id = active_thread_id;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: super::MipsGuestContext::zero(),
+        });
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "OrphanedVisibleMessage",
+                hwnd,
+                msg: crate::ce::gwe::WM_LBUTTONDOWN,
+                wparam: 0,
+                lparam: 0,
+                wndproc,
+                return_pc: active_pc,
+                return_sp,
+                caller_regs: None,
+                class_name: Some("visible_receiver".to_owned()),
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: None,
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: Some(super::ResumeImportAfterWndProc {
+                    thread_id: active_thread_id,
+                    running_thread: Some((active_thread_id, 0x10ac)),
+                    regs: super::MipsGuestContext::zero(),
+                    import_pc: active_pc,
+                }),
+                clear_focus_after_return: None,
+            });
+
+        assert!(!scheduler.clear_escaped_visible_message_callouts(&mut kernel));
+        assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
+        assert_eq!(scheduler.current_thread_id(), active_thread_id);
+    }
+
+    #[test]
     fn stale_blocked_wait_cleanup_removes_prior_context_for_thread() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -26694,6 +26705,33 @@ mod guest_thread_stack_tests {
         let first_stack = guest_thread_stack_top(process_stack_top, active_sp, 1);
 
         assert_eq!(first_stack, active_sp - GUEST_THREAD_STACK_SLOT_SIZE * 2);
+    }
+
+    #[test]
+    fn pending_guest_thread_return_pop_selects_matching_worker_thread() {
+        let pending = std::rc::Rc::new(std::cell::RefCell::new(vec![
+            PendingGuestThreadReturn {
+                creator_thread_id: 1,
+                worker_thread_id: 5,
+                thread_handle: 0x1050,
+                return_pc: 0x1000,
+                creator_regs: MipsGuestContext::default(),
+            },
+            PendingGuestThreadReturn {
+                creator_thread_id: 1,
+                worker_thread_id: 6,
+                thread_handle: 0x1054,
+                return_pc: 0x2000,
+                creator_regs: MipsGuestContext::default(),
+            },
+        ]));
+
+        let selected = pop_pending_guest_thread_return_for_thread(&pending, 5).unwrap();
+
+        assert_eq!(selected.worker_thread_id, 5);
+        let remaining = pending.borrow();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].worker_thread_id, 6);
     }
 
     #[test]
@@ -33848,6 +33886,14 @@ fn import_trap_target_for_mips_jr_thunk<D>(
     (traps.trap_at(target).is_some()
         || crate::emulator::imports::dynamic_coredll_proc_trap(target).is_some())
     .then_some(target)
+}
+
+#[cfg(feature = "unicorn")]
+fn import_trap_pc(pc: u32) -> bool {
+    let import_page_end = IMPORT_TRAP_BASE.saturating_add(IMPORT_TRAP_PAGE_SIZE);
+    pc >= IMPORT_TRAP_BASE
+        && pc < import_page_end
+        && (pc - IMPORT_TRAP_BASE) % crate::emulator::imports::IMPORT_TRAP_STRIDE == 0
 }
 
 #[cfg(feature = "unicorn")]

@@ -3442,9 +3442,23 @@ impl CeKernel {
                     } else {
                         ""
                     };
+                let serial_detail = if device.is_serial() {
+                    let timeouts = device.comm_timeouts();
+                    format!(
+                        " comm_mask=0x{:08x} timeouts=ri:{}/rtm:{}/rtc:{}/wtm:{}/wtc:{}",
+                        device.comm_mask(),
+                        timeouts.read_interval_timeout,
+                        timeouts.read_total_timeout_multiplier,
+                        timeouts.read_total_timeout_constant,
+                        timeouts.write_total_timeout_multiplier,
+                        timeouts.write_total_timeout_constant
+                    )
+                } else {
+                    String::new()
+                };
                 let _ = writeln!(
                     out,
-                    "    0x{handle:08x} {} kind={:?} backend={:?} host={} serial={} rx={} tx={}{}",
+                    "    0x{handle:08x} {} kind={:?} backend={:?} host={} serial={} rx={} tx={}{}{}",
                     device.guest_name,
                     device.kind,
                     device.backend,
@@ -3452,6 +3466,7 @@ impl CeKernel {
                     device.is_serial(),
                     rx,
                     tx,
+                    serial_detail,
                     remote_serial
                 );
             }
@@ -3644,6 +3659,41 @@ impl CeKernel {
             self.recent_device_ops.remove(0);
         }
         self.recent_device_ops.push(record);
+    }
+
+    pub fn record_comm_trace(
+        &mut self,
+        op: &'static str,
+        handle: u32,
+        input_len: u32,
+        input_preview: Option<String>,
+        output_capacity: u32,
+        success: bool,
+        bytes_returned: u32,
+        output_preview: Option<String>,
+        detail: Option<String>,
+    ) {
+        let (device, backend) = match self.handles.get(handle) {
+            Ok(KernelObject::Device(device)) => (
+                Some(device.guest_name.clone()),
+                Some(format!("{:?}", device.backend)),
+            ),
+            _ => (None, None),
+        };
+        self.record_device_trace(DeviceTraceRecord {
+            op,
+            handle,
+            device,
+            backend,
+            ioctl_code: 0,
+            input_len,
+            input_preview,
+            output_capacity,
+            success,
+            bytes_returned,
+            output_preview,
+            detail,
+        });
     }
 
     pub fn record_window_lifecycle_trace(
@@ -3891,6 +3941,17 @@ impl CeKernel {
         if let Ok(KernelObject::Device(device)) = self.handles.get_mut(handle) {
             device.enqueue_rx(&bytes);
         }
+        self.record_comm_trace(
+            "SerialRemoteDrain",
+            handle,
+            max_bytes as u32,
+            None,
+            0,
+            true,
+            count as u32,
+            file_trace_preview(&bytes),
+            Some(format!("queued_remote_to_rx={count}")),
+        );
         count
     }
 
@@ -4058,6 +4119,27 @@ impl CeKernel {
             result: result.as_ref().ok().map(|_| 1),
             error: result.as_ref().err().map(ToString::to_string),
         });
+        if self.is_serial_device_handle(handle) {
+            let transferred = result
+                .as_ref()
+                .ok()
+                .map(|bytes| bytes.len() as u32)
+                .unwrap_or(0);
+            self.record_comm_trace(
+                "ReadFile",
+                handle,
+                requested,
+                None,
+                requested,
+                result.is_ok(),
+                transferred,
+                result
+                    .as_ref()
+                    .ok()
+                    .and_then(|bytes| file_trace_preview(bytes)),
+                None,
+            );
+        }
         result
     }
 
@@ -4118,6 +4200,19 @@ impl CeKernel {
             result: result.as_ref().ok().map(|_| 1),
             error: result.as_ref().err().map(ToString::to_string),
         });
+        if self.is_serial_device_handle(handle) {
+            self.record_comm_trace(
+                "ReadFile",
+                handle,
+                requested,
+                None,
+                requested,
+                result.is_ok(),
+                result.as_ref().ok().copied().unwrap_or(0),
+                file_trace_preview(&preview_bytes),
+                Some("read_file_into".to_owned()),
+            );
+        }
         result
     }
 
@@ -4348,6 +4443,25 @@ impl CeKernel {
             result: result.as_ref().ok().map(|io| u32::from(io.success)),
             error: result.as_ref().err().map(ToString::to_string),
         });
+        if self.is_serial_device_handle(handle) {
+            let success = result.as_ref().is_ok_and(|io| io.success);
+            let transferred = result
+                .as_ref()
+                .ok()
+                .map(|io| io.bytes_transferred)
+                .unwrap_or(0);
+            self.record_comm_trace(
+                "WriteFile",
+                handle,
+                bytes.len() as u32,
+                file_trace_preview(bytes),
+                0,
+                success,
+                transferred,
+                None,
+                None,
+            );
+        }
         if result
             .as_ref()
             .is_ok_and(|io| io.success && io.bytes_transferred != 0)
