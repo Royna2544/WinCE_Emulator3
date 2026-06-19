@@ -45067,14 +45067,30 @@ fn mask_blt_raw<M: CoredllGuestMemory>(
                     None
                 };
                 let result = apply_bitmap_rop(src_rgb, dst_rgb, pattern_rgb, Some(rop));
-                let _ = write_blt_bitmap_pixel_rgb(
-                    memory,
-                    &dst_bmp,
-                    x,
-                    y,
-                    result,
-                    mono_destination_bk_rgb,
-                );
+                let source_alpha = if dst_bmp.bits_pixel == 32
+                    && rop3_byte(rop) == rop3_byte(SRCCOPY)
+                    && mono_destination_bk_rgb.is_none()
+                {
+                    src_bitmap_and_bytes
+                        .as_ref()
+                        .and_then(|(src_bmp, src_bytes)| {
+                            alpha_from_src_bitmap(src_bmp, src_bytes, sx, sy)
+                        })
+                } else {
+                    None
+                };
+                if let Some(alpha) = source_alpha {
+                    let _ = write_bitmap_pixel_rgba(memory, &dst_bmp, x, y, result, alpha);
+                } else {
+                    let _ = write_blt_bitmap_pixel_rgb(
+                        memory,
+                        &dst_bmp,
+                        x,
+                        y,
+                        result,
+                        mono_destination_bk_rgb,
+                    );
+                }
             }
         }
     }

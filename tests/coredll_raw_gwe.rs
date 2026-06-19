@@ -15945,6 +15945,105 @@ fn coredll_raw_transparent_image_preserves_alpha_dib_pixel_dword() -> Result<()>
 }
 
 #[test]
+fn coredll_raw_blt_alpha_dib_copy_ops_preserve_32bpp_alpha() -> Result<()> {
+    const SRCCOPY: u32 = 0x00cc_0020;
+    const BLACKNESS: u32 = 0x0000_0042;
+    fn makerop4(foreground: u32, background: u32) -> u32 {
+        foreground | ((background << 8) & 0xff00_0000)
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dc, _bitmap, bits, stride) =
+        create_selected_32bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    let (_mask_dc, mask_bitmap, mask_bits, _mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    memory.write_u8(mask_bits, 0x80)?; // Top-left pixel uses foreground SRCCOPY.
+
+    let cases = [
+        [0x11, 0x22, 0x33, 0x00],
+        [0x11, 0x22, 0x33, 0x01],
+        [0x11, 0x22, 0x33, 0x7f],
+        [0x11, 0x22, 0x33, 0x80],
+        [0x11, 0x22, 0x33, 0xff],
+    ];
+
+    for source_pixel in cases {
+        // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp::BltAlphaDIBTest(EBitBlt).
+        memory.write_bytes(bits, &[0; 16]);
+        memory.write_bytes(bits, &source_pixel);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_BIT_BLT,
+                [dc, 1, 0, 1, 1, dc, 0, 0, SRCCOPY],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(memory.read_bytes(bits + 4, 4), source_pixel);
+
+        // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp::BltAlphaDIBTest(EStretchBlt).
+        memory.write_bytes(bits + 4, &[0; 4]);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_STRETCH_BLT,
+                [dc, 1, 0, 1, 1, dc, 0, 0, 1, 1, SRCCOPY],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(memory.read_bytes(bits + 4, 4), source_pixel);
+
+        // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp::BltAlphaDIBTest(EMaskBlt).
+        memory.write_bytes(bits + 4, &[0; 4]);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_MASK_BLT,
+                [
+                    dc,
+                    1,
+                    0,
+                    1,
+                    1,
+                    dc,
+                    0,
+                    0,
+                    mask_bitmap,
+                    0,
+                    0,
+                    makerop4(SRCCOPY, BLACKNESS),
+                ],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(memory.read_bytes(bits + 4, 4), source_pixel);
+    }
+    assert_eq!(stride, 8);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_transparent_image_paletted_dib_duplicate_rgb_keys() -> Result<()> {
     const WHITE565: u16 = 0xffff;
     const RED565: u16 = 0xf800;

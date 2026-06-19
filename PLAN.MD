@@ -32,6 +32,10 @@ notes when it is still needed for implementation.
   `GetPixelAlphaDIBTest` and `SetPixelAlphaDIBTest` are now covered for raw
   selected 32 bpp DIBs. `GetPixel` truncates stored alpha, and `SetPixel`
   realizes RGB while leaving the DIB alpha byte clear.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
+  `BltAlphaDIBTest` is now covered for BitBlt, StretchBlt, and MaskBlt
+  selected 32 bpp DIB copy paths, preserving source alpha bytes through
+  SRCCOPY-style DIB-to-DIB transfers.
 
 ## Active Roadmap
 
