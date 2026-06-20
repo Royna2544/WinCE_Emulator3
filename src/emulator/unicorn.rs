@@ -1936,10 +1936,16 @@ impl UnicornMips {
             let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
             return false;
         }
+        let active_process_id = kernel.current_process_id();
+        if window.process_id != 0 && window.process_id != active_process_id {
+            kernel.gwe.post_message(thread_id, message);
+            kernel.queue_message_wake_candidates(thread_id);
+            return false;
+        }
         let wndproc = self.receiver_process_wndproc_for_process(
             original_wndproc,
             window.process_id,
-            kernel.current_process_id(),
+            active_process_id,
         );
         let Some(wndproc) = wndproc else {
             kernel.record_window_lifecycle_trace(
@@ -1963,7 +1969,6 @@ impl UnicornMips {
             return false;
         };
 
-        let active_process_state = kernel.current_process_state();
         let return_pc = active_saved.pc;
         let return_sp = active_saved.regs.regs[29];
         let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
@@ -1987,13 +1992,6 @@ impl UnicornMips {
             regs: active_saved.regs,
             import_pc: return_pc,
         };
-        if window.process_id != 0 && window.process_id != active_process_state.process_id {
-            kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
-                process_id: window.process_id,
-                exit_code: crate::ce::kernel::STILL_ACTIVE,
-                signaled: false,
-            });
-        }
         self.pending_wndproc_returns.push(PendingWndProcReturn {
             source: "OrphanedVisibleMessage",
             hwnd: message.hwnd,
@@ -3866,11 +3864,20 @@ impl UnicornMips {
             std::mem::take(&mut *state.guest_thread_stack_slots.borrow_mut());
         self.clear_orphaned_blocked_get_message_state(kernel);
         let _ = self.clear_orphaned_direct_send_callouts(kernel);
-        self.prune_active_process_from_parked_readonly(kernel);
+        self.prune_active_process_from_parked_readonly_with_thread_duplicates(kernel, true);
     }
 
     #[cfg(feature = "unicorn")]
     pub fn prune_active_process_from_parked_readonly(&mut self, kernel: &CeKernel) {
+        self.prune_active_process_from_parked_readonly_with_thread_duplicates(kernel, true);
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn prune_active_process_from_parked_readonly_with_thread_duplicates(
+        &mut self,
+        kernel: &CeKernel,
+        prune_thread_duplicates: bool,
+    ) {
         let active_state = kernel.current_process_state();
         let mut active_thread_ids = self.tracked_thread_ids();
         let current_thread_id = self.current_thread_id();
@@ -3882,7 +3889,7 @@ impl UnicornMips {
                 process,
                 active_state.process_id,
                 &active_thread_ids,
-            ) || (process.process_state.process_id == active_state.process_id
+            ) || (prune_thread_duplicates
                 && process.thread_id == current_thread_id);
             !matches_active || Self::active_matching_parked_process_should_remain(process)
         });
@@ -3924,7 +3931,7 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn prune_active_process_from_parked(&mut self, kernel: &CeKernel) {
-        self.prune_active_process_from_parked_readonly(kernel);
+        self.prune_active_process_from_parked_readonly_with_thread_duplicates(kernel, true);
     }
 
     #[cfg(feature = "unicorn")]
@@ -4842,7 +4849,7 @@ impl UnicornMips {
             )
         });
         *self = next_cpu;
-        self.prune_active_process_from_parked_readonly(kernel);
+        self.prune_active_process_from_parked_readonly_with_thread_duplicates(kernel, false);
     }
 
     #[cfg(feature = "unicorn")]
@@ -25442,7 +25449,7 @@ mod wait_scheduler_tests {
         let active_thread_handle = 0x107;
         let receiver_thread_id = super::MAIN_GUEST_THREAD_ID;
         let receiver_process_id = 1;
-        let active_process_id = 68;
+        let active_process_id = receiver_process_id;
         let active_pc = 0x0031_cd98;
         let return_sp = 0x7ffd_f578;
         let wndproc = 0x6004_f0f4;
@@ -25557,6 +25564,66 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn cross_process_visible_message_is_not_run_on_active_child_cpu() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = 3;
+        let receiver_thread_id = 1;
+        let receiver_process_id = 1;
+        let active_process_id = 67;
+        let active_pc = 0x0031_cd98;
+        let wndproc = 0x6004_f0f4;
+        let msg = crate::ce::gwe::WM_ACTIVATE;
+        map_test_wndproc_module(&mut scheduler, wndproc);
+
+        scheduler.current_thread_id = active_thread_id;
+        let mut active_regs = super::MipsGuestContext::zero();
+        active_regs.regs[29] = 0x7ffd_f578;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: active_regs,
+        });
+
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: receiver_process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let hwnd = kernel.create_window_ex_w(
+            receiver_thread_id,
+            "visible_parent",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        assert!(kernel.post_message_w(hwnd, msg, 1, 0));
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: active_process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+
+        assert!(!scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
+        assert_eq!(kernel.current_process_id(), active_process_id);
+        assert_eq!(scheduler.current_thread_id(), active_thread_id);
+        assert!(scheduler.pending_wndproc_returns.is_empty());
+        assert!(
+            kernel
+                .peek_ready_visible_message_w_filtered(receiver_thread_id, None, msg, msg)
+                .is_some_and(|queued| queued.hwnd == hwnd)
+        );
+    }
+
+    #[test]
     fn cross_thread_visible_message_infers_main_running_thread_for_resume() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -25564,7 +25631,7 @@ mod wait_scheduler_tests {
         let active_thread_id = super::MAIN_GUEST_THREAD_ID;
         let receiver_thread_id = 4;
         let receiver_process_id = 1;
-        let active_process_id = 68;
+        let active_process_id = receiver_process_id;
         let active_pc = 0x0033_9c54;
         let return_sp = 0x7ffd_f0a0;
         let wndproc = 0x6004_f0f4;
@@ -31481,11 +31548,17 @@ mod guest_thread_stack_tests {
         scheduler.switch_to_parked_process(&mut kernel, child, true, None);
 
         assert_eq!(kernel.current_process_id(), 67);
+        let parked_identities = scheduler
+            .parked_child_processes
+            .iter()
+            .map(|process| (process.process_state.process_id, process.thread_id))
+            .collect::<Vec<_>>();
         assert!(
             scheduler
                 .parked_child_processes
                 .iter()
-                .any(|process| process.process_state.process_id == 1 && process.thread_id == 3)
+                .any(|process| process.process_state.process_id == 1 && process.thread_id == 3),
+            "parked identities: {parked_identities:?}"
         );
 
         Ok(())
