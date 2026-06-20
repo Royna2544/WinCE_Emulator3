@@ -5816,6 +5816,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_RELEASE_DC => Some(CoredllValue::U32(release_dc_raw(
             kernel,
+            thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
@@ -40417,14 +40418,16 @@ fn end_paint_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
     true
 }
 
-fn get_dc_raw(kernel: &CeKernel, hwnd: u32) -> u32 {
+fn get_dc_raw(kernel: &mut CeKernel, hwnd: u32) -> u32 {
     let target = if hwnd == 0 {
         kernel.gwe.get_desktop_window()
     } else {
         hwnd
     };
     if kernel.gwe.is_window(target) {
-        paint_hdc_for_hwnd(target)
+        let hdc = paint_hdc_for_hwnd(target);
+        kernel.resources.revive_window_dc(hdc);
+        hdc
     } else {
         0
     }
@@ -40884,13 +40887,20 @@ fn scroll_exposed_rect(rect: Rect, dx: i32, dy: i32) -> Rect {
     }
 }
 
-fn release_dc_raw(kernel: &CeKernel, hwnd: u32, hdc: u32) -> u32 {
-    if hdc == 0 {
+fn release_dc_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, hdc: u32) -> u32 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
     if hwnd == 0 || kernel.gwe.is_window(hwnd) {
+        kernel.threads.set_last_error(thread_id, 0);
         1
     } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         0
     }
 }
@@ -41491,14 +41501,25 @@ fn create_compatible_dc_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> 
 }
 
 fn delete_dc_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> bool {
-    if hdc == 0 || !kernel.resources.delete_dc(hdc) {
+    if hdc == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    kernel.threads.set_last_error(thread_id, 0);
-    true
+    if kernel.resources.delete_dc(hdc) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    if hdc_to_hwnd(hdc).is_some() && is_valid_hdc(kernel, hdc) {
+        kernel.resources.delete_window_dc(hdc);
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+    false
 }
 
 fn create_compatible_bitmap_raw(
@@ -53100,6 +53121,9 @@ fn hdc_to_hwnd(hdc: u32) -> Option<u32> {
 fn is_valid_hdc(kernel: &CeKernel, hdc: u32) -> bool {
     if kernel.resources.is_memory_dc(hdc) {
         return true;
+    }
+    if kernel.resources.is_deleted_dc(hdc) {
+        return false;
     }
     let Some(hwnd) = hdc_to_hwnd(hdc) else {
         return false;

@@ -488,6 +488,7 @@ pub struct ResourceSystem {
     pens: BTreeMap<u32, PenObject>,
     palettes: BTreeMap<u32, PaletteObject>,
     memory_dcs: BTreeSet<u32>,
+    deleted_dcs: BTreeSet<u32>,
     dc_states: BTreeMap<u32, DcState>,
     dc_save_stacks: BTreeMap<u32, Vec<DcState>>,
     dc_clips: BTreeMap<u32, RegionObject>,
@@ -524,6 +525,7 @@ impl Default for ResourceSystem {
             pens: BTreeMap::new(),
             palettes: BTreeMap::new(),
             memory_dcs: BTreeSet::new(),
+            deleted_dcs: BTreeSet::new(),
             dc_states: BTreeMap::new(),
             dc_save_stacks: BTreeMap::new(),
             dc_clips: BTreeMap::new(),
@@ -2424,6 +2426,7 @@ impl ResourceSystem {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
         self.memory_dcs.insert(handle);
+        self.deleted_dcs.remove(&handle);
         self.dc_states.entry(handle).or_default();
         handle
     }
@@ -2432,6 +2435,21 @@ impl ResourceSystem {
         self.dc_clips.remove(&handle);
         self.dc_states.remove(&handle);
         self.memory_dcs.remove(&handle)
+    }
+
+    pub fn delete_window_dc(&mut self, hdc: u32) {
+        self.dc_clips.remove(&hdc);
+        self.dc_states.remove(&hdc);
+        self.dc_save_stacks.remove(&hdc);
+        self.deleted_dcs.insert(hdc);
+    }
+
+    pub fn revive_window_dc(&mut self, hdc: u32) {
+        self.deleted_dcs.remove(&hdc);
+    }
+
+    pub fn is_deleted_dc(&self, hdc: u32) -> bool {
+        self.deleted_dcs.contains(&hdc)
     }
 
     pub fn select_object(&mut self, hdc: u32, object: u32) -> Option<u32> {

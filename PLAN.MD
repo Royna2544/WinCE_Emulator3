@@ -135,6 +135,10 @@ notes when it is still needed for implementation.
   `ScrollDCBadParam` is now covered for raw `ScrollDC`: null/bad HDCs fail
   with `ERROR_INVALID_HANDLE`, diagonal scroll deltas fail with
   `ERROR_INVALID_PARAMETER`, and non-diagonal no-op scrolling still succeeds.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`:
+  `ProgramError` is now covered for raw DC lifecycle validation:
+  `ReleaseDC(NULL, hdc)` rejects a previously deleted DC with
+  `ERROR_INVALID_HANDLE` instead of treating the stale handle as released.
 
 ## Active Roadmap
 

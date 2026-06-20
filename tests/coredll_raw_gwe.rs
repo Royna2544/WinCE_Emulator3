@@ -58335,6 +58335,63 @@ fn coredll_raw_scroll_dc_matches_ce_bad_param_edges() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_release_dc_rejects_deleted_hdc_like_ce() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 5;
+
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0u32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("GetDC failed: {other:?}"),
+    };
+    assert_ne!(hdc, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_DC,
+            [hdc],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RELEASE_DC,
+            [0, hdc],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_adjust_window_rect_ex_expands_by_nonclient_area() -> Result<()> {
     // CE AdjustWindowRectEx expands a client rect to include the NC area.
     // WS_CAPTION = WS_BORDER|WS_DLGFRAME → 3px border + 24px caption at top.
