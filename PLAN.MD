@@ -900,6 +900,14 @@ notes when it is still needed for implementation.
   driver registry key, `$device\...` name, and empty bus name. Coverage verifies
   activated device handles, file-open device handles, null/short buffers, and
   stale-handle `ERROR_NOT_FOUND` behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devfsd.c` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: raw `FindFirstDevice` and
+  `FindNextDevice` now enumerate live activated device handles through CE-style
+  device-search handles instead of falling through as missing exports. Coverage
+  verifies legacy-name, `$device` name, empty bus-name, parent, and GUID search
+  paths, CE `DEVMGR_DEVICE_INFORMATION` output, normal `FindClose`, invalid
+  parameters, no-match `ERROR_NO_MORE_FILES`, and stale-handle skipping after
+  device deactivation.
 
 ## Active Roadmap
 

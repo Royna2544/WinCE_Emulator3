@@ -48,6 +48,8 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
 - Re-run the live startup after the device-information ordinal fix and confirm
   whether guest device probing now reaches `COM7:` earlier or still remains
   blocked behind the splash/readiness path.
+- Re-run the live startup after the device-search ordinal fix and confirm
+  whether CE Device Manager enumeration advances any GPS/storage probing paths.
 
 ## Cleanup Queue
 

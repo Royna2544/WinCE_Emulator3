@@ -41,10 +41,10 @@ use crate::{
         },
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
-            CriticalSectionObject, FileMappingView, KernelObject, PartitionObject,
-            PartitionSearchObject, PowerNotificationObject, PowerRelationshipObject,
-            PowerRequirementObject, StoreObject, StoreSearchObject, ThreadResumeResult,
-            ThreadSuspendResult,
+            CriticalSectionObject, DeviceSearchObject, FileMappingView, KernelObject,
+            PartitionObject, PartitionSearchObject, PowerNotificationObject,
+            PowerRelationshipObject, PowerRequirementObject, StoreObject, StoreSearchObject,
+            ThreadResumeResult, ThreadSuspendResult,
         },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, HKey,
@@ -223,6 +223,11 @@ const FMD_INFO_EX_REGION_OFFSET: u32 = 20;
 const DEVMGR_DEVICE_INFORMATION_SIZE: u32 = 1584;
 const DEVMGR_DEVICE_LEGACY_NAME_CHARS: usize = 6;
 const DEVMGR_DEVICE_MAX_PATH_CHARS: usize = 260;
+const DEVICE_SEARCH_BY_LEGACY_NAME: u32 = 0;
+const DEVICE_SEARCH_BY_DEVICE_NAME: u32 = 1;
+const DEVICE_SEARCH_BY_BUS_NAME: u32 = 2;
+const DEVICE_SEARCH_BY_GUID: u32 = 3;
+const DEVICE_SEARCH_BY_PARENT: u32 = 4;
 pub const FSDMGR_FMD_CALLBACK_TRAP_STRIDE: u32 = 0x10;
 pub const FSDMGR_FMD_CALLBACK_TRAP_COUNT: u32 = 13;
 pub const FSDMGR_FMD_CALLBACK_TRAP_BASE: u32 = 0x7fff_4f30;
@@ -4161,6 +4166,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 kernel, memory, thread_id, args,
             )))
         }
+        ORD_FIND_FIRST_DEVICE => Some(CoredllValue::Handle(find_first_device_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_FIND_NEXT_DEVICE => Some(CoredllValue::Bool(find_next_device_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_COM_THREAD_BASE_FUNC => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -19755,6 +19766,23 @@ fn get_clipboard_format_name_w_raw<M: CoredllGuestMemory>(
 }
 
 fn find_close_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    if matches!(
+        kernel.handles.get(handle),
+        Ok(KernelObject::DeviceSearch(_))
+    ) {
+        match kernel.handles.close(handle) {
+            Ok(_) => {
+                kernel.threads.set_last_error(thread_id, 0);
+                return true;
+            }
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return false;
+            }
+        }
+    }
     match kernel.find_close(handle) {
         Ok(ok) => {
             kernel.threads.set_last_error(thread_id, 0);
@@ -58859,6 +58887,22 @@ fn get_device_information_by_handle_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> bool {
+    write_device_information_by_handle_raw(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 0),
+        raw_arg(args, 1),
+    )
+}
+
+fn write_device_information_by_handle_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    info_ptr: u32,
+) -> bool {
     const H_DEVICE_OFFSET: u32 = 4;
     const H_PARENT_DEVICE_OFFSET: u32 = 8;
     const LEGACY_NAME_OFFSET: u32 = 12;
@@ -58866,8 +58910,6 @@ fn get_device_information_by_handle_raw<M: CoredllGuestMemory>(
     const DEVICE_NAME_OFFSET: u32 = 544;
     const BUS_NAME_OFFSET: u32 = 1064;
 
-    let handle = raw_arg(args, 0);
-    let info_ptr = raw_arg(args, 1);
     if info_ptr == 0 {
         kernel
             .threads
@@ -58957,6 +58999,264 @@ fn get_device_information_by_handle_raw<M: CoredllGuestMemory>(
 
     kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
     true
+}
+
+#[derive(Debug, Clone)]
+enum DeviceSearchCriteria {
+    LegacyName(String),
+    DeviceName(String),
+    BusName(String),
+    Guid([u8; 16]),
+    Parent(u32),
+}
+
+fn find_first_device_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let search_type = raw_arg(args, 0);
+    let search_param = raw_arg(args, 1);
+    let info_ptr = raw_arg(args, 2);
+    let Some(criteria) =
+        read_device_search_criteria(kernel, memory, thread_id, search_type, search_param)
+    else {
+        return 0xffff_ffff;
+    };
+    if !device_info_buffer_has_valid_size(kernel, memory, thread_id, info_ptr) {
+        return 0xffff_ffff;
+    }
+
+    let matches = matching_device_handles(kernel, &criteria);
+    for (index, handle) in matches.iter().copied().enumerate() {
+        if write_device_information_by_handle_raw(kernel, memory, thread_id, handle, info_ptr) {
+            let find_handle =
+                kernel
+                    .handles
+                    .insert(KernelObject::DeviceSearch(DeviceSearchObject {
+                        handles: matches,
+                        cursor: index + 1,
+                    }));
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            return find_handle;
+        }
+        if kernel.threads.get_last_error(thread_id) != ERROR_NOT_FOUND {
+            return 0xffff_ffff;
+        }
+    }
+
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+    0xffff_ffff
+}
+
+fn find_next_device_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let info_ptr = raw_arg(args, 1);
+    if !device_info_buffer_has_valid_size(kernel, memory, thread_id, info_ptr) {
+        return false;
+    }
+
+    loop {
+        let Some(device_handle) = next_device_search_handle(kernel, thread_id, handle) else {
+            return false;
+        };
+        if write_device_information_by_handle_raw(
+            kernel,
+            memory,
+            thread_id,
+            device_handle,
+            info_ptr,
+        ) {
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            return true;
+        }
+        if kernel.threads.get_last_error(thread_id) != ERROR_NOT_FOUND {
+            return false;
+        }
+    }
+}
+
+fn next_device_search_handle(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> Option<u32> {
+    let Ok(KernelObject::DeviceSearch(search)) = kernel.handles.get_mut(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return None;
+    };
+    let Some(device_handle) = search.handles.get(search.cursor).copied() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+        return None;
+    };
+    search.cursor += 1;
+    Some(device_handle)
+}
+
+fn read_device_search_criteria<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    search_type: u32,
+    search_param: u32,
+) -> Option<DeviceSearchCriteria> {
+    match search_type {
+        DEVICE_SEARCH_BY_LEGACY_NAME => read_guest_wide_arg(memory, search_param)
+            .map(DeviceSearchCriteria::LegacyName)
+            .or_else(|| {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                None
+            }),
+        DEVICE_SEARCH_BY_DEVICE_NAME => read_guest_wide_arg(memory, search_param)
+            .map(DeviceSearchCriteria::DeviceName)
+            .or_else(|| {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                None
+            }),
+        DEVICE_SEARCH_BY_BUS_NAME => read_guest_wide_arg(memory, search_param)
+            .map(DeviceSearchCriteria::BusName)
+            .or_else(|| {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                None
+            }),
+        DEVICE_SEARCH_BY_GUID => {
+            if search_param == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return None;
+            }
+            let mut guid = [0; 16];
+            match memory.read_bytes(search_param, &mut guid) {
+                Ok(()) => Some(DeviceSearchCriteria::Guid(guid)),
+                Err(_) => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    None
+                }
+            }
+        }
+        DEVICE_SEARCH_BY_PARENT => Some(DeviceSearchCriteria::Parent(search_param)),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            None
+        }
+    }
+}
+
+fn device_info_buffer_has_valid_size<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    info_ptr: u32,
+) -> bool {
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(size) = read_guest_u32(kernel, memory, thread_id, info_ptr) else {
+        return false;
+    };
+    if size < DEVMGR_DEVICE_INFORMATION_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    true
+}
+
+fn matching_device_handles(kernel: &mut CeKernel, criteria: &DeviceSearchCriteria) -> Vec<u32> {
+    let mut matches = Vec::new();
+    for guest_name in kernel.devices.enabled_names() {
+        if !device_matches_search(guest_name.as_str(), criteria) {
+            continue;
+        }
+        if let Some(handle) = open_device_handle_by_guest_name(kernel, &guest_name) {
+            matches.push(handle);
+            continue;
+        }
+        if let Ok(session) = kernel.devices.open(&guest_name) {
+            matches.push(kernel.handles.insert(KernelObject::Device(session)));
+        }
+    }
+    matches
+}
+
+fn open_device_handle_by_guest_name(kernel: &CeKernel, guest_name: &str) -> Option<u32> {
+    kernel.handles.iter().find_map(|(handle, object)| {
+        let KernelObject::Device(device) = object else {
+            return None;
+        };
+        device
+            .guest_name
+            .eq_ignore_ascii_case(guest_name)
+            .then_some(handle)
+    })
+}
+
+fn device_matches_search(guest_name: &str, criteria: &DeviceSearchCriteria) -> bool {
+    let device_name = guest_name.trim_end_matches(':');
+    match criteria {
+        DeviceSearchCriteria::LegacyName(pattern) => {
+            device_search_wildcard_match(pattern, guest_name)
+        }
+        DeviceSearchCriteria::DeviceName(pattern) => {
+            let pattern = pattern.strip_prefix(r"$device\").unwrap_or(pattern);
+            device_search_wildcard_match(pattern, device_name)
+        }
+        DeviceSearchCriteria::BusName(pattern) => pattern.is_empty(),
+        DeviceSearchCriteria::Guid(_guid) => false,
+        DeviceSearchCriteria::Parent(parent) => *parent == 0,
+    }
+}
+
+fn device_search_wildcard_match(pattern: &str, name: &str) -> bool {
+    if pattern == "*" || pattern == "*.*" {
+        return true;
+    }
+    let pattern = pattern.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+    let pattern = pattern.as_bytes();
+    let name = name.as_bytes();
+    let mut matches = vec![vec![false; name.len() + 1]; pattern.len() + 1];
+    matches[0][0] = true;
+    for pattern_index in 1..=pattern.len() {
+        if pattern[pattern_index - 1] == b'*' {
+            matches[pattern_index][0] = matches[pattern_index - 1][0];
+        }
+    }
+    for pattern_index in 1..=pattern.len() {
+        for name_index in 1..=name.len() {
+            matches[pattern_index][name_index] = match pattern[pattern_index - 1] {
+                b'*' => {
+                    matches[pattern_index - 1][name_index] || matches[pattern_index][name_index - 1]
+                }
+                b'?' => matches[pattern_index - 1][name_index - 1],
+                byte => byte == name[name_index - 1] && matches[pattern_index - 1][name_index - 1],
+            };
+        }
+    }
+    matches[pattern.len()][name.len()]
 }
 
 fn get_device_keys_raw<M: CoredllGuestMemory>(

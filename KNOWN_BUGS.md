@@ -81,3 +81,6 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 - Missing coredll exports for `GetDeviceInformationByDeviceHandle` and
   `GetDeviceInformationByFileHandle` are closed; they now return CE-style
   device information for live device handles and covered failure cases.
+- Missing coredll exports for `FindFirstDevice` and `FindNextDevice` are closed;
+  they now enumerate activated device handles with CE-style search state and
+  no-match/stale-handle behavior.

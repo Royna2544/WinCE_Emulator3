@@ -83,6 +83,10 @@ references for historical reconstruction.
   `GetDeviceInformationByFileHandle` now resolve through coredll ordinals and
   write the CE `DEVMGR_DEVICE_INFORMATION` layout for live device handles,
   including legacy name, registry driver key, and `$device\...` name.
+- Raw `FindFirstDevice` and `FindNextDevice` now resolve through coredll
+  ordinals and enumerate live activated device handles with CE-style device
+  search handles, including legacy-name, device-name, bus-name, parent, no
+  match, and stale-handle behavior.
 
 ## Recent Validation
 
@@ -103,6 +107,8 @@ references for historical reconstruction.
 - Focused raw coredll/kernel validation covers device-information success for
   activated and file-open device handles plus null, short-buffer, and stale
   handle failures.
+- Focused raw coredll/kernel validation covers `FindFirstDevice`/`FindNextDevice`
+  device search output and cleanup semantics.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.

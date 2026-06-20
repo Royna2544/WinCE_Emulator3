@@ -21,6 +21,7 @@ pub enum KernelObject {
     Semaphore(SemaphoreObject),
     File(FileObject),
     FindFile(FindFileObject),
+    DeviceSearch(DeviceSearchObject),
     Volume(VolumeObject),
     Store(StoreObject),
     StoreSearch(StoreSearchObject),
@@ -76,6 +77,12 @@ pub struct FileObject {
 pub struct FindFileObject {
     pub guest_pattern: String,
     pub find_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeviceSearchObject {
+    pub handles: Vec<u32>,
+    pub cursor: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -342,6 +349,11 @@ impl HandleTable {
             Ok(KernelObject::FindFile(find)) => {
                 format!("find(id={},pattern={})", find.find_id, find.guest_pattern)
             }
+            Ok(KernelObject::DeviceSearch(search)) => format!(
+                "device_search(cursor={},entries={})",
+                search.cursor,
+                search.handles.len()
+            ),
             Ok(KernelObject::Volume(volume)) => format!(
                 "volume(owner={},root={},disk={})",
                 volume.owner_process_id,
@@ -1037,6 +1049,7 @@ impl HandleTable {
             }
             KernelObject::File(_)
             | KernelObject::FindFile(_)
+            | KernelObject::DeviceSearch(_)
             | KernelObject::Volume(_)
             | KernelObject::Store(_)
             | KernelObject::StoreSearch(_)
@@ -1097,6 +1110,7 @@ impl HandleTable {
             KernelObject::Process(process) => process.signaled,
             KernelObject::File(_)
             | KernelObject::FindFile(_)
+            | KernelObject::DeviceSearch(_)
             | KernelObject::Volume(_)
             | KernelObject::Store(_)
             | KernelObject::StoreSearch(_)

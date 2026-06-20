@@ -1,6 +1,7 @@
 use std::fs;
 
 use wince_emulation_v3::{
+    Result,
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
@@ -20,10 +21,11 @@ use wince_emulation_v3::{
             ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON,
             ORD_DEVICE_POWER_NOTIFY, ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W,
             ORD_DRAW_ICON_EX, ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION,
-            ORD_ENUM_CLIPBOARD_FORMATS, ORD_ENUM_DEVICES, ORD_ENUM_DEVICE_INTERFACES,
+            ORD_ENUM_CLIPBOARD_FORMATS, ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES,
             ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE,
-            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_APIADDRESS,
-            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CLIPBOARD_DATA,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FIND_CLOSE, ORD_FIND_FIRST_DEVICE,
+            ORD_FIND_NEXT_DEVICE, ORD_FREE_LIBRARY, ORD_GET_APIADDRESS,
+            ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
             ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
             ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES,
             ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_BY_INDEX,
@@ -33,11 +35,11 @@ use wince_emulation_v3::{
             ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
             ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
-            ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROCESS_ID,
-            ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION,
+            ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_PRIORITY_CLIPBOARD_FORMAT,
             ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W,
-            ORD_GET_PROC_NAME, ORD_GET_STDIO_PATH_W, ORD_GET_STORE_INFORMATION,
-            ORD_GET_SYSTEM_MEMORY_DIVISION, ORD_GET_SYSTEM_POWER_STATE,
+            ORD_GET_PROC_NAME, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX,
+            ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STDIO_PATH_W,
+            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION, ORD_GET_SYSTEM_POWER_STATE,
             ORD_GET_SYSTEM_POWER_STATUS_EX, ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME,
             ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
             ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
@@ -57,7 +59,7 @@ use wince_emulation_v3::{
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_APIREADY, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE,
             ORD_IS_EXITING, ORD_IS_NAMED_EVENT_SIGNALED, ORD_IS_PRIMARY_THREAD,
-            ORD_IS_PROCESS_DYING, ORD_KERNEL_IO_CONTROL, ORD_KERN_EXTRACT_ICONS,
+            ORD_IS_PROCESS_DYING, ORD_KERN_EXTRACT_ICONS, ORD_KERNEL_IO_CONTROL,
             ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_CURSOR_W,
             ORD_LOAD_DRIVER, ORD_LOAD_FSD, ORD_LOAD_FSDEX, ORD_LOAD_IMAGE_W,
             ORD_LOAD_KERNEL_LIBRARY, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
@@ -86,7 +88,7 @@ use wince_emulation_v3::{
             ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS, ORD_STRING_COMPRESS,
             ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
             ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_VERIFY_APIHANDLE, ORD_VER_QUERY_VALUE_W,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_VER_QUERY_VALUE_W, ORD_VERIFY_APIHANDLE,
             ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_APIREADY, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
             ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
             ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
@@ -97,43 +99,43 @@ use wince_emulation_v3::{
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         framebuffer::{Framebuffer, PixelFormat, VirtualFramebuffer},
         gwe::{
-            Message, MessagePointerPayload, PeekFlags, Rect, WindowPos, QS_POSTMESSAGE, QS_TIMER,
-            SC_CLOSE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROYCLIPBOARD, WM_KEYDOWN,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NOTIFY, WM_PAINT, WM_RENDERALLFORMATS,
-            WM_RENDERFORMAT, WM_SYSCOMMAND, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_VISIBLE,
+            Message, MessagePointerPayload, PeekFlags, QS_POSTMESSAGE, QS_TIMER, Rect, SC_CLOSE,
+            WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROYCLIPBOARD, WM_KEYDOWN, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_NOTIFY, WM_PAINT, WM_RENDERALLFORMATS, WM_RENDERFORMAT, WM_SYSCOMMAND,
+            WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_VISIBLE, WindowPos,
         },
         kernel::{
-            CeKernel, CurrentProcessState, LoadedModuleMetadata, MessageQueueOptions,
-            CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
+            CurrentProcessState, LoadedModuleMetadata, MessageQueueOptions,
         },
         memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
         registry::{
-            RegistryValue, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE,
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, RegistryValue,
         },
         resource::ResourceId,
         scheduler::SchedulerBlockedWaitKind,
         shell::{
-            MessageBoxButtonLabel, MessageBoxButtonSlot, MessageBoxIcon,
-            ShellNotificationCallbackArguments, ShellNotificationCallbackMethod,
-            ShellSpecialFolderFallbackPolicy, ShellSpecialFolderSource,
             ISHELL_NOTIFICATION_CALLBACK_ON_COMMAND_SELECTED_VTABLE_OFFSET,
             ISHELL_NOTIFICATION_CALLBACK_ON_DISMISS_VTABLE_OFFSET,
-            ISHELL_NOTIFICATION_CALLBACK_ON_LINK_SELECTED_VTABLE_OFFSET,
+            ISHELL_NOTIFICATION_CALLBACK_ON_LINK_SELECTED_VTABLE_OFFSET, MessageBoxButtonLabel,
+            MessageBoxButtonSlot, MessageBoxIcon, ShellNotificationCallbackArguments,
+            ShellNotificationCallbackMethod, ShellSpecialFolderFallbackPolicy,
+            ShellSpecialFolderSource,
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
-            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_FOUND, ERROR_NOT_OWNER,
-            ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
+            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NO_MORE_FILES,
+            ERROR_NOT_FOUND, ERROR_NOT_OWNER, ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND,
+            ERROR_SIGNAL_REFUSED,
         },
         timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
-    Result,
 };
 
 mod support;
-use support::{unique_test_root, TestGuestMemory};
+use support::{TestGuestMemory, unique_test_root};
 
 #[test]
 fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
@@ -1653,6 +1655,422 @@ fn coredll_raw_get_device_information_reports_ce_device_info_layout() -> Result<
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_NOT_FOUND);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_find_device_opens_configured_device_when_not_active() -> Result<()> {
+    const DEVMGR_DEVICE_INFORMATION_SIZE: u32 = 1584;
+    const DEVICE_SEARCH_BY_LEGACY_NAME: u32 = 0;
+    const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
+
+    fn map_device_info(memory: &mut TestGuestMemory, addr: u32) {
+        memory.map_words(addr, 3);
+        memory.map_halfwords(addr + 12, 6);
+        memory.map_halfwords(addr + 24, 260);
+        memory.map_halfwords(addr + 544, 260);
+        memory.map_halfwords(addr + 1064, 260);
+    }
+
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.devices = DeviceConfigFile {
+        version: 1,
+        defaults: DeviceDefaults::default(),
+        devices: vec![DeviceConfig {
+            guest: "COM7:".to_owned(),
+            kind: DeviceKind::Serial,
+            backend: DeviceBackend::Stub,
+            host: None,
+            remote_gps: false,
+            enabled: true,
+            note: None,
+        }],
+    };
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let pattern_ptr = 0x3131_0000;
+    let info_ptr = 0x3131_1000;
+    memory.write_wide_z(pattern_ptr, "COM*");
+    map_device_info(&mut memory, info_ptr);
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(find),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_DEVICE,
+        [DEVICE_SEARCH_BY_LEGACY_NAME, pattern_ptr, info_ptr],
+    )
+    else {
+        panic!("FindFirstDevice did not return a handle");
+    };
+    assert_ne!(find, INVALID_HANDLE_VALUE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_ne!(memory.read_u32(info_ptr + 4)?, 0);
+    assert_eq!(memory.read_wide_z(info_ptr + 12, 6), "COM7:");
+    assert_eq!(memory.read_wide_z(info_ptr + 544, 260), r"$device\COM7");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_find_device_enumerates_live_ce_device_info() -> Result<()> {
+    const DEVMGR_DEVICE_INFORMATION_SIZE: u32 = 1584;
+    const DEVICE_SEARCH_BY_LEGACY_NAME: u32 = 0;
+    const DEVICE_SEARCH_BY_DEVICE_NAME: u32 = 1;
+    const DEVICE_SEARCH_BY_BUS_NAME: u32 = 2;
+    const DEVICE_SEARCH_BY_GUID: u32 = 3;
+    const DEVICE_SEARCH_BY_PARENT: u32 = 4;
+    const INVALID_HANDLE_VALUE: u32 = u32::MAX;
+
+    fn map_device_info(memory: &mut TestGuestMemory, addr: u32) {
+        memory.map_words(addr, 3);
+        memory.map_halfwords(addr + 12, 6);
+        memory.map_halfwords(addr + 24, 260);
+        memory.map_halfwords(addr + 544, 260);
+        memory.map_halfwords(addr + 1064, 260);
+    }
+
+    fn activate(
+        table: &CoredllExportTable,
+        kernel: &mut CeKernel,
+        memory: &mut TestGuestMemory,
+        thread_id: u32,
+        key_ptr: u32,
+    ) -> u32 {
+        let CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } = table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_ACTIVATE_DEVICE,
+            [key_ptr, 0],
+        )
+        else {
+            panic!("ActivateDevice did not return a handle");
+        };
+        assert_ne!(handle, 0);
+        handle
+    }
+
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.devices = DeviceConfigFile {
+        version: 1,
+        defaults: DeviceDefaults::default(),
+        devices: vec![
+            DeviceConfig {
+                guest: "COM7:".to_owned(),
+                kind: DeviceKind::Serial,
+                backend: DeviceBackend::Stub,
+                host: None,
+                remote_gps: false,
+                enabled: true,
+                note: None,
+            },
+            DeviceConfig {
+                guest: "UID1:".to_owned(),
+                kind: DeviceKind::IoctlDevice,
+                backend: DeviceBackend::NandUuid,
+                host: None,
+                remote_gps: false,
+                enabled: true,
+                note: None,
+            },
+        ],
+    };
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let com_key_ptr = 0x3132_0000;
+    let uid_key_ptr = 0x3132_0100;
+    let legacy_pattern_ptr = 0x3132_0200;
+    let device_pattern_ptr = 0x3132_0300;
+    let bus_pattern_ptr = 0x3132_0400;
+    let missing_pattern_ptr = 0x3132_0500;
+    let guid_ptr = 0x3132_0600;
+    let info_ptr = 0x3132_1000;
+    let next_info_ptr = 0x3132_2000;
+    memory.write_wide_z(com_key_ptr, r"Drivers\BuiltIn\COM7");
+    memory.write_wide_z(uid_key_ptr, r"Drivers\BuiltIn\UID1");
+    memory.write_wide_z(legacy_pattern_ptr, "COM*");
+    memory.write_wide_z(device_pattern_ptr, r"$device\UID1");
+    memory.write_wide_z(bus_pattern_ptr, "");
+    memory.write_wide_z(missing_pattern_ptr, "DSK*");
+    memory.write_bytes(guid_ptr, &[0x55; 16]);
+    map_device_info(&mut memory, info_ptr);
+    map_device_info(&mut memory, next_info_ptr);
+
+    let com_handle = activate(&table, &mut kernel, &mut memory, thread_id, com_key_ptr);
+    let uid_handle = activate(&table, &mut kernel, &mut memory, thread_id, uid_key_ptr);
+
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(find),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_DEVICE,
+        [DEVICE_SEARCH_BY_LEGACY_NAME, legacy_pattern_ptr, info_ptr],
+    )
+    else {
+        panic!("FindFirstDevice did not return a handle");
+    };
+    assert_ne!(find, INVALID_HANDLE_VALUE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(memory.read_u32(info_ptr + 4)?, com_handle);
+    assert_eq!(memory.read_wide_z(info_ptr + 12, 6), "COM7:");
+    memory.write_word(next_info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_DEVICE,
+            [find, next_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_FILES
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(device_find),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_DEVICE,
+        [DEVICE_SEARCH_BY_DEVICE_NAME, device_pattern_ptr, info_ptr],
+    )
+    else {
+        panic!("FindFirstDevice by device name did not return a handle");
+    };
+    assert_ne!(device_find, INVALID_HANDLE_VALUE);
+    assert_eq!(memory.read_u32(info_ptr + 4)?, uid_handle);
+    assert_eq!(memory.read_wide_z(info_ptr + 544, 260), r"$device\UID1");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [device_find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(parent_find),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_DEVICE,
+        [DEVICE_SEARCH_BY_PARENT, 0, info_ptr],
+    )
+    else {
+        panic!("FindFirstDevice by parent did not return a handle");
+    };
+    assert_ne!(parent_find, INVALID_HANDLE_VALUE);
+    assert_eq!(memory.read_u32(info_ptr + 4)?, com_handle);
+    memory.write_word(next_info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_DEVICE,
+            [parent_find, next_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(next_info_ptr + 4)?, uid_handle);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [parent_find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(bus_find),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_DEVICE,
+        [DEVICE_SEARCH_BY_BUS_NAME, bus_pattern_ptr, info_ptr],
+    )
+    else {
+        panic!("FindFirstDevice by bus name did not return a handle");
+    };
+    assert_ne!(bus_find, INVALID_HANDLE_VALUE);
+    assert_eq!(memory.read_u32(info_ptr + 4)?, com_handle);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [bus_find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_FIRST_DEVICE,
+            [DEVICE_SEARCH_BY_LEGACY_NAME, missing_pattern_ptr, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(INVALID_HANDLE_VALUE),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_FILES
+    );
+
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_FIRST_DEVICE,
+            [DEVICE_SEARCH_BY_GUID, guid_ptr, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(INVALID_HANDLE_VALUE),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_FILES
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_FIRST_DEVICE,
+            [DEVICE_SEARCH_BY_LEGACY_NAME, 0, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(INVALID_HANDLE_VALUE),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(stale_find),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_DEVICE,
+        [DEVICE_SEARCH_BY_PARENT, 0, info_ptr],
+    )
+    else {
+        panic!("FindFirstDevice stale test did not return a handle");
+    };
+    assert_ne!(stale_find, INVALID_HANDLE_VALUE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEACTIVATE_DEVICE,
+            [uid_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    memory.write_word(next_info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_DEVICE,
+            [stale_find, next_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_FILES
+    );
 
     Ok(())
 }
@@ -8458,12 +8876,13 @@ fn coredll_raw_shget_special_folder_path_honors_create_flags() -> Result<()> {
         memory.read_wide_z(path_ptr, 260),
         r"\SDMMC Disk\Profiles\guest\Application Data"
     );
-    assert!(root
-        .join("SDMMC")
-        .join("Profiles")
-        .join("guest")
-        .join("Application Data")
-        .is_dir());
+    assert!(
+        root.join("SDMMC")
+            .join("Profiles")
+            .join("guest")
+            .join("Application Data")
+            .is_dir()
+    );
     let queries = kernel
         .shell
         .special_folder_queries()
@@ -8924,8 +9343,8 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
 }
 
 #[test]
-fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_modules(
-) -> Result<()> {
+fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_modules()
+-> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
@@ -12030,11 +12449,12 @@ fn shell_add_to_recent_docs_creates_and_clears_recent_shortcuts() -> Result<()> 
     assert!(!recent_link.exists());
     assert!(!pidl_link.exists());
     assert!(!opaque_pidl_link.exists());
-    assert!(root
-        .join("Windows")
-        .join("Recent")
-        .join("Route 02.lnk")
-        .exists());
+    assert!(
+        root.join("Windows")
+            .join("Recent")
+            .join("Route 02.lnk")
+            .exists()
+    );
     let newest_link = root.join("Windows").join("Recent").join("Route 11.lnk");
     assert!(newest_link.exists());
 
@@ -16279,12 +16699,14 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             .unwrap()
             .colors_set
     );
-    assert!(kernel
-        .resources
-        .image_list(palette_ddb_list)
-        .unwrap()
-        .color_table
-        .is_empty());
+    assert!(
+        kernel
+            .resources
+            .image_list(palette_ddb_list)
+            .unwrap()
+            .color_table
+            .is_empty()
+    );
     let (ddb_palette_dc, ddb_palette_dst_bits, ddb_palette_dst_stride) =
         create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 1);
     assert!(matches!(
@@ -17186,12 +17608,14 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
-    assert!(!kernel
-        .resources
-        .image_list(no_mask_overlay_list)
-        .unwrap()
-        .overlays
-        .contains_key(&1));
+    assert!(
+        !kernel
+            .resources
+            .image_list(no_mask_overlay_list)
+            .unwrap()
+            .overlays
+            .contains_key(&1)
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -18174,14 +18598,18 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(kernel.resources.icon(extracted_icon).is_none());
     assert!(kernel.resources.bitmap(extracted_color_handle).is_none());
     assert!(kernel.resources.bitmap(extracted_mask_handle).is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, extracted_color_bits_ptr)
-        .is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, extracted_mask_bits_ptr)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, extracted_color_bits_ptr)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, extracted_mask_bits_ptr)
+            .is_none()
+    );
     let mask_handle_duplicate = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -18251,14 +18679,18 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         .bitmap(duplicate_mask_image.mask)
         .unwrap()
         .bits_ptr;
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
-        .is_some());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
+            .is_some()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -18273,23 +18705,31 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         }
     ));
     assert!(kernel.resources.image_list(mask_handle_duplicate).is_none());
-    assert!(kernel
-        .resources
-        .bitmap(duplicate_mask_image.bitmap)
-        .is_none());
+    assert!(
+        kernel
+            .resources
+            .bitmap(duplicate_mask_image.bitmap)
+            .is_none()
+    );
     assert!(kernel.resources.bitmap(duplicate_mask_image.mask).is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
-        .is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
-        .is_none());
-    assert!(kernel
-        .resources
-        .bitmap(original_mask_image.bitmap)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .resources
+            .bitmap(original_mask_image.bitmap)
+            .is_some()
+    );
     assert!(kernel.resources.bitmap(original_mask_image.mask).is_some());
     let _ = framebuffer.take_dirty_rects();
     assert!(matches!(
@@ -18419,19 +18859,25 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         }
     ));
     assert_eq!(kernel.resources.image_list_count(mask_handle_list), Some(0));
-    assert!(kernel
-        .resources
-        .bitmap(original_mask_image.bitmap)
-        .is_none());
+    assert!(
+        kernel
+            .resources
+            .bitmap(original_mask_image.bitmap)
+            .is_none()
+    );
     assert!(kernel.resources.bitmap(original_mask_image.mask).is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, original_bitmap_bits)
-        .is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, original_mask_bits)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, original_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, original_mask_bits)
+            .is_none()
+    );
     let replace_cleanup_list = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -18497,14 +18943,18 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert_eq!(replacement_image.mask, 0);
     assert!(kernel.resources.bitmap(replaced_image.bitmap).is_none());
     assert!(kernel.resources.bitmap(replaced_image.mask).is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, replaced_bitmap_bits)
-        .is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, replaced_mask_bits)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, replaced_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, replaced_mask_bits)
+            .is_none()
+    );
     let replace_icon_cleanup_list = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -18570,19 +19020,25 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert_eq!(icon_replacement.bitmap, 0);
     assert_eq!(icon_replacement.mask, 0);
     assert_eq!(icon_replacement.icon, 0x000b_8123);
-    assert!(kernel
-        .resources
-        .bitmap(icon_replaced_image.bitmap)
-        .is_none());
+    assert!(
+        kernel
+            .resources
+            .bitmap(icon_replaced_image.bitmap)
+            .is_none()
+    );
     assert!(kernel.resources.bitmap(icon_replaced_image.mask).is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, icon_replaced_bitmap_bits)
-        .is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, icon_replaced_mask_bits)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, icon_replaced_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, icon_replaced_mask_bits)
+            .is_none()
+    );
     let dither_mask_list = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -18681,14 +19137,18 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     ));
     assert!(kernel.resources.bitmap(dither_image.bitmap).is_some());
     assert!(kernel.resources.bitmap(dither_image.mask).is_some());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
-        .is_some());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
+            .is_some()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -18704,14 +19164,18 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     ));
     assert!(kernel.resources.bitmap(dither_image.bitmap).is_none());
     assert!(kernel.resources.bitmap(dither_image.mask).is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
-        .is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
+            .is_none()
+    );
 
     memory.write_wide_z(bitmap_path_ptr, r"\Images\red.bmp");
     let red_bitmap = match table.dispatch_raw_ordinal_with_memory(
@@ -19914,10 +20378,12 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     ));
     assert!(kernel.resources.image_list_drag().is_none());
     assert!(kernel.resources.image_list(drag_image_list).is_none());
-    assert!(kernel
-        .resources
-        .image_list(merged_drag_image_list)
-        .is_none());
+    assert!(
+        kernel
+            .resources
+            .image_list(merged_drag_image_list)
+            .is_none()
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -21661,10 +22127,12 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
     );
     assert_eq!(memory.read_u32(copied_nid + NID_STATE_OFFSET)?, 0x4);
     assert_eq!(memory.read_u32(copied_nid + NID_STATE_MASK_OFFSET)?, 0xff);
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -21679,10 +22147,12 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
         }
     ));
     assert!(kernel.gwe.message_pointer_payload(copied_nid).is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
+            .is_none()
+    );
 
     memory.write_wide_z(data + NID_TIP_OFFSET, "Duplicate should not post");
     assert!(matches!(
@@ -22048,9 +22518,11 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
         height: 4,
         flags: 5,
     });
-    assert!(kernel
-        .gwe
-        .insert_message_pointer_payload(payload_ptr, payload.clone()));
+    assert!(
+        kernel
+            .gwe
+            .insert_message_pointer_payload(payload_ptr, payload.clone())
+    );
     memory.write_word(msg_ptr, hwnd);
     memory.write_word(msg_ptr + 4, WM_HANDLESHELLNOTIFYICON);
     memory.write_word(msg_ptr + 8, 0);
@@ -22074,10 +22546,12 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
         kernel.gwe.message_pointer_payload(payload_ptr),
         Some(payload)
     );
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, payload_ptr)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, payload_ptr)
+            .is_some()
+    );
 
     memory.write_word(msg_ptr + 4, WM_WINDOWPOSCHANGED);
     assert!(matches!(
@@ -22094,10 +22568,12 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
         }
     ));
     assert!(kernel.gwe.message_pointer_payload(payload_ptr).is_none());
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, payload_ptr)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, payload_ptr)
+            .is_none()
+    );
 
     Ok(())
 }
@@ -22469,10 +22945,12 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(memory.read_u32(nmshn_ptr + 16)?, 0);
     assert_eq!(memory.read_u32(nmshn_ptr + 20)?, 0);
     assert_eq!(memory.read_u32(nmshn_ptr + 24)?, 0);
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -22486,10 +22964,12 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             ..
         }
     ));
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
+            .is_none()
+    );
 
     assert!(kernel.post_shell_notification_link_callback(clsid, 301, "cmd:route"));
     let callbacks = kernel
@@ -22541,10 +23021,12 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(link_ptr, link_nmshn_ptr + 28);
     assert_eq!(memory.read_u32(link_nmshn_ptr + 24)?, 0);
     assert_eq!(memory.read_wide_z(link_ptr, 32), "cmd:route");
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -22558,10 +23040,12 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             ..
         }
     ));
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
+            .is_none()
+    );
 
     assert!(kernel.post_shell_notification_dismiss_callback(clsid, 301, true));
     let callbacks = kernel
@@ -22622,10 +23106,12 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             ..
         }
     ));
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, dismiss_nmshn_ptr)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dismiss_nmshn_ptr)
+            .is_none()
+    );
     assert!(kernel.shell.notification(clsid, 301).is_some());
 
     assert!(kernel.post_shell_notification_command_callback(clsid, 301, 0x1234));
@@ -23534,10 +24020,12 @@ fn shnotification_i_posts_timeout_dismiss_and_removes_expired_record() -> Result
             ..
         }
     ));
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
+            .is_none()
+    );
 
     Ok(())
 }
@@ -23791,10 +24279,12 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     let mkdir_path = memory.read_u32(mkdir_notify + 16)?;
     assert_eq!(memory.read_u32(mkdir_notify + 20)?, 0);
     assert_eq!(memory.read_wide_z(mkdir_path, 64), r"\Windows\Routes");
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, mkdir_notify)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, mkdir_notify)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -23808,10 +24298,12 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
             ..
         }
     ));
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, mkdir_notify)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, mkdir_notify)
+            .is_none()
+    );
 
     memory.write_wide_z(path1, r"\Windows\PidlRoutes.txt");
     let create_handle = match table.dispatch_raw_ordinal_with_memory(
@@ -23941,10 +24433,12 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     assert_ne!(new_path, 0);
     assert_eq!(memory.read_wide_z(old_path, 64), r"\Windows\old.txt");
     assert_eq!(memory.read_wide_z(new_path, 64), r"\Windows\new.txt");
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, rename_notify)
-        .is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, rename_notify)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -23958,10 +24452,12 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
             ..
         }
     ));
-    assert!(kernel
-        .memory
-        .heap_size(PROCESS_HEAP_HANDLE, 0, rename_notify)
-        .is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, rename_notify)
+            .is_none()
+    );
     assert_eq!(
         kernel
             .shell
@@ -24421,10 +24917,12 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDNO));
     assert!(!kernel.gwe.is_window(record.dialog_hwnd));
     assert!(!kernel.gwe.is_window(record.text_hwnd));
-    assert!(record
-        .button_hwnds
-        .iter()
-        .all(|button_hwnd| !kernel.gwe.is_window(*button_hwnd)));
+    assert!(
+        record
+            .button_hwnds
+            .iter()
+            .all(|button_hwnd| !kernel.gwe.is_window(*button_hwnd))
+    );
     assert_eq!(record.owner_was_enabled, Some(true));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert!(!framebuffer.dirty_rects().is_empty());
@@ -24710,16 +25208,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.default_button_index, 1);
     assert_eq!(record.result, IDCANCEL);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDCANCEL));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(dialog_hwnd),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(dialog_hwnd),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let next_dialog_hwnd = hwnd + 24;
     let yes_button_hwnd = next_dialog_hwnd + 8;
@@ -24776,16 +25276,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.dialog_hwnd, command_dialog_hwnd);
     assert_eq!(record.result, IDNO);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDNO));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(command_dialog_hwnd),
-            WM_COMMAND,
-            WM_COMMAND,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(command_dialog_hwnd),
+                WM_COMMAND,
+                WM_COMMAND,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let close_dialog_hwnd = hwnd + 64;
     kernel.gwe.post_message(
@@ -24810,16 +25312,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.dialog_hwnd, close_dialog_hwnd);
     assert_eq!(record.result, IDCANCEL);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDCANCEL));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(close_dialog_hwnd),
-            WM_CLOSE,
-            WM_CLOSE,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(close_dialog_hwnd),
+                WM_CLOSE,
+                WM_CLOSE,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let sysclose_dialog_hwnd = hwnd + 84;
     kernel.gwe.post_message(
@@ -24847,16 +25351,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.dialog_hwnd, sysclose_dialog_hwnd);
     assert_eq!(record.result, IDCANCEL);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDCANCEL));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(sysclose_dialog_hwnd),
-            WM_SYSCOMMAND,
-            WM_SYSCOMMAND,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(sysclose_dialog_hwnd),
+                WM_SYSCOMMAND,
+                WM_SYSCOMMAND,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let char_return_dialog_hwnd = hwnd + 104;
     kernel.gwe.post_message(
@@ -24884,16 +25390,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.dialog_hwnd, char_return_dialog_hwnd);
     assert_eq!(record.result, IDNO);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDNO));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(char_return_dialog_hwnd),
-            WM_CHAR,
-            WM_CHAR,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(char_return_dialog_hwnd),
+                WM_CHAR,
+                WM_CHAR,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let char_escape_dialog_hwnd = hwnd + 124;
     kernel.gwe.post_message(
@@ -24921,16 +25429,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.dialog_hwnd, char_escape_dialog_hwnd);
     assert_eq!(record.result, IDCANCEL);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDCANCEL));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(char_escape_dialog_hwnd),
-            WM_CHAR,
-            WM_CHAR,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(char_escape_dialog_hwnd),
+                WM_CHAR,
+                WM_CHAR,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let down_only_dialog_hwnd = hwnd + 144;
     let down_only_yes_button_hwnd = down_only_dialog_hwnd + 8;
@@ -24959,16 +25469,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.dialog_hwnd, down_only_dialog_hwnd);
     assert_eq!(record.result, IDNO);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDNO));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(down_only_yes_button_hwnd),
-            WM_LBUTTONDOWN,
-            WM_LBUTTONDOWN,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(down_only_yes_button_hwnd),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONDOWN,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let dialog_click_dialog_hwnd = hwnd + 164;
     let no_button_lparam = make_lparam(112, 70);
@@ -25072,16 +25584,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.dialog_hwnd, nested_dialog_hwnd);
     assert_eq!(record.result, IDCANCEL);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDCANCEL));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(nested_dialog_hwnd),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(nested_dialog_hwnd),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let sent_other = kernel.create_window_ex_w(thread_id, "MSGBOX_SENT_OTHER", "", None, 0, 0, 0);
     let sent_dialog_hwnd = sent_other + 4;
@@ -25118,16 +25632,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     assert_eq!(record.dialog_hwnd, sent_dialog_hwnd);
     assert_eq!(record.result, IDCANCEL);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDCANCEL));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(sent_dialog_hwnd),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(sent_dialog_hwnd),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     let paint_other = kernel.create_window_ex_w_with_rect(
         thread_id,
@@ -25167,16 +25683,18 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
         kernel.gwe.update_rect(paint_other).is_none(),
         "modal MessageBox pump should dispatch generated non-dialog WM_PAINT before default fallback"
     );
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(paint_other),
-            WM_PAINT,
-            WM_PAINT,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(paint_other),
+                WM_PAINT,
+                WM_PAINT,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
     let record = kernel
         .shell
         .last_message_box()
@@ -25245,16 +25763,18 @@ fn message_box_w_tab_navigation_changes_activated_button() -> Result<()> {
     assert_eq!(record.dialog_hwnd, tab_dialog_hwnd);
     assert_eq!(record.result, IDYES);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDYES));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(tab_dialog_hwnd),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(tab_dialog_hwnd),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     // Second box: Tab forward once (No -> Cancel) then Space activates the Cancel button.
     let space_dialog_hwnd = hwnd + 24;
@@ -25284,16 +25804,18 @@ fn message_box_w_tab_navigation_changes_activated_button() -> Result<()> {
     assert_eq!(record.dialog_hwnd, space_dialog_hwnd);
     assert_eq!(record.result, IDCANCEL);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDCANCEL));
-    assert!(kernel
-        .gwe
-        .peek_message_filtered(
-            thread_id,
-            Some(space_dialog_hwnd),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-            PeekFlags::NO_REMOVE
-        )
-        .is_none());
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(space_dialog_hwnd),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
 
     Ok(())
 }
@@ -25928,10 +26450,12 @@ fn clipboard_delayed_render_requests_owner_and_accepts_rendered_handle() -> Resu
             ..
         }
     ));
-    assert!(kernel
-        .gwe
-        .complete_active_sent_message(owner_thread, 0)
-        .is_some());
+    assert!(
+        kernel
+            .gwe
+            .complete_active_sent_message(owner_thread, 0)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -25972,10 +26496,12 @@ fn clipboard_delayed_render_requests_owner_and_accepts_rendered_handle() -> Resu
         .expect("second delayed format should queue WM_RENDERFORMAT");
     assert_eq!(stale_render_message.hwnd, owner);
     assert_eq!(stale_render_message.wparam, CF_TEXT);
-    assert!(kernel
-        .gwe
-        .complete_active_sent_message(owner_thread, 0)
-        .is_some());
+    assert!(
+        kernel
+            .gwe
+            .complete_active_sent_message(owner_thread, 0)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -26032,10 +26558,12 @@ fn clipboard_delayed_render_requests_owner_and_accepts_rendered_handle() -> Resu
             ..
         }
     ));
-    assert!(kernel
-        .gwe
-        .complete_active_sent_message(owner_thread, 0)
-        .is_some());
+    assert!(
+        kernel
+            .gwe
+            .complete_active_sent_message(owner_thread, 0)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
