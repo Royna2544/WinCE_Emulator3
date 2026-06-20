@@ -6565,7 +6565,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_OUTLINE_TEXT_METRICS_W => {
             // GetOutlineTextMetricsW(hdc, cbData, lpOTM) — returns OUTLINETEXTMETRICW.
             // CE doesn't expose TrueType outline metrics; return 0 (not available).
-            kernel.threads.set_last_error(thread_id, 0);
+            kernel.threads.set_last_error(
+                thread_id,
+                if is_valid_hdc(kernel, raw_arg(args, 0)) {
+                    0
+                } else {
+                    ERROR_INVALID_HANDLE
+                },
+            );
             Some(CoredllValue::U32(0))
         }
         ORD_EXT_CREATE_REGION => {

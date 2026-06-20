@@ -46,24 +46,24 @@ use wince_emulation_v3::{
             ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_MONITOR_INFO,
             ORD_GET_NEAREST_COLOR, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM,
             ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_OBJECT_TYPE, ORD_GET_OBJECT_W,
-            ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT, ORD_GET_PIXEL, ORD_GET_QUEUE_STATUS,
-            ORD_GET_REGION_DATA, ORD_GET_RGN_BOX, ORD_GET_ROP2, ORD_GET_STOCK_OBJECT,
-            ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH,
-            ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES,
-            ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR,
-            ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W,
-            ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W, ORD_GET_VIEWPORT_EXT_EX,
-            ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW, ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W,
-            ORD_GET_WINDOW_ORG_EX, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
-            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
-            ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL,
-            ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
-            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_CREATE,
-            ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE,
-            ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW,
-            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE,
-            ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
-            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_GET_OUTLINE_TEXT_METRICS_W, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT, ORD_GET_PIXEL,
+            ORD_GET_QUEUE_STATUS, ORD_GET_REGION_DATA, ORD_GET_RGN_BOX, ORD_GET_ROP2,
+            ORD_GET_STOCK_OBJECT, ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR,
+            ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS,
+            ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA,
+            ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
+            ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W,
+            ORD_GET_VIEWPORT_EXT_EX, ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW,
+            ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_ORG_EX,
+            ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W,
+            ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT, ORD_GET_WINDOW_THREAD_PROCESS_ID,
+            ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL, ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD,
+            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
+            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
+            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
+            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
+            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
             ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
             ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
             ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
@@ -53883,6 +53883,70 @@ fn coredll_raw_gdi_get_font_data_validates_hdc_before_stub_fallback() -> Result<
         kernel.threads.get_last_error(thread_id),
         ERROR_NOT_SUPPORTED
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_get_outline_text_metrics_validates_hdc_before_stub_fallback() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 143_u32;
+
+    for hdc in [0, 0x1234_5678] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_OUTLINE_TEXT_METRICS_W,
+                [hdc, 0, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
+    }
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CREATE_COMPATIBLE_DC failed: {other:?}"),
+    };
+
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OUTLINE_TEXT_METRICS_W,
+            [dc, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }

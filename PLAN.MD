@@ -943,8 +943,8 @@ notes when it is still needed for implementation.
      edges, clipping, and read-only bitmap rejection where CE evidence exists.
    - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and the CE GDI invalid-HDC
      patterns in `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\text.cpp`/`draw.cpp`:
-     raw `GetFontData` now validates null/bad HDCs before falling back to the
-     emulator's unsupported font-binary path for valid DCs.
+     raw `GetFontData` and `GetOutlineTextMetricsW` now validate null/bad HDCs
+     before falling back to their unsupported/no-outline valid-DC paths.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the
