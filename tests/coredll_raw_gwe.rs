@@ -4912,6 +4912,52 @@ fn coredll_raw_pat_blt_patcopy_paints_selected_memory_dib() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_create_pattern_brush_rejects_invalid_bitmap_handles_like_ce() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x0000_00ff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+
+    for bitmap in [0, 0x1234_5678, brush] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CREATE_PATTERN_BRUSH,
+                [bitmap],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_pat_blt_tiles_pattern_brush_on_selected_memory_dib() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

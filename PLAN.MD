@@ -632,6 +632,11 @@ notes when it is still needed for implementation.
   style validation: `CreatePen` and `CreatePenIndirect` accept only
   `PS_SOLID`, `PS_DASH`, and `PS_NULL`; unsupported desktop styles fail with
   `ERROR_INVALID_PARAMETER`.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\brush.cpp`:
+  `passBrushNULL(ECreatePatternBrush)` is now covered for raw pattern-brush
+  creation: null, stale, and non-bitmap handles fail with
+  `ERROR_INVALID_HANDLE`, while valid bitmap pattern brushes keep private
+  backing after the caller bitmap is deleted.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`:
   `passNull2Font(ERemoveFontResource)` is now covered for raw
   `RemoveFontResourceW`: null paths fail with `ERROR_INVALID_PARAMETER`,
