@@ -3220,54 +3220,7 @@ impl UnicornMips {
         current_process_id: u32,
     ) -> Option<u32> {
         if is_ce_high_process_slot_callback(wndproc) {
-            tracing::debug!(
-                target: "ce.gwe",
-                wndproc = format_args!("0x{wndproc:08x}"),
-                process_id,
-                current_process_id,
-                branch = "high_slot",
-                "resolved CE slot WNDPROC"
-            );
             return Some(wndproc);
-        }
-        let local = self.receiver_process_wndproc(wndproc);
-        if local.is_some_and(|mapped| mapped != wndproc) {
-            if wndproc >= CE_PROCESS_SLOT_SIZE {
-                tracing::debug!(
-                    target: "ce.gwe",
-                    wndproc = format_args!("0x{wndproc:08x}"),
-                    mapped = format_args!("0x{:08x}", local.unwrap_or(0)),
-                    process_id,
-                    current_process_id,
-                    branch = "local_mapped",
-                    "resolved CE slot WNDPROC"
-                );
-            }
-            return local;
-        }
-        if local == Some(wndproc)
-            && Self::mapped_process_slot_dll_contains_callback(&self.mapped_blobs, wndproc)
-        {
-            tracing::debug!(
-                target: "ce.gwe",
-                wndproc = format_args!("0x{wndproc:08x}"),
-                process_id,
-                current_process_id,
-                branch = "local_process_slot_contains",
-                "resolved CE slot WNDPROC"
-            );
-            return local;
-        }
-        if local == Some(wndproc) && wndproc >= CE_PROCESS_SLOT_SIZE {
-            tracing::debug!(
-                target: "ce.gwe",
-                wndproc = format_args!("0x{wndproc:08x}"),
-                process_id,
-                current_process_id,
-                branch = "reject_local_shared_identity",
-                "rejected CE slot WNDPROC"
-            );
-            return None;
         }
         if let Some(parked) = self
             .parked_child_processes
@@ -3281,50 +3234,41 @@ impl UnicornMips {
                         &parked.cpu.mapped_blobs,
                         wndproc,
                     ))
-                || (local.is_none() && parked_mapped.is_none())
+                || (wndproc < CE_PROCESS_SLOT_SIZE && parked_mapped.is_none())
             {
-                if wndproc >= CE_PROCESS_SLOT_SIZE {
-                    tracing::debug!(
-                        target: "ce.gwe",
-                        wndproc = format_args!("0x{wndproc:08x}"),
-                        mapped = parked_mapped.map(|mapped| format!("0x{mapped:08x}")).unwrap_or_else(|| "None".to_owned()),
-                        process_id,
-                        current_process_id,
-                        branch = "parked_receiver",
-                        "resolved CE slot WNDPROC"
-                    );
-                }
                 return parked_mapped;
             }
         }
-        if wndproc >= CE_PROCESS_SLOT_SIZE {
-            if process_id == current_process_id
-                && (CE_HIGH_PROCESS_SLOT_DLL_BASE..CE_SHARED_HEAP_BASE).contains(&wndproc)
-            {
-                tracing::debug!(
-                    target: "ce.gwe",
-                    wndproc = format_args!("0x{wndproc:08x}"),
-                    process_id,
-                    current_process_id,
-                    branch = "current_high_process_slot",
-                    "resolved CE slot WNDPROC"
-                );
-                return local.or(Some(wndproc));
-            }
-            tracing::debug!(
-                target: "ce.gwe",
-                wndproc = format_args!("0x{wndproc:08x}"),
-                process_id,
-                current_process_id,
-                branch = "reject_unmapped_slot",
-                "rejected CE slot WNDPROC"
-            );
+
+        if wndproc >= CE_PROCESS_SLOT_SIZE
+            && Self::mapped_process_slot_dll_contains_callback(&self.mapped_blobs, wndproc)
+        {
+            return Some(wndproc);
+        }
+        if process_id != current_process_id {
             return None;
         }
-        if process_id == current_process_id {
-            local.or(Some(wndproc))
-        } else {
+
+        let local = self.receiver_process_wndproc(wndproc);
+        if local.is_some_and(|mapped| mapped != wndproc) {
+            if (CE_HIGH_PROCESS_SLOT_DLL_BASE..CE_SHARED_HEAP_BASE).contains(&wndproc)
+                && local.is_some_and(|mapped| mapped < CE_HIGH_PROCESS_SLOT_DLL_BASE)
+            {
+                return None;
+            }
+            return local;
+        }
+        if local == Some(wndproc)
+            && Self::mapped_process_slot_dll_contains_callback(&self.mapped_blobs, wndproc)
+        {
+            return local;
+        }
+        if local == Some(wndproc) && wndproc >= CE_PROCESS_SLOT_SIZE {
             None
+        } else if wndproc >= CE_PROCESS_SLOT_SIZE {
+            None
+        } else {
+            local.or(Some(wndproc))
         }
     }
 
@@ -44359,6 +44303,11 @@ mod unicorn_tests {
             base: 0x6000_0000,
             bytes: fake_pe_blob(0x8b000, 0x0010_0000),
         });
+        parent.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4015_0000,
+            bytes: vec![0; 0x7f000],
+        });
 
         let parked_parent = super::ParkedProcess {
             application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
@@ -44387,8 +44336,16 @@ mod unicorn_tests {
             Some(0x6004_f0f4)
         );
         assert_eq!(
+            child.receiver_process_wndproc_for_process(0x6004_f0f4, 1, 67),
+            Some(0x6004_f0f4)
+        );
+        assert_eq!(
             child.receiver_process_wndproc_for_process(0x4019_f0f4, 1, 1),
             Some(0x6004_f0f4)
+        );
+        assert_eq!(
+            child.receiver_process_wndproc_for_process(0x6004_f0f4, 67, 67),
+            None
         );
     }
 
