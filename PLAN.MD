@@ -809,9 +809,10 @@ notes when it is still needed for implementation.
   and `C:\WINCE600\PRIVATE\WINCEOS\UTILS\CMD2\cmd.cxx`: raw
   `GetStdioPathW`/`SetStdioPathW` now maintain CE per-process stdin/stdout/
   stderr path names instead of returning unsupported. Coverage verifies unset
-  entries, null-path clearing, short-buffer `ERROR_INSUFFICIENT_BUFFER`
-  behavior that preserves the caller length, process isolation, and invalid
-  descriptor rejection.
+  entries, explicit empty-string paths, null-path clearing, strict guest string
+  pointer validation, short-buffer `ERROR_INSUFFICIENT_BUFFER` behavior that
+  preserves the caller length, process isolation, and invalid descriptor
+  rejection.
 
 ## Active Roadmap
 

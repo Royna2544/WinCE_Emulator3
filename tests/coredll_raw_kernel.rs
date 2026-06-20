@@ -287,13 +287,56 @@ fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
             ..
         }
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BATTERY_GET_LIFE_TIME_INFO,
+            [last_change, cpu_usage, previous_cpu_usage],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!((1..=9999).contains(&memory.read_u16(last_change)?));
+    assert!((1..=12).contains(&memory.read_u16(last_change + 2)?));
+    assert_eq!(memory.read_u32(cpu_usage)?, 0);
+    assert_eq!(memory.read_u32(previous_cpu_usage)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BATTERY_NOTIFY_OF_TIME_CHANGE,
+            [1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_stdio_paths_follow_ce_process_contract() -> Result<()> {
     const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
     let stdio_path_ptr = 0x2a00;
     let stdio_out_ptr = 0x2b00;
     let stdio_len_ptr = 0x2c00;
     memory.map_halfwords(stdio_path_ptr, 64);
     memory.map_halfwords(stdio_out_ptr, 64);
     memory.map_words(stdio_len_ptr, 1);
+
     memory.write_wide_z(stdio_path_ptr, r"\Temp\stdout.txt");
     memory.write_wide_z(stdio_out_ptr, "unchanged");
     memory.write_word(stdio_len_ptr, 64);
@@ -313,6 +356,7 @@ fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
     assert_eq!(memory.read_u32(stdio_len_ptr)?, 0);
     assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), "unchanged");
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -345,6 +389,7 @@ fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
     assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), r"\Temp\stdout.txt");
     assert_eq!(memory.read_u32(stdio_len_ptr)?, 17);
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
     memory.write_wide_z(stdio_out_ptr, "short");
     memory.write_word(stdio_len_ptr, 4);
     assert!(matches!(
@@ -366,6 +411,39 @@ fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INSUFFICIENT_BUFFER
     );
+
+    memory.write_wide_z(stdio_path_ptr, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_STDIO_PATH_W,
+            [1, stdio_path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    memory.write_wide_z(stdio_out_ptr, "empty");
+    memory.write_word(stdio_len_ptr, 64);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STDIO_PATH_W,
+            [1, stdio_out_ptr, stdio_len_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(stdio_len_ptr)?, 1);
+    assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), "");
+
     let saved_state = kernel.current_process_state();
     kernel.set_current_process_id(99);
     memory.write_wide_z(stdio_out_ptr, "other");
@@ -386,6 +464,7 @@ fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
     assert_eq!(memory.read_u32(stdio_len_ptr)?, 0);
     assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), "other");
     kernel.set_current_process_state(saved_state);
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -416,6 +495,7 @@ fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
     ));
     assert_eq!(memory.read_u32(stdio_len_ptr)?, 0);
     assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), "cleared");
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -433,37 +513,6 @@ fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
-            ORD_BATTERY_GET_LIFE_TIME_INFO,
-            [last_change, cpu_usage, previous_cpu_usage],
-        ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::U32(0),
-            ..
-        }
-    ));
-    assert!((1..=9999).contains(&memory.read_u16(last_change)?));
-    assert!((1..=12).contains(&memory.read_u16(last_change + 2)?));
-    assert_eq!(memory.read_u32(cpu_usage)?, 0);
-    assert_eq!(memory.read_u32(previous_cpu_usage)?, 0);
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
-            ORD_BATTERY_NOTIFY_OF_TIME_CHANGE,
-            [1, 0],
-        ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::U32(0),
-            ..
-        }
-    ));
-    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }

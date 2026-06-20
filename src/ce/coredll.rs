@@ -27285,7 +27285,7 @@ fn set_stdio_path_w_raw<M: CoredllGuestMemory>(
     let path = if path_ptr == 0 {
         None
     } else {
-        let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+        let Some(path) = read_guest_wide_z(memory, path_ptr, 512).ok() else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -27333,20 +27333,21 @@ fn get_stdio_path_w_raw<M: CoredllGuestMemory>(
             return false;
         }
     }
-    let path = kernel.stdio_path(id).unwrap_or("").to_owned();
-    let required_units = if path.is_empty() {
-        0
-    } else {
-        path.encode_utf16().count().saturating_add(1) as u32
-    };
+    let path = kernel.stdio_path(id).map(str::to_owned);
+    let required_units = path
+        .as_deref()
+        .map(|path| path.encode_utf16().count().saturating_add(1) as u32)
+        .unwrap_or(0);
     if capacity_units < required_units {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
         return false;
     }
-    if required_units != 0 && !write_guest_wide_z(kernel, memory, thread_id, buffer_ptr, &path) {
-        return false;
+    if let Some(path) = path.as_deref() {
+        if !write_guest_wide_z(kernel, memory, thread_id, buffer_ptr, path) {
+            return false;
+        }
     }
     if !write_guest_u32(kernel, memory, thread_id, len_ptr, required_units) {
         return false;
