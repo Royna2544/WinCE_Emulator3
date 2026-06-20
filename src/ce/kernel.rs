@@ -19,6 +19,7 @@ use crate::{
             WM_KILLFOCUS, WM_MOVE, WM_NOTIFY, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE,
             WM_WINDOWPOSCHANGED, WindowPos,
         },
+        keybd::KeybdSystem,
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         nled::NledSystem,
         object::{
@@ -208,6 +209,7 @@ pub struct CeKernel {
     pub shell: ShellSystem,
     pub com: ComSystem,
     pub memory: MemorySystem,
+    pub keybd: KeybdSystem,
     pub nled: NledSystem,
     pub remote_server: Option<RemoteServer>,
     process_module_base: u32,
@@ -976,6 +978,7 @@ impl CeKernel {
             shell: ShellSystem::default(),
             com: ComSystem::default(),
             memory: MemorySystem::default(),
+            keybd: KeybdSystem::default(),
             nled: NledSystem::default(),
             remote_server: None,
             process_module_base: 0,

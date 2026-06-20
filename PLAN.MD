@@ -28,6 +28,15 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\keybd.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\KEYBD\LAYMGR\laymgr.cpp`,
+  `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\CTLPNL\CPLMAIN\keybd.cpp`, and
+  `C:\WINCE600\PRIVATE\TEST\BASEOS\DRIVERS\KEYBOARD\BVT_API\KBDTEST\ratdelay.cpp`:
+  raw `KeybdGetDeviceInfo` now reports CE keyboard metadata instead of
+  returning unsupported. Coverage verifies VKey-to-Unicode capacity,
+  autorepeat defaults, CE's selectable min/max delay/rate ranges, keyboard
+  present/enabled/status flags, invalid IDs, null buffers, and
+  `ERROR_INVALID_PARAMETER` reporting.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\nled.h`,
   `C:\WINCE600\PLATFORM\DEVICEEMULATOR\SRC\DRIVERS\NLEDDRVR\snled.cpp`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\NLEDDRVR\MDD\nleddrvr.cpp`, and

@@ -28,6 +28,11 @@ use crate::{
             CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
             MessageQueueOptions, MessageQueueReadStatus, MessageQueueWriteStatus,
         },
+        keybd::{
+            KBDI_AUTOREPEAT_INFO_ID, KBDI_AUTOREPEAT_SELECTIONS_INFO_ID, KBDI_KEYBOARD_STATUS_ID,
+            KBDI_VKEY_TO_UNICODE_INFO_ID, KeybdAutoRepeatInfo, KeybdAutoRepeatSelectionsInfo,
+            KeybdVKeyToUnicodeInfo,
+        },
         memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
@@ -3096,12 +3101,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_KEYBD_GET_DEVICE_INFO => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_KEYBD_GET_DEVICE_INFO => Some(CoredllValue::Bool(keybd_get_device_info_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_TOUCH_CALIBRATE => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -53765,6 +53767,81 @@ fn nled_set_device_raw<M: CoredllGuestMemory>(
         .threads
         .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_PARAMETER });
     ok
+}
+
+fn keybd_get_device_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let info_id = raw_arg(args, 0);
+    let output_ptr = raw_arg(args, 1);
+    let ok = match info_id {
+        KBDI_VKEY_TO_UNICODE_INFO_ID => write_keybd_vkey_to_unicode_info(
+            memory,
+            output_ptr,
+            kernel.keybd.vkey_to_unicode_info(),
+        ),
+        KBDI_AUTOREPEAT_INFO_ID => {
+            write_keybd_autorepeat_info(memory, output_ptr, kernel.keybd.autorepeat_info())
+        }
+        KBDI_AUTOREPEAT_SELECTIONS_INFO_ID => write_keybd_autorepeat_selections_info(
+            memory,
+            output_ptr,
+            kernel.keybd.autorepeat_selections_info(),
+        ),
+        KBDI_KEYBOARD_STATUS_ID => memory.write_u32(output_ptr, kernel.keybd.status()).is_ok(),
+        _ => false,
+    };
+
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_PARAMETER });
+    ok
+}
+
+fn write_keybd_vkey_to_unicode_info<M: CoredllGuestMemory>(
+    memory: &mut M,
+    ptr: u32,
+    info: KeybdVKeyToUnicodeInfo,
+) -> bool {
+    [
+        memory.write_u32(ptr, info.cb_to_unicode_state),
+        memory.write_u32(ptr.wrapping_add(4), info.max_to_unicode_characters),
+    ]
+    .into_iter()
+    .all(|result| result.is_ok())
+}
+
+fn write_keybd_autorepeat_info<M: CoredllGuestMemory>(
+    memory: &mut M,
+    ptr: u32,
+    info: KeybdAutoRepeatInfo,
+) -> bool {
+    [
+        memory.write_u32(ptr, info.current_initial_delay as u32),
+        memory.write_u32(ptr.wrapping_add(4), info.current_repeat_rate as u32),
+        memory.write_u32(ptr.wrapping_add(8), info.initial_delays_selectable as u32),
+        memory.write_u32(ptr.wrapping_add(12), info.repeat_rates_selectable as u32),
+    ]
+    .into_iter()
+    .all(|result| result.is_ok())
+}
+
+fn write_keybd_autorepeat_selections_info<M: CoredllGuestMemory>(
+    memory: &mut M,
+    ptr: u32,
+    info: KeybdAutoRepeatSelectionsInfo,
+) -> bool {
+    [
+        memory.write_u32(ptr, info.min_initial_delay as u32),
+        memory.write_u32(ptr.wrapping_add(4), info.max_initial_delay as u32),
+        memory.write_u32(ptr.wrapping_add(8), info.min_repeat_rate as u32),
+        memory.write_u32(ptr.wrapping_add(12), info.max_repeat_rate as u32),
+    ]
+    .into_iter()
+    .all(|result| result.is_ok())
 }
 
 fn write_nled_supports_info<M: CoredllGuestMemory>(
