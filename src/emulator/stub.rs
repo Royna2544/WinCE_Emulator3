@@ -65,6 +65,10 @@ impl UnicornMips {
         false
     }
 
+    pub fn has_running_guest_thread(&self) -> bool {
+        false
+    }
+
     pub fn saved_context_at_import(
         &self,
         _module_kind: crate::emulator::imports::ImportModuleKind,
@@ -90,6 +94,10 @@ impl UnicornMips {
     }
 
     pub fn active_process_has_visible_receiver_work(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
+    pub fn active_process_has_visible_queued_receiver_work(&self, _kernel: &CeKernel) -> bool {
         false
     }
 

@@ -57,7 +57,9 @@ references for historical reconstruction.
 - Host live-pump idle polling no longer forces short 100 ms CPU slices while an
   active guest context is runnable.
 - Current live runs reach real iNavi splash/resource state, hidden map child
-  windows, open `COM7:`, and remote GPS bytes drain into the serial queue.
+  windows, map/resource file loading, and `UID1:` probing. The current
+  2026-06-21 sample has not opened `COM7:`, so remote GPS/NMEA bytes remain
+  queued instead of draining into guest serial reads.
 - Remote taps are accepted by the live server and now route through the main
   iNavi splash/window stack after stale visible-message cleanup.
 - Escaped visible-message WndProc callouts are now retired before the
@@ -75,6 +77,11 @@ references for historical reconstruction.
   touch/key input is accepted and routed; the app continues resource/window
   setup (`resmapi_800x480.bin` memory-backed opens and hidden `afxwnd42u` child
   creation).
+- Remote/live scheduling now rotates away from an active process with no
+  running guest thread and no queued visible receiver work when another parked
+  process is runnable. The latest sample advances iNavi through additional
+  map/resource loads and accepts touch/key WndProc callouts on the real splash
+  window instead of sitting only in the hidden `happyway_win` helper slice.
 - Elevated `cargo flamegraph` startup samples still stop in the real
   `happyway_win.exe+0x7b56c` traffic/shared-memory fill loop; the live-pump
   visible-window readiness check no longer clones the full GWE window list on
@@ -97,7 +104,8 @@ references for historical reconstruction.
   slice, stale active-wait cleanup, host idle-slice guard, and related focused
   scheduler regressions.
 - Release/live validation survived the prior crash window, served framebuffer
-  snapshots, consumed remote touch, and drained remote GPS into `COM7:`.
+  snapshots, consumed remote touch/key input on the iNavi splash window, and
+  confirmed remote GPS remains queued until the guest opens `COM7:`.
 - Focused raw kernel ordinal validation covers duplicated process handles,
   shared process exit state, and process memory read/write copies.
 - Focused raw kernel ordinal validation covers normal and extended

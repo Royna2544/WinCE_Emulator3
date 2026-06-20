@@ -1248,6 +1248,10 @@ impl UnicornMips {
         self.saved_context.is_some()
     }
 
+    pub fn has_running_guest_thread(&self) -> bool {
+        self.running_guest_thread.is_some()
+    }
+
     #[cfg(feature = "unicorn")]
     pub fn saved_context_at_import(
         &self,

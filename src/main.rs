@@ -632,22 +632,19 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if args.remote_server.is_some()
-            && remote_drained.handled == 0
-            && desktop_queued == 0
-            && !cpu.has_saved_context()
-            && !cpu.active_process_has_visible_receiver_work(kernel)
-            && cpu.last_debug_snapshot().is_some_and(|snapshot| {
-                snapshot_has_only_stale_owned_blocked_waits(snapshot, cpu, kernel)
-            })
-            && cpu.has_runnable_parked_process(kernel)
-            && cpu.rotate_to_next_parked_process(kernel)
-        {
+        if switch_completed_active_context(cpu, kernel) {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if switch_completed_active_context(cpu, kernel) {
+        if args.remote_server.is_some()
+            && should_rotate_idle_nonrunning_runnable_parked_process(
+                cpu.has_running_guest_thread(),
+                cpu.active_process_has_visible_queued_receiver_work(kernel),
+                cpu.has_runnable_parked_process(kernel),
+            )
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -1245,6 +1242,16 @@ fn should_rotate_idle_runnable_parked_process(
     has_runnable_parked_process: bool,
 ) -> bool {
     !active_has_visible_receiver_work && has_runnable_parked_process
+}
+
+fn should_rotate_idle_nonrunning_runnable_parked_process(
+    active_has_running_guest_thread: bool,
+    active_has_visible_queued_receiver_work: bool,
+    has_runnable_parked_process: bool,
+) -> bool {
+    !active_has_running_guest_thread
+        && !active_has_visible_queued_receiver_work
+        && has_runnable_parked_process
 }
 
 fn effective_instruction_limit(
@@ -4160,6 +4167,22 @@ mod tests {
         assert!(should_rotate_idle_runnable_parked_process(false, true));
         assert!(!should_rotate_idle_runnable_parked_process(true, true));
         assert!(!should_rotate_idle_runnable_parked_process(false, false));
+    }
+
+    #[test]
+    fn idle_nonrunning_runnable_parked_rotation_preserves_queued_visible_ui_work() {
+        assert!(should_rotate_idle_nonrunning_runnable_parked_process(
+            false, false, true
+        ));
+        assert!(!should_rotate_idle_nonrunning_runnable_parked_process(
+            true, false, true
+        ));
+        assert!(!should_rotate_idle_nonrunning_runnable_parked_process(
+            false, true, true
+        ));
+        assert!(!should_rotate_idle_nonrunning_runnable_parked_process(
+            false, false, false
+        ));
     }
 
     #[test]

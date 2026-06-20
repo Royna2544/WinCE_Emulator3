@@ -8,6 +8,9 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
   wait, event, message, window state, or readiness condition that should hide,
   destroy, or demote the splash/window stack after remote input is delivered
   and stale visible-message callouts are cleared.
+- Trace why the real splash window keeps receiving repeated touch/key WndProc
+  callouts without transitioning to the map UI after iNavi resumes from the
+  hidden helper-process slice.
 - Disassemble/sample the current hot guest PCs around `0x0030f948`,
   `0x00339da8`, and `0x0034432c` against the real `iNavi.exe` to separate
   normal resource lookup from a repeated readiness wait.
@@ -39,9 +42,9 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
   unwinding when guest diagnostics require deeper stack fidelity.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or
   real caller traces before adding accelerometer command behavior.
-- Re-check live device traces after the app opens `COM7:`; current splash-phase
-  samples still show only repeated `UID1:` IOCTLs, so GPS/sensor data is not yet
-  in the active path.
+- Re-check live device traces after the app opens `COM7:`; current 2026-06-21
+  samples still show `UID1:` IOCTLs and queued remote GPS bytes, so sensor data
+  is not yet in the active guest path.
 - Re-run the live startup after the device-information ordinal fix and confirm
   whether guest device probing now reaches `COM7:` earlier or still remains
   blocked behind the splash/readiness path.
