@@ -4084,6 +4084,22 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn live_pump_hidden_active_has_visible_runnable_parked_process(
+        parked_processes: &VecDeque<ParkedProcess>,
+        kernel: &CeKernel,
+        active_thread_id: u32,
+    ) -> bool {
+        let active_process_id = kernel.current_process_id();
+        !Self::process_has_visible_windows(kernel, active_process_id)
+            && parked_processes.iter().any(|process| {
+                process.process_state.process_id != active_process_id
+                    && process.thread_id != active_thread_id
+                    && Self::parked_process_can_run(process, kernel)
+                    && Self::parked_process_has_visible_windows(process, kernel)
+            })
+    }
+
+    #[cfg(feature = "unicorn")]
     fn active_process_launch_from_trace(
         kernel: &CeKernel,
     ) -> Option<crate::ce::kernel::PendingProcessLaunch> {
@@ -6398,18 +6414,11 @@ impl UnicornMips {
                     scheduler_timeslice_pending_hook.set(true);
                 }
                 if live_pump && !scheduler_timeslice_pending_hook.get() {
-                    let active_process_id = kernel_ref.current_process_id();
-                    if !Self::process_has_visible_windows(kernel_ref, active_process_id)
-                        && parked_child_processes_timeslice_hook
-                            .borrow()
-                            .iter()
-                            .any(|process| {
-                                process.process_state.process_id != active_process_id
-                                    && process.thread_id != active_thread_id
-                                    && Self::parked_process_can_run(process, kernel_ref)
-                                    && Self::parked_process_has_visible_windows(process, kernel_ref)
-                            })
-                    {
+                    if Self::live_pump_hidden_active_has_visible_runnable_parked_process(
+                        &parked_child_processes_timeslice_hook.borrow(),
+                        kernel_ref,
+                        active_thread_id,
+                    ) {
                         scheduler_timeslice_pending_hook.set(true);
                     }
                 }
@@ -6488,6 +6497,27 @@ impl UnicornMips {
                 || !pending_dll_lifecycle_returns_timeslice_hook
                     .borrow()
                     .is_empty());
+            let active_thread_id = *current_thread_id_timeslice_hook.borrow();
+            if live_pump && !safe_to_attempt && pc < IMPORT_TRAP_BASE {
+                let no_pending_guest_returns =
+                    pending_wndproc_returns_timeslice_hook.borrow().is_empty()
+                        && pending_qsort_returns_timeslice_hook.borrow().is_empty()
+                        && pending_dll_lifecycle_returns_timeslice_hook
+                            .borrow()
+                            .is_empty();
+                if no_pending_guest_returns {
+                    let kernel_ref = unsafe { &*kernel_ptr };
+                    if Self::live_pump_hidden_active_has_visible_runnable_parked_process(
+                        &parked_child_processes_timeslice_hook.borrow(),
+                        kernel_ref,
+                        active_thread_id,
+                    ) {
+                        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(pc));
+                        let _ = uc.emu_stop();
+                        return;
+                    }
+                }
+            }
             if !scheduler_timeslice_consume_if_safe(
                 &scheduler_timeslice_pending_hook,
                 safe_to_attempt,
@@ -6497,7 +6527,6 @@ impl UnicornMips {
             let Some(context_pc) = context_pc else {
                 return;
             };
-            let active_thread_id = *current_thread_id_timeslice_hook.borrow();
             clear_orphaned_live_blocked_get_message(&blocked_get_message_timeslice_hook, unsafe {
                 &*kernel_ptr
             });
@@ -8876,11 +8905,6 @@ impl UnicornMips {
             && !unicorn_native_timeout
         {
             if let Some(exit) = decoded_kernel_exit.clone() {
-                if self.resume_decoded_current_process_terminate(&exit) {
-                    self.persist_run_state(&run_state, kernel);
-                    let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
-                    return Ok(());
-                }
                 if !Self::terminate_decoded_kernel_process(kernel, &exit) {
                     let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
                     return Err(Error::Backend(format!(
@@ -8911,11 +8935,6 @@ impl UnicornMips {
             .is_some_and(|snapshot| snapshot.interrupt_probe.is_some())
         {
             if let Some(exit) = decoded_kernel_exit {
-                if self.resume_decoded_current_process_terminate(&exit) {
-                    self.persist_run_state(&run_state, kernel);
-                    let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
-                    return Ok(());
-                }
                 if !Self::terminate_decoded_kernel_process(kernel, &exit) {
                     let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
                     return Err(Error::Backend(format!(
@@ -8954,34 +8973,6 @@ impl UnicornMips {
         Ok(())
     }
 
-    #[cfg(feature = "unicorn")]
-    fn resume_decoded_current_process_terminate(&mut self, exit: &EncodedKernelExit) -> bool {
-        let Some(snapshot) = self.last_debug.as_ref() else {
-            return false;
-        };
-        if exit.process != crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE
-            || exit.caller.wrapping_add(8) != snapshot.ra
-        {
-            return false;
-        }
-        let Some(saved) = self.saved_context.as_mut() else {
-            return false;
-        };
-        saved.pc = snapshot.ra;
-        saved.regs.set_v0(1);
-        saved.regs.regs[31] = snapshot.ra;
-        tracing::warn!(
-            target: "ce.unicorn",
-            target = format_args!("0x{:08x}", exit.target),
-            caller = format_args!("0x{:08x}", exit.caller),
-            return_pc = format_args!("0x{:08x}", snapshot.ra),
-            exit_code = format_args!("0x{:08x}", exit.exit_code),
-            "resumed decoded old-MIPS TerminateProcess(GetCurrentProcess()) thunk as success for diagnostics"
-        );
-        true
-    }
-
-    #[cfg(feature = "unicorn")]
     fn terminate_decoded_kernel_process(kernel: &mut CeKernel, exit: &EncodedKernelExit) -> bool {
         kernel.terminate_process(exit.process, exit.exit_code)
             || (exit.process == kernel.current_process_id()
@@ -30408,6 +30399,95 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn live_pump_hidden_active_visible_parked_predicate_requires_hidden_active() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let active_thread = 1;
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+
+        let parked_thread = 3;
+        let mut parked_cpu = UnicornMips::new()?;
+        parked_cpu.set_initial_thread_id(parked_thread);
+        parked_cpu.current_thread_id = parked_thread;
+        parked_cpu.saved_context = Some(SavedCpuContext {
+            pc: 0x0040_2000,
+            regs: MipsGuestContext::zero(),
+        });
+        let active_state = kernel.current_process_state();
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let parked_hwnd = kernel.create_window_ex_w(
+            parked_thread,
+            "parked_visible",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        kernel.set_current_process_state(active_state);
+        assert!(kernel.gwe.is_window(parked_hwnd));
+        let mut parked = VecDeque::new();
+        parked.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 67,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: parked_thread,
+            cpu: Box::new(parked_cpu),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        assert!(
+            UnicornMips::live_pump_hidden_active_has_visible_runnable_parked_process(
+                &parked,
+                &kernel,
+                active_thread
+            ),
+            "hidden active process should yield to a runnable visible parked process"
+        );
+
+        let active_hwnd = kernel.create_window_ex_w(
+            active_thread,
+            "active_visible",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert!(kernel.gwe.is_window(active_hwnd));
+        assert!(
+            !UnicornMips::live_pump_hidden_active_has_visible_runnable_parked_process(
+                &parked,
+                &kernel,
+                active_thread
+            ),
+            "visible active process should not trigger the hidden-active live-pump stop"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn live_pump_handoff_keeps_active_visible_queued_messages() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -44547,32 +44627,29 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn decoded_current_process_terminate_can_resume_for_diagnostics() {
-        let mut emulator = super::UnicornMips::new().unwrap();
-        let return_pc = 0x0048_fa98;
+    fn decoded_current_process_terminate_marks_current_process_exited() {
+        let config = crate::config::RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
         let exit = super::EncodedKernelExit {
             target: 0xffff_f3fa,
             api_set: 2,
             method: 2,
             process: crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
             exit_code: 3,
-            caller: return_pc - 8,
+            caller: 0x0048_fa90,
         };
-        emulator.last_debug = Some(super::UnicornDebugSnapshot {
-            pc: 0,
-            ra: return_pc,
-            ..Default::default()
-        });
-        emulator.saved_context = Some(super::SavedCpuContext {
-            pc: 0,
-            regs: super::MipsGuestContext::zero(),
-        });
 
-        assert!(emulator.resume_decoded_current_process_terminate(&exit));
-        let saved = emulator.saved_context.as_ref().unwrap();
-        assert_eq!(saved.pc, return_pc);
-        assert_eq!(saved.regs.regs[2], 1);
-        assert_eq!(saved.regs.regs[31], return_pc);
+        assert!(super::UnicornMips::terminate_decoded_kernel_process(
+            &mut kernel,
+            &exit
+        ));
+        assert_eq!(kernel.current_process_state().exit_code, 3);
+        assert!(kernel.current_process_state().signaled);
     }
 
     #[test]

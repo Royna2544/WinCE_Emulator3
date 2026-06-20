@@ -108,6 +108,11 @@ notes when it is still needed for implementation.
   host-backed loaded modules by returning a readable handle to the module's
   guest backing file. Coverage verifies returned file-handle readability,
   success last-error behavior, and invalid module rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: decoded old-MIPS
+  `TerminateProcess(GetCurrentProcess(), code)` now marks the current process
+  exited instead of resuming the thunk as a diagnostic-only success, matching
+  CE's active-process `PROCTerminate` path and the `ExitProcess` macro.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract
@@ -675,7 +680,11 @@ notes when it is still needed for implementation.
   visible runnable work from being stranded behind the active process. Live
   pump handoff also rotates from a visible active process with receiver work to
   a hidden parked process that has CPU-runnable work but no visible windows or
-  queued receiver work, preserving progress for helper child processes.
+  queued receiver work, preserving progress for helper child processes. The
+  Unicorn timeslice hook now also stops immediately when live-pump execution
+  has a hidden active process and a runnable visible parked process, allowing
+  route UI work to progress even before the current PC reaches a normal safe
+  scheduling boundary.
 
 ## Active Roadmap
 
