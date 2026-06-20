@@ -3220,18 +3220,53 @@ impl UnicornMips {
         current_process_id: u32,
     ) -> Option<u32> {
         if is_ce_high_process_slot_callback(wndproc) {
+            tracing::debug!(
+                target: "ce.gwe",
+                wndproc = format_args!("0x{wndproc:08x}"),
+                process_id,
+                current_process_id,
+                branch = "high_slot",
+                "resolved CE slot WNDPROC"
+            );
             return Some(wndproc);
         }
         let local = self.receiver_process_wndproc(wndproc);
         if local.is_some_and(|mapped| mapped != wndproc) {
+            if wndproc >= CE_PROCESS_SLOT_SIZE {
+                tracing::debug!(
+                    target: "ce.gwe",
+                    wndproc = format_args!("0x{wndproc:08x}"),
+                    mapped = format_args!("0x{:08x}", local.unwrap_or(0)),
+                    process_id,
+                    current_process_id,
+                    branch = "local_mapped",
+                    "resolved CE slot WNDPROC"
+                );
+            }
             return local;
         }
         if local == Some(wndproc)
             && Self::mapped_process_slot_dll_contains_callback(&self.mapped_blobs, wndproc)
         {
+            tracing::debug!(
+                target: "ce.gwe",
+                wndproc = format_args!("0x{wndproc:08x}"),
+                process_id,
+                current_process_id,
+                branch = "local_process_slot_contains",
+                "resolved CE slot WNDPROC"
+            );
             return local;
         }
         if local == Some(wndproc) && wndproc >= CE_PROCESS_SLOT_SIZE {
+            tracing::debug!(
+                target: "ce.gwe",
+                wndproc = format_args!("0x{wndproc:08x}"),
+                process_id,
+                current_process_id,
+                branch = "reject_local_shared_identity",
+                "rejected CE slot WNDPROC"
+            );
             return None;
         }
         if let Some(parked) = self
@@ -3248,8 +3283,43 @@ impl UnicornMips {
                     ))
                 || (local.is_none() && parked_mapped.is_none())
             {
+                if wndproc >= CE_PROCESS_SLOT_SIZE {
+                    tracing::debug!(
+                        target: "ce.gwe",
+                        wndproc = format_args!("0x{wndproc:08x}"),
+                        mapped = parked_mapped.map(|mapped| format!("0x{mapped:08x}")).unwrap_or_else(|| "None".to_owned()),
+                        process_id,
+                        current_process_id,
+                        branch = "parked_receiver",
+                        "resolved CE slot WNDPROC"
+                    );
+                }
                 return parked_mapped;
             }
+        }
+        if wndproc >= CE_PROCESS_SLOT_SIZE {
+            if process_id == current_process_id
+                && (CE_HIGH_PROCESS_SLOT_DLL_BASE..CE_SHARED_HEAP_BASE).contains(&wndproc)
+            {
+                tracing::debug!(
+                    target: "ce.gwe",
+                    wndproc = format_args!("0x{wndproc:08x}"),
+                    process_id,
+                    current_process_id,
+                    branch = "current_high_process_slot",
+                    "resolved CE slot WNDPROC"
+                );
+                return local.or(Some(wndproc));
+            }
+            tracing::debug!(
+                target: "ce.gwe",
+                wndproc = format_args!("0x{wndproc:08x}"),
+                process_id,
+                current_process_id,
+                branch = "reject_unmapped_slot",
+                "rejected CE slot WNDPROC"
+            );
+            return None;
         }
         if process_id == current_process_id {
             local.or(Some(wndproc))
@@ -3338,10 +3408,7 @@ impl UnicornMips {
     fn mapped_dll_blob_is_process_slot_view(blob: &MappedBlob) -> bool {
         blob.name.starts_with("dll:")
             && (blob.base < CE_PROCESS_SLOT_SIZE
-                || (blob.base >= CE_HIGH_PROCESS_SLOT_DLL_BASE && blob.base < CE_SHARED_HEAP_BASE)
-                || (blob.base < CE_SHARED_HEAP_BASE && (blob.base & CE_PROCESS_SLOT_MASK) == 0)
-                || mapped_blob_pe_preferred_image_base(blob)
-                    .is_some_and(|base| base < CE_PROCESS_SLOT_SIZE))
+                || (blob.base >= CE_HIGH_PROCESS_SLOT_DLL_BASE && blob.base < CE_SHARED_HEAP_BASE))
     }
 
     #[cfg(feature = "unicorn")]
@@ -12844,37 +12911,6 @@ fn mapped_blob_module_for_pc(mapped_blobs: &[MappedBlob], pc: u32) -> Option<Str
     mapped_blob_module_index_for_pc(mapped_blobs, pc)
         .and_then(|index| mapped_blobs.get(index))
         .map(|blob| compact_mapped_blob_name(&blob.name))
-}
-
-#[cfg(feature = "unicorn")]
-fn mapped_blob_pe_preferred_image_base(blob: &MappedBlob) -> Option<u32> {
-    if blob.bytes.len() < 0x40 || &blob.bytes[0..2] != b"MZ" {
-        return None;
-    }
-    let lfanew = u32::from_le_bytes([
-        blob.bytes[0x3c],
-        blob.bytes[0x3d],
-        blob.bytes[0x3e],
-        blob.bytes[0x3f],
-    ]) as usize;
-    let optional_header = lfanew.checked_add(24)?;
-    let image_base = optional_header.checked_add(0x1c)?;
-    let image_base_end = image_base.checked_add(4)?;
-    if image_base_end > blob.bytes.len()
-        || blob.bytes.get(lfanew..lfanew.checked_add(4)?)? != b"PE\0\0"
-        || u16::from_le_bytes([
-            blob.bytes[optional_header],
-            blob.bytes[optional_header.checked_add(1)?],
-        ]) != 0x010b
-    {
-        return None;
-    }
-    Some(u32::from_le_bytes([
-        blob.bytes[image_base],
-        blob.bytes[image_base + 1],
-        blob.bytes[image_base + 2],
-        blob.bytes[image_base + 3],
-    ]))
 }
 
 #[cfg(feature = "unicorn")]
@@ -44362,7 +44398,7 @@ mod unicorn_tests {
         child.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: vec![0; 0x7f000],
+            bytes: fake_pe_blob(0x7f000, 0x0015_0000),
         });
 
         assert_eq!(
@@ -44386,6 +44422,23 @@ mod unicorn_tests {
 
         assert_eq!(
             loaded_child.receiver_process_wndproc_for_process(0x4019_f0f4, 67, 67),
+            None
+        );
+
+        let empty_current_child = super::UnicornMips::new().unwrap();
+        assert_eq!(
+            empty_current_child.receiver_process_wndproc_for_process(0x4019_f0f4, 67, 67),
+            None
+        );
+
+        let mut aligned_shared_child = super::UnicornMips::new().unwrap();
+        aligned_shared_child.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4000_0000,
+            bytes: vec![0; 0x200000],
+        });
+        assert_eq!(
+            aligned_shared_child.receiver_process_wndproc_for_process(0x4019_f0f4, 67, 67),
             None
         );
 
