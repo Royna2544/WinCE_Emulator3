@@ -5600,6 +5600,13 @@ impl CeKernel {
         self.handles.process_id(handle)
     }
 
+    pub fn open_process_handle(&mut self, process_id: u32) -> Option<u32> {
+        if process_id == self.current_process_id || process_id == u32::MAX {
+            return Some(CE_CURRENT_PROCESS_PSEUDO_HANDLE);
+        }
+        self.handles.open_process(process_id)
+    }
+
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
         if Self::is_current_process_pseudo_handle(handle) {
             self.destroy_process_windows(self.current_process_id, 0);

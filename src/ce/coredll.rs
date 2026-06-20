@@ -2292,21 +2292,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(true))
         }
         ORD_OPEN_PROCESS => {
-            // OpenProcess(dwDesiredAccess, bInheritHandle, dwProcessId) — open process handle.
-            // Single-process emulator: return the pseudo process handle if ID matches.
             let requested_id = raw_arg(args, 2);
-            let our_id = kernel.current_process_id();
-            if requested_id == our_id || requested_id == 0xffff_ffff {
-                kernel.threads.set_last_error(thread_id, 0);
-                Some(CoredllValue::Handle(
-                    crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
-                ))
-            } else {
+            let Some(handle) = kernel.open_process_handle(requested_id) else {
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                Some(CoredllValue::Handle(0))
-            }
+                return Some(CoredllValue::Handle(0));
+            };
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Handle(handle))
         }
         ORD_OPEN_THREAD => {
             // OpenThread(dwDesiredAccess, bInheritHandle, dwThreadId) — open thread handle.

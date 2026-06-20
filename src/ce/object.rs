@@ -473,6 +473,16 @@ impl HandleTable {
         }))
     }
 
+    pub fn open_process(&mut self, process_id: u32) -> Option<u32> {
+        let process = self.objects.values().find_map(|object| match object {
+            KernelObject::Process(process) if process.process_id == process_id => {
+                Some(process.clone())
+            }
+            _ => None,
+        })?;
+        Some(self.insert(KernelObject::Process(process)))
+    }
+
     pub fn file_mapping(&self, handle: u32) -> Result<&FileMappingObject> {
         match self.get(handle)? {
             KernelObject::FileMapping(mapping) if !mapping.closed => Ok(mapping),
@@ -700,11 +710,18 @@ impl HandleTable {
     }
 
     pub fn mark_process_exited(&mut self, handle: u32, exit_code: u32) -> bool {
-        let Ok(KernelObject::Process(process)) = self.get_mut(handle) else {
+        let Ok(KernelObject::Process(process)) = self.get(handle) else {
             return false;
         };
-        process.exit_code = exit_code;
-        process.signaled = true;
+        let process_id = process.process_id;
+        for object in self.objects.values_mut() {
+            if let KernelObject::Process(process) = object {
+                if process.process_id == process_id {
+                    process.exit_code = exit_code;
+                    process.signaled = true;
+                }
+            }
+        }
         true
     }
 

@@ -28,6 +28,16 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kwin32.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\UTILS\CMD2\cmdexec.cxx`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and shell/task
+  callers under `C:\WINCE600\PRIVATE\WINCEOS\COREOS\SHELL`: raw
+  `OpenProcess` now opens launched process IDs as distinct process handles
+  instead of only accepting the current pseudo-process. The opened handles
+  preserve CE-style current-process pseudo behavior, reject unknown PIDs, remain
+  independently closeable, and observe shared process exit/wait state when the
+  launched process terminates.
 - `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwindbas.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\extfile.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwindbas.h`,
