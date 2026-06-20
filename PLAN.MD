@@ -244,6 +244,13 @@ notes when it is still needed for implementation.
   shape by writing mount flags without clearing the caller's last-error on
   success. Coverage also locks down `FSDMGR_GetVolumeName` name-length return
   values and exact-sized buffer rejection before caller-buffer writes.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winver.h`: raw `VerQueryValueW` now
+  walks CE `VERBLOCK` version-resource trees instead of returning unsupported,
+  returning pointers inside the caller's `GetFileVersionInfoW` buffer and the
+  raw CE `wValLen` value. Coverage verifies root `VS_FIXEDFILEINFO` queries,
+  nested `StringFileInfo` lookups, zeroed length outputs, and missing-path
+  `ERROR_RESOURCE_NAME_NOT_FOUND` behavior.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`, and

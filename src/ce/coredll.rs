@@ -4232,12 +4232,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_VER_QUERY_VALUE_W => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_VER_QUERY_VALUE_W => Some(CoredllValue::Bool(ver_query_value_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SET_OOMEVENT => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
@@ -11122,6 +11119,155 @@ fn get_file_version_info_w_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn ver_query_value_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let block_ptr = raw_arg(args, 0);
+    let sub_block_ptr = raw_arg(args, 1);
+    let buffer_out_ptr = raw_arg(args, 2);
+    let len_out_ptr = raw_arg(args, 3);
+
+    if len_out_ptr == 0 || !write_guest_u32(kernel, memory, thread_id, len_out_ptr, 0) {
+        return false;
+    }
+    if block_ptr == 0 || sub_block_ptr == 0 || buffer_out_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(sub_block) = read_guest_wide_arg(memory, sub_block_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(len_bytes) = read_guest_bytes(kernel, memory, thread_id, block_ptr, 2) else {
+        return false;
+    };
+    let Some(total_len) = read_le_u16(&len_bytes, 0) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if usize::from(total_len) < VERSION_BLOCK_MIN_SIZE {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_DATA);
+        return false;
+    }
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, block_ptr, u32::from(total_len))
+    else {
+        return false;
+    };
+    let Some((value_offset, value_len)) = ver_query_value_in_block(&bytes, &sub_block) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+        return false;
+    };
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        buffer_out_ptr,
+        block_ptr.wrapping_add(value_offset as u32),
+    ) || !write_guest_u32(kernel, memory, thread_id, len_out_ptr, u32::from(value_len))
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+const VERSION_BLOCK_MIN_SIZE: usize = 8;
+
+fn ver_query_value_in_block(bytes: &[u8], sub_block: &str) -> Option<(usize, u16)> {
+    let total_len = usize::from(read_le_u16(bytes, 0)?);
+    if total_len < VERSION_BLOCK_MIN_SIZE || total_len > bytes.len() {
+        return None;
+    }
+    let mut block_offset = 0usize;
+    let mut block_len = total_len;
+    for segment in sub_block.split('\\').filter(|segment| !segment.is_empty()) {
+        let header = version_block_header(bytes, block_offset, block_len)?;
+        let children_start = align_usize_to_u32(
+            header
+                .value_offset
+                .checked_add(usize::from(header.value_len))?,
+        );
+        let children_end = block_offset.checked_add(block_len)?;
+        let mut child_offset = block_offset.checked_add(children_start)?;
+        let mut found = None;
+        while child_offset + VERSION_BLOCK_MIN_SIZE <= children_end {
+            let child_total = usize::from(read_le_u16(bytes, child_offset)?);
+            if child_total <= VERSION_BLOCK_MIN_SIZE || child_offset + child_total > children_end {
+                break;
+            }
+            let child = version_block_header(bytes, child_offset, child_total)?;
+            if child.key.eq_ignore_ascii_case(segment) {
+                found = Some((child_offset, child_total));
+                break;
+            }
+            child_offset = child_offset.checked_add(align_usize_to_u32(child_total))?;
+        }
+        let (next_offset, next_len) = found?;
+        block_offset = next_offset;
+        block_len = next_len;
+    }
+    let header = version_block_header(bytes, block_offset, block_len)?;
+    let block_end = block_offset.checked_add(block_len)?;
+    if block_offset + header.value_offset < block_end {
+        Some((block_offset + header.value_offset, header.value_len))
+    } else {
+        Some((block_offset + header.key_end_offset, header.value_len))
+    }
+}
+
+struct VersionBlockHeader {
+    value_len: u16,
+    key: String,
+    key_end_offset: usize,
+    value_offset: usize,
+}
+
+fn version_block_header(
+    bytes: &[u8],
+    offset: usize,
+    block_len: usize,
+) -> Option<VersionBlockHeader> {
+    let block_end = offset.checked_add(block_len)?;
+    if block_len < VERSION_BLOCK_MIN_SIZE || block_end > bytes.len() {
+        return None;
+    }
+    let total_len = usize::from(read_le_u16(bytes, offset)?);
+    if total_len > block_len || total_len < VERSION_BLOCK_MIN_SIZE {
+        return None;
+    }
+    let value_len = read_le_u16(bytes, offset + 2)?;
+    let mut units = Vec::new();
+    let mut cursor = offset + 6;
+    while cursor + 2 <= block_end {
+        let unit = read_le_u16(bytes, cursor)?;
+        cursor += 2;
+        if unit == 0 {
+            let key = String::from_utf16(&units).ok()?;
+            let key_end_offset = cursor.checked_sub(offset)?;
+            let value_offset = align_usize_to_u32(key_end_offset);
+            return Some(VersionBlockHeader {
+                value_len,
+                key,
+                key_end_offset,
+                value_offset,
+            });
+        }
+        units.push(unit);
+    }
+    None
 }
 
 fn version_info_resource_bytes(

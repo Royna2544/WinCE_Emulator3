@@ -82,10 +82,10 @@ use wince_emulation_v3::{
             ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS, ORD_STRING_COMPRESS,
             ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
             ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_VERIFY_APIHANDLE, ORD_WAIT_COMM_EVENT,
-            ORD_WAIT_FOR_APIREADY, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_MSG_QUEUE,
-            ORD_WRITE_PROCESS_MEMORY,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_VER_QUERY_VALUE_W, ORD_VERIFY_APIHANDLE,
+            ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_APIREADY, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
         },
         devices::{
             CommDcb, DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind,
@@ -6486,7 +6486,6 @@ fn coredll_raw_get_call_stack_snapshot_rejects_ce_invalid_parameters() -> Result
 fn coredll_raw_get_file_version_info_reads_ce_version_resource() -> Result<()> {
     const ERROR_INVALID_DATA: u32 = 13;
     const VS_FFI_SIGNATURE: u32 = 0xfeef_04bd;
-    const VERSION_INFO_SIZE: u32 = 92;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -6494,11 +6493,9 @@ fn coredll_raw_get_file_version_info_reads_ce_version_resource() -> Result<()> {
     let root = unique_test_root("file_version_info");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("Docs")).unwrap();
-    fs::write(
-        root.join("Docs").join("versioned.exe"),
-        pe32_with_version_info_resource(VS_FFI_SIGNATURE),
-    )
-    .unwrap();
+    let versioned_bytes = pe32_with_version_info_resource(VS_FFI_SIGNATURE);
+    let version_info_size = version_info_resource_data(VS_FFI_SIGNATURE).len() as u32;
+    fs::write(root.join("Docs").join("versioned.exe"), versioned_bytes).unwrap();
     fs::write(
         root.join("Docs").join("bad-version.exe"),
         pe32_with_version_info_resource(0x1234_5678),
@@ -6511,9 +6508,15 @@ fn coredll_raw_get_file_version_info_reads_ce_version_resource() -> Result<()> {
     let path_ptr = 0x2_4000;
     let handle_ptr = 0x2_4800;
     let info_ptr = 0x2_5000;
+    let sub_block_ptr = 0x2_5600;
+    let buffer_out_ptr = 0x2_5700;
+    let len_out_ptr = 0x2_5800;
     memory.map_halfwords(path_ptr, 64);
     memory.map_words(handle_ptr, 1);
-    memory.map_bytes(info_ptr, 128);
+    memory.map_bytes(info_ptr, 512);
+    memory.map_halfwords(sub_block_ptr, 96);
+    memory.map_words(buffer_out_ptr, 1);
+    memory.map_words(len_out_ptr, 1);
 
     memory.write_wide_z(path_ptr, r"\Docs\versioned.exe");
     memory.write_u32(handle_ptr, 0xfeed_beef)?;
@@ -6526,9 +6529,9 @@ fn coredll_raw_get_file_version_info_reads_ce_version_resource() -> Result<()> {
             [path_ptr, handle_ptr],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(VERSION_INFO_SIZE),
+            value: CoredllValue::U32(size),
             ..
-        }
+        } if size == version_info_size
     ));
     assert_eq!(memory.read_u32(handle_ptr)?, 0);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
@@ -6563,20 +6566,105 @@ fn coredll_raw_get_file_version_info_reads_ce_version_resource() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_GET_FILE_VERSION_INFO_W,
-            [path_ptr, 0, 128, info_ptr],
+            [path_ptr, 0, 512, info_ptr],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
             ..
         }
     ));
-    let full_info = memory.read_bytes(info_ptr, VERSION_INFO_SIZE as usize);
-    assert_eq!(read_test_u16(&full_info, 0), VERSION_INFO_SIZE as u16);
+    let full_info = memory.read_bytes(info_ptr, version_info_size as usize);
+    assert_eq!(read_test_u16(&full_info, 0), version_info_size as u16);
     assert_eq!(read_test_u32(&full_info, 40), VS_FFI_SIGNATURE);
     assert_eq!(read_test_u32(&full_info, 44), 0x0001_0000);
     assert_eq!(read_test_u32(&full_info, 48), 0x0006_0001);
     assert_eq!(read_test_u32(&full_info, 52), 0x0000_0002);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(sub_block_ptr, r"\");
+    memory.write_u32(buffer_out_ptr, 0xdead_beef)?;
+    memory.write_u32(len_out_ptr, 0xfeed_face)?;
+    let root_query = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_VER_QUERY_VALUE_W,
+        [info_ptr, sub_block_ptr, buffer_out_ptr, len_out_ptr],
+    );
+    assert!(
+        matches!(
+            root_query,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ),
+        "unexpected root VerQueryValueW result: {root_query:?}, last_error={}, len={}",
+        kernel.threads.get_last_error(thread_id),
+        memory.read_u32(len_out_ptr)?
+    );
+    assert_eq!(
+        memory.read_u32(buffer_out_ptr)?,
+        info_ptr + 40,
+        "VerQueryValueW root query returns the VS_FIXEDFILEINFO value pointer"
+    );
+    assert_eq!(memory.read_u32(len_out_ptr)?, 52);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(sub_block_ptr, r"\StringFileInfo\040904b0\ProductName");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_VER_QUERY_VALUE_W,
+            [info_ptr, sub_block_ptr, buffer_out_ptr, len_out_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(len_out_ptr)?, 14);
+    let product_name_ptr = memory.read_u32(buffer_out_ptr)?;
+    let product_name = memory.read_bytes(product_name_ptr, 28);
+    let product_name_units = product_name
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .take_while(|unit| *unit != 0)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        String::from_utf16(&product_name_units).unwrap(),
+        "Route Planner"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(sub_block_ptr, r"\StringFileInfo\040904b0\MissingName");
+    memory.write_u32(buffer_out_ptr, 0xabcd_1234)?;
+    memory.write_u32(len_out_ptr, 0xfeed_face)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_VER_QUERY_VALUE_W,
+            [info_ptr, sub_block_ptr, buffer_out_ptr, len_out_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(buffer_out_ptr)?,
+        0xabcd_1234,
+        "missing VerQueryValueW paths leave lplpBuffer untouched"
+    );
+    assert_eq!(memory.read_u32(len_out_ptr)?, 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND
+    );
 
     memory.write_wide_z(path_ptr, r"\Docs\bad-version.exe");
     memory.write_u32(handle_ptr, 0xabcd_1234)?;
@@ -13200,22 +13288,67 @@ fn pe32_with_version_info_resource(signature: u32) -> Vec<u8> {
 }
 
 fn version_info_resource_data(signature: u32) -> Vec<u8> {
-    let mut bytes = vec![0u8; 92];
-    put_test_u16(&mut bytes, 0, 92);
-    put_test_u16(&mut bytes, 2, 52);
-    put_test_u16(&mut bytes, 4, 0);
-    for (index, unit) in "VS_VERSION_INFO"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .enumerate()
-    {
-        put_test_u16(&mut bytes, 6 + index * 2, unit);
+    let mut fixed_info = vec![0u8; 52];
+    put_test_u32(&mut fixed_info, 0, signature);
+    put_test_u32(&mut fixed_info, 4, 0x0001_0000);
+    put_test_u32(&mut fixed_info, 8, 0x0006_0001);
+    put_test_u32(&mut fixed_info, 12, 0x0000_0002);
+    let product_name = version_utf16_value("Route Planner");
+    let product_block = version_block(
+        "ProductName",
+        product_name.len() as u16 / 2,
+        1,
+        &product_name,
+        &[],
+    );
+    let lang_block = version_block("040904b0", 0, 1, &[], &[product_block]);
+    let string_file_info = version_block("StringFileInfo", 0, 1, &[], &[lang_block]);
+    version_block(
+        "VS_VERSION_INFO",
+        fixed_info.len() as u16,
+        0,
+        &fixed_info,
+        &[string_file_info],
+    )
+}
+
+fn version_utf16_value(text: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for unit in text.encode_utf16().chain(std::iter::once(0)) {
+        bytes.extend_from_slice(&unit.to_le_bytes());
     }
-    put_test_u32(&mut bytes, 40, signature);
-    put_test_u32(&mut bytes, 44, 0x0001_0000);
-    put_test_u32(&mut bytes, 48, 0x0006_0001);
-    put_test_u32(&mut bytes, 52, 0x0000_0002);
     bytes
+}
+
+fn version_block(
+    key: &str,
+    value_len: u16,
+    value_type: u16,
+    value: &[u8],
+    children: &[Vec<u8>],
+) -> Vec<u8> {
+    let mut bytes = vec![0u8; 6];
+    put_test_u16(&mut bytes, 2, value_len);
+    put_test_u16(&mut bytes, 4, value_type);
+    for unit in key.encode_utf16().chain(std::iter::once(0)) {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    version_pad_to_dword(&mut bytes);
+    bytes.extend_from_slice(value);
+    version_pad_to_dword(&mut bytes);
+    for child in children {
+        bytes.extend_from_slice(child);
+    }
+    version_pad_to_dword(&mut bytes);
+    let total_len = bytes.len() as u16;
+    put_test_u16(&mut bytes, 0, total_len);
+    bytes
+}
+
+fn version_pad_to_dword(bytes: &mut Vec<u8>) {
+    while bytes.len() % 4 != 0 {
+        bytes.push(0);
+    }
 }
 
 fn pe32_with_missing_and_mask_icon() -> Vec<u8> {
