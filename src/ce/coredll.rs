@@ -41,7 +41,8 @@ use crate::{
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
             CriticalSectionObject, FileMappingView, KernelObject, PowerNotificationObject,
-            PowerRequirementObject, ThreadResumeResult, ThreadSuspendResult,
+            PowerRelationshipObject, PowerRequirementObject, ThreadResumeResult,
+            ThreadSuspendResult,
         },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, HKey,
@@ -4319,12 +4320,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_DEVICE_POWER_NOTIFY => Some(CoredllValue::U32(device_power_notify_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_REGISTER_POWER_RELATIONSHIP | ORD_RELEASE_POWER_RELATIONSHIP => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_REGISTER_POWER_RELATIONSHIP => Some(CoredllValue::Handle(
+            register_power_relationship_raw(kernel, memory, thread_id, args),
+        )),
+        ORD_RELEASE_POWER_RELATIONSHIP => Some(CoredllValue::U32(release_power_relationship_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_SET_DEVICE_POWER => Some(CoredllValue::U32(set_device_power_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -20670,6 +20673,94 @@ fn stop_power_notifications_raw(kernel: &mut CeKernel, thread_id: u32, handle: u
         Ok(_) => power_status(kernel, thread_id, ERROR_SUCCESS),
         Err(_) => power_status(kernel, thread_id, ERROR_INVALID_HANDLE),
     }
+}
+
+const POWER_CAPABILITIES_SIZE: usize = 48;
+
+fn register_power_relationship_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let parent_ptr = raw_arg(args, 0);
+    let child_ptr = raw_arg(args, 1);
+    let caps_ptr = raw_arg(args, 2);
+    let flags = raw_arg(args, 3);
+    let parent = match read_power_relationship_name(memory, parent_ptr) {
+        Some(name) => name,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+    };
+    let child = match read_power_relationship_name(memory, child_ptr) {
+        Some(name) => name,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+    };
+    if parent.is_none() && child.is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let capabilities = if caps_ptr == 0 {
+        None
+    } else {
+        let mut bytes = Vec::with_capacity(POWER_CAPABILITIES_SIZE);
+        for offset in 0..POWER_CAPABILITIES_SIZE {
+            let Ok(byte) = memory.read_u8(caps_ptr.wrapping_add(offset as u32)) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            };
+            bytes.push(byte);
+        }
+        Some(bytes)
+    };
+    let handle = kernel
+        .handles
+        .insert(KernelObject::PowerRelationship(PowerRelationshipObject {
+            parent,
+            child,
+            capabilities,
+            flags,
+        }));
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    handle
+}
+
+fn release_power_relationship_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    if handle == 0
+        || !matches!(
+            kernel.handles.get(handle),
+            Ok(KernelObject::PowerRelationship(_))
+        )
+    {
+        return power_status(kernel, thread_id, ERROR_INVALID_HANDLE);
+    }
+    match kernel.close_handle(handle) {
+        Ok(_) => power_status(kernel, thread_id, ERROR_SUCCESS),
+        Err(_) => power_status(kernel, thread_id, ERROR_INVALID_HANDLE),
+    }
+}
+
+fn read_power_relationship_name<M: CoredllGuestMemory>(
+    memory: &M,
+    ptr: u32,
+) -> Option<Option<String>> {
+    if ptr == 0 {
+        return Some(None);
+    }
+    read_guest_wide_arg(memory, ptr).map(Some)
 }
 
 fn set_system_power_state_raw<M: CoredllGuestMemory>(

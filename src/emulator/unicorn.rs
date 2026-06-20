@@ -1744,10 +1744,14 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn reconcile_active_visible_window_thread(&mut self, kernel: &CeKernel) -> bool {
-        if self.active_process_has_visible_receiver_work(kernel) || self.saved_context.is_none() {
+        if self.saved_context.is_none()
+            || Self::thread_has_visible_receiver_work(self.current_thread_id(), kernel)
+            || Self::thread_has_receiver_work(self.current_thread_id(), kernel)
+        {
             return false;
         }
         let active_process_id = kernel.current_process_id();
+        let current_thread_id = self.current_thread_id();
         let Some(thread_id) = kernel
             .gwe
             .windows_snapshot()
@@ -1755,6 +1759,7 @@ impl UnicornMips {
             .find_map(|window| {
                 if window.process_id != active_process_id
                     || window.thread_id == 0
+                    || window.thread_id == current_thread_id
                     || window.destroyed
                     || !window.visible
                 {
@@ -29952,7 +29957,7 @@ mod guest_thread_stack_tests {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
-        scheduler.set_initial_thread_id(3);
+        scheduler.set_initial_thread_id(1);
         scheduler.current_thread_id = 5;
         scheduler.saved_context = Some(SavedCpuContext {
             pc: GUEST_THREAD_RETURN_STUB_ADDR,
@@ -29976,7 +29981,7 @@ mod guest_thread_stack_tests {
             .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc);
         assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_USER + 10, 0, 0));
 
-        assert!(!scheduler.active_process_has_visible_receiver_work(&kernel));
+        assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
         assert!(scheduler.reconcile_active_visible_window_thread(&kernel));
 
         assert_eq!(scheduler.current_thread_id, 1);

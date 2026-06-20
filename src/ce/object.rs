@@ -30,6 +30,7 @@ pub enum KernelObject {
     WaveOut(u32),
     PowerRequirement(PowerRequirementObject),
     PowerNotification(PowerNotificationObject),
+    PowerRelationship(PowerRelationshipObject),
     FileMapping(FileMappingObject),
     CriticalSection(CriticalSectionObject),
     Thread(ThreadObject),
@@ -121,6 +122,14 @@ pub struct PowerRequirementObject {
 #[derive(Debug, Clone)]
 pub struct PowerNotificationObject {
     pub message_queue: u32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PowerRelationshipObject {
+    pub parent: Option<String>,
+    pub child: Option<String>,
+    pub capabilities: Option<Vec<u8>>,
     pub flags: u32,
 }
 
@@ -326,6 +335,13 @@ impl HandleTable {
             Ok(KernelObject::PowerNotification(notification)) => format!(
                 "power_notification(queue=0x{:08x},flags=0x{:08x})",
                 notification.message_queue, notification.flags
+            ),
+            Ok(KernelObject::PowerRelationship(relationship)) => format!(
+                "power_relationship(parent={},child={},caps={},flags=0x{:08x})",
+                relationship.parent.as_deref().unwrap_or("<none>"),
+                relationship.child.as_deref().unwrap_or("<none>"),
+                relationship.capabilities.as_ref().map_or(0, Vec::len),
+                relationship.flags
             ),
             Ok(KernelObject::FileMapping(mapping)) => format!(
                 "mapping(name={},size={},views={},closed={})",
@@ -891,6 +907,7 @@ impl HandleTable {
             | KernelObject::WaveOut(_)
             | KernelObject::PowerRequirement(_)
             | KernelObject::PowerNotification(_)
+            | KernelObject::PowerRelationship(_)
             | KernelObject::FileMapping(_)
             | KernelObject::CriticalSection(_) => WaitResult::Failed,
             KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
@@ -944,6 +961,7 @@ impl HandleTable {
             | KernelObject::WaveOut(_)
             | KernelObject::PowerRequirement(_)
             | KernelObject::PowerNotification(_)
+            | KernelObject::PowerRelationship(_)
             | KernelObject::FileMapping(_)
             | KernelObject::CriticalSection(_) => return None,
         })

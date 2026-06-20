@@ -58,19 +58,19 @@ use wince_emulation_v3::{
             ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM,
             ORD_QUERY_INSTRUCTION_SET, ORD_QUERY_PERFORMANCE_COUNTER,
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE, ORD_READ_PROCESS_MEMORY,
-            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_DEVICE, ORD_REGISTER_TASK_BAR,
-            ORD_RELEASE_MUTEX, ORD_RELEASE_POWER_REQUIREMENT, ORD_RELEASE_SEMAPHORE,
-            ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_REQUEST_POWER_NOTIFICATIONS,
-            ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_DESTROY_LIST, ORD_RESOURCE_MARK_AS_SHAREABLE,
-            ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST, ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD,
-            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
-            ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER, ORD_SET_LAST_ERROR,
-            ORD_SET_POWER_REQUIREMENT, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_PRIORITY,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
-            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
-            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_DEVICE, ORD_REGISTER_POWER_RELATIONSHIP,
+            ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX, ORD_RELEASE_POWER_RELATIONSHIP,
+            ORD_RELEASE_POWER_REQUIREMENT, ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS,
+            ORD_REQUEST_POWER_NOTIFICATIONS, ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_DESTROY_LIST,
+            ORD_RESOURCE_MARK_AS_SHAREABLE, ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST,
+            ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
+            ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER,
+            ORD_SET_LAST_ERROR, ORD_SET_POWER_REQUIREMENT, ORD_SET_SYSTEM_POWER_STATE,
+            ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I,
+            ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
+            ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I,
+            ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH,
+            ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
             ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS, ORD_STRING_COMPRESS,
             ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
@@ -1210,9 +1210,12 @@ fn coredll_raw_power_manager_tracks_system_and_device_power_state() -> Result<()
     let missing_device_ptr = 0x3130_0100;
     let system_state_ptr = 0x3130_0200;
     let pm_device_ptr = 0x3130_0300;
+    let parent_ptr = 0x3130_0400;
+    let child_ptr = 0x3130_0500;
     let device_state_ptr = 0x3130_1000;
     let system_flags_ptr = 0x3130_1004;
     let msg_queue_options_ptr = 0x3130_1100;
+    let power_caps_ptr = 0x3130_1200;
     let system_name_ptr = 0x3130_2000;
     memory.map_words(device_state_ptr, 2);
     memory.map_words(msg_queue_options_ptr, 5);
@@ -1220,11 +1223,16 @@ fn coredll_raw_power_manager_tracks_system_and_device_power_state() -> Result<()
     memory.write_word(msg_queue_options_ptr + 8, 4);
     memory.write_word(msg_queue_options_ptr + 12, 64);
     memory.write_word(msg_queue_options_ptr + 16, 1);
+    memory.map_bytes(power_caps_ptr, 48);
+    memory.fill(power_caps_ptr, 0, 48);
+    memory.write_bytes(power_caps_ptr, &[0x1f, 0x01, 0x00, 0x00]);
     memory.map_halfwords(system_name_ptr, 32);
     memory.write_wide_z(device_ptr, "com7:");
     memory.write_wide_z(missing_device_ptr, "COM8:");
     memory.write_wide_z(system_state_ptr, "screenoff");
     memory.write_wide_z(pm_device_ptr, "BKL1:");
+    memory.write_wide_z(parent_ptr, "BUS1:");
+    memory.write_wide_z(child_ptr, "COM7:");
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1432,6 +1440,82 @@ fn coredll_raw_power_manager_tracks_system_and_device_power_state() -> Result<()
             ..
         }
     ));
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(relationship),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REGISTER_POWER_RELATIONSHIP,
+        [parent_ptr, child_ptr, power_caps_ptr, 0x20],
+    )
+    else {
+        panic!("RegisterPowerRelationship did not return a handle");
+    };
+    assert_ne!(relationship, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RELEASE_POWER_RELATIONSHIP,
+            [relationship],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RELEASE_POWER_RELATIONSHIP,
+            [relationship],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_HANDLE),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_POWER_RELATIONSHIP,
+            [parent_ptr, child_ptr, 0x2000, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_POWER_RELATIONSHIP,
+            [0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
