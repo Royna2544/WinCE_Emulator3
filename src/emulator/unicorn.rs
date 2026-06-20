@@ -10942,6 +10942,11 @@ fn run_pending_process_launches<D>(
                             (snapshot.thread_exit_reached || snapshot.pc == THREAD_EXIT_STUB_ADDR)
                                 .then_some(ChildProcessRunOutcome::Exited(snapshot.v0))
                         })
+                        .or_else(|| {
+                            child
+                                .active_terminal_child_process_return_code()
+                                .map(ChildProcessRunOutcome::Exited)
+                        })
                 })
                 .unwrap_or(ChildProcessRunOutcome::Parked);
             let parked_child = (outcome == ChildProcessRunOutcome::Parked).then_some(child);
@@ -11000,6 +11005,25 @@ fn run_pending_process_launches<D>(
                 );
             }
             ChildProcessRunOutcome::Parked => {
+                if let Some(exit_code) = child_launch_handle_exit_code(kernel, &launch) {
+                    kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                        op: "CreateProcessChildParkSkipped",
+                        application: launch.application.clone(),
+                        command_line: launch.command_line.clone(),
+                        path: Some(path.display().to_string()),
+                        process_handle: Some(launch.process_handle),
+                        thread_handle: Some(launch.thread_handle),
+                        process_id: Some(launch.process_id),
+                        thread_id: Some(launch.thread_id),
+                        result: Some(exit_code),
+                        error: None,
+                        detail: Some(format!(
+                            "already_exited show_cmd={:?} child_current_dir={:?}",
+                            launch.show_cmd, child_current_directory
+                        )),
+                    });
+                    continue;
+                }
                 if let Some(child) = child {
                     parked_child_processes
                         .borrow_mut()
@@ -11049,6 +11073,16 @@ fn run_pending_process_launches<D>(
 enum ChildProcessRunOutcome {
     Exited(u32),
     Parked,
+}
+
+#[cfg(feature = "unicorn")]
+fn child_launch_handle_exit_code(
+    kernel: &CeKernel,
+    launch: &crate::ce::kernel::PendingProcessLaunch,
+) -> Option<u32> {
+    kernel
+        .process_exit_code_for_handle(launch.process_handle)
+        .filter(|exit_code| *exit_code != crate::ce::kernel::STILL_ACTIVE)
 }
 
 #[cfg(feature = "unicorn")]
@@ -29047,6 +29081,24 @@ mod guest_thread_stack_tests {
                 .is_some_and(|detail| detail.starts_with("parked_prune_exit"))
         }));
 
+        Ok(())
+    }
+
+    #[test]
+    fn exited_child_launch_handle_is_not_parkable() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            Some("iNavi|SDMMC Disk\\mapdata".to_owned()),
+        );
+
+        assert_eq!(child_launch_handle_exit_code(&kernel, &launch), None);
+
+        let _ = kernel.take_pending_process_launches();
+        kernel.mark_process_launch_exited(&launch, 0x24);
+
+        assert_eq!(child_launch_handle_exit_code(&kernel, &launch), Some(0x24));
         Ok(())
     }
 
