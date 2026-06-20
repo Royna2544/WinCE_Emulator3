@@ -2528,11 +2528,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_CHECK_REMOTE_DEBUGGER_PRESENT => {
             // CheckRemoteDebuggerPresent(hProcess, pbDebuggerPresent)
-            // Write FALSE to output and return TRUE (call succeeded, no debugger).
-            let out_ptr = raw_arg(args, 1);
-            let _ = memory.write_u32(out_ptr, 0);
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
+            Some(CoredllValue::Bool(check_remote_debugger_present_raw(
+                kernel, memory, thread_id, args,
+            )))
         }
         ORD_CONVERT_THREAD_TO_FIBER | ORD_CREATE_FIBER => {
             // Fiber APIs require Unicorn cooperative scheduling; return NULL.
@@ -27375,6 +27373,27 @@ fn get_process_id_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32
             0
         }
     }
+}
+
+fn check_remote_debugger_present_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let process_handle = raw_arg(args, 0);
+    let out_ptr = raw_arg(args, 1);
+    if out_ptr == 0 || kernel.process_id_for_handle(process_handle).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if !write_guest_u32(kernel, memory, thread_id, out_ptr, 0) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 const FIRST_LAUNCHED_PROCESS_ID: u32 = 0x42;

@@ -11,11 +11,12 @@ use wince_emulation_v3::{
             ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
             ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_MODULE_INFO, ORD_CE_GET_THREAD_PRIORITY,
             ORD_CE_GET_THREAD_QUANTUM, ORD_CE_OPEN_FILE_HANDLE, ORD_CE_SET_THREAD_PRIORITY,
-            ORD_CE_SET_THREAD_QUANTUM, ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE,
-            ORD_CLOSE_MSG_QUEUE, ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_APIHANDLE,
-            ORD_CREATE_APISET, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
-            ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE,
-            ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
+            ORD_CE_SET_THREAD_QUANTUM, ORD_CHECK_REMOTE_DEBUGGER_PRESENT, ORD_CLEAR_COMM_ERROR,
+            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
+            ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_APIHANDLE, ORD_CREATE_APISET,
+            ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
+            ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W,
+            ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
             ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
             ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
@@ -5149,6 +5150,99 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_ne!(opened_process, 0);
     assert_ne!(opened_process, CE_CURRENT_PROCESS_PSEUDO_HANDLE);
     assert_ne!(opened_process, launch.process_handle);
+
+    let debugger_present_ptr = 0x5060;
+    memory.map_words(debugger_present_ptr, 1);
+    memory.write_u32(debugger_present_ptr, 0xffff_ffff)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            [CE_CURRENT_PROCESS_PSEUDO_HANDLE, debugger_present_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(debugger_present_ptr)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_u32(debugger_present_ptr, 0xffff_ffff)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            [opened_process, debugger_present_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(debugger_present_ptr)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_u32(debugger_present_ptr, 0x1234_5678)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            [0xdead_beef, debugger_present_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(debugger_present_ptr)?, 0x1234_5678);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x2000_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

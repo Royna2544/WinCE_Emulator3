@@ -139,6 +139,11 @@ notes when it is still needed for implementation.
   `TerminateProcess(GetCurrentProcess(), code)` now marks the current process
   exited instead of resuming the thunk as a diagnostic-only success, matching
   CE's active-process `PROCTerminate` path and the `ExitProcess` macro.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`: raw
+  `CheckRemoteDebuggerPresent` now follows CE's `PROCChekDbgr` validation by
+  requiring both a valid process object and writable output pointer, returning
+  no-debugger state for valid current or launched processes and
+  `ERROR_INVALID_PARAMETER` for null/bad inputs.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c` and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: raw `CreateThread` now
   mirrors CE's `NKCreateThread` parameter gate by rejecting null start

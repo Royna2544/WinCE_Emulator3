@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 125] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 126] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13807,6 +13807,10 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 125] = &[
     CoredllOrdinalDef {
         name: "CeGetModuleInfo",
         ordinal: ORD_CE_GET_MODULE_INFO,
+    },
+    CoredllOrdinalDef {
+        name: "CheckRemoteDebuggerPresent",
+        ordinal: ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
     },
     CoredllOrdinalDef {
         name: "CeOpenFileHandle",
