@@ -58318,7 +58318,7 @@ fn coredll_raw_scroll_dc_matches_ce_bad_param_edges() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_SCROLL_DC,
-            [hdc, 2, 0, 0, 0, 0, update_ptr],
+            [hdc, 0, 0, 0, 0, 0, update_ptr],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -58387,6 +58387,110 @@ fn coredll_raw_release_dc_rejects_deleted_hdc_like_ce() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_HANDLE
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_scroll_dc_sets_update_rect_and_region_like_ce() -> Result<()> {
+    const SIMPLEREGION: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 5;
+    let scroll_ptr = 0x1_2000_u32;
+    let clip_ptr = 0x1_2010_u32;
+    let update_ptr = 0x1_2020_u32;
+    let box_ptr = 0x1_2030_u32;
+    for ptr in [scroll_ptr, clip_ptr, update_ptr, box_ptr] {
+        memory.map_words(ptr, 4);
+    }
+
+    let write_rect = |memory: &mut TestGuestMemory, ptr: u32, rect: (i32, i32, i32, i32)| {
+        memory.write_u32(ptr, rect.0 as u32).unwrap();
+        memory.write_u32(ptr + 4, rect.1 as u32).unwrap();
+        memory.write_u32(ptr + 8, rect.2 as u32).unwrap();
+        memory.write_u32(ptr + 12, rect.3 as u32).unwrap();
+    };
+    let assert_rect = |memory: &TestGuestMemory, ptr: u32, expected: (i32, i32, i32, i32)| {
+        assert_eq!(memory.read_u32(ptr).unwrap() as i32, expected.0);
+        assert_eq!(memory.read_u32(ptr + 4).unwrap() as i32, expected.1);
+        assert_eq!(memory.read_u32(ptr + 8).unwrap() as i32, expected.2);
+        assert_eq!(memory.read_u32(ptr + 12).unwrap() as i32, expected.3);
+    };
+
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp::ScrollDCScrollTest:
+    // the update region box mirrors the exposed update rectangle.
+    write_rect(&mut memory, scroll_ptr, (10, 20, 70, 90));
+    write_rect(&mut memory, clip_ptr, (25, 30, 60, 80));
+
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0u32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("GetDC failed: {other:?}"),
+    };
+    let region = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(update) did not return a region: {other:?}"),
+    };
+
+    for (dx, dy, expected) in [
+        (1, 0, (25, 30, 26, 80)),
+        (-2, 0, (58, 30, 60, 80)),
+        (0, 3, (25, 30, 60, 33)),
+        (0, -4, (25, 76, 60, 80)),
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SCROLL_DC,
+                [
+                    hdc, dx as u32, dy as u32, scroll_ptr, clip_ptr, region, update_ptr
+                ],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_rect(&memory, update_ptr, expected);
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_RGN_BOX,
+                [region, box_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(SIMPLEREGION),
+                ..
+            }
+        ));
+        assert_rect(&memory, box_ptr, expected);
+    }
 
     Ok(())
 }

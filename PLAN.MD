@@ -139,6 +139,10 @@ notes when it is still needed for implementation.
   `ProgramError` is now covered for raw DC lifecycle validation:
   `ReleaseDC(NULL, hdc)` rejects a previously deleted DC with
   `ERROR_INVALID_HANDLE` instead of treating the stale handle as released.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`:
+  `ScrollDCScrollTest` update geometry is now covered for raw `ScrollDC`:
+  exposed edge rectangles are reported for one-axis scrolls, and
+  `hrgnUpdate` is updated to the same simple region box.
 
 ## Active Roadmap
 

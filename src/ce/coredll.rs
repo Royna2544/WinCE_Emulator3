@@ -40621,6 +40621,9 @@ fn scroll_dc_raw<M: CoredllGuestMemory>(
     let hdc = raw_arg(args, 0);
     let dx = raw_i32_arg(args, 1);
     let dy = raw_i32_arg(args, 2);
+    let scroll_ptr = raw_arg(args, 3);
+    let clip_ptr = raw_arg(args, 4);
+    let update_region = raw_arg(args, 5);
     let update_ptr = raw_arg(args, 6);
 
     if !is_valid_hdc(kernel, hdc) {
@@ -40636,14 +40639,105 @@ fn scroll_dc_raw<M: CoredllGuestMemory>(
         return false;
     }
 
+    let mut effective = if scroll_ptr != 0 {
+        let Some(rect) = read_guest_rect(kernel, memory, thread_id, scroll_ptr) else {
+            return false;
+        };
+        rect.normalized()
+    } else {
+        scroll_dc_default_rect(kernel, hdc)
+    };
+    if clip_ptr != 0 {
+        let Some(rect) = read_guest_rect(kernel, memory, thread_id, clip_ptr) else {
+            return false;
+        };
+        effective = match effective.intersect(rect) {
+            Some(rect) => rect,
+            None => Rect::default(),
+        };
+    }
+    let exposed = scroll_dc_exposed_rect(effective, dx, dy);
+
     if update_ptr != 0 {
-        let _ = memory.write_u32(update_ptr, 0);
-        let _ = memory.write_u32(update_ptr + 4, 0);
-        let _ = memory.write_u32(update_ptr + 8, 0);
-        let _ = memory.write_u32(update_ptr + 12, 0);
+        let _ = write_guest_rect(kernel, memory, thread_id, update_ptr, exposed);
+    }
+    if update_region != 0 {
+        let rects = if exposed.is_empty() {
+            Vec::new()
+        } else {
+            vec![exposed]
+        };
+        if !kernel.resources.set_region_rects(update_region, rects) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn scroll_dc_default_rect(kernel: &CeKernel, hdc: u32) -> Rect {
+    if let Some(hwnd) = hdc_to_hwnd(hdc) {
+        return kernel.gwe.get_client_rect(hwnd).unwrap_or(Rect {
+            left: 0,
+            top: 0,
+            right: kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN),
+            bottom: kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN),
+        });
+    }
+    if let Some(bitmap_handle) = kernel.resources.selected_bitmap(hdc)
+        && let Some(bitmap) = kernel.resources.bitmap(bitmap_handle)
+    {
+        return Rect {
+            left: 0,
+            top: 0,
+            right: bitmap.width.max(0),
+            bottom: bitmap.height.max(0),
+        };
+    }
+    Rect::default()
+}
+
+fn scroll_dc_exposed_rect(effective: Rect, dx: i32, dy: i32) -> Rect {
+    if effective.is_empty() || (dx == 0 && dy == 0) {
+        return Rect::default();
+    }
+    if dx > 0 {
+        let width = dx.min(effective.width());
+        return Rect {
+            left: effective.left,
+            top: effective.top,
+            right: effective.left.saturating_add(width),
+            bottom: effective.bottom,
+        };
+    }
+    if dx < 0 {
+        let width = dx.saturating_abs().min(effective.width());
+        return Rect {
+            left: effective.right.saturating_sub(width),
+            top: effective.top,
+            right: effective.right,
+            bottom: effective.bottom,
+        };
+    }
+    if dy > 0 {
+        let height = dy.min(effective.height());
+        return Rect {
+            left: effective.left,
+            top: effective.top,
+            right: effective.right,
+            bottom: effective.top.saturating_add(height),
+        };
+    }
+    let height = dy.saturating_abs().min(effective.height());
+    Rect {
+        left: effective.left,
+        top: effective.bottom.saturating_sub(height),
+        right: effective.right,
+        bottom: effective.bottom,
+    }
 }
 
 fn scroll_window_ex_raw<M: CoredllGuestMemory>(
