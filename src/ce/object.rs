@@ -499,6 +499,22 @@ impl HandleTable {
         processes
     }
 
+    pub fn thread_snapshots(&self) -> Vec<ThreadObject> {
+        let mut thread_ids = Vec::new();
+        let mut threads = Vec::new();
+        for object in self.objects.values() {
+            let KernelObject::Thread(thread) = object else {
+                continue;
+            };
+            if thread_ids.contains(&thread.thread_id) {
+                continue;
+            }
+            thread_ids.push(thread.thread_id);
+            threads.push(thread.clone());
+        }
+        threads
+    }
+
     pub fn file_mapping(&self, handle: u32) -> Result<&FileMappingObject> {
         match self.get(handle)? {
             KernelObject::FileMapping(mapping) if !mapping.closed => Ok(mapping),

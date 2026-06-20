@@ -3809,9 +3809,11 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
     const THSNAP_SIZE: u32 = 60;
     const PROCESSENTRY32_SIZE: u32 = 564;
+    const THREADENTRY32_SIZE: u32 = 36;
     const PROCESSENTRY32_EXE_OFFSET: u32 = 36;
     const INVALID_TOOLHELP_SNAPSHOT: u32 = 0xffff_ffff;
     const TH32CS_SNAPHEAPLIST: u32 = 0x0000_0001;
+    const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
     const TH32HEAPLIST_SIZE: u32 = 24;
     const HEAPENTRY32_SIZE: u32 = 36;
     const HF32_DEFAULT: u32 = 1;
@@ -3880,6 +3882,66 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(
         read_guest_wide_z(&memory, launch_entry + PROCESSENTRY32_EXE_OFFSET, 260),
         "raw-child.exe"
+    );
+    let thread_snapshot = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_THCREATE_SNAPSHOT,
+        [TH32CS_SNAPTHREAD, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("expected THCreateSnapshot thread handle, got {other:?}"),
+    };
+    assert_ne!(thread_snapshot, 0);
+    assert_ne!(thread_snapshot, INVALID_TOOLHELP_SNAPSHOT);
+    assert_eq!(
+        read_guest_le_u32(&memory, thread_snapshot + 4),
+        THSNAP_SIZE + PROCESSENTRY32_SIZE * 2 + THREADENTRY32_SIZE * 2
+    );
+    assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 16), 2);
+    assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 24), 2);
+    assert_eq!(
+        read_guest_le_u32(&memory, thread_snapshot + 28),
+        TH32CS_SNAPTHREAD
+    );
+    let first_thread_entry = thread_snapshot + THSNAP_SIZE + PROCESSENTRY32_SIZE * 2;
+    let second_thread_entry = first_thread_entry + THREADENTRY32_SIZE;
+    let thread_ids = [
+        read_guest_le_u32(&memory, first_thread_entry + 8),
+        read_guest_le_u32(&memory, second_thread_entry + 8),
+    ];
+    assert!(thread_ids.contains(&thread_id));
+    assert!(thread_ids.contains(&launch.thread_id));
+    let current_thread_entry = if read_guest_le_u32(&memory, first_thread_entry + 8) == thread_id {
+        first_thread_entry
+    } else {
+        second_thread_entry
+    };
+    let launch_thread_entry =
+        if read_guest_le_u32(&memory, first_thread_entry + 8) == launch.thread_id {
+            first_thread_entry
+        } else {
+            second_thread_entry
+        };
+    for entry in [current_thread_entry, launch_thread_entry] {
+        assert_eq!(read_guest_le_u32(&memory, entry), THREADENTRY32_SIZE);
+        assert_eq!(read_guest_le_u32(&memory, entry + 4), 1);
+    }
+    assert_eq!(
+        read_guest_le_u32(&memory, current_thread_entry + 12),
+        kernel.current_process_id()
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, launch_thread_entry + 12),
+        launch.process_id
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, launch_thread_entry + 32),
+        launch.process_id
     );
     let heap_snapshot_bytes = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,

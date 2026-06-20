@@ -45,6 +45,19 @@ notes when it is still needed for implementation.
   instead of reporting unsupported. Coverage verifies process-heap filtering,
   heap-list counts/sizes, default-heap flags, fixed allocation entries,
   process/heap IDs, and invalid snapshot rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\toolhelp.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: `TH32CS_SNAPTHREAD`
+  snapshots now append CE-layout `THREADENTRY32` records after the process
+  slice. Coverage verifies thread IDs, owner process IDs, current-process IDs,
+  sizes, and current/launched thread coverage.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`
+  now appends CE-layout `THREADENTRY32` rows for `TH32CS_SNAPTHREAD` instead
+  of returning only process rows. Coverage verifies process rows are still
+  included for thread snapshots, current and launched child thread IDs,
+  owner/current process IDs, and thread-entry sizing.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,

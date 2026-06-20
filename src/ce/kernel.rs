@@ -25,9 +25,9 @@ use crate::{
         object::{
             CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject, FileChangeNotificationObject,
             FileChangeRecord, FileObject, FindFileObject, HandleTable, KernelObject,
-            MAX_SUSPEND_COUNT, MessageQueueHandleObject, ThreadResumeResult, ThreadSuspendResult,
-            VolumeObject, WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
-            win32_thread_priority_to_ce,
+            MAX_SUSPEND_COUNT, MessageQueueHandleObject, ThreadObject, ThreadResumeResult,
+            ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
+            ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
@@ -684,6 +684,16 @@ pub struct ToolhelpProcessSnapshot {
     pub flags: u32,
     pub memory_base: u32,
     pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolhelpThreadSnapshot {
+    pub thread_id: u32,
+    pub owner_process_id: u32,
+    pub base_priority: i32,
+    pub current_priority: i32,
+    pub flags: u32,
+    pub current_process_id: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2238,6 +2248,53 @@ impl CeKernel {
             });
         }
         snapshots
+    }
+
+    pub fn toolhelp_thread_snapshots(&self, current_thread_id: u32) -> Vec<ToolhelpThreadSnapshot> {
+        let mut snapshots = vec![ToolhelpThreadSnapshot {
+            thread_id: current_thread_id,
+            owner_process_id: self.current_process_id,
+            base_priority: self.thread_priority_by_id(current_thread_id),
+            current_priority: self.thread_priority_by_id(current_thread_id),
+            flags: 0,
+            current_process_id: self.current_process_id,
+        }];
+        let mut thread_ids = vec![current_thread_id];
+        for thread in self.handles.thread_snapshots() {
+            if thread_ids.contains(&thread.thread_id) {
+                continue;
+            }
+            thread_ids.push(thread.thread_id);
+            snapshots.push(self.toolhelp_thread_snapshot_from_object(&thread));
+        }
+        snapshots
+    }
+
+    fn toolhelp_thread_snapshot_from_object(
+        &self,
+        thread: &ThreadObject,
+    ) -> ToolhelpThreadSnapshot {
+        let owner_process_id = self
+            .pending_process_launches
+            .iter()
+            .find(|launch| launch.thread_id == thread.thread_id)
+            .map(|launch| launch.process_id)
+            .unwrap_or(self.current_process_id);
+        let flags = if thread.suspend_count != 0 {
+            6
+        } else if thread.signaled {
+            4
+        } else {
+            0
+        };
+        ToolhelpThreadSnapshot {
+            thread_id: thread.thread_id,
+            owner_process_id,
+            base_priority: thread.priority,
+            current_priority: self.thread_priority_by_id(thread.thread_id),
+            flags,
+            current_process_id: owner_process_id,
+        }
     }
 
     pub fn current_process_state(&self) -> CurrentProcessState {
