@@ -725,6 +725,11 @@ notes when it is still needed for implementation.
      `COMPRESSION_FORMAT_NONE` reporting, short output buffers, accepting
      no-op `NONE` updates, unsupported compressed formats, and invalid input
      packets.
+   - File-handle `DeviceIoControl(FSCTL_QUERY_ALLOCATED_RANGES)` now consumes
+     CE's `FILE_ALLOCATED_RANGE_BUFFER` layout from `fsioctl.h` and reports
+     the requested intersection with the host-backed file extent as allocated.
+     Coverage verifies EOF clipping, empty intersections, zero-length queries,
+     short output buffers, invalid input sizing, and stale-handle rejection.
    - `CeFsIoControlW`/`AFS_FsIoControlW(FSCTL_STORAGE_MEDIA_CHANGE_EVENT)`
      now follows CE's mounted-volume media-change path for host-backed mounts:
      detach notifications succeed as ignored zero-byte events, while attach

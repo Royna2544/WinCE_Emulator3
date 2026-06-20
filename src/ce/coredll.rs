@@ -127,6 +127,7 @@ const FSCTL_COPY_EXTERNAL_START: u32 = 0x0009_004c;
 const FSCTL_COPY_EXTERNAL_COMPLETE: u32 = 0x0009_0050;
 const FSCTL_GET_COMPRESSION: u32 = 0x0009_003c;
 const FSCTL_SET_COMPRESSION: u32 = 0x0009_c040;
+const FSCTL_QUERY_ALLOCATED_RANGES: u32 = 0x0009_40cf;
 const FSCTL_GET_STREAM_INFORMATION: u32 = 0x0009_4038;
 const FSCTL_SET_ZERO_DATA: u32 = 0x0009_80c8;
 const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
@@ -141,6 +142,7 @@ const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
 const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
 const COMPRESSION_FORMAT_NONE: u16 = 0;
+const FILE_ALLOCATED_RANGE_BUFFER_SIZE: u32 = 16;
 const FILE_STREAM_INFO_STANDARD: u32 = 0;
 const FILE_STREAM_INFO_SIZE: u32 = 52;
 const FILE_ZERO_DATA_INFORMATION_SIZE: u32 = 16;
@@ -23886,6 +23888,31 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
             }
         }
     }
+    if ioctl_code == FSCTL_QUERY_ALLOCATED_RANGES {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_query_allocated_ranges_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    handle,
+                    input_ptr,
+                    input_len,
+                    output_ptr,
+                    output_capacity,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
     if ioctl_code == FSCTL_SET_ZERO_DATA {
         match kernel.is_file_handle(handle) {
             Ok(true) => {
@@ -24850,6 +24877,101 @@ fn file_handle_set_compression_raw<M: CoredllGuestMemory>(
         return false;
     }
     if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn file_handle_query_allocated_ranges_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    input_ptr: u32,
+    input_len: u32,
+    output_ptr: u32,
+    output_capacity: u32,
+    returned_ptr: u32,
+) -> bool {
+    if input_ptr == 0 || input_len != FILE_ALLOCATED_RANGE_BUFFER_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    let Some(query_start) = read_guest_u64_le(kernel, memory, thread_id, input_ptr) else {
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    let Some(query_len) = read_guest_u64_le(kernel, memory, thread_id, input_ptr.wrapping_add(8))
+    else {
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    if query_len == 0 {
+        if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+            return false;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let file_size = match kernel.get_file_size(handle) {
+        Ok(size) => size as u64,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        }
+    };
+    let query_end = query_start.saturating_add(query_len);
+    let range_end = query_end.min(file_size);
+    if query_start >= range_end {
+        if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+            return false;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    if output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if output_capacity < FILE_ALLOCATED_RANGE_BUFFER_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+        write_optional_count(
+            kernel,
+            memory,
+            thread_id,
+            returned_ptr,
+            FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+        );
+        return false;
+    }
+    if !write_guest_u64_le(kernel, memory, thread_id, output_ptr, query_start)
+        || !write_guest_u64_le(
+            kernel,
+            memory,
+            thread_id,
+            output_ptr.wrapping_add(8),
+            range_end - query_start,
+        )
+        || !write_optional_count(
+            kernel,
+            memory,
+            thread_id,
+            returned_ptr,
+            FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+        )
+    {
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -61314,6 +61436,17 @@ fn read_guest_u32<M: CoredllGuestMemory>(
     }
 }
 
+fn read_guest_u64_le<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    addr: u32,
+) -> Option<u64> {
+    let low = read_guest_u32(kernel, memory, thread_id, addr)?;
+    let high = read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(4))?;
+    Some(u64::from(low) | (u64::from(high) << 32))
+}
+
 fn read_guest_u16<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -61356,6 +61489,23 @@ fn write_guest_u32<M: CoredllGuestMemory>(
             false
         }
     }
+}
+
+fn write_guest_u64_le<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    value: u64,
+) -> bool {
+    write_guest_u32(kernel, memory, thread_id, addr, value as u32)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(4),
+            (value >> 32) as u32,
+        )
 }
 
 fn write_guest_u8<M: CoredllGuestMemory>(

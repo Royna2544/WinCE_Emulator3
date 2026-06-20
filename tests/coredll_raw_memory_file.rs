@@ -7023,6 +7023,249 @@ fn coredll_raw_file_handle_compression_reports_uncompressed() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_file_handle_query_allocated_ranges_reports_host_extent() -> Result<()> {
+    const FSCTL_QUERY_ALLOCATED_RANGES: u32 = 0x0009_40cf;
+    const FILE_ALLOCATED_RANGE_BUFFER_SIZE: u32 = 16;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    const ERROR_INVALID_HANDLE: u32 = 6;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let root = unique_test_root("file_handle_query_allocated_ranges");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("ranges.bin"), b"0123456789").unwrap();
+    kernel.files = HostFileSystem::new(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let path_ptr = 0x1_c000u32;
+    let query_ptr = 0x1_c100u32;
+    let out_ptr = 0x1_c200u32;
+    let bytes_returned_ptr = 0x1_c300u32;
+    memory.write_wide_z(path_ptr, "\\ranges.bin");
+    memory.map_words(query_ptr, 4);
+    memory.map_words(out_ptr, 4);
+    memory.map_words(bytes_returned_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+
+    let read_range_u64 = |memory: &TestGuestMemory, addr: u32| -> Result<u64> {
+        Ok(u64::from(memory.read_u32(addr)?) | (u64::from(memory.read_u32(addr + 4)?) << 32))
+    };
+
+    memory.write_word(query_ptr, 2);
+    memory.write_word(query_ptr + 4, 0);
+    memory.write_word(query_ptr + 8, 20);
+    memory.write_word(query_ptr + 12, 0);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_QUERY_ALLOCATED_RANGES,
+                query_ptr,
+                FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+                out_ptr,
+                FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        memory.read_u32(bytes_returned_ptr)?,
+        FILE_ALLOCATED_RANGE_BUFFER_SIZE
+    );
+    assert_eq!(read_range_u64(&memory, out_ptr)?, 2);
+    assert_eq!(read_range_u64(&memory, out_ptr + 8)?, 8);
+
+    memory.write_word(out_ptr, 0xaaaa_aaaa);
+    memory.write_word(out_ptr + 4, 0xbbbb_bbbb);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_QUERY_ALLOCATED_RANGES,
+                query_ptr,
+                FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+                out_ptr,
+                8,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+    assert_eq!(
+        memory.read_u32(bytes_returned_ptr)?,
+        FILE_ALLOCATED_RANGE_BUFFER_SIZE
+    );
+    assert_eq!(memory.read_u32(out_ptr)?, 0xaaaa_aaaa);
+    assert_eq!(memory.read_u32(out_ptr + 4)?, 0xbbbb_bbbb);
+
+    memory.write_word(query_ptr, 12);
+    memory.write_word(query_ptr + 8, 4);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_QUERY_ALLOCATED_RANGES,
+                query_ptr,
+                FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(query_ptr, 0);
+    memory.write_word(query_ptr + 8, 0);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_QUERY_ALLOCATED_RANGES,
+                query_ptr,
+                FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_QUERY_ALLOCATED_RANGES,
+                query_ptr,
+                8,
+                out_ptr,
+                16,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_QUERY_ALLOCATED_RANGES,
+                query_ptr,
+                FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+                out_ptr,
+                FILE_ALLOCATED_RANGE_BUFFER_SIZE,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_file_handle_set_zero_data_zeros_existing_range() -> Result<()> {
     const FSCTL_SET_ZERO_DATA: u32 = 0x0009_80c8;
     const ERROR_ACCESS_DENIED: u32 = 5;
