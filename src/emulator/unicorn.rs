@@ -1953,9 +1953,15 @@ impl UnicornMips {
         call_regs.regs[25] = wndproc;
         call_regs.regs[29] = call_sp;
         call_regs.regs[31] = WNDPROC_RETURN_STUB_ADDR;
+        let resume_thread_handle = guest_thread_handle_for_running_context(
+            kernel,
+            self.running_guest_thread,
+            active_thread_id,
+        );
         let resume = ResumeImportAfterWndProc {
             thread_id: active_thread_id,
-            running_thread: self.running_guest_thread,
+            running_thread: (resume_thread_handle != 0)
+                .then_some((active_thread_id, resume_thread_handle)),
             regs: active_saved.regs,
             import_pc: return_pc,
         };
@@ -18224,6 +18230,10 @@ fn guest_thread_handle_for_running_context(
         .filter(|(running_thread_id, _)| *running_thread_id == thread_id)
         .map(|(_, handle)| handle)
         .or_else(|| kernel.guest_thread_handle_by_id(thread_id))
+        .or_else(|| {
+            (thread_id == MAIN_GUEST_THREAD_ID)
+                .then_some(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE)
+        })
         .unwrap_or(0)
 }
 
@@ -24986,6 +24996,94 @@ mod wait_scheduler_tests {
         assert_eq!(
             scheduler.running_guest_thread,
             Some((active_thread_id, active_thread_handle))
+        );
+        let restored = scheduler.saved_context.as_ref().unwrap();
+        assert_eq!(restored.pc, active_pc);
+        assert_eq!(restored.regs, active_regs);
+    }
+
+    #[test]
+    fn cross_thread_visible_message_infers_main_running_thread_for_resume() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let receiver_thread_id = 4;
+        let receiver_process_id = 1;
+        let active_process_id = 68;
+        let active_pc = 0x0033_9c54;
+        let return_sp = 0x7ffd_f0a0;
+        let wndproc = 0x6004_f0f4;
+        let msg = crate::ce::gwe::WM_LBUTTONDOWN;
+
+        scheduler.current_thread_id = active_thread_id;
+        scheduler.running_guest_thread = None;
+        let mut active_regs = super::MipsGuestContext::zero();
+        active_regs.regs[29] = return_sp;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: active_regs.clone(),
+        });
+
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: receiver_process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let hwnd = kernel.create_window_ex_w(
+            receiver_thread_id,
+            "visible_receiver",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        let _ = kernel.gwe.validate_window(hwnd);
+        assert!(kernel.post_message_w(hwnd, msg, 1, 0x0020_0010));
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: active_process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        scheduler.mapped_blobs.push(super::MappedBlob {
+            name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
+            base: 0x6004_0000,
+            bytes: vec![0; 0x20_000],
+        });
+
+        assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
+        let resume = scheduler.pending_wndproc_returns[0]
+            .resume_import
+            .as_ref()
+            .unwrap();
+        assert_eq!(resume.thread_id, active_thread_id);
+        assert_eq!(
+            resume.running_thread,
+            Some((
+                active_thread_id,
+                crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            ))
+        );
+
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: super::MipsGuestContext::zero(),
+        });
+        assert!(scheduler.clear_escaped_visible_message_callouts(&mut kernel));
+        assert_eq!(scheduler.current_thread_id(), active_thread_id);
+        assert_eq!(
+            scheduler.running_guest_thread,
+            Some((
+                active_thread_id,
+                crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            ))
         );
         let restored = scheduler.saved_context.as_ref().unwrap();
         assert_eq!(restored.pc, active_pc);
