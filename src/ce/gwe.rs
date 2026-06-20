@@ -94,6 +94,7 @@ pub const WM_CAPTURECHANGED: u32 = 0x0215;
 pub const WM_RENDERFORMAT: u32 = 0x0305;
 pub const WM_RENDERALLFORMATS: u32 = 0x0306;
 pub const WM_DESTROYCLIPBOARD: u32 = 0x0307;
+pub const WM_HOTKEY: u32 = 0x0312;
 pub const WM_USER: u32 = 0x0400;
 pub const WM_HANDLESHELLNOTIFYICON: u32 = WM_USER + 0x0bad;
 pub const WM_APP: u32 = 0x8000;
@@ -131,6 +132,14 @@ pub const VK_LCONTROL: u32 = 0xa2;
 pub const VK_RCONTROL: u32 = 0xa3;
 pub const VK_LMENU: u32 = 0xa4;
 pub const VK_RMENU: u32 = 0xa5;
+const VK_LWIN: u32 = 0x5b;
+const VK_RWIN: u32 = 0x5c;
+const MOD_ALT: u32 = 0x0001;
+const MOD_CONTROL: u32 = 0x0002;
+const MOD_SHIFT: u32 = 0x0004;
+const MOD_WIN: u32 = 0x0008;
+const MOD_KEYUP: u32 = 0x1000;
+const MOD_VALID_MASK: u32 = MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN | MOD_KEYUP;
 pub const KEY_STATE_TOGGLED_FLAG: u32 = 0x0001;
 pub const KEY_STATE_GET_ASYNC_DOWN_FLAG: u32 = 0x0002;
 pub const KEY_STATE_PREV_DOWN_FLAG: u32 = 0x0040;
@@ -871,6 +880,15 @@ impl Default for SipPanelState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotKeyRegistration {
+    pub hwnd: u32,
+    pub id: u32,
+    pub modifiers: u32,
+    pub vk: u32,
+    pub thread_id: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Gwe {
     next_hwnd: u32,
@@ -903,6 +921,7 @@ pub struct Gwe {
     last_dispatch_ms_by_thread: BTreeMap<u32, u32>,
     changed_queue_status_by_thread: BTreeMap<u32, u32>,
     quit_by_thread: BTreeMap<u32, QuitState>,
+    hot_keys: BTreeMap<(u32, u32, u32), HotKeyRegistration>,
     key_state: [u16; 256],
     async_key_down: [bool; 256],
     keyboard_layout: u32,
@@ -1016,6 +1035,7 @@ impl Default for Gwe {
             last_dispatch_ms_by_thread: BTreeMap::new(),
             changed_queue_status_by_thread: BTreeMap::new(),
             quit_by_thread: BTreeMap::new(),
+            hot_keys: BTreeMap::new(),
             key_state: [0; 256],
             async_key_down: [false; 256],
             keyboard_layout: DEFAULT_KEYBOARD_LAYOUT_HKL,
@@ -2609,6 +2629,75 @@ impl Gwe {
             .filter(|hwnd| self.is_window(*hwnd))
     }
 
+    pub fn register_hot_key(
+        &mut self,
+        thread_id: u32,
+        hwnd: u32,
+        id: u32,
+        modifiers: u32,
+        vk: u32,
+    ) -> bool {
+        if hwnd != 0 && !self.is_window(hwnd) {
+            return false;
+        }
+        if modifiers & !MOD_VALID_MASK != 0 || !(1..=0xff).contains(&vk) {
+            return false;
+        }
+        let key = hot_key_key(thread_id, hwnd, id);
+        let chord_modifiers = modifiers & MOD_VALID_MASK;
+        if self.hot_keys.iter().any(|(existing_key, hot_key)| {
+            *existing_key != key
+                && hot_key.vk == vk
+                && hot_key.modifiers == chord_modifiers
+                && (hot_key.hwnd == 0 || self.is_window(hot_key.hwnd))
+        }) {
+            return false;
+        }
+        self.hot_keys.insert(
+            key,
+            HotKeyRegistration {
+                hwnd,
+                id,
+                modifiers: chord_modifiers,
+                vk,
+                thread_id,
+            },
+        );
+        true
+    }
+
+    pub fn unregister_hot_key(&mut self, thread_id: u32, hwnd: u32, id: u32) -> bool {
+        if hwnd != 0 && !self.is_window(hwnd) {
+            return false;
+        }
+        self.hot_keys
+            .remove(&hot_key_key(thread_id, hwnd, id))
+            .is_some()
+    }
+
+    pub fn matching_hot_key(
+        &self,
+        thread_id: u32,
+        virtual_key: u32,
+        key_down: bool,
+    ) -> Option<HotKeyRegistration> {
+        let wanted_keyup = !key_down;
+        let current_modifiers = self.current_hot_key_modifiers();
+        self.hot_keys
+            .values()
+            .find(|hot_key| {
+                hot_key.vk == virtual_key
+                    && ((hot_key.modifiers & MOD_KEYUP != 0) == wanted_keyup)
+                    && hot_key.modifiers & !MOD_KEYUP == current_modifiers
+                    && if hot_key.hwnd == 0 {
+                        hot_key.thread_id == thread_id
+                    } else {
+                        self.is_window(hot_key.hwnd)
+                    }
+            })
+            .cloned()
+    }
+
     pub fn get_foreground_keyboard_target(&self) -> Option<u32> {
         self.get_active_window()
             .and_then(|active| self.windows.get(&active).map(|window| window.thread_id))
@@ -3930,6 +4019,25 @@ impl Gwe {
             _ => {}
         }
         state
+    }
+
+    fn current_hot_key_modifiers(&self) -> u32 {
+        let mut modifiers = 0;
+        if self.effective_key_state(VK_MENU) & 0x8000 != 0 {
+            modifiers |= MOD_ALT;
+        }
+        if self.effective_key_state(VK_CONTROL) & 0x8000 != 0 {
+            modifiers |= MOD_CONTROL;
+        }
+        if self.effective_key_state(VK_SHIFT) & 0x8000 != 0 {
+            modifiers |= MOD_SHIFT;
+        }
+        if self.effective_key_state(VK_LWIN) & 0x8000 != 0
+            || self.effective_key_state(VK_RWIN) & 0x8000 != 0
+        {
+            modifiers |= MOD_WIN;
+        }
+        modifiers
     }
 
     fn consume_async_key_down(&mut self, virtual_key: u32) -> bool {
@@ -5724,6 +5832,10 @@ fn modifier_alias_for(virtual_key: u32) -> Option<u32> {
         VK_LMENU | VK_RMENU => Some(VK_MENU),
         _ => None,
     }
+}
+
+fn hot_key_key(thread_id: u32, hwnd: u32, id: u32) -> (u32, u32, u32) {
+    (hwnd, (hwnd == 0).then_some(thread_id).unwrap_or(0), id)
 }
 
 fn is_mouse_message(msg: u32) -> bool {

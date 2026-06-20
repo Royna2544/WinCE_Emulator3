@@ -28,6 +28,13 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\RDP\OAK\UIT\SHELL\WBTSHELL\wbttskbr.cpp`,
+  `C:\WINCE600\PUBLIC\VOIP\OAK\PHONE\PHONEAPP\PHONECORE\hotkeys.cpp`, and
+  `C:\WINCE600\PUBLIC\VOIP\OAK\PHONE\HOMESCREEN\hotkeys.cpp`:
+  raw `RegisterHotKey`/`UnregisterHotKey` now keep CE-style window/thread
+  hotkey registrations instead of hard-failing. Coverage verifies invalid
+  window rejection, same-window/id replacement, `WM_HOTKEY` delivery on the
+  registered chord, unregister cleanup, and missing-registration failure.
 - `C:\WINCE600\PRIVATE\TEST\MULTIMEDIA\DIRECTX\DSHOW\COMMON\LIBS\IMAGING\imageload.cpp`,
   `C:\WINCE600\PRIVATE\TEST\MULTIMEDIA\DIRECTX\DSHOW\PLAYBACK\LOGGERS\videoframeinstrumenter.cpp`,
   and

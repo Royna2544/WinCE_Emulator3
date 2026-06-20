@@ -94,7 +94,7 @@ use wince_emulation_v3::{
             ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE,
             ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION, ORD_REALIZE_PALETTE,
             ORD_RECT_IN_REGION, ORD_RECT_VISIBLE, ORD_RECTANGLE, ORD_REDRAW_WINDOW,
-            ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_REGISTER_SIPANEL,
+            ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_REGISTER_HOT_KEY, ORD_REGISTER_SIPANEL,
             ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
             ORD_REMOVE_FONT_RESOURCE_W, ORD_REMOVE_MENU, ORD_RESTORE_DC, ORD_ROUND_RECT,
             ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SCROLL_DC, ORD_SELECT_CLIP_RGN,
@@ -114,8 +114,8 @@ use wince_emulation_v3::{
             ORD_SHOW_WINDOW, ORD_SHSIP_PREFERENCE_I, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
             ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
             ORD_TRACK_POPUP_MENU_EX, ORD_TRANSLATE_ACCELERATOR_W, ORD_TRANSLATE_MESSAGE,
-            ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
-            ORD_WINDOW_FROM_POINT,
+            ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UNREGISTER_HOT_KEY, ORD_UPDATE_WINDOW,
+            ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
         },
         file::{GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
@@ -139,18 +139,18 @@ use wince_emulation_v3::{
             WM_COMPAREITEM, WM_CONTEXTMENU, WM_CREATE, WM_DEADCHAR, WM_DELETEITEM, WM_DESTROY,
             WM_DISPLAYCHANGE, WM_DRAWITEM, WM_ENABLE, WM_ENTERMENULOOP, WM_ERASEBKGND,
             WM_EXITMENULOOP, WM_FONTCHANGE, WM_GETDLGCODE, WM_GETFONT, WM_GETICON,
-            WM_GETMINMAXINFO, WM_GETTEXT, WM_GETTEXTLENGTH, WM_HELP, WM_HSCROLL, WM_IME_CHAR,
-            WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_NOTIFY, WM_IME_STARTCOMPOSITION,
-            WM_INITMENU, WM_INITMENUPOPUP, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MOUSEACTIVATE,
-            WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCACTIVATE, WM_NCCREATE, WM_NCDESTROY,
-            WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NEXTDLGCTL, WM_PAINT,
-            WM_PARENTNOTIFY, WM_QUIT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-            WM_SETFOCUS, WM_SETFONT, WM_SETICON, WM_SETREDRAW, WM_SETTEXT, WM_SETTINGCHANGE,
-            WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP,
-            WM_TIMECHANGE, WM_TIMER, WM_USER, WM_VKEYTOITEM, WM_VSCROLL, WM_WINDOWPOSCHANGED,
-            WNDCLASSW_SIZE, WS_CHILD, WS_DISABLED, WS_EX_NOPARENTNOTIFY, WS_EX_TOPMOST, WS_GROUP,
-            WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+            WM_GETMINMAXINFO, WM_GETTEXT, WM_GETTEXTLENGTH, WM_HELP, WM_HOTKEY, WM_HSCROLL,
+            WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_NOTIFY,
+            WM_IME_STARTCOMPOSITION, WM_INITMENU, WM_INITMENUPOPUP, WM_INPUTLANGCHANGE, WM_KEYDOWN,
+            WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MENUCHAR,
+            WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCACTIVATE, WM_NCCREATE,
+            WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NEXTDLGCTL,
+            WM_PAINT, WM_PARENTNOTIFY, WM_QUIT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP,
+            WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETICON, WM_SETREDRAW, WM_SETTEXT,
+            WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN,
+            WM_SYSKEYUP, WM_TIMECHANGE, WM_TIMER, WM_USER, WM_VKEYTOITEM, WM_VSCROLL,
+            WM_WINDOWPOSCHANGED, WNDCLASSW_SIZE, WS_CHILD, WS_DISABLED, WS_EX_NOPARENTNOTIFY,
+            WS_EX_TOPMOST, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -24945,6 +24945,171 @@ fn coredll_raw_post_keybd_message_posts_key_and_characters() -> Result<()> {
             )
             .is_none(),
         "capacity-limited PostKeybdMessage should queue only one character"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_register_hot_key_posts_and_replaces_window_chords() -> Result<()> {
+    const MOD_CONTROL: u32 = 0x0002;
+    const MOD_SHIFT: u32 = 0x0004;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let msg_ptr = 0x3660;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "HOTKEYTARGET", "", None, 0, 0, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_HOT_KEY,
+            [0xdead_beef, 7, MOD_CONTROL, u32::from(b'A')],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_HOT_KEY,
+            [hwnd, 7, MOD_CONTROL, u32::from(b'A')],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_HOT_KEY,
+            [hwnd, 7, MOD_SHIFT, u32::from(b'B')],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(kernel.post_keybd_message_for_thread(thread_id, Some(hwnd), VK_CONTROL, true, 0, &[]));
+    assert!(kernel.post_keybd_message_for_thread(
+        thread_id,
+        Some(hwnd),
+        u32::from(b'A'),
+        true,
+        0,
+        &[]
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, 0, WM_HOTKEY, WM_HOTKEY, PeekFlags::REMOVE.bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(kernel.post_keybd_message_for_thread(thread_id, Some(hwnd), VK_CONTROL, false, 0, &[]));
+
+    assert!(kernel.post_keybd_message_for_thread(thread_id, Some(hwnd), VK_LSHIFT, true, 0, &[]));
+    assert!(kernel.post_keybd_message_for_thread(
+        thread_id,
+        Some(hwnd),
+        u32::from(b'B'),
+        true,
+        0,
+        &[]
+    ));
+    assert_next_filtered_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_HOTKEY,
+        7,
+        MOD_SHIFT | (u32::from(b'B') << 16),
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNREGISTER_HOT_KEY,
+            [hwnd, 7],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(kernel.post_keybd_message_for_thread(
+        thread_id,
+        Some(hwnd),
+        u32::from(b'B'),
+        true,
+        0,
+        &[]
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, 0, WM_HOTKEY, WM_HOTKEY, PeekFlags::REMOVE.bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNREGISTER_HOT_KEY,
+            [hwnd, 7],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
     );
 
     Ok(())

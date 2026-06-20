@@ -7065,16 +7065,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_REGISTER_HOT_KEY => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
-        ORD_UNREGISTER_HOT_KEY => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_REGISTER_HOT_KEY => Some(CoredllValue::Bool(register_hot_key_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_UNREGISTER_HOT_KEY => Some(CoredllValue::Bool(unregister_hot_key_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_SYSTEM_IDLE_TIMER_RESET => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -37705,6 +37701,51 @@ fn set_keyboard_target_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> 
         .unwrap_or(0);
     kernel.threads.set_last_error(thread_id, 0);
     previous
+}
+
+fn register_hot_key_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let hwnd = raw_arg(args, 0);
+    let id = raw_arg(args, 1);
+    let modifiers = raw_arg(args, 2);
+    let vk = raw_arg(args, 3);
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    if kernel
+        .gwe
+        .register_hot_key(thread_id, hwnd, id, modifiers, vk)
+    {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
+}
+
+fn unregister_hot_key_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let hwnd = raw_arg(args, 0);
+    let id = raw_arg(args, 1);
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    if kernel.gwe.unregister_hot_key(thread_id, hwnd, id) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
 }
 
 fn get_keyboard_layout_list_raw<M: CoredllGuestMemory>(

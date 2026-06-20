@@ -7343,6 +7343,40 @@ impl CeKernel {
         } else {
             crate::ce::gwe::WM_KEYUP
         };
+        if let Some(hot_key) = self.gwe.matching_hot_key(thread_id, virtual_key, key_down) {
+            let hot_key_hwnd = hot_key.hwnd;
+            let hot_key_thread = if hot_key_hwnd == 0 {
+                hot_key.thread_id
+            } else {
+                match self
+                    .gwe
+                    .window(hot_key_hwnd)
+                    .filter(|window| !window.destroyed)
+                {
+                    Some(window) => window.thread_id,
+                    None => thread_id,
+                }
+            };
+            let hot_key_message = Message {
+                hwnd: hot_key_hwnd,
+                msg: crate::ce::gwe::WM_HOTKEY,
+                wparam: hot_key.id,
+                lparam: (hot_key.modifiers & !0x1000) | (hot_key.vk << 16),
+                time_ms,
+                source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
+                mouse_pos_at_post: None,
+            };
+            self.gwe
+                .post_message(hot_key_thread, hot_key_message.clone());
+            self.record_message_op(
+                "post_message",
+                hot_key_thread,
+                &hot_key_message,
+                Some(1),
+                Some("hotkey".to_owned()),
+            );
+            self.queue_message_wake_candidates(hot_key_thread);
+        }
         let key_message = Message {
             hwnd: hwnd_value,
             msg: key_msg,
