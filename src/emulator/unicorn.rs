@@ -2508,26 +2508,32 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     pub fn clear_escaped_visible_message_callouts(&mut self, kernel: &mut CeKernel) -> bool {
         let candidates = [
-            self.saved_context.as_ref().map(|saved| saved.pc),
-            self.last_debug.as_ref().map(|snapshot| snapshot.pc),
+            self.saved_context
+                .as_ref()
+                .map(|saved| (saved.pc, import_trap_pc(saved.pc))),
+            self.last_debug.as_ref().map(|snapshot| {
+                let stopped_on_import_trap = snapshot.trap_address == Some(snapshot.pc)
+                    || snapshot.trap_module_kind.is_some()
+                    || snapshot.trap_ordinal.is_some();
+                (snapshot.pc, stopped_on_import_trap)
+            }),
         ];
-        let Some(index) = self
-            .pending_wndproc_returns
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(index, pending)| {
-                let escaped_visible_message = pending.source == "OrphanedVisibleMessage"
-                    && pending.resume_import.is_some()
-                    && pending.return_pc != 0
-                    && !import_trap_pc(pending.return_pc)
-                    && candidates
-                        .iter()
-                        .copied()
-                        .flatten()
-                        .any(|pc| pc == pending.return_pc);
-                escaped_visible_message.then_some(index)
-            })
+        let Some(index) =
+            self.pending_wndproc_returns
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, pending)| {
+                    let escaped_visible_message = pending.source == "OrphanedVisibleMessage"
+                        && pending.resume_import.is_some()
+                        && pending.return_pc != 0
+                        && candidates.iter().copied().flatten().any(
+                            |(pc, stopped_on_import_trap)| {
+                                pc == pending.return_pc && !stopped_on_import_trap
+                            },
+                        );
+                    escaped_visible_message.then_some(index)
+                })
         else {
             return false;
         };
@@ -26211,6 +26217,66 @@ mod wait_scheduler_tests {
         assert!(!scheduler.clear_escaped_visible_message_callouts(&mut kernel));
         assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
         assert_eq!(scheduler.current_thread_id(), active_thread_id);
+    }
+
+    #[test]
+    fn escaped_visible_message_completes_when_image_pc_overlaps_import_trap_range() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = 16;
+        let return_pc = crate::emulator::imports::IMPORT_TRAP_BASE
+            + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let wndproc = 0x6004_f0f4;
+        let return_sp = 0x7fe5_f290;
+        let hwnd = kernel.create_window_ex_w(1, "visible_receiver", "", None, 0, 0, 0);
+
+        scheduler.current_thread_id = active_thread_id;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: wndproc,
+            regs: super::MipsGuestContext::zero(),
+        });
+        scheduler.last_debug = Some(super::UnicornDebugSnapshot {
+            pc: return_pc,
+            v0: 1,
+            ..Default::default()
+        });
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "OrphanedVisibleMessage",
+                hwnd,
+                msg: crate::ce::gwe::WM_WINDOWPOSCHANGED,
+                wparam: 0,
+                lparam: 0,
+                wndproc,
+                return_pc,
+                return_sp,
+                caller_regs: None,
+                class_name: Some("visible_receiver".to_owned()),
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: None,
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: Some(super::ResumeImportAfterWndProc {
+                    thread_id: active_thread_id,
+                    running_thread: Some((active_thread_id, 0x10ac)),
+                    regs: super::MipsGuestContext::zero(),
+                    import_pc: return_pc,
+                }),
+                clear_focus_after_return: None,
+            });
+
+        assert!(scheduler.clear_escaped_visible_message_callouts(&mut kernel));
+        assert!(scheduler.pending_wndproc_returns.is_empty());
+        let restored = scheduler.saved_context.as_ref().unwrap();
+        assert_eq!(restored.pc, return_pc);
+        assert_eq!(restored.regs.regs[2], 0);
     }
 
     #[test]
