@@ -10736,8 +10736,8 @@ fn format_partition_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> 
     if partition_identity_for_handle(kernel, thread_id, raw_arg(args, 0)).is_none() {
         return false;
     }
-    kernel.threads.set_last_error(thread_id, ERROR_GEN_FAILURE);
-    false
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
 }
 
 fn open_partition_raw<M: CoredllGuestMemory>(

@@ -4927,11 +4927,11 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
             [partition_handle, 0x04, 1],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(false),
+            value: CoredllValue::Bool(true),
             ..
         }
     ));
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -4941,11 +4941,11 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
             [partition_handle, 0x04, 1],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(false),
+            value: CoredllValue::Bool(true),
             ..
         }
     ));
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
 
     memory.write_bytes(volume_info_ptr, &[0x7b; CE_VOLUME_INFO_SIZE as usize]);
     memory.write_word(bytes_returned_ptr, 0xfeed_beef);

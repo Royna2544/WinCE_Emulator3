@@ -311,6 +311,8 @@ notes when it is still needed for implementation.
   ordinals now validate store and partition handles/names instead of being
   inert exports. Coverage verifies safe host-backed semantics: mount and
   dismount of the already-mounted synthetic partition are no-op successes,
+  `FormatPartition`/`FormatPartitionEx` follow CE `nullpart` by treating
+  host-backed partition formatting as a successful media-format no-op,
   store/partition layout mutations fail with `ERROR_GEN_FAILURE`, empty
   partition names fail with `ERROR_BAD_ARGUMENTS`, and missing partition
   deletion follows `ERROR_FILE_NOT_FOUND`.

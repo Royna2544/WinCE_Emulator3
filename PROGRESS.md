@@ -16,7 +16,8 @@ references for historical reconstruction.
 - File and storage behavior includes mounted host paths, volume-boundary checks,
   file attributes, find handles, change notifications, `CeGetFileNotificationInfo`,
   FSDMGR import shims, public AFS mount registration, synthetic disk metadata,
-  sparse-sector backing, and selected FMD/file-lock/security descriptor surfaces.
+  sparse-sector backing, StoreMgr partition format no-ops, and selected
+  FMD/file-lock/security descriptor surfaces.
 - GWE/message behavior includes HWND/message-queue state, menu and message-box
   foundations, cross-thread send setup, timeout completion, nested reply paths,
   and scheduler wake integration for multiple wait classes.
