@@ -44753,14 +44753,17 @@ fn coredll_raw_add_remove_font_resource_broadcasts_wm_fontchange() -> Result<()>
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("tahoma.ttf"), MINIMAL_TRUETYPE_FONT_BYTES).unwrap();
+    fs::write(root.join("arial.ttf"), MINIMAL_TRUETYPE_FONT_BYTES).unwrap();
     kernel.mount_guest_root("\\Windows", &root);
 
     // Reserve space for MSG (7 u32s) and short wide path strings.
     memory.map_words(msg_ptr, 7);
     let path_ptr = 0x1_a500_u32;
     let missing_path_ptr = 0x1_a600_u32;
+    let path2_ptr = 0x1_a700_u32;
     memory.write_wide_z(path_ptr, "\\Windows\\tahoma.ttf");
     memory.write_wide_z(missing_path_ptr, "\\Windows\\missing.ttf");
+    memory.write_wide_z(path2_ptr, "\\Windows\\arial.ttf");
 
     let hwnd = kernel.create_window_ex_w(receiver_thread, "FONTCHANGE_TEST", "", None, 0, 0, 0);
 
@@ -44906,6 +44909,62 @@ fn coredll_raw_add_remove_font_resource_broadcasts_wm_fontchange() -> Result<()>
         kernel.threads.get_last_error(caller_thread),
         ERROR_FILE_NOT_FOUND
     );
+
+    // CE font.cpp::OutOfOrderAddRemoveTest verifies independent path refs even
+    // when two loaded font resources are removed in different orders.
+    for sequence in [[path_ptr, path2_ptr], [path2_ptr, path_ptr]] {
+        for font_path in sequence {
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    caller_thread,
+                    ORD_ADD_FONT_RESOURCE_W,
+                    [font_path],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::U32(1),
+                    ..
+                }
+            ));
+            assert_eq!(kernel.threads.get_last_error(caller_thread), 0);
+        }
+        for font_path in sequence {
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    caller_thread,
+                    ORD_REMOVE_FONT_RESOURCE_W,
+                    [font_path],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(true),
+                    ..
+                }
+            ));
+            assert_eq!(kernel.threads.get_last_error(caller_thread), 0);
+        }
+        for font_path in sequence {
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    caller_thread,
+                    ORD_REMOVE_FONT_RESOURCE_W,
+                    [font_path],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(false),
+                    ..
+                }
+            ));
+            assert_eq!(
+                kernel.threads.get_last_error(caller_thread),
+                ERROR_FILE_NOT_FOUND
+            );
+        }
+    }
 
     let _ = fs::remove_dir_all(&root);
 
