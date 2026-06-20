@@ -3415,11 +3415,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 1),
         ))),
-        ORD_AFS_CLOSE_ALL_FILE_HANDLES => {
-            // AFS_CloseAllFileHandles() — close all open file handles for a volume. No-op.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_AFS_CLOSE_ALL_FILE_HANDLES => Some(CoredllValue::Bool(afs_close_all_file_handles_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_AFS_UNMOUNT => Some(CoredllValue::Bool(afs_unmount_raw(
             kernel,
             thread_id,
@@ -17271,6 +17269,12 @@ fn afs_register_file_system_function_raw(
 
 fn afs_notify_mounted_fs_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
     let status = kernel.notify_afs_mounted_fs(raw_arg(args, 0), raw_arg(args, 1));
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
+}
+
+fn afs_close_all_file_handles_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let status = kernel.close_all_file_handles_for_volume(raw_arg(args, 0), raw_arg(args, 1));
     kernel.threads.set_last_error(thread_id, status);
     status == 0
 }

@@ -142,6 +142,13 @@ notes when it is still needed for implementation.
   call. Coverage verifies power-on/off/device flags, repeated notifications,
   invalid-handle failure, cross-process access denial, and cleanup when the
   volume handle closes.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\extfile.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mextfile.h`: raw
+  `AFS_CloseAllFileHandles` now follows CE FSDMGR's mounted-volume validation
+  path before returning the kernel-cleanup no-op success. Coverage verifies
+  valid mounted volume handles, ignored process-handle payloads, invalid
+  volume handles, and cross-process access denial.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: raw StoreMgr

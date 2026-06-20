@@ -3191,6 +3191,18 @@ impl CeKernel {
             .unwrap_or(&[])
     }
 
+    pub fn close_all_file_handles_for_volume(
+        &mut self,
+        volume_handle: u32,
+        _process_handle: u32,
+    ) -> u32 {
+        match self.volume_root_for_handle(volume_handle) {
+            Ok(_) => ERROR_SUCCESS,
+            Err(Error::AccessDenied(_)) => ERROR_ACCESS_DENIED,
+            Err(_) => ERROR_INVALID_HANDLE,
+        }
+    }
+
     pub fn fsdmgr_create_cache(&mut self, disk_ptr: u32, block_size: u32) -> Option<u32> {
         if disk_ptr == 0 || block_size == 0 {
             return None;
