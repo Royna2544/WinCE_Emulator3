@@ -35987,6 +35987,16 @@ fn image_list_load_image_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
+    let Some(list_bitmap) = clone_bitmap_for_image_list(kernel, memory, thread_id, bitmap) else {
+        delete_owned_bitmap(kernel, bitmap);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if list_bitmap != bitmap {
+        delete_owned_bitmap(kernel, bitmap);
+    }
     let height = bitmap_info.height.max(1);
     let width = if requested_cx > 0 {
         requested_cx
@@ -36006,28 +36016,32 @@ fn image_list_load_image_raw<M: CoredllGuestMemory>(
         .resources
         .create_image_list(width, height, image_list_flags, 1, grow)
     else {
+        delete_owned_bitmap(kernel, list_bitmap);
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
     let added = if mask == CLR_NONE {
-        kernel.resources.add_image_list_image(list, bitmap, 0)
+        kernel.resources.add_image_list_image(list, list_bitmap, 0)
     } else {
-        let mask = image_list_add_masked_color(kernel, memory, mask, bitmap);
+        let mask = image_list_add_masked_color(kernel, memory, mask, list_bitmap);
         let Some(mask_bitmap) =
-            create_image_list_mask_bitmap(kernel, memory, thread_id, bitmap, mask)
+            create_image_list_mask_bitmap(kernel, memory, thread_id, list_bitmap, mask)
         else {
             kernel.resources.destroy_image_list(list);
+            delete_owned_bitmap(kernel, list_bitmap);
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return 0;
         };
-        let added =
-            kernel
-                .resources
-                .add_masked_image_list_image_with_mask(list, bitmap, mask_bitmap, mask);
+        let added = kernel.resources.add_masked_image_list_image_with_mask(
+            list,
+            list_bitmap,
+            mask_bitmap,
+            mask,
+        );
         if added.is_none() {
             delete_owned_bitmap(kernel, mask_bitmap);
         }
@@ -36035,6 +36049,7 @@ fn image_list_load_image_raw<M: CoredllGuestMemory>(
     };
     if added.is_none() {
         kernel.resources.destroy_image_list(list);
+        delete_owned_bitmap(kernel, list_bitmap);
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);

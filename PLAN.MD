@@ -952,6 +952,10 @@ notes when it is still needed for implementation.
   IME UI context and queue the owning UI window's corresponding
   `WM_IME_NOTIFY/IMN_SET*` callback, matching the CE IME UI control path
   instead of silently updating the context only.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
+  raw `ImageList_LoadImage` now treats the `LoadImageW` bitmap as CE does:
+  copying it into image-list-owned storage, building masks from that stored
+  copy, and releasing the temporary loaded bitmap on success and failure paths.
 
 ## Active Roadmap
 

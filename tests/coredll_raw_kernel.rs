@@ -18063,6 +18063,14 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert_ne!(loaded_list.images[0].bitmap, 0);
     assert_ne!(loaded_list.images[0].mask, 0);
     assert_eq!(loaded_list.images[0].transparent_color, Some(0x00ff_00ff));
+    assert!(
+        kernel
+            .resources
+            .bitmap(loaded_list.images[0].bitmap)
+            .unwrap()
+            .bits_writable,
+        "CE ImageList_LoadImage deletes the temporary LoadImageW bitmap after copying it into list storage"
+    );
     let loaded_mask = kernel.resources.bitmap(loaded_list.images[0].mask).unwrap();
     assert_eq!(loaded_mask.bits_pixel, 1);
     assert!(matches!(
@@ -18281,6 +18289,10 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         .resources
         .bitmap(resource_loaded_list.images[0].bitmap)
         .unwrap();
+    assert!(
+        resource_bitmap.bits_writable,
+        "resource-backed ImageList_LoadImage entries should be list-owned copies, not readonly LoadImageW handles"
+    );
     assert_ne!(
         resource_bitmap.bits_ptr, resource_dib_ptr,
         "resource-backed DIB pixels should be copied into owned bitmap storage"
