@@ -457,8 +457,12 @@ notes when it is still needed for implementation.
   in a hidden `GetMessage` wait and a visible parked process has a ready wait
   unblock, `rotate_after_run_slice_handoff` now resumes the ready parked
   process before falling through to generic runnable-process rotation.
-  Coverage reproduces the hidden iSearch wait to visible iNavi handoff and
-  verifies process/thread/module state after rotation.
+  Orphaned visible-window callouts now map process-slot-equivalent MFC
+  wndprocs back into loaded guest DLL ranges and filter low-value paint/focus
+  messages without forcing a guest callout. Coverage reproduces the hidden
+  iSearch wait to visible iNavi handoff, verifies process/thread/module state
+  after rotation, and checks stale child-thread recovery for mapped MFC
+  wndprocs.
 
 ## Active Roadmap
 

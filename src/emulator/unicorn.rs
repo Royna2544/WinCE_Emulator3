@@ -1676,11 +1676,27 @@ impl UnicornMips {
             let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
             return false;
         };
-        let wndproc = window.wndproc;
-        if !is_guest_wndproc(wndproc) {
+        let original_wndproc = window.wndproc;
+        if !is_guest_wndproc(original_wndproc) {
             let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
             return false;
         }
+        if matches!(
+            message.msg,
+            crate::ce::gwe::WM_ACTIVATE
+                | crate::ce::gwe::WM_SETFOCUS
+                | crate::ce::gwe::WM_KILLFOCUS
+                | crate::ce::gwe::WM_MOUSEMOVE
+                | crate::ce::gwe::WM_LBUTTONDOWN
+                | crate::ce::gwe::WM_LBUTTONUP
+                | crate::ce::gwe::WM_PAINT
+        ) {
+            let _ = kernel.gwe.validate_window(message.hwnd);
+            return true;
+        }
+        let wndproc = self
+            .mapped_guest_wndproc(original_wndproc)
+            .unwrap_or(original_wndproc);
 
         let return_sp = saved.regs.regs[29];
         let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
@@ -29957,6 +29973,11 @@ mod guest_thread_stack_tests {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
+        scheduler.mapped_blobs.push(super::MappedBlob {
+            name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
+            base: 0x0004_0000,
+            bytes: vec![0; 0x20_000],
+        });
         scheduler.set_initial_thread_id(1);
         scheduler.current_thread_id = 5;
         scheduler.saved_context = Some(SavedCpuContext {
@@ -29990,7 +30011,7 @@ mod guest_thread_stack_tests {
         assert!(scheduler.prepare_active_orphaned_visible_message_callout(&mut kernel));
         assert_eq!(
             scheduler.saved_context.as_ref().map(|saved| saved.pc),
-            Some(wndproc)
+            Some(0x0004_f0f4)
         );
 
         Ok(())
