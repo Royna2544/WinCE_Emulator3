@@ -927,6 +927,12 @@ notes when it is still needed for implementation.
   report it as `$bus\...` in CE `DEVMGR_DEVICE_INFORMATION`, and match
   `DeviceSearchByBusName` with CE wildcard semantics instead of accepting only
   an empty bus-name search.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\FSD\CACHEFILT\privatefilehandle.cpp`:
+  file-handle `DeviceIoControl(FSCTL_SET_FILE_CACHE)` now follows the CE
+  cache-filter input-size predicate, accepting non-null caller packets up to
+  the 4-byte `FILE_CACHE_INFO` size before evaluating the info level and
+  rejecting oversized packets as invalid.
 
 ## Active Roadmap
 

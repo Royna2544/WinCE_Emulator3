@@ -7360,6 +7360,33 @@ fn coredll_raw_file_handle_set_file_cache_follows_cache_filter_shape() -> Result
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
+    memory.write_word(cache_info_ptr, FILE_CACHE_DISABLE_STANDARD);
+    memory.write_word(bytes_returned_ptr, 0xDEAD_BEEF);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_SET_FILE_CACHE,
+                cache_info_ptr,
+                2,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
     memory.write_word(cache_info_ptr, FILE_CACHE_ENABLE_STANDARD);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -7395,6 +7422,24 @@ fn coredll_raw_file_handle_set_file_cache_follows_cache_filter_shape() -> Result
             thread_id,
             ORD_DEVICE_IO_CONTROL,
             [file, FSCTL_SET_FILE_CACHE, cache_info_ptr, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [file, FSCTL_SET_FILE_CACHE, cache_info_ptr, 8, 0, 0, 0, 0],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(false),

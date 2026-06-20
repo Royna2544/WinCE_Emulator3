@@ -26241,7 +26241,7 @@ fn file_handle_set_file_cache_raw<M: CoredllGuestMemory>(
     input_len: u32,
     returned_ptr: u32,
 ) -> bool {
-    if input_ptr == 0 || input_len != FILE_CACHE_INFO_SIZE {
+    if input_ptr == 0 || input_len > FILE_CACHE_INFO_SIZE {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
