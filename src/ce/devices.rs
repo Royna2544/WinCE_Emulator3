@@ -62,6 +62,14 @@ pub struct DeviceConfig {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceKeyEntry {
+    pub normalized_name: String,
+    pub guest_name: String,
+    pub active_key: String,
+    pub driver_key: String,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceKind {
@@ -245,17 +253,25 @@ impl DeviceNamespace {
 
     pub fn device_keys(&self, guest_name: &str) -> Option<(String, String)> {
         let normalized = normalize_device_name(guest_name);
-        for (index, (key, device)) in self.devices.iter().enumerate() {
-            if key == &normalized {
-                let active_key = format!(r"Drivers\Active\{}", index + 1);
-                let driver_key = format!(
+        self.device_key_entries().into_iter().find_map(|entry| {
+            (entry.normalized_name == normalized).then_some((entry.active_key, entry.driver_key))
+        })
+    }
+
+    pub fn device_key_entries(&self) -> Vec<DeviceKeyEntry> {
+        self.devices
+            .iter()
+            .enumerate()
+            .map(|(index, (key, device))| DeviceKeyEntry {
+                normalized_name: key.clone(),
+                guest_name: device.guest.clone(),
+                active_key: format!(r"Drivers\Active\{}", index + 1),
+                driver_key: format!(
                     r"Drivers\BuiltIn\{}",
                     registry_key_suffix_from_device_name(&device.guest)
-                );
-                return Some((active_key, driver_key));
-            }
-        }
-        None
+                ),
+            })
+            .collect()
     }
 
     pub fn remote_gps_target(&self) -> Option<String> {

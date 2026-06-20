@@ -175,6 +175,14 @@ notes when it is still needed for implementation.
   argument rejection, unknown/disabled device lookup failures, length-only
   queries, `ERROR_MORE_DATA` size reporting, case-insensitive device matching,
   and successful `Drivers\Active\N` / `Drivers\BuiltIn\NAME` output.
+- `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\DEVLOAD\devreg.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\DDK\INC\devload.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\windev.h`: raw `OpenDeviceKey` now
+  follows CE's active-key `Key` indirection instead of reporting unsupported,
+  seeding configured devices into `Drivers\Active\N` and
+  `Drivers\BuiltIn\NAME` registry keys when needed. Coverage verifies returned
+  driver-key handles, null active-key pointers, missing active keys, and active
+  keys missing the `Key` value.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battery.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battimpl.h`,

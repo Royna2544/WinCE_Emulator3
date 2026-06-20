@@ -44,7 +44,8 @@ use crate::{
             ThreadSuspendResult,
         },
         registry::{
-            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HKey, RegOpenResult, RegQueryValueResult,
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HKEY_LOCAL_MACHINE, HKey, RegOpenResult,
+            RegQueryValueResult, RegistryValue,
         },
         resource::{
             AcceleratorEntry, FontObject, IconObject, ImageListDraw, MenuItem,
@@ -4115,12 +4116,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(2))
         }
-        ORD_OPEN_DEVICE_KEY => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_OPEN_DEVICE_KEY => Some(CoredllValue::Handle(open_device_key_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_CE_RESYNC_FILESYS => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -54644,6 +54642,100 @@ fn get_device_keys_raw<M: CoredllGuestMemory>(
 
     kernel.threads.set_last_error(thread_id, 0);
     0
+}
+
+fn open_device_key_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let active_key_ptr = raw_arg(args, 0);
+    let Some(active_key) = read_guest_wide_arg(memory, active_key_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+
+    ensure_configured_device_registry_keys(kernel);
+
+    let active_open = kernel
+        .registry
+        .reg_open_key_exw(HKEY_LOCAL_MACHINE, Some(&active_key), 0, 0);
+    let Some(active_handle) = active_open.hkey else {
+        kernel.threads.set_last_error(thread_id, active_open.status);
+        return 0;
+    };
+
+    let dev_key = match kernel
+        .registry
+        .query_value(&format!(r"hklm\{active_key}"), "Key")
+        .ok()
+        .and_then(RegistryValue::as_str)
+        .map(str::to_owned)
+    {
+        Some(dev_key) => dev_key,
+        None => {
+            let query_status = kernel
+                .registry
+                .reg_query_value_exw(active_handle, Some("Key"), None)
+                .status;
+            let _ = kernel.registry.reg_close_key(active_handle);
+            kernel.threads.set_last_error(
+                thread_id,
+                if query_status == 0 {
+                    ERROR_INVALID_PARAMETER
+                } else {
+                    query_status
+                },
+            );
+            return 0;
+        }
+    };
+    let _ = kernel.registry.reg_close_key(active_handle);
+
+    let driver_open = kernel
+        .registry
+        .reg_open_key_exw(HKEY_LOCAL_MACHINE, Some(&dev_key), 0, 0);
+    match driver_open.hkey {
+        Some(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            handle
+        }
+        None => {
+            kernel.threads.set_last_error(thread_id, driver_open.status);
+            0
+        }
+    }
+}
+
+fn ensure_configured_device_registry_keys(kernel: &mut CeKernel) {
+    for entry in kernel.devices.device_key_entries() {
+        let active_path = format!(r"hklm\{}", entry.active_key);
+        let driver_path = format!(r"hklm\{}", entry.driver_key);
+        kernel.registry.create_key(&active_path);
+        kernel.registry.create_key(&driver_path);
+        if kernel.registry.query_value(&active_path, "Key").is_err() {
+            kernel
+                .registry
+                .set_value(&active_path, "Key", RegistryValue::string(entry.driver_key));
+        }
+        if kernel.registry.query_value(&active_path, "Name").is_err() {
+            kernel.registry.set_value(
+                &active_path,
+                "Name",
+                RegistryValue::string(entry.guest_name.clone()),
+            );
+        }
+        if kernel.registry.query_value(&driver_path, "Name").is_err() {
+            kernel.registry.set_value(
+                &driver_path,
+                "Name",
+                RegistryValue::string(entry.guest_name),
+            );
+        }
+    }
 }
 
 fn write_guest_wide_z<M: CoredllGuestMemory>(
