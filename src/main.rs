@@ -940,7 +940,7 @@ fn run_cpu_loop(
                     cpu.active_process_has_visible_queued_receiver_work(kernel),
                     cpu.active_process_has_visible_windows(kernel),
                     cpu.has_runnable_parked_process(kernel),
-                ) && cpu.rotate_to_next_parked_process(kernel)
+                ) && cpu.rotate_to_visible_window_parked_process(kernel)
                 {
                     reported_blocked_message_wait = false;
                     publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
@@ -970,7 +970,7 @@ fn run_cpu_loop(
             cpu.active_process_has_visible_queued_receiver_work(kernel),
             cpu.active_process_has_visible_windows(kernel),
             cpu.has_runnable_parked_process(kernel),
-        ) && cpu.rotate_to_next_parked_process(kernel)
+        ) && cpu.rotate_to_visible_window_parked_process(kernel)
         {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);

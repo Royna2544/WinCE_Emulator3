@@ -851,8 +851,8 @@ notes when it is still needed for implementation.
   keeping remote route UI progress moving between host wall-clock slices. The
   saved-context idle rotation now also requires no active running guest thread
   and no visible queued receiver work, preserving visible callout delivery
-  ahead of generic parked-process rotation, and the same guard runs inside
-  live-pump wall-clock blocked-message stops before yielding the slice.
+  ahead of visible-window parked-process rotation, and the same guard runs
+  inside live-pump wall-clock blocked-message stops before yielding the slice.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
   `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble
