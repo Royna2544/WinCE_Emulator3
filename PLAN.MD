@@ -28,6 +28,14 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\apicall.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\apis.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\psyscall.h`: raw API-set support now
+  creates API-set handles, registers/query names in CE's 128-slot API table,
+  returns ARM implicit-call trap addresses from `GetAPIAddress`, and verifies
+  `CreateAPIHandle` objects back to their server data. Coverage verifies
+  create/register/query, readiness, encoded method addresses, valid/invalid
+  API handles, and bad guest method-table validation.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\toolhelp.h`, and

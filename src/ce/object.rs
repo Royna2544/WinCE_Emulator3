@@ -37,6 +37,8 @@ pub enum KernelObject {
     PowerRelationship(PowerRelationshipObject),
     FileMapping(FileMappingObject),
     CriticalSection(CriticalSectionObject),
+    ApiSet(ApiSetObject),
+    ApiHandle(ApiHandleObject),
     Thread(ThreadObject),
     Process(ProcessObject),
 }
@@ -186,6 +188,20 @@ pub struct FileMappingView {
 #[derive(Debug, Clone)]
 pub struct CriticalSectionObject {
     pub guest_ptr: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApiSetObject {
+    pub name: [u8; 4],
+    pub methods: Vec<u32>,
+    pub signatures: Vec<u64>,
+    pub registered_id: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApiHandleObject {
+    pub api_set_handle: u32,
+    pub data: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -397,6 +413,19 @@ impl HandleTable {
             Ok(KernelObject::CriticalSection(cs)) => {
                 format!("critical_section(ptr=0x{:08x})", cs.guest_ptr)
             }
+            Ok(KernelObject::ApiSet(api_set)) => format!(
+                "api_set(name={},methods={},registered={})",
+                String::from_utf8_lossy(&api_set.name),
+                api_set.methods.len(),
+                api_set
+                    .registered_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "none".to_owned())
+            ),
+            Ok(KernelObject::ApiHandle(api_handle)) => format!(
+                "api_handle(set=0x{:08x},data=0x{:08x})",
+                api_handle.api_set_handle, api_handle.data
+            ),
             Ok(KernelObject::Thread(thread)) => format!(
                 "thread(id={},signaled={},suspend={},exit=0x{:08x})",
                 thread.thread_id, thread.signaled, thread.suspend_count, thread.exit_code
@@ -957,7 +986,9 @@ impl HandleTable {
             | KernelObject::PowerNotification(_)
             | KernelObject::PowerRelationship(_)
             | KernelObject::FileMapping(_)
-            | KernelObject::CriticalSection(_) => WaitResult::Failed,
+            | KernelObject::CriticalSection(_)
+            | KernelObject::ApiSet(_)
+            | KernelObject::ApiHandle(_) => WaitResult::Failed,
             KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
             KernelObject::Process(process) if process.signaled => WaitResult::Object0,
             _ if timeout_ms == 0 => WaitResult::Timeout,
@@ -1015,7 +1046,9 @@ impl HandleTable {
             | KernelObject::PowerNotification(_)
             | KernelObject::PowerRelationship(_)
             | KernelObject::FileMapping(_)
-            | KernelObject::CriticalSection(_) => return None,
+            | KernelObject::CriticalSection(_)
+            | KernelObject::ApiSet(_)
+            | KernelObject::ApiHandle(_) => return None,
         })
     }
 }

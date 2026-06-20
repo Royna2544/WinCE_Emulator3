@@ -8477,6 +8477,7 @@ impl UnicornMips {
         // ── Memory fault hook + optional iNavi/render-map trace watch hooks ────────
         let memory_fault = Rc::new(RefCell::new(None));
         let memory_fault_hook = Rc::clone(&memory_fault);
+        let mapped_kernel_memory_fault_hook = Rc::clone(&mapped_kernel_memory);
         #[cfg(feature = "trace")]
         if inavi_slot_trace_enabled && let Some(addr) = inavi_slot_static_watch_addr {
             let slot_watch = Rc::clone(&inavi_render_milestones);
@@ -8622,8 +8623,20 @@ impl UnicornMips {
             1,
             0,
             move |uc, access, address, size, value| {
+                let access_name = format!("{access:?}");
+                if access_name.contains("UNMAPPED")
+                    && repair_missing_virtual_page_for_fault(
+                        uc,
+                        unsafe { &*kernel_ptr },
+                        &mut mapped_kernel_memory_fault_hook.borrow_mut(),
+                        address as u32,
+                    )
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
                 *memory_fault_hook.borrow_mut() = Some(UnicornMemoryFault {
-                    access: format!("{access:?}"),
+                    access: access_name,
                     address: address as u32,
                     size,
                     value,
@@ -10963,6 +10976,51 @@ fn live_virtual_memory_pages(kernel: &CeKernel) -> Result<HashSet<u32>> {
         )?;
     }
     Ok(pages)
+}
+
+#[cfg(feature = "unicorn")]
+fn repair_missing_virtual_page_for_fault<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    mapped: &mut KernelMemoryMappings,
+    address: u32,
+) -> Result<bool> {
+    let Some(allocation) = kernel.memory.virtual_allocations().find(|allocation| {
+        address >= allocation.base && address < allocation.base.saturating_add(allocation.size)
+    }) else {
+        return Ok(false);
+    };
+    let page_base = address & !0xfff;
+    remove_mapped_guest_page(mapped, page_base);
+    mapped.virtual_pages.remove(&page_base);
+    let newly_mapped = map_guest_range(
+        uc,
+        mapped,
+        page_base,
+        0x1000,
+        virtual_allocation_perms(allocation.protect),
+        "virtual allocation fault repair",
+        false,
+    )?;
+    mapped.virtual_pages.extend(newly_mapped.iter().copied());
+    if !newly_mapped.is_empty() {
+        let page_offset = page_base.saturating_sub(allocation.base) as usize;
+        if page_offset < allocation.initial_bytes.len() {
+            let page_end = page_offset
+                .saturating_add(0x1000)
+                .min(allocation.initial_bytes.len());
+            uc.mem_write(
+                u64::from(page_base),
+                &allocation.initial_bytes[page_offset..page_end],
+            )
+            .map_err(|err| {
+                Error::Backend(format!(
+                    "seed repaired virtual page 0x{page_base:08x}: {err:?}"
+                ))
+            })?;
+        }
+    }
+    Ok(true)
 }
 
 #[cfg(feature = "unicorn")]
@@ -47375,7 +47433,7 @@ mod unicorn_tests {
         let thread_id = super::MAIN_GUEST_THREAD_ID;
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
         let hwnd = kernel.create_window_ex_w(thread_id, "GETMSG_LONG", "", None, 0, 0, 0);
-        let period_ms = super::MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS + 1;
+        let period_ms = super::MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS + 25;
         assert_eq!(
             kernel.set_timer_for_thread(thread_id, Some(hwnd), Some(4565), period_ms, None),
             4565

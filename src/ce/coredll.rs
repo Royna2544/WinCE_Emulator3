@@ -2783,18 +2783,20 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(true))
         }
         ORD_IS_APIREADY => {
+            let ready =
+                kernel.wait_for_api_ready(raw_arg(args, 0)) == crate::ce::timer::WAIT_OBJECT_0;
             kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
+            Some(CoredllValue::Bool(ready))
         }
         ORD_WAIT_FOR_APIREADY => {
-            // WaitForAPIReady(dwAPISetKey, dwMilliseconds) — all CE API sets are always ready
-            // in the emulator; return WAIT_OBJECT_0 immediately.
+            let result = kernel.wait_for_api_ready(raw_arg(args, 0));
             kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(0))
+            Some(CoredllValue::U32(result))
         }
         ORD_GET_APIADDRESS => {
+            let address = kernel.get_api_address(raw_arg(args, 0), raw_arg(args, 1));
             kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Handle(0))
+            Some(CoredllValue::Handle(address))
         }
         ORD_RANDOM => Some(CoredllValue::U32(crt::rand_raw(kernel, thread_id))),
         ORD_PROFILE_START
@@ -2827,22 +2829,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_CREATE_APISET | ORD_QUERY_APISET_ID => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
-        ORD_REGISTER_APISET | ORD_CREATE_APIHANDLE => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
-        ORD_VERIFY_APIHANDLE => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_CREATE_APISET => Some(CoredllValue::Handle(create_api_set_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_QUERY_APISET_ID => Some(CoredllValue::U32(query_api_set_id_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REGISTER_APISET => Some(CoredllValue::Bool(register_api_set_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_CREATE_APIHANDLE => Some(CoredllValue::Handle(create_api_handle_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_VERIFY_APIHANDLE => Some(CoredllValue::Handle(verify_api_handle_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_EXTRACT_RESOURCE => {
             kernel
                 .threads
@@ -62373,6 +62374,136 @@ fn sys_color_index(index: u32) -> u32 {
 
 const fn rgb(red: u32, green: u32, blue: u32) -> u32 {
     red | (green << 8) | (blue << 16)
+}
+
+fn create_api_set_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    const MAX_METHODS: u32 = 256;
+    let name_ptr = raw_arg(args, 0);
+    let method_count = raw_arg(args, 1);
+    let methods_ptr = raw_arg(args, 2);
+    let signatures_ptr = raw_arg(args, 3);
+
+    if method_count == 0 || method_count > MAX_METHODS {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    let Some(name) = read_api_set_name4(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+
+    let mut methods = Vec::with_capacity(method_count as usize);
+    for index in 0..method_count {
+        let Ok(method) = memory.read_u32(methods_ptr.wrapping_add(index * 4)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        methods.push(method);
+    }
+
+    let mut signatures = Vec::with_capacity(method_count as usize);
+    for index in 0..method_count {
+        let sig_ptr = signatures_ptr.wrapping_add(index * 8);
+        let (Ok(lo), Ok(hi)) = (memory.read_u32(sig_ptr), memory.read_u32(sig_ptr + 4)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        signatures.push(u64::from(lo) | (u64::from(hi) << 32));
+    }
+
+    let handle = kernel.create_api_set(name, methods, signatures);
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    handle
+}
+
+fn query_api_set_id_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(name) = read_api_set_query_name(memory, raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    kernel.query_api_set_id(name).unwrap_or(u32::MAX)
+}
+
+fn register_api_set_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let error = kernel.register_api_set(raw_arg(args, 0), raw_arg(args, 1));
+    kernel.threads.set_last_error(thread_id, error);
+    error == ERROR_SUCCESS
+}
+
+fn create_api_handle_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    match kernel.create_api_handle(raw_arg(args, 0), raw_arg(args, 1)) {
+        Ok(handle) => {
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            handle
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn verify_api_handle_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    match kernel.verify_api_handle(raw_arg(args, 0), raw_arg(args, 1)) {
+        Ok(data) => {
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            data
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn read_api_set_name4<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<[u8; 4]> {
+    if ptr == 0 {
+        return None;
+    }
+    let mut name = [0; 4];
+    memory.read_bytes(ptr, &mut name).ok()?;
+    Some(name)
+}
+
+fn read_api_set_query_name<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<[u8; 4]> {
+    if ptr == 0 {
+        return None;
+    }
+    let mut name = [0; 4];
+    for index in 0..4 {
+        let byte = memory.read_u8(ptr.wrapping_add(index)).ok()?;
+        if byte == 0 {
+            return Some(name);
+        }
+        name[index as usize] = byte;
+    }
+    (memory.read_u8(ptr.wrapping_add(4)).ok()? == 0).then_some(name)
 }
 
 fn raw_arg(args: &[u32], index: usize) -> u32 {

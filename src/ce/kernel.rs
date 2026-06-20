@@ -23,10 +23,10 @@ use crate::{
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         nled::NledSystem,
         object::{
-            CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject, FileChangeNotificationObject,
-            FileChangeRecord, FileObject, FindFileObject, HandleTable, KernelObject,
-            MAX_SUSPEND_COUNT, MessageQueueHandleObject, ThreadObject, ThreadResumeResult,
-            ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
+            ApiHandleObject, ApiSetObject, CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject,
+            FileChangeNotificationObject, FileChangeRecord, FileObject, FindFileObject,
+            HandleTable, KernelObject, MAX_SUSPEND_COUNT, MessageQueueHandleObject, ThreadObject,
+            ThreadResumeResult, ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
             ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
@@ -78,8 +78,15 @@ const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
 const DISK_IOCTL_INITIALIZED: u32 = 4;
 const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
 const ERROR_BUSY: u32 = 170;
+const ERROR_NO_PROC_SLOTS: u32 = 89;
 const RREXF_REQUEST_EXCLUSIVE: u32 = 0x0001;
 pub const CE_DEFAULT_THREAD_QUANTUM_MS: u32 = 100;
+pub const CE_NUM_API_SETS: u32 = 128;
+const CE_METHOD_MASK: u32 = 0x00ff;
+const CE_REGISTER_APISET_TYPE: u32 = 0x8000_0000;
+const CE_SH_FIRST_EXT_API_SET: u32 = 112;
+const CE_SH_FIRST_EXT_HAPI_SET: u32 = 64;
+const CE_SH_FIRST_OS_API_SET: u32 = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePumpResult {
@@ -310,6 +317,7 @@ pub struct CeKernel {
     display_perf_timings: Vec<DisplayPerfTiming>,
     display_perf_unhandled: u32,
     window_backing_stores: BTreeMap<u32, FramebufferBackingStore>,
+    api_sets: BTreeMap<u32, u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -1053,6 +1061,14 @@ fn normalize_power_device_name(name: &str) -> String {
     name.trim().trim_end_matches(':').to_ascii_lowercase()
 }
 
+fn ce_implicit_call_address(set_id: u32, method: u32) -> u32 {
+    const FIRST_METHOD_ARM: u32 = 0xf102_0000;
+    const APISET_SHIFT: u32 = 8;
+    const APICALL_SCALE_ARM: u32 = 4;
+    let encoded = (set_id << APISET_SHIFT) | method;
+    FIRST_METHOD_ARM.wrapping_sub(encoded.wrapping_mul(APICALL_SCALE_ARM))
+}
+
 impl CeKernel {
     const MSGQUEUE_MSGALERT: u32 = 0x0000_0001;
     const MSGQUEUE_NOPRECOMMIT: u32 = 0x0000_0001;
@@ -1151,6 +1167,7 @@ impl CeKernel {
             display_perf_timings: Vec::new(),
             display_perf_unhandled: 0,
             window_backing_stores: BTreeMap::new(),
+            api_sets: BTreeMap::new(),
         };
         kernel.publish_configured_mount_device_interfaces(true);
         kernel
@@ -1158,6 +1175,121 @@ impl CeKernel {
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
         self.runtime_loader_stats
+    }
+
+    pub fn create_api_set(
+        &mut self,
+        name: [u8; 4],
+        methods: Vec<u32>,
+        signatures: Vec<u64>,
+    ) -> u32 {
+        self.handles.insert(KernelObject::ApiSet(ApiSetObject {
+            name,
+            methods,
+            signatures,
+            registered_id: None,
+        }))
+    }
+
+    pub fn register_api_set(&mut self, api_set_handle: u32, mut set_id: u32) -> u32 {
+        let handle_based = (set_id & CE_REGISTER_APISET_TYPE) != 0;
+        set_id &= !CE_REGISTER_APISET_TYPE;
+
+        let Ok(KernelObject::ApiSet(api_set)) = self.handles.get(api_set_handle) else {
+            return ERROR_INVALID_HANDLE;
+        };
+        if api_set.registered_id.is_some() {
+            return ERROR_INVALID_PARAMETER;
+        }
+
+        let limit = if handle_based {
+            CE_SH_FIRST_OS_API_SET
+        } else {
+            CE_NUM_API_SETS
+        };
+        if set_id == 0 {
+            let base = if handle_based {
+                CE_SH_FIRST_EXT_HAPI_SET
+            } else {
+                CE_SH_FIRST_EXT_API_SET
+            };
+            let Some(free_id) =
+                (base..limit).find(|candidate| !self.api_sets.contains_key(candidate))
+            else {
+                return ERROR_NO_PROC_SLOTS;
+            };
+            set_id = free_id;
+        }
+
+        let valid_slot = if handle_based {
+            set_id < CE_SH_FIRST_OS_API_SET
+        } else {
+            (CE_SH_FIRST_OS_API_SET..CE_NUM_API_SETS).contains(&set_id)
+        };
+        if !valid_slot {
+            return ERROR_NO_PROC_SLOTS;
+        }
+        if self.api_sets.contains_key(&set_id) {
+            return ERROR_INVALID_PARAMETER;
+        }
+
+        let Ok(KernelObject::ApiSet(api_set)) = self.handles.get_mut(api_set_handle) else {
+            return ERROR_INVALID_HANDLE;
+        };
+        api_set.registered_id = Some(set_id);
+        self.api_sets.insert(set_id, api_set_handle);
+        ERROR_SUCCESS
+    }
+
+    pub fn query_api_set_id(&self, name: [u8; 4]) -> Option<u32> {
+        self.api_sets.iter().find_map(|(set_id, handle)| {
+            matches!(
+                self.handles.get(*handle),
+                Ok(KernelObject::ApiSet(api_set)) if api_set.name == name
+            )
+            .then_some(*set_id)
+        })
+    }
+
+    pub fn wait_for_api_ready(&self, set_id: u32) -> u32 {
+        if set_id < CE_NUM_API_SETS {
+            WAIT_OBJECT_0
+        } else {
+            WAIT_FAILED
+        }
+    }
+
+    pub fn get_api_address(&self, set_id: u32, method: u32) -> u32 {
+        if self.wait_for_api_ready(set_id) != WAIT_OBJECT_0 || method > CE_METHOD_MASK {
+            return 0;
+        }
+        ce_implicit_call_address(set_id, method)
+    }
+
+    pub fn create_api_handle(&mut self, api_set_handle: u32, data: u32) -> Result<u32> {
+        if !matches!(self.handles.get(api_set_handle)?, KernelObject::ApiSet(_)) {
+            return Err(Error::InvalidHandle(api_set_handle));
+        }
+        Ok(self
+            .handles
+            .insert(KernelObject::ApiHandle(ApiHandleObject {
+                api_set_handle,
+                data,
+            })))
+    }
+
+    pub fn verify_api_handle(&self, api_set_handle: u32, handle: u32) -> Result<u32> {
+        if !matches!(self.handles.get(api_set_handle)?, KernelObject::ApiSet(_)) {
+            return Err(Error::InvalidHandle(api_set_handle));
+        }
+        let KernelObject::ApiHandle(api_handle) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        if api_handle.api_set_handle == api_set_handle {
+            Ok(api_handle.data)
+        } else {
+            Err(Error::InvalidHandle(handle))
+        }
     }
 
     pub fn register_file_system_notification_callback(&mut self, callback: u32) {
@@ -5814,6 +5946,11 @@ impl CeKernel {
                 self.handles.close(handle)?;
                 self.close_message_queue_endpoint(endpoint.queue_id, endpoint.read_access);
                 return Ok(true);
+            }
+            KernelObject::ApiSet(api_set) => {
+                if let Some(set_id) = api_set.registered_id {
+                    self.api_sets.remove(&set_id);
+                }
             }
             KernelObject::Event(event) if event.name.is_some() => {
                 self.record_event_trace(EventTraceRecord {
