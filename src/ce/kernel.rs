@@ -1994,6 +1994,7 @@ impl CeKernel {
         {
             module.load_flags &= !DONT_RESOLVE_DLL_REFERENCES_FLAG;
         }
+        module.load_flags |= requested_flags & !NO_IMPORT_LOAD_FLAGS;
         Some(module.base)
     }
 
