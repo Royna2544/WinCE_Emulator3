@@ -238,6 +238,11 @@ impl DeviceNamespace {
         })
     }
 
+    pub fn is_configured_device_name(&self, guest_name: &str) -> bool {
+        self.devices
+            .contains_key(&normalize_device_name(guest_name))
+    }
+
     pub fn default_baud(&self) -> u32 {
         self.defaults.baud
     }
@@ -803,6 +808,28 @@ mod tests {
         });
 
         assert_eq!(namespace.open("com7").unwrap().guest_name, "COM7:");
+    }
+
+    #[test]
+    fn configured_device_name_check_matches_open_normalization() {
+        let namespace = DeviceNamespace::from_config(DeviceConfigFile {
+            version: 1,
+            defaults: DeviceDefaults::default(),
+            devices: vec![DeviceConfig {
+                guest: "COM7:".to_owned(),
+                kind: DeviceKind::Serial,
+                backend: DeviceBackend::Stub,
+                host: None,
+                remote_gps: false,
+                enabled: true,
+                note: None,
+            }],
+        });
+
+        assert!(namespace.is_configured_device_name("com7"));
+        assert!(namespace.is_configured_device_name("COM7:"));
+        assert!(namespace.is_configured_device_name(r"\\.\COM7"));
+        assert!(!namespace.is_configured_device_name(r"\SDMMC Disk\INavi\res\resmapi_800x480.bin"));
     }
 
     #[test]

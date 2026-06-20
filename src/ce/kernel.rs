@@ -4782,7 +4782,8 @@ impl CeKernel {
         desired_access: u32,
         creation_disposition: u32,
     ) -> Result<u32> {
-        if let Ok(session) = self.devices.open(path) {
+        if self.devices.is_configured_device_name(path) {
+            let session = self.devices.open(path)?;
             let handle = self.handles.insert(KernelObject::Device(session));
             self.drain_remote_serial_to_handle(handle, usize::MAX);
             self.push_file_trace(FileTraceRecord {
