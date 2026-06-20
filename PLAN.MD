@@ -418,6 +418,12 @@ notes when it is still needed for implementation.
   RT_GROUP_ICON entries by choosing 32x32 and 16x16 resources instead of
   blindly extracting directory entries 0 and 1, while preserving CE's partial
   missing-resource behavior.
+- Runtime live-pump/iNavi route frontier: when the active process is parked
+  in a hidden `GetMessage` wait and a visible parked process has a ready wait
+  unblock, `rotate_after_run_slice_handoff` now resumes the ready parked
+  process before falling through to generic runnable-process rotation.
+  Coverage reproduces the hidden iSearch wait to visible iNavi handoff and
+  verifies process/thread/module state after rotation.
 
 ## Active Roadmap
 
@@ -456,6 +462,9 @@ notes when it is still needed for implementation.
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the
      map transition, route search, destination entry, and realistic navigation.
+   - Continue after the ready parked-wait live-pump handoff by tracing the next
+     app-level wait, event, or message transition blocking visible route UI
+     progress.
    - Trace the actual CE wait/event/message or app readiness transition that
      should hide, destroy, or demote the owned splash popup.
    - Keep runtime policy generic; do not add app-specific shortcuts.

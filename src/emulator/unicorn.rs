@@ -2163,6 +2163,13 @@ impl UnicornMips {
         let active_has_visible_queued_receiver =
             self.active_process_has_visible_queued_receiver_work(kernel);
         if live_pump
+            && !active_has_visible_queued_receiver
+            && self.has_ready_parked_wait_unblock(kernel)
+            && self.rotate_to_ready_parked_wait(kernel)
+        {
+            return;
+        }
+        if live_pump
             && !self.active_process_has_resumable_context()
             && self.rotate_to_any_runnable_parked_process(kernel)
         {
@@ -29551,6 +29558,124 @@ mod guest_thread_stack_tests {
                 .parked_child_processes
                 .iter()
                 .any(|process| process.process_state.process_id == 68)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn live_pump_handoff_resumes_ready_parked_wait_from_hidden_get_message() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+
+        let active_thread = 6;
+        let active_handle = 0x606;
+        scheduler.set_initial_thread_id(active_thread);
+        scheduler.current_thread_id = active_thread;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0004_08bc,
+            regs: MipsGuestContext::zero(),
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 68,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0004_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iSearch.exe",
+        ));
+        let active_wait_id = kernel.register_blocked_waiter(
+            active_thread,
+            active_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        scheduler.blocked_guest_thread = Some(BlockedGuestThread {
+            wait_id: active_wait_id,
+            thread_id: active_thread,
+            thread_handle: active_handle,
+            regs: MipsGuestContext::zero(),
+            import_pc: 0,
+            return_pc: 0x0004_2000,
+            msg_ptr: 0x3000_0100,
+            hwnd: None,
+            min_msg: 0,
+            max_msg: 0,
+        });
+
+        let parked_thread = 8;
+        let parked_handle = 0x808;
+        let wait_started_ms = kernel.timers.tick_count().wrapping_sub(200);
+        let parked_wait_id = kernel.register_blocked_waiter(
+            parked_thread,
+            parked_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep,
+            wait_started_ms,
+            100,
+        );
+        let mut parked_cpu = UnicornMips::new()?;
+        parked_cpu.set_initial_thread_id(parked_thread);
+        parked_cpu.current_thread_id = parked_thread;
+        parked_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            wait_id: parked_wait_id,
+            thread_id: parked_thread,
+            thread_handle: parked_handle,
+            wait_handles: Vec::new(),
+            kind: BlockedWaitKind::Sleep,
+            wait_started_ms,
+            timeout_ms: 100,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0031_cd80,
+        });
+        let parked_hwnd = kernel.create_window_ex_w(
+            parked_thread,
+            "visible_ui",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert!(kernel.gwe.is_window(parked_hwnd));
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: parked_thread,
+            cpu: Box::new(parked_cpu),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        assert!(scheduler.has_ready_parked_wait_unblock(&kernel));
+        assert!(!scheduler.active_process_has_visible_queued_receiver_work(&kernel));
+
+        scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
+
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(scheduler.current_thread_id, parked_thread);
+        assert_eq!(
+            kernel.process_module_path(),
+            "\\SDMMC Disk\\INavi\\iNavi.exe"
         );
 
         Ok(())
