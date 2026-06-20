@@ -28,6 +28,14 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\COMMON\DDK\INC\devload.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\windev.h`,
+  `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\CTLPNL\CPLMAIN\system.cpp`, and
+  `C:\WINCE600\PRIVATE\TEST\STRESS\STRESS\MODULES\NET\BTIR\CLIENT\btirclient.cpp`:
+  raw `EnumPnpIds`/`EnumDevices` now follow CE's double-null wide list and
+  byte-sized buffer contract instead of reporting unsupported. Coverage
+  verifies size queries, `ERROR_MORE_DATA`, null length-pointer rejection,
+  empty PNP lists, and configured enabled device enumeration.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\keybd.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\KEYBD\LAYMGR\laymgr.cpp`,
   `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\CTLPNL\CPLMAIN\keybd.cpp`, and

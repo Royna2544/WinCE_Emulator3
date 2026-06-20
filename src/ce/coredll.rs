@@ -3051,12 +3051,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_ENUM_PNP_IDS | ORD_ENUM_DEVICES => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_ENUM_PNP_IDS => Some(CoredllValue::U32(enum_pnp_ids_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_ENUM_DEVICES => Some(CoredllValue::U32(enum_devices_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_DEVICE_KEYS => {
             kernel
                 .threads
@@ -53749,6 +53749,93 @@ fn nled_get_device_info_raw<M: CoredllGuestMemory>(
         .threads
         .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_PARAMETER });
     ok
+}
+
+fn enum_pnp_ids_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    enum_wide_multi_sz_raw(kernel, memory, thread_id, args, &[])
+}
+
+fn enum_devices_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let names = kernel.devices.enabled_names();
+    enum_wide_multi_sz_raw(kernel, memory, thread_id, args, &names)
+}
+
+fn enum_wide_multi_sz_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+    entries: &[String],
+) -> u32 {
+    let list_ptr = raw_arg(args, 0);
+    let bytes_ptr = raw_arg(args, 1);
+    if bytes_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    let supplied_bytes = match memory.read_u32(bytes_ptr) {
+        Ok(value) => value,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return ERROR_INVALID_PARAMETER;
+        }
+    };
+    let units = wide_multi_sz_units(entries);
+    let required_bytes = units.len().saturating_mul(2).min(u32::MAX as usize) as u32;
+    if !write_guest_u32(kernel, memory, thread_id, bytes_ptr, required_bytes) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    if list_ptr == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    if supplied_bytes < required_bytes {
+        kernel.threads.set_last_error(thread_id, ERROR_MORE_DATA);
+        return ERROR_MORE_DATA;
+    }
+
+    for (index, unit) in units.into_iter().enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            list_ptr.wrapping_add((index as u32) * 2),
+            unit,
+        ) {
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+
+    kernel.threads.set_last_error(thread_id, 0);
+    0
+}
+
+fn wide_multi_sz_units(entries: &[String]) -> Vec<u16> {
+    let mut units = Vec::new();
+    for entry in entries {
+        units.extend(entry.encode_utf16());
+        units.push(0);
+    }
+    units.push(0);
+    if entries.is_empty() {
+        units.push(0);
+    }
+    units
 }
 
 fn nled_set_device_raw<M: CoredllGuestMemory>(

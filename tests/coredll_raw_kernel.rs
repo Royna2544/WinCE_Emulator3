@@ -13,12 +13,12 @@ use wince_emulation_v3::{
             ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON,
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
             ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
-            ORD_ENUM_DEVICE_INTERFACES, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W,
-            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX,
-            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
-            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
-            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
+            ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
+            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
+            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
+            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
             ORD_GET_FILE_VERSION_INFO_W, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
@@ -81,7 +81,9 @@ use wince_emulation_v3::{
         },
         memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
-        registry::{ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, RegistryValue},
+        registry::{
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, RegistryValue,
+        },
         resource::ResourceId,
         scheduler::SchedulerBlockedWaitKind,
         shell::{
@@ -104,6 +106,178 @@ use wince_emulation_v3::{
 
 mod support;
 use support::{TestGuestMemory, unique_test_root};
+
+#[test]
+fn coredll_raw_device_enumerators_return_ce_multisz_lists() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.devices = DeviceConfigFile {
+        version: 1,
+        defaults: DeviceDefaults::default(),
+        devices: vec![
+            DeviceConfig {
+                guest: "COM7:".to_owned(),
+                kind: DeviceKind::Serial,
+                backend: DeviceBackend::Stub,
+                host: None,
+                remote_gps: false,
+                enabled: true,
+                note: None,
+            },
+            DeviceConfig {
+                guest: "ACC1:".to_owned(),
+                kind: DeviceKind::IoctlDevice,
+                backend: DeviceBackend::Accelerometer,
+                host: None,
+                remote_gps: false,
+                enabled: false,
+                note: None,
+            },
+            DeviceConfig {
+                guest: "I2C1:".to_owned(),
+                kind: DeviceKind::IoctlDevice,
+                backend: DeviceBackend::I2cBus,
+                host: None,
+                remote_gps: false,
+                enabled: true,
+                note: None,
+            },
+        ],
+    };
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let size_ptr = 0x2100;
+    let list_ptr = 0x2200;
+    memory.map_words(size_ptr, 1);
+    memory.map_halfwords(list_ptr, 32);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_PNP_IDS,
+            [0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(size_ptr, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_PNP_IDS,
+            [0, size_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(size_ptr)?, 4);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_word(size_ptr, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_PNP_IDS,
+            [list_ptr, size_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_MORE_DATA),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(size_ptr)?, 4);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_MORE_DATA);
+
+    memory.write_word(size_ptr, 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_PNP_IDS,
+            [list_ptr, size_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(size_ptr)?, 4);
+    assert_eq!(memory.read_u16(list_ptr)?, 0);
+    assert_eq!(memory.read_u16(list_ptr + 2)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_word(size_ptr, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_DEVICES,
+            [0, size_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    let device_list_bytes = memory.read_u32(size_ptr)?;
+    assert_eq!(device_list_bytes, 26);
+
+    memory.write_word(size_ptr, device_list_bytes - 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_DEVICES,
+            [list_ptr, size_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_MORE_DATA),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(size_ptr)?, device_list_bytes);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_MORE_DATA);
+
+    memory.write_word(size_ptr, device_list_bytes);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_DEVICES,
+            [list_ptr, size_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(list_ptr, 16), "COM7:");
+    assert_eq!(memory.read_wide_z(list_ptr + 12, 16), "I2C1:");
+    assert_eq!(memory.read_u16(list_ptr + 24)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    Ok(())
+}
 
 #[test]
 fn coredll_raw_keybd_get_device_info_reports_ce_defaults() -> Result<()> {
