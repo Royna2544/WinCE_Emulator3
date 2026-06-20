@@ -362,6 +362,14 @@ fn run_cpu_loop(
             continue;
         }
         if args.remote_server.is_some()
+            && !cpu.active_process_has_visible_receiver_work(kernel)
+            && cpu.rotate_to_visible_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if args.remote_server.is_some()
             && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
         {
             reported_blocked_message_wait = false;
@@ -544,6 +552,7 @@ fn run_cpu_loop(
                 cpu.active_process_has_receiver_work(kernel),
                 cpu.active_process_has_visible_receiver_work(kernel),
             )
+            && !cpu.active_process_has_visible_windows(kernel)
             && cpu.rotate_to_receiver_parked_process_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
@@ -786,6 +795,7 @@ fn run_cpu_loop(
             continue;
         }
         if !cpu.active_process_has_visible_receiver_work(kernel)
+            && !cpu.active_process_has_visible_windows(kernel)
             && cpu.rotate_to_receiver_parked_process_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
