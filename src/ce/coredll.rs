@@ -3003,6 +3003,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_GET_COMM_PROPERTIES => Some(CoredllValue::Bool(get_comm_properties_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_SETUP_COMM | ORD_CLEAR_COMM_BREAK | ORD_SET_COMM_BREAK | ORD_ESCAPE_COMM_FUNCTION => {
             Some(CoredllValue::Bool(comm_handle_raw(
                 kernel,
@@ -4636,13 +4643,6 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
-        }
-        ORD_GET_COMM_PROPERTIES => {
-            // GetCommProperties(hFile, lpCommProp) — serial port properties; not supported.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
         }
         ORD_READ_REGISTRY_FROM_OEM => {
             // ReadRegistryFromOEM() — load OEM registry; no-op in emulator.
@@ -12049,6 +12049,173 @@ fn get_comm_timeouts_raw<M: CoredllGuestMemory>(
         true,
         20,
         Some(format_comm_timeouts_detail(&timeouts)),
+        None,
+    );
+    true
+}
+
+fn get_comm_properties_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    comm_prop_ptr: u32,
+) -> bool {
+    const COMMPROP_SIZE: usize = 64;
+    const SP_SERIALCOMM: u32 = 0x0000_0001;
+    const PST_RS232: u32 = 0x0000_0001;
+    const PCF_DTRDSR: u32 = 0x0001;
+    const PCF_RTSCTS: u32 = 0x0002;
+    const PCF_RLSD: u32 = 0x0004;
+    const PCF_PARITY_CHECK: u32 = 0x0008;
+    const PCF_XONXOFF: u32 = 0x0010;
+    const PCF_SETXCHAR: u32 = 0x0020;
+    const PCF_TOTALTIMEOUTS: u32 = 0x0040;
+    const PCF_INTTIMEOUTS: u32 = 0x0080;
+    const PCF_SPECIALCHARS: u32 = 0x0100;
+    const SP_PARITY: u32 = 0x0001;
+    const SP_BAUD: u32 = 0x0002;
+    const SP_DATABITS: u32 = 0x0004;
+    const SP_STOPBITS: u32 = 0x0008;
+    const SP_HANDSHAKING: u32 = 0x0010;
+    const SP_PARITY_CHECK: u32 = 0x0020;
+    const SP_RLSD: u32 = 0x0040;
+    const BAUD_075: u32 = 0x0000_0001;
+    const BAUD_110: u32 = 0x0000_0002;
+    const BAUD_150: u32 = 0x0000_0008;
+    const BAUD_300: u32 = 0x0000_0010;
+    const BAUD_600: u32 = 0x0000_0020;
+    const BAUD_1200: u32 = 0x0000_0040;
+    const BAUD_1800: u32 = 0x0000_0080;
+    const BAUD_2400: u32 = 0x0000_0100;
+    const BAUD_4800: u32 = 0x0000_0200;
+    const BAUD_7200: u32 = 0x0000_0400;
+    const BAUD_9600: u32 = 0x0000_0800;
+    const BAUD_14400: u32 = 0x0000_1000;
+    const BAUD_19200: u32 = 0x0000_2000;
+    const BAUD_38400: u32 = 0x0000_4000;
+    const BAUD_56K: u32 = 0x0000_8000;
+    const BAUD_128K: u32 = 0x0001_0000;
+    const BAUD_115200: u32 = 0x0002_0000;
+    const BAUD_57600: u32 = 0x0004_0000;
+    const BAUD_USER: u32 = 0x1000_0000;
+    const DATABITS_5: u16 = 0x0001;
+    const DATABITS_6: u16 = 0x0002;
+    const DATABITS_7: u16 = 0x0004;
+    const DATABITS_8: u16 = 0x0008;
+    const STOPBITS_10: u16 = 0x0001;
+    const STOPBITS_20: u16 = 0x0004;
+    const PARITY_NONE: u16 = 0x0100;
+    const PARITY_ODD: u16 = 0x0200;
+    const PARITY_EVEN: u16 = 0x0400;
+    const PARITY_MARK: u16 = 0x0800;
+    const PARITY_SPACE: u16 = 0x1000;
+
+    if comm_prop_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if kernel.get_comm_dcb(handle).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+
+    let mut bytes = [0u8; COMMPROP_SIZE];
+    let put_u16 = |bytes: &mut [u8; COMMPROP_SIZE], offset: usize, value: u16| {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    };
+    let put_u32 = |bytes: &mut [u8; COMMPROP_SIZE], offset: usize, value: u32| {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    };
+
+    put_u16(&mut bytes, 0, 0xffff);
+    put_u16(&mut bytes, 2, 0xffff);
+    put_u32(&mut bytes, 4, SP_SERIALCOMM);
+    put_u32(&mut bytes, 12, 16);
+    put_u32(&mut bytes, 16, 16);
+    put_u32(&mut bytes, 20, BAUD_115200);
+    put_u32(&mut bytes, 24, PST_RS232);
+    put_u32(
+        &mut bytes,
+        28,
+        PCF_DTRDSR
+            | PCF_RLSD
+            | PCF_RTSCTS
+            | PCF_SETXCHAR
+            | PCF_INTTIMEOUTS
+            | PCF_PARITY_CHECK
+            | PCF_SPECIALCHARS
+            | PCF_TOTALTIMEOUTS
+            | PCF_XONXOFF,
+    );
+    put_u32(
+        &mut bytes,
+        32,
+        SP_BAUD
+            | SP_DATABITS
+            | SP_HANDSHAKING
+            | SP_PARITY
+            | SP_PARITY_CHECK
+            | SP_RLSD
+            | SP_STOPBITS,
+    );
+    put_u32(
+        &mut bytes,
+        36,
+        BAUD_075
+            | BAUD_110
+            | BAUD_150
+            | BAUD_300
+            | BAUD_600
+            | BAUD_1200
+            | BAUD_1800
+            | BAUD_2400
+            | BAUD_4800
+            | BAUD_7200
+            | BAUD_9600
+            | BAUD_14400
+            | BAUD_19200
+            | BAUD_38400
+            | BAUD_56K
+            | BAUD_128K
+            | BAUD_115200
+            | BAUD_57600
+            | BAUD_USER,
+    );
+    put_u16(
+        &mut bytes,
+        40,
+        DATABITS_5 | DATABITS_6 | DATABITS_7 | DATABITS_8,
+    );
+    put_u16(
+        &mut bytes,
+        42,
+        STOPBITS_10
+            | STOPBITS_20
+            | PARITY_NONE
+            | PARITY_ODD
+            | PARITY_EVEN
+            | PARITY_SPACE
+            | PARITY_MARK,
+    );
+
+    if !write_guest_bytes(kernel, memory, thread_id, comm_prop_ptr, &bytes) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_comm_trace(
+        "GetCommProperties",
+        handle,
+        0,
+        None,
+        COMMPROP_SIZE as u32,
+        true,
+        COMMPROP_SIZE as u32,
+        Some("serial COMMPROP".to_owned()),
         None,
     );
     true

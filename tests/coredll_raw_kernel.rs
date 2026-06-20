@@ -18,10 +18,11 @@ use wince_emulation_v3::{
             ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
             ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
             ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
-            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC,
-            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
-            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
+            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
+            ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_ICON_INFO,
+            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
+            ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
@@ -21459,6 +21460,7 @@ fn coredll_raw_comm_state_mask_wait_and_purge_are_stateful() -> Result<()> {
     const MS_RLSD_ON: u32 = 0x0080;
     const PURGE_TXCLEAR: u32 = 0x0004;
     const PURGE_RXCLEAR: u32 = 0x0008;
+    const COMMPROP_SIZE: u32 = 64;
 
     let table = CoredllExportTable::default();
     let mut config = RuntimeConfig::load_default()?;
@@ -21519,6 +21521,84 @@ fn coredll_raw_comm_state_mask_wait_and_purge_are_stateful() -> Result<()> {
         }
     ));
     assert_eq!(memory.read_bytes(dcb_ptr, CommDcb::SIZE), dcb);
+
+    let comm_prop_ptr = 0x3100_1100;
+    memory.map_bytes(comm_prop_ptr, COMMPROP_SIZE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_COMM_PROPERTIES,
+            [com, 0]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_COMM_PROPERTIES,
+            [0xdead_beef, comm_prop_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_COMM_PROPERTIES,
+            [com, comm_prop_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    let comm_prop = memory.read_bytes(comm_prop_ptr, COMMPROP_SIZE as usize);
+    let prop_u16 = |offset: usize| u16::from_le_bytes([comm_prop[offset], comm_prop[offset + 1]]);
+    let prop_u32 = |offset: usize| {
+        u32::from_le_bytes([
+            comm_prop[offset],
+            comm_prop[offset + 1],
+            comm_prop[offset + 2],
+            comm_prop[offset + 3],
+        ])
+    };
+    assert_eq!(prop_u16(0), 0xffff);
+    assert_eq!(prop_u16(2), 0xffff);
+    assert_eq!(prop_u32(4), 0x0000_0001);
+    assert_eq!(prop_u32(12), 16);
+    assert_eq!(prop_u32(16), 16);
+    assert_eq!(prop_u32(20), 0x0002_0000);
+    assert_eq!(prop_u32(24), 0x0000_0001);
+    assert_eq!(prop_u32(28), 0x0000_01ff);
+    assert_eq!(prop_u32(32), 0x0000_007f);
+    assert_eq!(prop_u32(36), 0x1007_fffb);
+    assert_eq!(prop_u16(40), 0x000f);
+    assert_eq!(prop_u16(42), 0x1f05);
+    assert_eq!(prop_u32(44), 0);
+    assert_eq!(prop_u32(48), 0);
+    assert_eq!(prop_u32(52), 0);
+    assert_eq!(prop_u32(56), 0);
+    assert_eq!(prop_u16(60), 0);
 
     let mask_ptr = 0x3100_2000;
     memory.map_words(mask_ptr, 1);

@@ -28,6 +28,15 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\SERIAL\SER_CARD\ser_card.c`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COMM\TAPI\UNIMODEM\config.c`:
+  raw `GetCommProperties` now returns CE-style serial `COMMPROP` data instead
+  of reporting unsupported. Coverage verifies serial-handle validation, null
+  output rejection, packet metadata, RS-232 provider identity, queue sizes,
+  provider capability masks, settable baud/data/stop/parity masks, and empty
+  current queue/provider-specific fields.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winreg.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\PM\MDD\pmsysreg.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\PM\PDD\PDA\pwstates.h`:
