@@ -161,6 +161,7 @@ const FSCTL_SET_SIMULATION_MODE: u32 = 0x0009_0088;
 const FSCTL_SET_FILE_CACHE: u32 = 0x0009_0090;
 const FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR: u32 = 0x0009_00a8;
 const FSCTL_STORAGE_MEDIA_CHANGE_EVENT: u32 = 0x0009_00ac;
+const CE_FILE_FLAG_TRANS_DATA: u32 = 0x0000_0001;
 const IOCTL_FILE_WRITE_GATHER: u32 = 0x0009_0044;
 const IOCTL_FILE_READ_SCATTER: u32 = 0x0009_0048;
 const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
@@ -25857,20 +25858,24 @@ fn file_handle_set_extended_flags_raw<M: CoredllGuestMemory>(
         write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
         return false;
     }
-    if memory.read_u32(flags_ptr).is_err() {
+    let Ok(flags) = memory.read_u32(flags_ptr) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
         return false;
-    }
+    };
     if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
         return false;
     }
-    kernel
-        .threads
-        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-    false
+    if flags & CE_FILE_FLAG_TRANS_DATA != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn file_handle_set_encryption_raw<M: CoredllGuestMemory>(

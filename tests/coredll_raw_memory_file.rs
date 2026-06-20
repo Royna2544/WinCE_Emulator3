@@ -8037,6 +8037,7 @@ fn coredll_raw_file_handle_optional_attribute_fsctls_validate_before_unsupported
     const FSCTL_SET_EXTENDED_FLAGS: u32 = 0x0009_0034;
     const FSCTL_SET_ENCRYPTION: u32 = 0x0009_00d7;
     const FSCTL_SET_SPARSE: u32 = 0x0009_00c4;
+    const CE_FILE_FLAG_TRANS_DATA: u32 = 1;
     const FILE_SET_ENCRYPTION: u32 = 1;
     const ERROR_INVALID_HANDLE: u32 = 6;
     const ERROR_INVALID_PARAMETER: u32 = 87;
@@ -8080,6 +8081,33 @@ fn coredll_raw_file_handle_optional_attribute_fsctls_validate_before_unsupported
     };
 
     memory.write_word(packet_ptr, 0);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_SET_EXTENDED_FLAGS,
+                packet_ptr,
+                4,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(packet_ptr, CE_FILE_FLAG_TRANS_DATA);
     memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

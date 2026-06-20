@@ -940,6 +940,12 @@ notes when it is still needed for implementation.
   the 4-byte `FILE_CACHE_INFO` size before evaluating the info level and
   rejecting oversized packets as invalid.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\FSD\CACHEFILT\fssharedfilemap_cached.cpp`:
+  file-handle `DeviceIoControl(FSCTL_SET_EXTENDED_FLAGS)` now preserves CE's
+  cache-filter handling for host-backed files: valid non-transaction flags
+  succeed as a zero-byte no-op, while `CE_FILE_FLAG_TRANS_DATA` remains
+  unsupported after the packet has been validated.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`: volume
   `CeFsIoControlW(FSCTL_SET_SIMULATION_MODE)` now recognizes CE's
   `FS_SIMULATION_MODE_INFO` packet before the host-backed FSD fallback,
