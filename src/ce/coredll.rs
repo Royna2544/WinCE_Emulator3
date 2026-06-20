@@ -183,6 +183,7 @@ const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
 const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
 const IOCTL_DISK_READ_CDROM: u32 = 0x0007_1c44;
 const IOCTL_DISK_WRITE_CDROM: u32 = 0x0007_1c48;
+const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
 const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
 const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
 const IOCTL_DISK_COPY_EXTERNAL_START: u32 = 0x0007_1c58;
@@ -206,6 +207,7 @@ const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
 const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+const DELETE_SECTOR_INFO_SIZE: u32 = 12;
 const FMD_INTERFACE_SIZE: u32 = 56;
 const FMD_FLASH_REGION_SIZE: u32 = 28;
 const FMD_RESERVED_ENTRY_SIZE: u32 = 16;
@@ -226,6 +228,7 @@ const BLOCK_STATUS_XIP: u32 = 0x10;
 const ERROR_GEN_FAILURE: u32 = 31;
 const ERROR_BAD_ARGUMENTS: u32 = 160;
 const ERROR_DEVICE_REMOVED: u32 = 1617;
+const ERROR_INVALID_BLOCK: u32 = 9;
 const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
 const CE_VOLUME_INFO_LEVEL_STANDARD: u32 = 0;
 const CE_VOLUME_INFO_SIZE: u32 = 144;
@@ -24388,6 +24391,7 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_DELETE_CLUSTER
             | IOCTL_DISK_READ_CDROM
             | IOCTL_DISK_WRITE_CDROM
+            | IOCTL_DISK_DELETE_SECTORS
     );
     if !handled {
         return None;
@@ -24490,6 +24494,16 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             input_ptr,
             input_len,
             returned_ptr,
+        ),
+        IOCTL_DISK_DELETE_SECTORS => disk_delete_sectors_raw(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr,
+            input_len,
+            returned_ptr,
+            info.total_bytes,
+            info.writable,
         ),
         IOCTL_DISK_SET_STANDBY_TIMER
         | IOCTL_DISK_STANDBY_NOW
@@ -24622,6 +24636,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_DELETE_CLUSTER
             | IOCTL_DISK_READ_CDROM
             | IOCTL_DISK_WRITE_CDROM
+            | IOCTL_DISK_DELETE_SECTORS
     );
     if !handled {
         return None;
@@ -24737,6 +24752,16 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
                 returned_ptr,
             )
         }
+        IOCTL_DISK_DELETE_SECTORS => disk_delete_sectors_raw(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr,
+            input_len,
+            returned_ptr,
+            info.total_bytes,
+            info.writable,
+        ),
         IOCTL_DISK_GETPMTIMINGS => disk_get_power_timings_raw(
             kernel,
             memory,
@@ -24903,6 +24928,70 @@ fn partition_disk_copy_external_raw<M: CoredllGuestMemory>(
         .threads
         .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
     false
+}
+
+fn disk_delete_sectors_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    delete_info_ptr: u32,
+    delete_info_bytes: u32,
+    returned_ptr: u32,
+    total_bytes: u64,
+    writable: bool,
+) -> bool {
+    if delete_info_ptr == 0 || delete_info_bytes != DELETE_SECTOR_INFO_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(cb_size) = memory.read_u32(delete_info_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(start_sector) = memory.read_u32(delete_info_ptr.wrapping_add(4)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(sector_count) = memory.read_u32(delete_info_ptr.wrapping_add(8)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if cb_size != DELETE_SECTOR_INFO_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let total_sectors = (total_bytes / u64::from(STORE_SECTOR_SIZE)).min(u64::from(u32::MAX));
+    let start = u64::from(start_sector);
+    let Some(end) = start.checked_add(u64::from(sector_count)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_BLOCK);
+        return false;
+    };
+    if start >= total_sectors || end > total_sectors {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_BLOCK);
+        return false;
+    }
+    if !writable {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+        return false;
+    }
+    disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
 }
 
 fn disk_zero_byte_success_raw<M: CoredllGuestMemory>(

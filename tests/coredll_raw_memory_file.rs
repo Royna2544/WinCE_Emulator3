@@ -3820,12 +3820,14 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
     const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
     const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
+    const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
     const IOCTL_DISK_STANDBY_NOW: u32 = 0x0007_1c1c;
     const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
     const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
     const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
     const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
     const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+    const DELETE_SECTOR_INFO_SIZE: u32 = 12;
     const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
     const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
     const STORE_ATTRIBUTE_AUTOMOUNT: u32 = 0x0000_0020;
@@ -3838,6 +3840,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const STORAGE_DEVICE_FLAG_READWRITE: u32 = 1 << 0;
     const STORAGE_DEVICE_FLAG_READONLY: u32 = 1 << 1;
     const ERROR_GEN_FAILURE: u32 = 31;
+    const ERROR_INVALID_BLOCK: u32 = 9;
     const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
     const ERROR_BAD_ARGUMENTS: u32 = 160;
     const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
@@ -3901,6 +3904,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     let sector_list_ptr = 0x3028_0000;
     let sector_addr_ptr = 0x3029_0000;
     let copy_external_ptr = 0x302a_0000;
+    let delete_sector_ptr = 0x302a_1000;
     let sg_write_ptr = 0x302b_0000;
     let sg_read_ptr = 0x302b_0100;
     let disk_write_ptr = 0x302b_1000;
@@ -3920,6 +3924,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     memory.map_bytes(sector_list_ptr, 8);
     memory.map_bytes(sector_addr_ptr, 8);
     memory.map_bytes(copy_external_ptr, DISK_COPY_EXTERNAL_SIZE + 8);
+    memory.map_bytes(delete_sector_ptr, DELETE_SECTOR_INFO_SIZE);
     memory.map_bytes(sg_write_ptr, 28);
     memory.map_bytes(sg_read_ptr, 36);
     memory.map_bytes(disk_write_ptr, 512);
@@ -4192,6 +4197,65 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(delete_sector_ptr, DELETE_SECTOR_INFO_SIZE);
+    memory.write_word(delete_sector_ptr + 4, 4);
+    memory.write_word(delete_sector_ptr + 8, 8);
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_DELETE_SECTORS,
+                delete_sector_ptr,
+                DELETE_SECTOR_INFO_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(delete_sector_ptr, DELETE_SECTOR_INFO_SIZE - 4);
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_DELETE_SECTORS,
+                delete_sector_ptr,
+                DELETE_SECTOR_INFO_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_face);
 
     memory.write_word(bytes_returned_ptr, 0xfeed_face);
     assert!(matches!(
@@ -5140,6 +5204,66 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(delete_sector_ptr, DELETE_SECTOR_INFO_SIZE);
+    memory.write_word(delete_sector_ptr + 4, 2);
+    memory.write_word(delete_sector_ptr + 8, 3);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_DISK_DELETE_SECTORS,
+                delete_sector_ptr,
+                DELETE_SECTOR_INFO_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(delete_sector_ptr + 4, 0xffff_fffe);
+    memory.write_word(delete_sector_ptr + 8, 4);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_DISK_DELETE_SECTORS,
+                delete_sector_ptr,
+                DELETE_SECTOR_INFO_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_BLOCK
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_babe);
 
     memory.write_word(sector_list_ptr, 7);
     memory.write_word(sector_list_ptr + 4, 9);

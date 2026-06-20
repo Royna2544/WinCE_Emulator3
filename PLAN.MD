@@ -150,6 +150,14 @@ notes when it is still needed for implementation.
   and self-process rejection, duplicate attach `ERROR_ACCESS_DENIED`, debugger
   presence queries through duplicate handles, same-thread detach, and
   wrong-thread/repeated detach rejection.
+- `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\DOSPART\part.cpp`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\DISKCACHE\cache.cpp`: store and
+  partition handles now consume `IOCTL_DISK_DELETE_SECTORS`
+  `DELETE_SECTOR_INFO` packets instead of falling through as unsupported.
+  Coverage verifies CE packet-size validation, host-backed zero-byte success,
+  and out-of-range partition requests returning `ERROR_INVALID_BLOCK` without
+  touching the caller byte count.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c` and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: raw `CreateThread` now
   mirrors CE's `NKCreateThread` parameter gate by rejecting null start
