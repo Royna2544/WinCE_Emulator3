@@ -143,6 +143,10 @@ notes when it is still needed for implementation.
   `ScrollDCScrollTest` update geometry is now covered for raw `ScrollDC`:
   exposed edge rectangles are reported for one-axis scrolls, and
   `hrgnUpdate` is updated to the same simple region box.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`:
+  `SimpleScrollDCTest` pixel movement is now represented for raw
+  framebuffer-backed `ScrollDC`: one-axis scrolls move screen pixels in CE's
+  sign convention and clear the newly exposed edge.
 
 ## Active Roadmap
 

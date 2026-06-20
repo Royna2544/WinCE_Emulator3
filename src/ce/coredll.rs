@@ -5805,7 +5805,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             args,
         ) as u32)),
         ORD_SCROLL_DC => Some(CoredllValue::Bool(scroll_dc_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_GET_DC => Some(CoredllValue::Handle(get_dc_raw(kernel, raw_arg(args, 0)))),
         ORD_GET_WINDOW_DC => Some(CoredllValue::Handle(get_dc_raw(kernel, raw_arg(args, 0)))),
@@ -40614,6 +40618,7 @@ fn set_scroll_range_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> 
 fn scroll_dc_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
@@ -40657,6 +40662,18 @@ fn scroll_dc_raw<M: CoredllGuestMemory>(
         };
     }
     let exposed = scroll_dc_exposed_rect(effective, dx, dy);
+
+    if let Some(framebuffer) = framebuffer
+        && !effective.is_empty()
+        && (dx != 0 || dy != 0)
+        && let Some(hwnd) = hdc_to_hwnd(hdc)
+    {
+        let origin = kernel
+            .gwe
+            .client_to_screen(hwnd, Point { x: 0, y: 0 })
+            .unwrap_or(Point { x: 0, y: 0 });
+        scroll_framebuffer_rect(framebuffer, effective.offset(origin.x, origin.y), dx, dy);
+    }
 
     if update_ptr != 0 {
         let _ = write_guest_rect(kernel, memory, thread_id, update_ptr, exposed);

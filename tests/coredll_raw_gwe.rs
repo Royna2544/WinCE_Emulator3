@@ -58496,6 +58496,87 @@ fn coredll_raw_scroll_dc_sets_update_rect_and_region_like_ce() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_scroll_dc_moves_framebuffer_pixels_like_ce() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 5;
+    let mut framebuffer = VirtualFramebuffer::new(4, 2, PixelFormat::Rgb565)?;
+
+    let write_fb = |framebuffer: &mut VirtualFramebuffer, x: usize, y: usize, raw: u16| {
+        let offset = y * framebuffer.stride() + x * PixelFormat::Rgb565.bytes_per_pixel();
+        framebuffer.pixels_mut()[offset..offset + 2].copy_from_slice(&raw.to_le_bytes());
+    };
+    for (x, raw) in [0xf800, 0x07e0, 0x001f, 0xffff].into_iter().enumerate() {
+        write_fb(&mut framebuffer, x, 0, raw);
+    }
+    for (x, raw) in [0x07ff, 0xf81f, 0xffe0, 0x8410].into_iter().enumerate() {
+        write_fb(&mut framebuffer, x, 1, raw);
+    }
+
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0u32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("GetDC failed: {other:?}"),
+    };
+
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp::SimpleScrollDCTest:
+    // positive dx moves pixels right and exposes the left edge.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_SCROLL_DC,
+            [hdc, 1, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 0), 0x0000);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 0), 0xf800);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 0), 0x07e0);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 3, 0), 0x001f);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 0, 1), 0x0000);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 1), 0x07ff);
+
+    // Positive dy moves pixels down and exposes the top edge.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_SCROLL_DC,
+            [hdc, 0, 1, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    for x in 0..4 {
+        assert_eq!(framebuffer_rgb565_at(&framebuffer, x, 0), 0x0000);
+    }
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 1, 1), 0xf800);
+    assert_eq!(framebuffer_rgb565_at(&framebuffer, 2, 1), 0x07e0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_adjust_window_rect_ex_expands_by_nonclient_area() -> Result<()> {
     // CE AdjustWindowRectEx expands a client rect to include the NC area.
     // WS_CAPTION = WS_BORDER|WS_DLGFRAME → 3px border + 24px caption at top.
