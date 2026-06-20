@@ -1453,7 +1453,8 @@ fn blocked_remote_input_target(
         .last_debug_snapshot()
         .and_then(|snapshot| snapshot.blocked_get_message.clone())
         .filter(|blocked| {
-            remote_input_wait_target_is_visible(kernel, blocked.thread_id, blocked.hwnd)
+            blocked.hwnd.is_some()
+                && remote_input_wait_target_is_visible(kernel, blocked.thread_id, blocked.hwnd)
         })
     {
         return Some(BlockedRemoteInputTarget {
@@ -1494,10 +1495,11 @@ fn saved_message_remote_input_target(kernel: &CeKernel) -> Option<BlockedRemoteI
                 let SchedulerBlockedWaitKind::GetMessage { hwnd, .. } = wait.kind else {
                     unreachable!();
                 };
-                remote_input_wait_target_is_visible(kernel, wait.thread_id, hwnd).then_some(
+                let hwnd = hwnd?;
+                remote_input_wait_target_is_visible(kernel, wait.thread_id, Some(hwnd)).then_some(
                     BlockedRemoteInputTarget {
                         thread_id: wait.thread_id,
-                        hwnd,
+                        hwnd: Some(hwnd),
                     },
                 )
             })
@@ -1544,19 +1546,7 @@ fn service_remote_endpoint(
         kernel,
         Some(desktop.framebuffer_mut()),
     );
-    let mut remote_target = blocked_get_message.cloned();
-    if remote_target.is_none()
-        && !cpu.active_process_has_visible_receiver_work(kernel)
-        && cpu.rotate_to_receiver_parked_process_with_framebuffer(
-            kernel,
-            Some(desktop.framebuffer_mut()),
-        )
-    {
-        remote_target = Some(BlockedRemoteInputTarget {
-            thread_id: cpu.current_thread_id(),
-            hwnd: None,
-        });
-    }
+    let remote_target = blocked_get_message.cloned();
     let drained = if let Some(blocked) = remote_target.as_ref() {
         kernel.drain_remote_server_control_messages_to_thread_window_with_targets(
             blocked.thread_id,
@@ -4265,6 +4255,30 @@ mod tests {
                 hwnd: Some(hwnd),
             })
         );
+    }
+
+    #[test]
+    fn remote_input_target_ignores_any_get_message_without_visible_window() {
+        let mut kernel = CeKernel::boot(
+            RuntimeConfig::load_default().expect("runtime config loads for hidden waiter test"),
+        );
+        let mut cpu = UnicornMips::new().expect("unicorn initializes for hidden waiter test");
+        cpu.set_initial_thread_id(1);
+        let _hidden = kernel.create_window_ex_w(6, "HIDDEN_REMOTE_HELPER", "", None, 0, 0, 0);
+        kernel.register_blocked_waiter(
+            6,
+            0x606,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            10,
+            u32::MAX,
+        );
+
+        assert_eq!(blocked_remote_input_target(&cpu, &kernel), None);
     }
 
     #[test]
