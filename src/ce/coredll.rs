@@ -24118,7 +24118,12 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_GET_STORAGEID
             | DISK_IOCTL_INITIALIZED
             | IOCTL_DISK_INITIALIZED
+            | DISK_IOCTL_FORMAT_MEDIA
+            | IOCTL_DISK_FORMAT_MEDIA
+            | IOCTL_DISK_FORMAT_VOLUME
+            | IOCTL_DISK_SCAN_VOLUME
             | IOCTL_DISK_FLUSH_CACHE
+            | IOCTL_DISK_GETPMTIMINGS
             | IOCTL_DISK_SET_STANDBY_TIMER
             | IOCTL_DISK_STANDBY_NOW
             | IOCTL_DISK_DELETE_CLUSTER
@@ -24189,9 +24194,23 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             output_capacity,
             returned_ptr,
         ),
-        DISK_IOCTL_INITIALIZED | IOCTL_DISK_INITIALIZED | IOCTL_DISK_FLUSH_CACHE => {
+        DISK_IOCTL_INITIALIZED
+        | IOCTL_DISK_INITIALIZED
+        | DISK_IOCTL_FORMAT_MEDIA
+        | IOCTL_DISK_FORMAT_MEDIA
+        | IOCTL_DISK_FORMAT_VOLUME
+        | IOCTL_DISK_SCAN_VOLUME
+        | IOCTL_DISK_FLUSH_CACHE => {
             disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
         }
+        IOCTL_DISK_GETPMTIMINGS => disk_get_power_timings_raw(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr,
+            input_len,
+            returned_ptr,
+        ),
         IOCTL_DISK_SET_STANDBY_TIMER
         | IOCTL_DISK_STANDBY_NOW
         | IOCTL_DISK_DELETE_CLUSTER
@@ -24303,7 +24322,17 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_GET_STORAGEID
             | DISK_IOCTL_INITIALIZED
             | IOCTL_DISK_INITIALIZED
+            | DISK_IOCTL_FORMAT_MEDIA
+            | IOCTL_DISK_FORMAT_MEDIA
+            | IOCTL_DISK_FORMAT_VOLUME
+            | IOCTL_DISK_SCAN_VOLUME
+            | IOCTL_DISK_GET_SECTOR_ADDR
             | IOCTL_DISK_FLUSH_CACHE
+            | IOCTL_DISK_COPY_EXTERNAL_START
+            | IOCTL_DISK_COPY_EXTERNAL_COMPLETE
+            | IOCTL_DISK_GETPMTIMINGS
+            | IOCTL_DISK_SECURE_WIPE
+            | IOCTL_DISK_SET_SECURE_WIPE_FLAG
             | IOCTL_DISK_SET_STANDBY_TIMER
             | IOCTL_DISK_STANDBY_NOW
             | IOCTL_DISK_DELETE_CLUSTER
@@ -24374,7 +24403,44 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             output_capacity,
             returned_ptr,
         ),
-        DISK_IOCTL_INITIALIZED | IOCTL_DISK_INITIALIZED | IOCTL_DISK_FLUSH_CACHE => {
+        DISK_IOCTL_INITIALIZED
+        | IOCTL_DISK_INITIALIZED
+        | DISK_IOCTL_FORMAT_MEDIA
+        | IOCTL_DISK_FORMAT_MEDIA
+        | IOCTL_DISK_FORMAT_VOLUME
+        | IOCTL_DISK_SCAN_VOLUME
+        | IOCTL_DISK_FLUSH_CACHE => {
+            disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
+        }
+        IOCTL_DISK_GET_SECTOR_ADDR => partition_disk_get_sector_addr_raw(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr,
+            input_len,
+            output_ptr,
+            output_capacity,
+            returned_ptr,
+        ),
+        IOCTL_DISK_COPY_EXTERNAL_START | IOCTL_DISK_COPY_EXTERNAL_COMPLETE => {
+            partition_disk_copy_external_raw(
+                kernel,
+                memory,
+                thread_id,
+                input_ptr,
+                input_len,
+                returned_ptr,
+            )
+        }
+        IOCTL_DISK_GETPMTIMINGS => disk_get_power_timings_raw(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr,
+            input_len,
+            returned_ptr,
+        ),
+        IOCTL_DISK_SECURE_WIPE | IOCTL_DISK_SET_SECURE_WIPE_FLAG => {
             disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
         }
         IOCTL_DISK_SET_STANDBY_TIMER
@@ -24386,6 +24452,152 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         }
         _ => unreachable!(),
     })
+}
+
+fn disk_get_power_timings_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    timings_ptr: u32,
+    timings_bytes: u32,
+    returned_ptr: u32,
+) -> bool {
+    if timings_ptr == 0 || timings_bytes < DISK_POWER_TIMINGS_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(requested_size) = memory.read_u32(timings_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if requested_size < DISK_POWER_TIMINGS_SIZE || requested_size > timings_bytes {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    for offset in (0..DISK_POWER_TIMINGS_SIZE).step_by(4) {
+        let value = if offset == 0 {
+            DISK_POWER_TIMINGS_SIZE
+        } else {
+            0
+        };
+        if memory
+            .write_u32(timings_ptr.wrapping_add(offset), value)
+            .is_err()
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    }
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn partition_disk_get_sector_addr_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    sector_list_ptr: u32,
+    sector_list_bytes: u32,
+    addr_list_ptr: u32,
+    addr_list_bytes: u32,
+    returned_ptr: u32,
+) -> bool {
+    if sector_list_ptr == 0
+        || addr_list_ptr == 0
+        || sector_list_bytes == 0
+        || sector_list_bytes != addr_list_bytes
+        || sector_list_bytes % 4 != 0
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    for offset in (0..sector_list_bytes).step_by(4) {
+        if memory
+            .read_u32(sector_list_ptr.wrapping_add(offset))
+            .is_err()
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    }
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
+}
+
+fn partition_disk_copy_external_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    copy_external_ptr: u32,
+    copy_external_bytes: u32,
+    returned_ptr: u32,
+) -> bool {
+    if copy_external_ptr == 0 || copy_external_bytes < DISK_COPY_EXTERNAL_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(sector_list_bytes) =
+        memory.read_u32(copy_external_ptr.wrapping_add(DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(required_bytes) = DISK_COPY_EXTERNAL_SIZE.checked_add(sector_list_bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if sector_list_bytes % 8 != 0 || required_bytes > copy_external_bytes {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let sector_list_ptr = copy_external_ptr.wrapping_add(DISK_COPY_EXTERNAL_SIZE);
+    for offset in (0..sector_list_bytes).step_by(8) {
+        if memory
+            .read_u32(sector_list_ptr.wrapping_add(offset))
+            .and_then(|_| memory.read_u32(sector_list_ptr.wrapping_add(offset + 4)))
+            .is_err()
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    }
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
 }
 
 fn disk_zero_byte_success_raw<M: CoredllGuestMemory>(

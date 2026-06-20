@@ -735,11 +735,23 @@ notes when it is still needed for implementation.
      detach notifications succeed as ignored zero-byte events, while attach
      notifications report `StorageMediaAttachResultUnchanged`. Coverage
      verifies CE input/output sizing, AFS routing, and invalid event rejection.
-   - File-handle `DeviceIoControl(FSCTL_SET_ZERO_DATA)` now consumes CE's
-     `FILE_ZERO_DATA_INFORMATION` layout from `fsioctl.h` and zeros the
-     requested existing host-backed file range without growing the file.
-     Coverage verifies middle-range zeroing, EOF clipping, invalid range
-     rejection, and read-only handle access denial.
+  - File-handle `DeviceIoControl(FSCTL_SET_ZERO_DATA)` now consumes CE's
+    `FILE_ZERO_DATA_INFORMATION` layout from `fsioctl.h` and zeros the
+    requested existing host-backed file range without growing the file.
+    Coverage verifies middle-range zeroing, EOF clipping, invalid range
+    rejection, and read-only handle access denial.
+  - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\partition.cpp`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\DOSPART\part.cpp`, and
+    `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: mounted store and partition
+    handles now recognize the remaining CE disk-maintenance IOCTLs needed by
+    host-backed media. Store handles accept format/scan no-ops and power
+    timing queries; partition handles add format no-ops, secure-wipe status
+    controls, `IOCTL_DISK_GET_SECTOR_ADDR` validation, and
+    `IOCTL_DISK_COPY_EXTERNAL_START` packet validation before reporting the
+    unsupported lower block-driver operation. Coverage verifies success
+    byte-counts, CE `PowerTimings` sizing, invalid packet rejection, preserved
+    sector-list inputs, and lower-driver `ERROR_NOT_SUPPORTED` forwarding.
 
 6. Expand input, text, GDI, and drawing fidelity.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph
