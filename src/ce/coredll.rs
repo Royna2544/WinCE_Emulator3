@@ -131,6 +131,7 @@ const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
 const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
 const FSCTL_SET_FILE_CACHE: u32 = 0x0009_0090;
 const FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR: u32 = 0x0009_00a8;
+const FSCTL_STORAGE_MEDIA_CHANGE_EVENT: u32 = 0x0009_00ac;
 const IOCTL_FILE_WRITE_GATHER: u32 = 0x0009_0044;
 const IOCTL_FILE_READ_SCATTER: u32 = 0x0009_0048;
 const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
@@ -138,6 +139,9 @@ const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
 const FILE_STREAM_INFO_STANDARD: u32 = 0;
 const FILE_STREAM_INFO_SIZE: u32 = 52;
+const STORAGE_MEDIA_CHANGE_EVENT_DETACHED: u32 = 0;
+const STORAGE_MEDIA_CHANGE_EVENT_ATTACHED: u32 = 1;
+const STORAGE_MEDIA_ATTACH_RESULT_UNCHANGED: u32 = 0;
 const FILE_SCATTER_GATHER_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_RAM_BYTES: u64 = 64 * 1024 * 1024;
@@ -10190,6 +10194,16 @@ fn fs_io_control_volume_info_raw<M: CoredllGuestMemory>(
         FSCTL_COPY_EXTERNAL_START | FSCTL_COPY_EXTERNAL_COMPLETE => {
             fs_io_control_copy_external_raw(kernel, memory, thread_id, in_ptr, in_size)
         }
+        FSCTL_STORAGE_MEDIA_CHANGE_EVENT => fs_io_control_storage_media_change_event_raw(
+            kernel,
+            memory,
+            thread_id,
+            in_ptr,
+            in_size,
+            out_ptr,
+            out_size,
+            bytes_returned_ptr,
+        ),
         FSCTL_SET_FILE_CACHE => {
             kernel
                 .threads
@@ -10231,6 +10245,75 @@ fn fs_io_control_volume_info_raw<M: CoredllGuestMemory>(
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            false
+        }
+    }
+}
+
+fn fs_io_control_storage_media_change_event_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    in_ptr: u32,
+    in_size: u32,
+    out_ptr: u32,
+    out_size: u32,
+    bytes_returned_ptr: u32,
+) -> bool {
+    if in_ptr == 0 || in_size != 4 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let event = match memory.read_u32(in_ptr) {
+        Ok(event) => event,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    };
+    match event {
+        STORAGE_MEDIA_CHANGE_EVENT_DETACHED => {
+            if !write_optional_count(kernel, memory, thread_id, bytes_returned_ptr, 0) {
+                return false;
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        STORAGE_MEDIA_CHANGE_EVENT_ATTACHED => {
+            if out_ptr == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+            if out_size < 4 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+                write_optional_count(kernel, memory, thread_id, bytes_returned_ptr, 4);
+                return false;
+            }
+            if !write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                out_ptr,
+                STORAGE_MEDIA_ATTACH_RESULT_UNCHANGED,
+            ) || !write_optional_count(kernel, memory, thread_id, bytes_returned_ptr, 4)
+            {
+                return false;
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             false
         }
     }

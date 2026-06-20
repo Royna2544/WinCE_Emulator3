@@ -719,6 +719,11 @@ notes when it is still needed for implementation.
      the standard stream's attributes, CE FILETIMEs, logical size, and physical
      size while preserving short-buffer byte-count behavior. Coverage verifies
      the caller-initialized info-level packet shape used by CE callers.
+   - `CeFsIoControlW`/`AFS_FsIoControlW(FSCTL_STORAGE_MEDIA_CHANGE_EVENT)`
+     now follows CE's mounted-volume media-change path for host-backed mounts:
+     detach notifications succeed as ignored zero-byte events, while attach
+     notifications report `StorageMediaAttachResultUnchanged`. Coverage
+     verifies CE input/output sizing, AFS routing, and invalid event rejection.
 
 6. Expand input, text, GDI, and drawing fidelity.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph
