@@ -4,10 +4,11 @@
 //! The registry exposes `MFS1:` backed by `YAS526B.dll`, while the app's
 //! ResidentFlash sensor descriptor names `YAS526C`. The driver is a CE stream
 //! device whose public surface is a very small set of private IOCTLs. Its read
-//! and write paths talk to I2C registers `0x2e` and `0x2f`; the first input
-//! byte selects the register bank and the third byte is used as a read count.
-//! This module keeps a deterministic register map and returns compass-like
-//! bytes without inventing app-specific state.
+//! and write paths talk to I2C devices `0x2e` and `0x2f`; the first input byte
+//! selects that device and the third byte is used as a read count. Writes send
+//! a selector/command pair to I2C, but do not make the command byte readable as
+//! the next compass sample. This module keeps deterministic sample bytes
+//! without inventing app-specific state.
 //!
 //! Scope:
 //! - Preserve the observed private IOCTL numbers.
@@ -65,12 +66,9 @@ impl Magnetometer {
     }
 
     fn write_registers(&mut self, input: &[u8]) -> DeviceIoControlResult {
-        if input.len() != 4 || !valid_selector(input[1]) {
+        if input.len() != 4 || !valid_bank(input[0]) || !valid_selector(input[1]) {
             return failure();
         }
-        let bank = self.bank_mut(input[0]);
-        let offset = input[1] as usize;
-        bank[offset] = input[3];
         success(Vec::new())
     }
 
@@ -80,7 +78,7 @@ impl Magnetometer {
         output_capacity: u32,
         output_buffer_present: bool,
     ) -> DeviceIoControlResult {
-        if input.len() != 4 || !valid_selector(input[1]) {
+        if input.len() != 4 || !valid_bank(input[0]) {
             return failure();
         }
         let requested = input[2] as usize;
@@ -94,10 +92,7 @@ impl Magnetometer {
             return failure();
         }
         let bank = self.bank(input[0]);
-        let offset = input[1] as usize;
-        let output = (0..requested)
-            .map(|idx| bank[(offset + idx) & 0xff])
-            .collect();
+        let output = (0..requested).map(|idx| bank[idx & 0xff]).collect();
         success(output)
     }
 
@@ -108,14 +103,10 @@ impl Magnetometer {
             &self.bank_2e
         }
     }
+}
 
-    fn bank_mut(&mut self, selector: u8) -> &mut [u8; 256] {
-        if selector == 1 {
-            &mut self.bank_2f
-        } else {
-            &mut self.bank_2e
-        }
-    }
+fn valid_bank(value: u8) -> bool {
+    matches!(value, 0 | 1)
 }
 
 fn valid_selector(value: u8) -> bool {

@@ -977,7 +977,29 @@ mod tests {
         );
         let mag_read =
             mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0x40, 1, 0], 1);
-        assert_eq!(mag_read.output, vec![0xaa]);
+        assert_eq!(mag_read.output, vec![0x10]);
+        assert!(
+            mag.device_io_control(magnetometer::IOCTL_MFS_WRITE_REGISTERS, &[0, 0, 0, 0xa0], 0)
+                .success
+        );
+        let mag_live_pattern = mag.device_io_control_with_output_buffer(
+            magnetometer::IOCTL_MFS_READ_REGISTERS,
+            &[0, 0, 4, 0xa0],
+            0,
+            true,
+        );
+        assert_eq!(mag_live_pattern.output, vec![0x10, 0x00, 0xf0, 0xff]);
+        let mag_bank_2f = mag.device_io_control_with_output_buffer(
+            magnetometer::IOCTL_MFS_READ_REGISTERS,
+            &[1, 0, 4, 0xa0],
+            0,
+            true,
+        );
+        assert_eq!(mag_bank_2f.output, vec![0x20, 0x00, 0x08, 0x00]);
+        assert!(
+            !mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[2, 0, 1, 0], 1)
+                .success
+        );
         let mag_no_output_buffer =
             mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0x40, 1, 0], 0);
         assert!(!mag_no_output_buffer.success);
@@ -989,7 +1011,7 @@ mod tests {
         );
         assert!(mag_zero_capacity_with_output_buffer.success);
         assert_eq!(mag_zero_capacity_with_output_buffer.bytes_returned, 1);
-        assert_eq!(mag_zero_capacity_with_output_buffer.output, vec![0xaa]);
+        assert_eq!(mag_zero_capacity_with_output_buffer.output, vec![0x10]);
 
         let mut i2c = namespace.open("I2C2:").unwrap();
         assert!(
