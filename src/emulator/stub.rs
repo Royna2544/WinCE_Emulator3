@@ -260,6 +260,14 @@ impl UnicornMips {
         false
     }
 
+    pub fn rotate_to_active_receiver_thread(
+        &mut self,
+        _kernel: &CeKernel,
+        _target_thread_ids: &[u32],
+    ) -> bool {
+        false
+    }
+
     pub fn reconcile_active_visible_window_thread(&mut self, _kernel: &CeKernel) -> bool {
         false
     }

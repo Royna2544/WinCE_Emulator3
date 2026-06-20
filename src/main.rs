@@ -350,12 +350,9 @@ fn run_cpu_loop(
             Some(desktop.framebuffer_mut()),
         );
         if args.remote_server.is_some()
-            && !cpu.active_process_has_visible_windows(kernel)
-            && !cpu.active_process_has_receiver_work(kernel)
-            && cpu.rotate_to_visible_window_parked_process(kernel)
+            && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
         {
             reported_blocked_message_wait = false;
-            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if cpu.complete_escaped_saved_get_message_sent_callout(kernel) {
@@ -421,6 +418,14 @@ fn run_cpu_loop(
             continue;
         }
         if cpu.prepare_cross_thread_visible_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if args.remote_server.is_some()
+            && cpu.active_process_has_receiver_work(kernel)
+            && cpu.rotate_to_active_receiver_thread(kernel, &[])
+        {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -849,12 +854,7 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if rotate_hidden_active_to_visible_parked_for_live_pump(
-            cpu,
-            kernel,
-            desktop,
-            live_pump_slice,
-        ) {
+        if live_pump_slice && rotate_idle_active_to_visible_parked(cpu, kernel, desktop) {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -889,6 +889,10 @@ fn run_cpu_loop(
                     message_waiter,
                     cpu.active_process_has_receiver_work(kernel),
                 ) {
+                    if rotate_idle_active_to_visible_parked(cpu, kernel, desktop) {
+                        reported_blocked_message_wait = false;
+                        continue;
+                    }
                     if non_message_waiter {
                         reported_blocked_message_wait = false;
                         std::thread::sleep(Duration::from_millis(16));
@@ -930,12 +934,8 @@ fn run_cpu_loop(
             }
         }
         if args.remote_server.is_some()
-            && rotate_hidden_active_to_visible_parked_for_live_pump(
-                cpu,
-                kernel,
-                desktop,
-                live_pump_slice,
-            )
+            && live_pump_slice
+            && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
         {
             reported_blocked_message_wait = false;
             continue;
@@ -950,15 +950,12 @@ fn run_cpu_loop(
     Ok(())
 }
 
-fn rotate_hidden_active_to_visible_parked_for_live_pump(
+fn rotate_idle_active_to_visible_parked(
     cpu: &mut UnicornMips,
     kernel: &mut CeKernel,
     desktop: &mut DesktopRuntime,
-    live_pump_slice: bool,
 ) -> bool {
-    if live_pump_slice
-        && !cpu.active_process_has_visible_windows(kernel)
-        && !cpu.active_process_has_receiver_work(kernel)
+    if !cpu.active_process_has_receiver_work(kernel)
         && cpu.rotate_to_visible_window_parked_process(kernel)
     {
         publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
