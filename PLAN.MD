@@ -28,6 +28,15 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\toolhelp.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw
+  `THCreateSnapshot` now allocates and seeds a CE-shaped `THSNAP` buffer for
+  process snapshots instead of returning `ERROR_NOT_SUPPORTED`. Coverage
+  verifies header offsets, process-entry layout, current/launched process IDs,
+  duplicate process-handle deduplication, wide executable names, and invalid
+  process rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,

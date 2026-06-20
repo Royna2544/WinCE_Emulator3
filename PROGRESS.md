@@ -29,6 +29,8 @@ references for historical reconstruction.
 - Process-handle behavior includes opening launched process IDs as distinct
   handles plus raw `ReadProcessMemory`/`WriteProcessMemory` byte copies with
   CE-style handle validation and transferred-byte counts.
+- Toolhelp process snapshots now expose the current process and launched child
+  process entries through raw `THCreateSnapshot` memory blocks.
 
 ## Latest Confirmed State
 
@@ -55,6 +57,8 @@ references for historical reconstruction.
   snapshots, consumed remote touch, and drained remote GPS into `COM7:`.
 - Focused raw kernel ordinal validation covers duplicated process handles,
   shared process exit state, and process memory read/write copies.
+- Focused raw kernel ordinal validation covers `THCreateSnapshot` success and
+  invalid requested-process failure.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.

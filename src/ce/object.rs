@@ -483,6 +483,22 @@ impl HandleTable {
         Some(self.insert(KernelObject::Process(process)))
     }
 
+    pub fn process_snapshots(&self) -> Vec<ProcessObject> {
+        let mut process_ids = Vec::new();
+        let mut processes = Vec::new();
+        for object in self.objects.values() {
+            let KernelObject::Process(process) = object else {
+                continue;
+            };
+            if process_ids.contains(&process.process_id) {
+                continue;
+            }
+            process_ids.push(process.process_id);
+            processes.push(process.clone());
+        }
+        processes
+    }
+
     pub fn file_mapping(&self, handle: u32) -> Result<&FileMappingObject> {
         match self.get(handle)? {
             KernelObject::FileMapping(mapping) if !mapping.closed => Ok(mapping),

@@ -27,13 +27,14 @@ use crate::{
         kernel::{
             CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
             MessageQueueOptions, MessageQueueReadStatus, MessageQueueWriteStatus,
+            ToolhelpProcessSnapshot,
         },
         keybd::{
             KBDI_AUTOREPEAT_INFO_ID, KBDI_AUTOREPEAT_SELECTIONS_INFO_ID, KBDI_KEYBOARD_STATUS_ID,
             KBDI_VKEY_TO_UNICODE_INFO_ID, KeybdAutoRepeatInfo, KeybdAutoRepeatSelectionsInfo,
             KeybdVKeyToUnicodeInfo,
         },
-        memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
+        memory::{HEAP_ZERO_MEMORY, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PROCESS_HEAP_HANDLE},
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
             CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
@@ -2730,12 +2731,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_WRITE_PROCESS_MEMORY => Some(CoredllValue::Bool(write_process_memory_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_THCREATE_SNAPSHOT => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0xffff_ffff))
-        }
+        ORD_THCREATE_SNAPSHOT => Some(CoredllValue::Handle(thcreate_snapshot_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_NOTIFY_FORCE_CLEANBOOT | ORD_SET_CLEAN_REBOOT_FLAG => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -57017,6 +57015,142 @@ fn write_process_memory_raw<M: CoredllGuestMemory>(
         raw_arg(args, 4),
         true,
     )
+}
+
+const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
+const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+const THSNAP_SIZE: usize = 60;
+const THSNAP_RESERVE: u32 = 0x0040_0000;
+const PROCESSENTRY32_SIZE: usize = 564;
+const PROCESSENTRY32_EXE_OFFSET: usize = 36;
+const MAX_PATH_WCHARS: usize = 260;
+const INVALID_TOOLHELP_SNAPSHOT: u32 = 0xffff_ffff;
+
+fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let flags = raw_arg(args, 0);
+    let requested_process = raw_arg(args, 1);
+    let process_snapshots = kernel.toolhelp_process_snapshots();
+    if requested_process != 0 {
+        let requested_process_id = kernel
+            .process_id_for_handle(requested_process)
+            .unwrap_or(requested_process);
+        if !process_snapshots
+            .iter()
+            .any(|process| process.process_id == requested_process_id)
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return INVALID_TOOLHELP_SNAPSHOT;
+        }
+    }
+
+    let include_processes = flags & (TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD) != 0;
+    let process_count = if include_processes {
+        process_snapshots.len()
+    } else {
+        0
+    };
+    let snapshot_size = THSNAP_SIZE + process_count.saturating_mul(PROCESSENTRY32_SIZE);
+    let Some(snapshot_size_u32) = u32::try_from(snapshot_size).ok() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_TOOLHELP_SNAPSHOT;
+    };
+    let allocation_size = snapshot_size_u32.max(0x1000);
+    let Some(base) =
+        kernel
+            .memory
+            .virtual_alloc(0, allocation_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_TOOLHELP_SNAPSHOT;
+    };
+
+    let mut bytes = vec![0; snapshot_size];
+    put_le_u32(&mut bytes, 0, THSNAP_SIZE as u32);
+    put_le_u32(&mut bytes, 4, snapshot_size_u32);
+    put_le_u32(&mut bytes, 8, allocation_size);
+    put_le_u32(&mut bytes, 12, THSNAP_RESERVE.max(allocation_size));
+    put_le_u32(&mut bytes, 16, process_count as u32);
+    put_le_u32(&mut bytes, 28, flags);
+    if include_processes {
+        for (index, process) in process_snapshots.iter().enumerate() {
+            write_process_entry32(
+                &mut bytes[THSNAP_SIZE + index * PROCESSENTRY32_SIZE
+                    ..THSNAP_SIZE + (index + 1) * PROCESSENTRY32_SIZE],
+                process,
+            );
+        }
+    }
+
+    kernel.memory.set_virtual_initial_bytes(base, bytes.clone());
+    if memory.ensure_mapped(base, allocation_size).is_err() {
+        let _ = kernel.memory.virtual_free(base, 0, MEM_RELEASE);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_TOOLHELP_SNAPSHOT;
+    }
+    if !write_guest_bytes(kernel, memory, thread_id, base, &bytes) {
+        let _ = kernel.memory.virtual_free(base, 0, MEM_RELEASE);
+        return INVALID_TOOLHELP_SNAPSHOT;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    tracing::trace!(
+        target: "ce.toolhelp",
+        thread_id,
+        flags = format_args!("0x{flags:08x}"),
+        process_count,
+        snapshot = format_args!("0x{base:08x}"),
+        "THCreateSnapshot"
+    );
+    base
+}
+
+fn write_process_entry32(entry: &mut [u8], process: &ToolhelpProcessSnapshot) {
+    put_le_u32(entry, 0, PROCESSENTRY32_SIZE as u32);
+    put_le_u32(entry, 4, 1);
+    put_le_u32(entry, 8, process.process_id);
+    put_le_u32(entry, 12, process.default_heap);
+    put_le_u32(entry, 20, process.thread_count);
+    put_le_u32(entry, 28, process.priority_base as u32);
+    put_le_u32(entry, 32, process.flags);
+    put_wide_z(
+        entry,
+        PROCESSENTRY32_EXE_OFFSET,
+        MAX_PATH_WCHARS,
+        &process.name,
+    );
+    put_le_u32(entry, 556, process.memory_base);
+}
+
+fn put_le_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    if let Some(slot) = bytes.get_mut(offset..offset + 4) {
+        slot.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn put_wide_z(bytes: &mut [u8], offset: usize, capacity_chars: usize, value: &str) {
+    for (index, unit) in value
+        .encode_utf16()
+        .take(capacity_chars.saturating_sub(1))
+        .chain(std::iter::once(0))
+        .enumerate()
+    {
+        let byte_offset = offset + index * 2;
+        if let Some(slot) = bytes.get_mut(byte_offset..byte_offset + 2) {
+            slot.copy_from_slice(&unit.to_le_bytes());
+        }
+    }
 }
 
 fn process_memory_copy_raw<M: CoredllGuestMemory>(

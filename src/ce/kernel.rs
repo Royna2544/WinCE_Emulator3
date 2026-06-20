@@ -675,11 +675,35 @@ pub struct PendingProcessLaunch {
     pub thread_id: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolhelpProcessSnapshot {
+    pub process_id: u32,
+    pub default_heap: u32,
+    pub thread_count: u32,
+    pub priority_base: i32,
+    pub flags: u32,
+    pub memory_base: u32,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentProcessState {
     pub process_id: u32,
     pub exit_code: u32,
     pub signaled: bool,
+}
+
+fn toolhelp_process_basename(path: &str) -> String {
+    let name = path
+        .rsplit(|ch| ch == '\\' || ch == '/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path);
+    if name.is_empty() {
+        "process.exe".to_owned()
+    } else {
+        name.to_owned()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2178,6 +2202,42 @@ impl CeKernel {
 
     pub fn current_process_id(&self) -> u32 {
         self.current_process_id
+    }
+
+    pub fn toolhelp_process_snapshots(&self) -> Vec<ToolhelpProcessSnapshot> {
+        let mut snapshots = vec![ToolhelpProcessSnapshot {
+            process_id: self.current_process_id,
+            default_heap: crate::ce::memory::PROCESS_HEAP_HANDLE,
+            thread_count: 1,
+            priority_base: crate::ce::object::THREAD_PRIORITY_NORMAL as i32,
+            flags: 0,
+            memory_base: self.process_module_base,
+            name: toolhelp_process_basename(&self.process_module_path),
+        }];
+        let mut process_ids = vec![self.current_process_id];
+        for process in self.handles.process_snapshots() {
+            if process_ids.contains(&process.process_id) {
+                continue;
+            }
+            let name = self
+                .pending_process_launches
+                .iter()
+                .find(|launch| launch.process_id == process.process_id)
+                .and_then(|launch| launch.application.as_deref())
+                .map(toolhelp_process_basename)
+                .unwrap_or_else(|| format!("process-{}.exe", process.process_id));
+            process_ids.push(process.process_id);
+            snapshots.push(ToolhelpProcessSnapshot {
+                process_id: process.process_id,
+                default_heap: crate::ce::memory::PROCESS_HEAP_HANDLE,
+                thread_count: 1,
+                priority_base: crate::ce::object::THREAD_PRIORITY_NORMAL as i32,
+                flags: 0,
+                memory_base: 0,
+                name,
+            });
+        }
+        snapshots
     }
 
     pub fn current_process_state(&self) -> CurrentProcessState {

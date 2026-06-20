@@ -64,10 +64,10 @@ use wince_emulation_v3::{
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
             ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS,
             ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
-            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_MSG_QUEUE,
-            ORD_WRITE_PROCESS_MEMORY,
+            ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
         },
         devices::{
             CommDcb, DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind,
@@ -3620,6 +3620,72 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_ne!(opened_process, 0);
     assert_ne!(opened_process, CE_CURRENT_PROCESS_PSEUDO_HANDLE);
     assert_ne!(opened_process, launch.process_handle);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_THCREATE_SNAPSHOT,
+            [0x0000_0002, 0xdead_beef],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0xffff_ffff),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    let snapshot = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_THCREATE_SNAPSHOT,
+        [0x0000_0002, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("expected THCreateSnapshot handle, got {other:?}"),
+    };
+    assert_ne!(snapshot, 0);
+    assert_ne!(snapshot, 0xffff_ffff);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    let snapshot_bytes = memory.read_bytes(snapshot, 60 + 2 * 564);
+    let snapshot_u32 = |offset: usize| {
+        u32::from_le_bytes([
+            snapshot_bytes[offset],
+            snapshot_bytes[offset + 1],
+            snapshot_bytes[offset + 2],
+            snapshot_bytes[offset + 3],
+        ])
+    };
+    assert_eq!(snapshot_u32(0), 60);
+    assert_eq!(snapshot_u32(4), 60 + 2 * 564);
+    assert_eq!(snapshot_u32(16), 2);
+    assert_eq!(snapshot_u32(28), 0x0000_0002);
+    let read_snapshot_name = |entry_offset: usize| {
+        let mut units = Vec::new();
+        for index in 0..260 {
+            let offset = entry_offset + 36 + index * 2;
+            let unit = u16::from_le_bytes([snapshot_bytes[offset], snapshot_bytes[offset + 1]]);
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        String::from_utf16_lossy(&units)
+    };
+    let first_entry = 60;
+    let second_entry = 60 + 564;
+    assert_eq!(snapshot_u32(first_entry), 564);
+    assert_eq!(snapshot_u32(first_entry + 8), 1);
+    assert_eq!(read_snapshot_name(first_entry), "process.exe");
+    assert_eq!(snapshot_u32(second_entry), 564);
+    assert_eq!(snapshot_u32(second_entry + 8), launch.process_id);
+    assert_eq!(read_snapshot_name(second_entry), "raw-child.exe");
     let process_source_ptr = 0x5080;
     let process_dest_ptr = 0x5090;
     let process_count_ptr = 0x50a0;
@@ -3721,6 +3787,116 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         ERROR_INVALID_HANDLE
     );
     assert_eq!(memory.read_u32(process_count_ptr)?, 0);
+    fn read_guest_le_u32(memory: &TestGuestMemory, addr: u32) -> u32 {
+        let bytes = memory.read_bytes(addr, 4);
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+
+    fn read_guest_wide_z(memory: &TestGuestMemory, addr: u32, max_chars: usize) -> String {
+        let bytes = memory.read_bytes(addr, max_chars * 2);
+        let mut units = Vec::new();
+        for chunk in bytes.chunks_exact(2) {
+            let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        String::from_utf16_lossy(&units)
+    }
+
+    const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
+    const THSNAP_SIZE: u32 = 60;
+    const PROCESSENTRY32_SIZE: u32 = 564;
+    const PROCESSENTRY32_EXE_OFFSET: u32 = 36;
+    const INVALID_TOOLHELP_SNAPSHOT: u32 = 0xffff_ffff;
+
+    let process_snapshot = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_THCREATE_SNAPSHOT,
+        [TH32CS_SNAPPROCESS, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("expected THCreateSnapshot handle, got {other:?}"),
+    };
+    assert_ne!(process_snapshot, 0);
+    assert_ne!(process_snapshot, INVALID_TOOLHELP_SNAPSHOT);
+    assert_eq!(read_guest_le_u32(&memory, process_snapshot), THSNAP_SIZE);
+    assert_eq!(
+        read_guest_le_u32(&memory, process_snapshot + 4),
+        THSNAP_SIZE + PROCESSENTRY32_SIZE * 2
+    );
+    assert!(read_guest_le_u32(&memory, process_snapshot + 8) >= 0x1000);
+    assert_eq!(
+        read_guest_le_u32(&memory, process_snapshot + 12),
+        0x0040_0000
+    );
+    assert_eq!(read_guest_le_u32(&memory, process_snapshot + 16), 2);
+    assert_eq!(
+        read_guest_le_u32(&memory, process_snapshot + 28),
+        TH32CS_SNAPPROCESS
+    );
+    assert_eq!(read_guest_le_u32(&memory, process_snapshot + 36), 0);
+    let first_entry = process_snapshot + THSNAP_SIZE;
+    let second_entry = first_entry + PROCESSENTRY32_SIZE;
+    let process_ids = [
+        read_guest_le_u32(&memory, first_entry + 8),
+        read_guest_le_u32(&memory, second_entry + 8),
+    ];
+    assert!(process_ids.contains(&kernel.current_process_id()));
+    assert!(process_ids.contains(&launch.process_id));
+    for entry in [first_entry, second_entry] {
+        assert_eq!(read_guest_le_u32(&memory, entry), PROCESSENTRY32_SIZE);
+        assert_eq!(read_guest_le_u32(&memory, entry + 4), 1);
+        assert_eq!(read_guest_le_u32(&memory, entry + 12), PROCESS_HEAP_HANDLE);
+        assert_eq!(read_guest_le_u32(&memory, entry + 20), 1);
+        assert_eq!(read_guest_le_u32(&memory, entry + 28), 3);
+    }
+    let launch_entry = if read_guest_le_u32(&memory, first_entry + 8) == launch.process_id {
+        first_entry
+    } else {
+        second_entry
+    };
+    assert_eq!(
+        read_guest_wide_z(&memory, launch_entry + PROCESSENTRY32_EXE_OFFSET, 260),
+        "raw-child.exe"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_THCREATE_SNAPSHOT,
+            [TH32CS_SNAPPROCESS, launch.process_id],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0 && handle != INVALID_TOOLHELP_SNAPSHOT
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_THCREATE_SNAPSHOT,
+            [TH32CS_SNAPPROCESS, 0xdead_beef],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(INVALID_TOOLHELP_SNAPSHOT),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     let launch_process_index = launch.process_id.saturating_sub(0x42).saturating_add(1);
     let process_exit_ptr = 0x50b0;
     memory.map_words(process_exit_ptr, 1);
