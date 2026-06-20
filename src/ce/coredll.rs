@@ -2498,13 +2498,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_GET_OPEN_FILE_NAME_W | ORD_GET_SAVE_FILE_NAME_W => {
-            // GetOpenFileNameW / GetSaveFileNameW — common file dialogs; not supported in emulator.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_GET_OPEN_FILE_NAME_W | ORD_GET_SAVE_FILE_NAME_W => Some(CoredllValue::Bool(
+            common_file_dialog_w_raw(kernel, memory, thread_id, raw_arg(args, 0)),
+        )),
         ORD_CHECK_PASSWORD => {
             // CheckPassword(lpszPassword) — validate password against CE password store.
             // Not supported; return FALSE (password check fails = not authenticated).
@@ -9841,6 +9837,48 @@ fn write_store_information<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn common_file_dialog_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    open_file_name_ptr: u32,
+) -> bool {
+    const OPEN_FILE_NAME_W_SIZE: u32 = 76;
+    const OPEN_FILE_NAME_LPSTR_FILE_OFFSET: u32 = 28;
+
+    if open_file_name_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(struct_size) = memory.read_u32(open_file_name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(file_ptr) =
+        memory.read_u32(open_file_name_ptr.wrapping_add(OPEN_FILE_NAME_LPSTR_FILE_OFFSET))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if struct_size != OPEN_FILE_NAME_W_SIZE || file_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
 }
 
 fn get_system_memory_division_raw<M: CoredllGuestMemory>(

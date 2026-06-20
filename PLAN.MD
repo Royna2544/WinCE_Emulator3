@@ -951,6 +951,11 @@ notes when it is still needed for implementation.
   store and partition `DeviceIoControl(IOCTL_DISK_DEVICE_INFO)` now follow
   CE's cached store-device path by requiring the `STORAGEDEVICEINFO` packet in
   the input buffer rather than accepting an output-only call shape.
+- `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\fileopen.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\commdlg.h`: raw `GetOpenFileNameW` and
+  `GetSaveFileNameW` now perform CE's initial `OPENFILENAMEW` validation,
+  returning `ERROR_INVALID_PARAMETER` for null, wrong-sized, or missing
+  `lpstrFile` packets before falling back to the unsupported dialog path.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\ui.c`, and
   `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\LANG\IME\CIMEUI\imeui.cpp`: raw

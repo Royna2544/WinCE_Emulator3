@@ -38,10 +38,11 @@ use wince_emulation_v3::{
             ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
             ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
-            ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_PRIORITY_CLIPBOARD_FORMAT,
-            ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W,
-            ORD_GET_PROC_NAME, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX,
-            ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STDIO_PATH_W,
+            ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_OPEN_FILE_NAME_W,
+            ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
+            ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROC_NAME,
+            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
+            ORD_GET_PROCESS_VERSION, ORD_GET_SAVE_FILE_NAME_W, ORD_GET_STDIO_PATH_W,
             ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION, ORD_GET_SYSTEM_POWER_STATE,
             ORD_GET_SYSTEM_POWER_STATUS_EX, ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME,
             ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
@@ -139,6 +140,108 @@ use wince_emulation_v3::{
 
 mod support;
 use support::{TestGuestMemory, unique_test_root};
+
+#[test]
+fn coredll_raw_common_file_dialog_validates_openfilenamew_before_unsupported() -> Result<()> {
+    const OPENFILENAMEW_SIZE: u32 = 76;
+    const OPENFILENAMEW_LPSTR_FILE_OFFSET: u32 = 28;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let thread_id = 7;
+    let mut memory = TestGuestMemory::default();
+    let open_file_name_ptr = 0x1_0000;
+    let file_buffer_ptr = 0x1_1000;
+    memory.map_bytes(open_file_name_ptr, OPENFILENAMEW_SIZE);
+    memory.map_bytes(file_buffer_ptr, 260 * 2);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OPEN_FILE_NAME_W,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(open_file_name_ptr, OPENFILENAMEW_SIZE - 4);
+    memory.write_word(
+        open_file_name_ptr + OPENFILENAMEW_LPSTR_FILE_OFFSET,
+        file_buffer_ptr,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SAVE_FILE_NAME_W,
+            [open_file_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(open_file_name_ptr, OPENFILENAMEW_SIZE);
+    memory.write_word(open_file_name_ptr + OPENFILENAMEW_LPSTR_FILE_OFFSET, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OPEN_FILE_NAME_W,
+            [open_file_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(
+        open_file_name_ptr + OPENFILENAMEW_LPSTR_FILE_OFFSET,
+        file_buffer_ptr,
+    );
+    for ordinal in [ORD_GET_OPEN_FILE_NAME_W, ORD_GET_SAVE_FILE_NAME_W] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ordinal,
+                [open_file_name_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_NOT_SUPPORTED
+        );
+    }
+
+    Ok(())
+}
 
 #[test]
 fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
