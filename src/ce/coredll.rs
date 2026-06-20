@@ -44251,6 +44251,8 @@ fn imm_set_composition_window_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> bool {
+    const IMN_SETCOMPOSITIONWINDOW: u32 = 0x000b;
+
     let Some(himc) = resolve_imm_status_context(kernel, raw_arg(args, 0)) else {
         kernel
             .threads
@@ -44267,7 +44269,19 @@ fn imm_set_composition_window_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
-    context.composition_form = form;
+    let hwnd = {
+        context.composition_form = form;
+        context.hwnd
+    };
+    if let Some(hwnd) = hwnd {
+        let _ = kernel.post_message_w_for_thread(
+            thread_id,
+            hwnd,
+            crate::ce::gwe::WM_IME_NOTIFY,
+            IMN_SETCOMPOSITIONWINDOW,
+            0,
+        );
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -44866,6 +44880,8 @@ fn imm_set_candidate_window_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> bool {
+    const IMN_SETCANDIDATEPOS: u32 = 0x0009;
+
     let Some(himc) = resolve_imm_status_context(kernel, raw_arg(args, 0)) else {
         kernel
             .threads
@@ -44887,7 +44903,19 @@ fn imm_set_candidate_window_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
-    *slot = form;
+    let hwnd = {
+        *slot = form;
+        context.hwnd
+    };
+    if let Some(hwnd) = hwnd {
+        let _ = kernel.post_message_w_for_thread(
+            thread_id,
+            hwnd,
+            crate::ce::gwe::WM_IME_NOTIFY,
+            IMN_SETCANDIDATEPOS,
+            form.index,
+        );
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -44995,6 +45023,8 @@ fn imm_set_composition_font_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> bool {
+    const IMN_SETCOMPOSITIONFONT: u32 = 0x000a;
+
     let Some(himc) = resolve_imm_status_context(kernel, raw_arg(args, 0)) else {
         kernel
             .threads
@@ -45016,7 +45046,19 @@ fn imm_set_composition_font_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
-    context.composition_font.copy_from_slice(&bytes);
+    let hwnd = {
+        context.composition_font.copy_from_slice(&bytes);
+        context.hwnd
+    };
+    if let Some(hwnd) = hwnd {
+        let _ = kernel.post_message_w_for_thread(
+            thread_id,
+            hwnd,
+            crate::ce::gwe::WM_IME_NOTIFY,
+            IMN_SETCOMPOSITIONFONT,
+            0,
+        );
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }

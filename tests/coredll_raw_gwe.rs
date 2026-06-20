@@ -37157,6 +37157,17 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
             ..
         }
     ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        notify_msg_ptr,
+        hwnd,
+        WM_IME_NOTIFY,
+        0x000b,
+        0,
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -37199,6 +37210,17 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
             ..
         }
     ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        notify_msg_ptr,
+        hwnd,
+        WM_IME_NOTIFY,
+        0x0009,
+        2,
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -37315,6 +37337,17 @@ fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
             ..
         }
     ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        notify_msg_ptr,
+        hwnd,
+        WM_IME_NOTIFY,
+        0x000a,
+        0,
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

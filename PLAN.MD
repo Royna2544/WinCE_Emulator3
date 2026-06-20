@@ -936,9 +936,11 @@ notes when it is still needed for implementation.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\ui.c`, and
   `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\LANG\IME\CIMEUI\imeui.cpp`: raw
-  `ImmSetStatusWindowPos` now stores the IME status point and queues the
-  owning UI window's `WM_IME_NOTIFY/IMN_SETSTATUSWINDOWPOS` callback, matching
-  the CE IME UI control path instead of silently updating the context only.
+  `ImmSetCompositionWindow`, `ImmSetCandidateWindow`,
+  `ImmSetCompositionFontW`, and `ImmSetStatusWindowPos` now store the updated
+  IME UI context and queue the owning UI window's corresponding
+  `WM_IME_NOTIFY/IMN_SET*` callback, matching the CE IME UI control path
+  instead of silently updating the context only.
 
 ## Active Roadmap
 
