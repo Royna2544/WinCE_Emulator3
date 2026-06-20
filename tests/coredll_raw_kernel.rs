@@ -64,8 +64,8 @@ use wince_emulation_v3::{
             ORD_INTERLOCKED_INCREMENT, ORD_IS_APIREADY, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE,
             ORD_IS_EXITING, ORD_IS_NAMED_EVENT_SIGNALED, ORD_IS_PRIMARY_THREAD,
             ORD_IS_PROCESS_DYING, ORD_KERN_EXTRACT_ICONS, ORD_KERNEL_IO_CONTROL,
-            ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_CURSOR_W,
-            ORD_LOAD_DRIVER, ORD_LOAD_FSD, ORD_LOAD_FSDEX, ORD_LOAD_IMAGE_W,
+            ORD_KERNEL_LIB_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
+            ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_FSD, ORD_LOAD_FSDEX, ORD_LOAD_IMAGE_W,
             ORD_LOAD_KERNEL_LIBRARY, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
             ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
             ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE,
@@ -27801,6 +27801,130 @@ fn coredll_raw_kernel_io_control_returns_device_id() -> Result<()> {
     assert_eq!(memory.read_bytes(out + 30, 11), b"INAVI_HOST\0");
     assert_eq!(memory.read_u32(returned)?, required_size);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_kernel_lib_io_control_follows_core_validation() -> Result<()> {
+    const KMOD_CORE: u32 = 1;
+    const IOCTL_KLIB_GETCOMPRESSIONINFO: u32 = 3;
+    const IOCTL_KLIB_GETUSRCOREDLL: u32 = 23;
+    const IOCTL_KLIB_MAPPD: u32 = 24;
+    const IOCTL_KLIB_CACHE_REGISTER: u32 = 33;
+    const COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 19;
+    let out = 0x1600;
+    let returned = 0x1700;
+    memory.map_words(out, 1);
+    memory.map_words(returned, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [
+                KMOD_CORE,
+                IOCTL_KLIB_GETCOMPRESSIONINFO,
+                0,
+                0,
+                out,
+                4,
+                returned
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(out)?, 0);
+    assert_eq!(memory.read_u32(returned)?, 4);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [
+                KMOD_CORE,
+                IOCTL_KLIB_GETCOMPRESSIONINFO,
+                0,
+                0,
+                out,
+                8,
+                returned
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [KMOD_CORE, IOCTL_KLIB_GETUSRCOREDLL, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(COREDLL_MODULE_HANDLE),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [KMOD_CORE, IOCTL_KLIB_CACHE_REGISTER, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [KMOD_CORE, IOCTL_KLIB_MAPPD, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     Ok(())
 }

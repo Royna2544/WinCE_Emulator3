@@ -124,6 +124,25 @@ const SPIF_SENDCHANGE: u32 = 0x0002;
 const SYSTEM_PARAMETERS_INFO_REGISTRY_PATH: &str = r"HKLM\System\Emulator\SystemParametersInfo";
 const SHELL_FOLDERS_REGISTRY_PATH: &str = r"HKLM\System\Explorer\Shell Folders";
 const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
+const KMOD_CORE: u32 = 1;
+const KMOD_OAL: u32 = 5;
+const KMOD_MAX: u32 = 6;
+const IOCTL_KLIB_GETCOMPRESSIONINFO: u32 = 3;
+const IOCTL_KLIB_GETALARMRESOLUTION: u32 = 5;
+const IOCTL_KLIB_ISKDPRESENT: u32 = 6;
+const IOCTL_KLIB_SETIGNORENOFAULT: u32 = 11;
+const IOCTL_KLIB_SETJITDBGRPATH: u32 = 18;
+const IOCTL_KLIB_GETUSRCOREDLL: u32 = 23;
+const IOCTL_KLIB_MAPPD: u32 = 24;
+const IOCTL_KLIB_UNMAPPD: u32 = 25;
+const IOCTL_KLIB_GETKHEAPINFO: u32 = 26;
+const IOCTL_KLIB_GETPHYSMEMINFO: u32 = 27;
+const IOCTL_KLIB_GET_POOL_STATE: u32 = 28;
+const IOCTL_KLIB_UNALIGNENABLE: u32 = 32;
+const IOCTL_KLIB_CACHE_REGISTER: u32 = 33;
+const IOCTL_KLIB_FLUSH_MAPFILES: u32 = 34;
+const KLIB_PHYSMEMINFO_SIZE: u32 = 24;
+const KLIB_NK_PAGE_POOL_STATE_SIZE: u32 = 92;
 const ERROR_PATH_NOT_FOUND: u32 = 3;
 const FSCTL_COPY_EXTERNAL_START: u32 = 0x0009_004c;
 const FSCTL_COPY_EXTERNAL_COMPLETE: u32 = 0x0009_0050;
@@ -4258,10 +4277,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_KERNEL_LIB_IO_CONTROL => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
+            Some(kernel_lib_io_control_raw(kernel, memory, thread_id, args))
         }
         ORD_LOAD_ANIMATED_CURSOR => {
             kernel
@@ -26416,6 +26432,157 @@ fn kernel_io_control_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             write_optional_count(kernel, memory, thread_id, raw_arg(args, 5), 0);
             false
+        }
+    }
+}
+
+fn kernel_lib_io_control_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> CoredllValue {
+    let hlib = raw_arg(args, 0);
+    let code = raw_arg(args, 1);
+    let in_ptr = raw_arg(args, 2);
+    let in_size = raw_arg(args, 3);
+    let out_ptr = raw_arg(args, 4);
+    let out_size = raw_arg(args, 5);
+    let returned_ptr = raw_arg(args, 6);
+
+    if hlib == KMOD_OAL {
+        return CoredllValue::Bool(kernel_io_control_raw(
+            kernel,
+            memory,
+            thread_id,
+            &[code, in_ptr, in_size, out_ptr, out_size, returned_ptr],
+        ));
+    }
+
+    if hlib != KMOD_CORE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return CoredllValue::Bool(false);
+    }
+
+    match code {
+        IOCTL_KLIB_SETIGNORENOFAULT | IOCTL_KLIB_SETJITDBGRPATH => {
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            CoredllValue::Bool(true)
+        }
+        IOCTL_KLIB_GETUSRCOREDLL => {
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            CoredllValue::Handle(COREDLL_MODULE_HANDLE)
+        }
+        IOCTL_KLIB_UNALIGNENABLE => {
+            if in_size != 4 || in_ptr == 0 || memory.read_u32(in_ptr).is_err() {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return CoredllValue::Bool(false);
+            }
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            CoredllValue::Bool(false)
+        }
+        IOCTL_KLIB_GETCOMPRESSIONINFO | IOCTL_KLIB_GETALARMRESOLUTION | IOCTL_KLIB_ISKDPRESENT => {
+            if out_size != 4 || out_ptr == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return CoredllValue::Bool(false);
+            }
+            let value = match code {
+                IOCTL_KLIB_GETALARMRESOLUTION => 1000,
+                _ => 0,
+            };
+            if !write_guest_u32(kernel, memory, thread_id, out_ptr, value) {
+                return CoredllValue::Bool(false);
+            }
+            if !write_optional_count(kernel, memory, thread_id, returned_ptr, 4) {
+                return CoredllValue::Bool(false);
+            }
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            CoredllValue::Bool(true)
+        }
+        IOCTL_KLIB_GETKHEAPINFO => {
+            if returned_ptr == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+                let _ = write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            }
+            CoredllValue::Bool(false)
+        }
+        IOCTL_KLIB_GETPHYSMEMINFO => {
+            if out_size != KLIB_PHYSMEMINFO_SIZE || out_ptr == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            }
+            CoredllValue::Bool(false)
+        }
+        IOCTL_KLIB_GET_POOL_STATE => {
+            if in_ptr != 0
+                || in_size != 0
+                || out_ptr == 0
+                || out_size != KLIB_NK_PAGE_POOL_STATE_SIZE
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            }
+            CoredllValue::Bool(false)
+        }
+        IOCTL_KLIB_MAPPD => {
+            if in_size != 4 || out_size != 520 || in_ptr == 0 || out_ptr == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            }
+            CoredllValue::U32(0)
+        }
+        IOCTL_KLIB_UNMAPPD => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            CoredllValue::Bool(false)
+        }
+        IOCTL_KLIB_CACHE_REGISTER | IOCTL_KLIB_FLUSH_MAPFILES => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            CoredllValue::Bool(false)
+        }
+        _ => {
+            if code >= 256 || hlib <= KMOD_MAX {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            }
+            CoredllValue::Bool(false)
         }
     }
 }

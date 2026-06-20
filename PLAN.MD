@@ -988,6 +988,16 @@ notes when it is still needed for implementation.
   heap-list pointer, heap-list critical-section pointer, and zeroed normal
   non-sentinel override slots. Coverage verifies layout fields, the adjacent
   heap-list head, and repeated-call pointer stability.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kdriver.c` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`: raw
+  `KernelLibIoControl` now follows the CE user-mode `KMOD_CORE` front door for
+  the low-risk scalar controls instead of failing every call. The emulator
+  validates DWORD output sizes, preserves the `GETUSRCOREDLL` return-value
+  quirk, denies cache/mapfile controls with `ERROR_ACCESS_DENIED`, and keeps
+  complex kernel heap/physical memory/page-directory controls behind
+  source-backed validation before unsupported fallbacks. Coverage verifies the
+  scalar output, invalid packet, handle-return, denial, and page-directory
+  validation paths.
 
 ## Active Roadmap
 
