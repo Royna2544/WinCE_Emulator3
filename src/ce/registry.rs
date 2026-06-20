@@ -486,6 +486,10 @@ impl Registry {
         self.keys.len()
     }
 
+    pub fn is_valid_hkey(&self, hkey: HKey) -> bool {
+        self.resolve_handle_path(hkey).is_some()
+    }
+
     fn alloc_key_handle(&mut self, path: String) -> HKey {
         let handle = self.next_handle;
         self.next_handle += 4;

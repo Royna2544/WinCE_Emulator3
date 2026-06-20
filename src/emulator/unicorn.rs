@@ -2983,6 +2983,14 @@ impl UnicornMips {
         if mapped_blob_module_for_pc(&self.mapped_blobs, wndproc).is_some() {
             return Some(wndproc);
         }
+        if wndproc < CE_USER_KERNEL_SPLIT {
+            let slot_zero_wndproc = wndproc & CE_PROCESS_SLOT_MASK;
+            if slot_zero_wndproc != 0
+                && mapped_blob_module_for_pc(&self.mapped_blobs, slot_zero_wndproc).is_some()
+            {
+                return Some(slot_zero_wndproc);
+            }
+        }
         None
     }
 
@@ -42502,6 +42510,21 @@ mod unicorn_tests {
         assert_eq!(
             uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
             super::WNDPROC_RETURN_STUB_ADDR
+        );
+    }
+
+    #[test]
+    fn mapped_guest_wndproc_accepts_ce_process_slot_equivalent() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "image:slot-zero.exe".to_owned(),
+            base: 0x0004_f000,
+            bytes: vec![0; 0x1000],
+        });
+
+        assert_eq!(
+            emulator.mapped_guest_wndproc(0x6004_f134),
+            Some(0x0004_f134)
         );
     }
 

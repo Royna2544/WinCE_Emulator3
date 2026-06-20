@@ -28,6 +28,15 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winreg.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\PM\MDD\pmsysreg.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\PM\PDD\PDA\pwstates.h`:
+  raw `CeFindFirstRegChange` now returns a CE-style waitable registry
+  notification handle instead of reporting unsupported. The handle starts
+  unsignaled, `CeFindNextRegChange` re-arms it by resetting the event, and
+  `CeFindCloseRegChange` closes it through the kernel handle table. Coverage
+  verifies valid predefined-key watches, invalid `HKEY` rejection, wait/reset
+  behavior, and invalid/closed notification handles.
 - `C:\WINCE600\PUBLIC\COMMON\DDK\INC\devload.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\windev.h`,
   `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\CTLPNL\CPLMAIN\system.cpp`, and

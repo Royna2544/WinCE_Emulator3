@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 90] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 93] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13875,6 +13875,18 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 90] = &[
     CoredllOrdinalDef {
         name: "RegistryNotifyMsgQueue",
         ordinal: ORD_REGISTRY_NOTIFY_MSG_QUEUE,
+    },
+    CoredllOrdinalDef {
+        name: "CeFindFirstRegChange",
+        ordinal: ORD_CE_FIND_FIRST_REG_CHANGE,
+    },
+    CoredllOrdinalDef {
+        name: "CeFindNextRegChange",
+        ordinal: ORD_CE_FIND_NEXT_REG_CHANGE,
+    },
+    CoredllOrdinalDef {
+        name: "CeFindCloseRegChange",
+        ordinal: ORD_CE_FIND_CLOSE_REG_CHANGE,
     },
     CoredllOrdinalDef {
         name: "WaitForAPIReady",

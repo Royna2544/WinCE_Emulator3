@@ -3652,24 +3652,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_REG_OPEN_KEY_EX_W => Some(CoredllValue::U32(reg_open_key_ex_w_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_CE_FIND_FIRST_REG_CHANGE => {
-            // CeFindFirstRegChange(hKey, bWatchSubtree, fdwNotifyFilter) — watch registry.
-            // CE registry change notifications; not supported in emulation.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0xffff_ffff))
-        }
-        ORD_CE_FIND_NEXT_REG_CHANGE => {
-            // CeFindNextRegChange(hChange) — re-arm registry change handle. No-op, succeed.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(false))
-        }
-        ORD_CE_FIND_CLOSE_REG_CHANGE => {
-            // CeFindCloseRegChange(hChange) — close registry change notification handle.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_CE_FIND_FIRST_REG_CHANGE => Some(CoredllValue::Handle(ce_find_first_reg_change_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_CE_FIND_NEXT_REG_CHANGE => Some(CoredllValue::Bool(ce_find_next_reg_change_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_CE_FIND_CLOSE_REG_CHANGE => Some(CoredllValue::Bool(ce_find_close_reg_change_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_REG_FLUSH_KEY => {
             // RegFlushKey(hKey) — flush registry hive to storage; no-op in emulation.
             kernel.threads.set_last_error(thread_id, 0);
@@ -16253,6 +16250,35 @@ fn close_handle_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool 
             false
         }
     }
+}
+
+fn ce_find_first_reg_change_raw(kernel: &mut CeKernel, thread_id: u32, hkey: u32) -> u32 {
+    if !kernel.registry.is_valid_hkey(hkey) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0xffff_ffff;
+    }
+
+    let handle = kernel.create_event_w(None, true, false);
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn ce_find_next_reg_change_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    let ok = kernel.reset_event(handle);
+    if ok {
+        kernel.threads.set_last_error(thread_id, 0);
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+    }
+    ok
+}
+
+fn ce_find_close_reg_change_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    close_handle_raw(kernel, thread_id, handle)
 }
 
 fn file_notification_prefix_fit(
@@ -57770,6 +57796,9 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "RegQueryInfoKeyW",
     "RegQueryValueExW",
     "RegSetValueExW",
+    "CeFindFirstRegChange",
+    "CeFindNextRegChange",
+    "CeFindCloseRegChange",
     "CreateFileW",
     "CreateFileForMapping",
     "CreateFileForMappingW",
