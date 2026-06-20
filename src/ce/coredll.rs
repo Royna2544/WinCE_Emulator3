@@ -31766,6 +31766,12 @@ fn find_resource<M: CoredllGuestMemory>(
         return 0;
     };
     let module = normalized_module(kernel, module);
+    if !is_valid_resource_module(kernel, module) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     let Some(handle) = kernel.resources.find_resource(module, name, kind) else {
         kernel
             .threads
@@ -34103,6 +34109,13 @@ fn normalized_module(kernel: &CeKernel, module: u32) -> u32 {
     } else {
         module
     }
+}
+
+fn is_valid_resource_module(kernel: &CeKernel, module: u32) -> bool {
+    module == kernel.process_module_base()
+        || module == COREDLL_MODULE_HANDLE
+        || kernel.is_loaded_module_handle(module)
+        || kernel.resources.has_module_resources(module)
 }
 
 fn load_bitmap_w_raw<M: CoredllGuestMemory>(

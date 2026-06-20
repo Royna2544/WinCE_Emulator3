@@ -825,6 +825,11 @@ notes when it is still needed for implementation.
   pointer validation, short-buffer `ERROR_INSUFFICIENT_BUFFER` behavior that
   preserves the caller length, process isolation, and invalid descriptor
   rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp`: raw
+  `FindResourceW` now preserves CE's split between invalid resource modules
+  and valid modules with missing resources, returning `ERROR_INVALID_HANDLE`
+  only for bogus module handles and `ERROR_RESOURCE_NAME_NOT_FOUND` after a
+  valid module/resource table search misses.
 
 ## Active Roadmap
 

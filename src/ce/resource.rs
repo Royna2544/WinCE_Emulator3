@@ -590,6 +590,14 @@ impl ResourceSystem {
             })
     }
 
+    pub fn has_module_resources(&self, module: u32) -> bool {
+        self.entries.values().any(|entry| entry.module == module)
+            || self
+                .strings
+                .keys()
+                .any(|(entry_module, _id)| *entry_module == module)
+    }
+
     pub fn load_resource(&self, handle: u32) -> Option<u32> {
         Some(self.entries.get(&handle)?.data_ptr)
     }
