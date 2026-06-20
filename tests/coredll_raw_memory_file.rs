@@ -3793,11 +3793,16 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
 fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const STORE_INFO_SIZE: u32 = 232;
     const PARTITION_INFO_SIZE: u32 = 296;
+    const CE_VOLUME_INFO_SIZE: u32 = 144;
     const STORAGE_DEVICE_INFO_SIZE: u32 = 80;
+    const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
+    const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
     const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
     const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
     const STORE_ATTRIBUTE_AUTOMOUNT: u32 = 0x0000_0020;
     const PARTITION_ATTRIBUTE_MOUNTED: u32 = 0x0000_0010;
+    const CE_VOLUME_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0004;
+    const CE_VOLUME_FLAG_STORE: u32 = 0x0000_0020;
     const STORAGE_DEVICE_CLASS_BLOCK: u32 = 0x0000_0001;
     const STORAGE_DEVICE_TYPE_FLASH: u32 = 1 << 1;
     const STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE: u32 = 1 << 30;
@@ -3851,11 +3856,18 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 11;
     let name_ptr = 0x1_0000;
+    let info_level_ptr = 0x1_0100;
+    let bytes_returned_ptr = 0x1_0120;
     let info_ptr = 0x3020_0000;
     let partition_info_ptr = 0x3021_0000;
+    let volume_info_ptr = 0x3022_0000;
     memory.map_halfwords(name_ptr, 32);
+    memory.map_words(info_level_ptr, 1);
+    memory.map_words(bytes_returned_ptr, 1);
     memory.map_bytes(info_ptr, STORE_INFO_SIZE);
     memory.map_bytes(partition_info_ptr, PARTITION_INFO_SIZE);
+    memory.map_bytes(volume_info_ptr, CE_VOLUME_INFO_SIZE);
+    memory.write_word(info_level_ptr, 0);
 
     let read_le_u32 = |bytes: &[u8], offset: usize| -> u32 {
         u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("DWORD"))
@@ -3908,6 +3920,21 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         assert_eq!(read_le_u64(&info, 276), 0);
         assert_eq!(read_le_u32(&info, 284), PARTITION_ATTRIBUTE_MOUNTED);
         assert_eq!(info[288], 0x04);
+    };
+    let assert_sd_volume = |memory: &TestGuestMemory| {
+        let info = memory.read_bytes(volume_info_ptr, CE_VOLUME_INFO_SIZE as usize);
+        assert_eq!(read_le_u32(&info, 0), CE_VOLUME_INFO_SIZE);
+        assert_eq!(
+            read_le_u32(&info, 4) & CE_VOLUME_ATTRIBUTE_REMOVABLE,
+            CE_VOLUME_ATTRIBUTE_REMOVABLE
+        );
+        assert_eq!(
+            read_le_u32(&info, 8) & CE_VOLUME_FLAG_STORE,
+            CE_VOLUME_FLAG_STORE
+        );
+        assert_eq!(read_le_u32(&info, 12), 4096);
+        assert_eq!(read_fixed_wide(&info, 16, 32), "SDMMC Disk");
+        assert_eq!(read_fixed_wide(&info, 80, 32), "SDMMC Disk");
     };
     let assert_flash_store = |memory: &TestGuestMemory| {
         let info = memory.read_bytes(info_ptr, STORE_INFO_SIZE as usize);
@@ -3986,6 +4013,94 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         }
     ));
     assert_sd_partition(&memory);
+
+    memory.write_bytes(volume_info_ptr, &[0x7b; CE_VOLUME_INFO_SIZE as usize]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                FSCTL_GET_VOLUME_INFO,
+                info_level_ptr,
+                4,
+                volume_info_ptr,
+                CE_VOLUME_INFO_SIZE,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, CE_VOLUME_INFO_SIZE);
+    assert_sd_volume(&memory);
+
+    memory.write_bytes(volume_info_ptr, &[0x7c; CE_VOLUME_INFO_SIZE as usize]);
+    memory.write_word(bytes_returned_ptr, 0x1234_abcd);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                FSCTL_GET_VOLUME_INFO,
+                info_level_ptr,
+                0,
+                volume_info_ptr,
+                CE_VOLUME_INFO_SIZE,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0x1234_abcd);
+    assert_eq!(
+        memory.read_bytes(volume_info_ptr, CE_VOLUME_INFO_SIZE as usize),
+        vec![0x7c; CE_VOLUME_INFO_SIZE as usize]
+    );
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                FSCTL_REFRESH_VOLUME,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
     let partition_search_handle = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,

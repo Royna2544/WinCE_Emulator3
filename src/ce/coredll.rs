@@ -23176,6 +23176,25 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
             }
         }
     }
+    if matches!(
+        ioctl_code,
+        FSCTL_GET_VOLUME_INFO | FSCTL_REFRESH_VOLUME | FSCTL_FLUSH_BUFFERS
+    ) {
+        if let Some(store_guest_root) = partition_store_guest_root(kernel, handle) {
+            return fs_io_control_volume_info_raw(
+                kernel,
+                memory,
+                thread_id,
+                Some(store_guest_root.as_str()),
+                ioctl_code,
+                input_ptr,
+                input_len,
+                output_ptr,
+                output_capacity,
+                returned_ptr,
+            );
+        }
+    }
     if ioctl_code == FSCTL_SET_FILE_CACHE {
         match kernel.is_file_handle(handle) {
             Ok(true) => {
@@ -23272,6 +23291,13 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
         },
     );
     result.success
+}
+
+fn partition_store_guest_root(kernel: &mut CeKernel, handle: u32) -> Option<String> {
+    match kernel.handles.get(handle) {
+        Ok(KernelObject::Partition(partition)) => Some(partition.store_guest_root.clone()),
+        Ok(_) | Err(_) => None,
+    }
 }
 
 fn file_handle_get_volume_info_raw<M: CoredllGuestMemory>(

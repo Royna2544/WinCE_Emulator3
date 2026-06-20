@@ -113,6 +113,15 @@ notes when it is still needed for implementation.
   `PARTINFO` size and offsets, partition/file-system/volume names, sector
   counts, mounted attributes, whole-store FAT partition type, enumeration
   exhaustion, missing partitions, and closed partition-find-handle rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\partition.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`: partition-handle
+  `DeviceIoControl` now follows StoreMgr's standard handle API mapping for
+  safe mounted-volume FSCTLs. Coverage verifies `FSCTL_GET_VOLUME_INFO`
+  returns CE-layout volume metadata from an opened partition handle, invalid
+  volume-info inputs leave caller buffers untouched, and
+  `FSCTL_REFRESH_VOLUME` succeeds as a zero-byte no-op.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now
