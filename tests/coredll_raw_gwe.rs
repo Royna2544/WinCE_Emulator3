@@ -10,57 +10,58 @@ use wince_emulation_v3::{
             ORD_BRING_WINDOW_TO_TOP, ORD_CHANGE_DISPLAY_SETTINGS_EX, ORD_CHECK_MENU_ITEM,
             ORD_CHECK_MENU_RADIO_ITEM, ORD_CHECK_RADIO_BUTTON, ORD_CHILD_WINDOW_FROM_POINT,
             ORD_CLIENT_TO_SCREEN, ORD_CLOSE_HANDLE, ORD_COMBINE_RGN, ORD_COPY_RECT,
-            ORD_CREATE_BITMAP, ORD_CREATE_CARET, ORD_CREATE_COMPATIBLE_BITMAP,
-            ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIALOG_INDIRECT_PARAM_W,
-            ORD_CREATE_DIBPATTERN_BRUSH_PT, ORD_CREATE_DIBSECTION, ORD_CREATE_FILE_MAPPING_W,
-            ORD_CREATE_FONT_INDIRECT_W, ORD_CREATE_ICON_INDIRECT, ORD_CREATE_MENU,
-            ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PATTERN_BRUSH, ORD_CREATE_PEN,
-            ORD_CREATE_PEN_INDIRECT, ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN,
-            ORD_CREATE_RECT_RGN_INDIRECT, ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W,
-            ORD_DEF_DLG_PROC_W, ORD_DEF_WINDOW_PROC_W, ORD_DEFAULT_IME_WND_GET, ORD_DELETE_DC,
-            ORD_DELETE_MENU, ORD_DELETE_OBJECT, ORD_DESTROY_ACCELERATOR_TABLE, ORD_DESTROY_CARET,
-            ORD_DESTROY_ICON, ORD_DESTROY_MENU, ORD_DESTROY_WINDOW,
-            ORD_DIALOG_BOX_INDIRECT_PARAM_W, ORD_DISABLE_CARET_SYSTEM_WIDE, ORD_DISPATCH_MESSAGE_W,
-            ORD_DRAW_EDGE, ORD_DRAW_FOCUS_RECT, ORD_DRAW_FRAME_CONTROL, ORD_DRAW_ICON_EX,
-            ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W, ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE,
-            ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT,
-            ORD_ENUM_FONT_FAMILIES_EX_W, ORD_ENUM_FONT_FAMILIES_W, ORD_ENUM_FONTS_W,
-            ORD_ENUM_WINDOWS, ORD_EQUAL_RECT, ORD_EQUAL_RGN, ORD_EXCLUDE_CLIP_RECT, ORD_EXT_ESCAPE,
-            ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FILL_RGN, ORD_FIND_RESOURCE,
-            ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W, ORD_FLUSH_VIEW_OF_FILE, ORD_GET_ACTIVE_WINDOW,
-            ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS,
-            ORD_GET_BK_COLOR, ORD_GET_BK_MODE, ORD_GET_CAPTURE, ORD_GET_CARET_BLINK_TIME,
-            ORD_GET_CARET_POS, ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_ABCWIDTHS_I,
-            ORD_GET_CHAR_WIDTH32, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT,
-            ORD_GET_CLIP_BOX, ORD_GET_CLIP_RGN, ORD_GET_CURRENT_OBJECT, ORD_GET_CURSOR,
-            ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DESKTOP_WINDOW, ORD_GET_DEVICE_CAPS,
-            ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
-            ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
-            ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE, ORD_GET_FOREGROUND_KEYBOARD_TARGET,
-            ORD_GET_FOREGROUND_WINDOW, ORD_GET_ICON_INFO, ORD_GET_KEY_STATE,
-            ORD_GET_KEYBOARD_LAYOUT, ORD_GET_KEYBOARD_LAYOUT_LIST, ORD_GET_KEYBOARD_LAYOUT_NAME_W,
-            ORD_GET_KEYBOARD_TARGET, ORD_GET_LAYOUT, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
-            ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
-            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_COLOR,
-            ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM,
-            ORD_GET_OBJECT_TYPE, ORD_GET_OBJECT_W, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
-            ORD_GET_PIXEL, ORD_GET_QUEUE_STATUS, ORD_GET_REGION_DATA, ORD_GET_RGN_BOX,
-            ORD_GET_ROP2, ORD_GET_STOCK_OBJECT, ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU,
-            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
-            ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN,
-            ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W,
-            ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN,
-            ORD_GET_VERSION_EX_W, ORD_GET_VIEWPORT_EXT_EX, ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW,
-            ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_ORG_EX,
-            ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W,
-            ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT, ORD_GET_WINDOW_THREAD_PROCESS_ID,
-            ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL, ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD,
-            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
-            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
-            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
-            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
-            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_CREATE_BITMAP, ORD_CREATE_BITMAP_FROM_POINTER, ORD_CREATE_CARET,
+            ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC,
+            ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_DIBPATTERN_BRUSH_PT,
+            ORD_CREATE_DIBSECTION, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FONT_INDIRECT_W,
+            ORD_CREATE_ICON_INDIRECT, ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE,
+            ORD_CREATE_PATTERN_BRUSH, ORD_CREATE_PEN, ORD_CREATE_PEN_INDIRECT,
+            ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN, ORD_CREATE_RECT_RGN_INDIRECT,
+            ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W, ORD_DEF_DLG_PROC_W,
+            ORD_DEF_WINDOW_PROC_W, ORD_DEFAULT_IME_WND_GET, ORD_DELETE_DC, ORD_DELETE_MENU,
+            ORD_DELETE_OBJECT, ORD_DESTROY_ACCELERATOR_TABLE, ORD_DESTROY_CARET, ORD_DESTROY_ICON,
+            ORD_DESTROY_MENU, ORD_DESTROY_WINDOW, ORD_DIALOG_BOX_INDIRECT_PARAM_W,
+            ORD_DISABLE_CARET_SYSTEM_WIDE, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_EDGE,
+            ORD_DRAW_FOCUS_RECT, ORD_DRAW_FRAME_CONTROL, ORD_DRAW_ICON_EX, ORD_DRAW_MENU_BAR,
+            ORD_DRAW_TEXT_W, ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE, ORD_ENABLE_MENU_ITEM,
+            ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT, ORD_ENUM_FONT_FAMILIES_EX_W,
+            ORD_ENUM_FONT_FAMILIES_W, ORD_ENUM_FONTS_W, ORD_ENUM_WINDOWS, ORD_EQUAL_RECT,
+            ORD_EQUAL_RGN, ORD_EXCLUDE_CLIP_RECT, ORD_EXT_ESCAPE, ORD_EXT_TEXT_OUT_W,
+            ORD_FILL_RECT, ORD_FILL_RGN, ORD_FIND_RESOURCE, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
+            ORD_FLUSH_VIEW_OF_FILE, ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU,
+            ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_BK_COLOR, ORD_GET_BK_MODE,
+            ORD_GET_CAPTURE, ORD_GET_CARET_BLINK_TIME, ORD_GET_CARET_POS, ORD_GET_CHAR_ABCWIDTHS,
+            ORD_GET_CHAR_ABCWIDTHS_I, ORD_GET_CHAR_WIDTH32, ORD_GET_CLASS_INFO_W,
+            ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CLIP_BOX, ORD_GET_CLIP_RGN,
+            ORD_GET_CURRENT_OBJECT, ORD_GET_CURSOR, ORD_GET_CURSOR_POS, ORD_GET_DC,
+            ORD_GET_DESKTOP_WINDOW, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS,
+            ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT,
+            ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS, ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE,
+            ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW, ORD_GET_ICON_INFO,
+            ORD_GET_KEY_STATE, ORD_GET_KEYBOARD_LAYOUT, ORD_GET_KEYBOARD_LAYOUT_LIST,
+            ORD_GET_KEYBOARD_LAYOUT_NAME_W, ORD_GET_KEYBOARD_TARGET, ORD_GET_LAYOUT, ORD_GET_MENU,
+            ORD_GET_MENU_ITEM_INFO_W, ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP,
+            ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT,
+            ORD_GET_NEAREST_COLOR, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM,
+            ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_OBJECT_TYPE, ORD_GET_OBJECT_W,
+            ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT, ORD_GET_PIXEL, ORD_GET_QUEUE_STATUS,
+            ORD_GET_REGION_DATA, ORD_GET_RGN_BOX, ORD_GET_ROP2, ORD_GET_STOCK_OBJECT,
+            ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH,
+            ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES,
+            ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR,
+            ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W,
+            ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W, ORD_GET_VIEWPORT_EXT_EX,
+            ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW, ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W,
+            ORD_GET_WINDOW_ORG_EX, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
+            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
+            ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL,
+            ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
+            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_CREATE,
+            ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE,
+            ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW,
+            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE,
+            ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
             ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
             ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
             ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
@@ -51178,6 +51179,169 @@ fn coredll_raw_create_bitmap_copies_initial_bits() -> Result<()> {
         [0x00, 0xf8, 0xe0, 0x07],
         "mutating the caller lpBits buffer must not mutate the bitmap"
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_create_bitmap_from_pointer_aliases_supplied_stride() -> Result<()> {
+    const SRCCOPY: u32 = 0x00cc_0020;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 136_u32;
+    let info_ptr = 0x2_0000;
+    let bits_ptr = 0x3000_1000;
+    let stride = 8_u32;
+    memory.map_bytes(info_ptr, 40);
+
+    let mut header = [0u8; 40];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&2i32.to_le_bytes());
+    header[8..12].copy_from_slice(&(-3i32).to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&16u16.to_le_bytes());
+    memory.write_bytes(info_ptr, &header);
+    memory.write_word(info_ptr, 40);
+
+    for (args, expected_error) in [
+        ([0, stride, bits_ptr], ERROR_INVALID_PARAMETER),
+        ([info_ptr, 0, bits_ptr], ERROR_INVALID_PARAMETER),
+        ([info_ptr, stride, 0], ERROR_INVALID_PARAMETER),
+        ([info_ptr, 2, bits_ptr], ERROR_INVALID_PARAMETER),
+    ] {
+        assert!(
+            matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_CREATE_BITMAP_FROM_POINTER,
+                    args,
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(0),
+                    ..
+                }
+            ),
+            "CreateBitmapFromPointer args {args:?} should fail"
+        );
+        assert_eq!(kernel.threads.get_last_error(thread_id), expected_error);
+    }
+
+    write_rgb565(&mut memory, bits_ptr, stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, bits_ptr, stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, bits_ptr, stride, 0, 1, 0x001f);
+    write_rgb565(&mut memory, bits_ptr, stride, 1, 1, 0xffff);
+    write_rgb565(&mut memory, bits_ptr, stride, 0, 2, 0x0000);
+    write_rgb565(&mut memory, bits_ptr, stride, 1, 2, 0xf81f);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_BITMAP_FROM_POINTER,
+        [info_ptr, stride, bits_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateBitmapFromPointer returned unexpected: {other:?}"),
+    };
+    assert_ne!(bitmap, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let object = kernel
+        .resources
+        .bitmap(bitmap)
+        .expect("CreateBitmapFromPointer object");
+    assert_eq!(object.width, 2);
+    assert_eq!(object.height, 3);
+    assert!(object.top_down);
+    assert_eq!(object.width_bytes, stride as i32);
+    assert_eq!(object.bits_ptr, bits_ptr);
+    assert!(!object.bits_owned);
+    assert!(object.bits_writable);
+
+    let src_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC returned unexpected: {other:?}"),
+    };
+    let old_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SELECT_OBJECT,
+        [src_dc, bitmap],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0 => handle,
+        other => panic!("SelectObject(CreateBitmapFromPointer) returned unexpected: {other:?}"),
+    };
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BIT_BLT,
+            [dst_dc, 0, 0, 2, 3, src_dc, 0, 0, SRCCOPY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0xf800);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 0), 0x07e0);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 1), 0x001f);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0xffff);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 2), 0x0000);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 2), 0xf81f);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [src_dc, old_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == bitmap
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 2), 0xf81f);
 
     Ok(())
 }

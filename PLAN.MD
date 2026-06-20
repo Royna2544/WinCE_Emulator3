@@ -28,6 +28,15 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PRIVATE\TEST\MULTIMEDIA\DIRECTX\DSHOW\COMMON\LIBS\IMAGING\imageload.cpp`,
+  `C:\WINCE600\PRIVATE\TEST\MULTIMEDIA\DIRECTX\DSHOW\PLAYBACK\LOGGERS\videoframeinstrumenter.cpp`,
+  and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\CAPTURE\CAMERA\LAYERED\PDD_NULL\nullpdd.cpp`:
+  `CreateBitmapFromPointer` is now implemented for CE-style BITMAPINFO inputs
+  that alias caller-owned image memory with an explicit stride. Raw coverage
+  verifies invalid parameter handling, top-down RGB565 BITMAPINFO metadata,
+  padded source rows, selected memory-DC BitBlt behavior, and non-owned bitmap
+  lifetime after `DeleteObject`.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
   `GetPixelAlphaDIBTest` and `SetPixelAlphaDIBTest` are now covered for raw
   selected 32 bpp DIBs. `GetPixel` truncates stored alpha, and `SetPixel`

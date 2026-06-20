@@ -4029,12 +4029,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_CREATE_BITMAP_FROM_POINTER => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_CREATE_BITMAP_FROM_POINTER => Some(CoredllValue::Handle(
+            create_bitmap_from_pointer_raw(kernel, memory, thread_id, args),
+        )),
         ORD_ENABLE_EUDC => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
@@ -35377,6 +35374,143 @@ fn create_bitmap_raw<M: CoredllGuestMemory>(
     kernel
         .resources
         .create_bitmap(width, height, planes, bits_pixel, bits_ptr)
+}
+
+fn create_bitmap_from_pointer_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let info_ptr = raw_arg(args, 0);
+    let stride = raw_i32_arg(args, 1);
+    let bits_ptr = raw_arg(args, 2);
+    if info_ptr == 0 || stride <= 0 || bits_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(header_size) = read_guest_u32(kernel, memory, thread_id, info_ptr) else {
+        return 0;
+    };
+    if header_size != 12 && !(40..=124).contains(&header_size) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(header_bytes) = read_guest_bytes(kernel, memory, thread_id, info_ptr, header_size)
+    else {
+        return 0;
+    };
+    let Some(header) = parse_dib_header(&header_bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if header.width == 0
+        || header.height == 0
+        || header.planes != 1
+        || !is_supported_dib_bit_depth(header.bits_pixel)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let compression = if header_size >= 40 {
+        let Some(compression) = read_le_u32(&header_bytes, 16) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        compression
+    } else {
+        BI_RGB
+    };
+    let rgb_masks = match dib_rgb_masks(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+    ) {
+        Some(masks) => masks,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+    };
+    let alpha_mask = match dib_alpha_mask(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+    ) {
+        Some(mask) => mask,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+    };
+    let Some(min_stride) = bitmap_byte_count(header.width, 1, header.bits_pixel) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let stride = stride as u32;
+    if stride < min_stride {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(byte_count) = stride.checked_mul(header.height.unsigned_abs()) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if read_guest_bytes(kernel, memory, thread_id, bits_ptr, byte_count).is_none() {
+        return 0;
+    }
+    let color_table = read_dib_color_table(
+        memory,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+        DIB_RGB_COLORS,
+        None,
+    );
+    kernel.threads.set_last_error(thread_id, 0);
+    let bitmap = kernel.resources.create_bitmap_with_masks(
+        header.width,
+        header.height,
+        header.planes,
+        header.bits_pixel,
+        bits_ptr,
+        rgb_masks,
+    );
+    if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
+        object.width_bytes = stride as i32;
+        object.alpha_mask = alpha_mask;
+        object.color_table = color_table;
+    }
+    bitmap
 }
 
 fn ensure_bitmap_backing_for_memory_dc_select(
