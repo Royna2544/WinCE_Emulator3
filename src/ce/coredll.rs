@@ -4134,12 +4134,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_TRANSLATE_CHARSET_INFO => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_TRANSLATE_CHARSET_INFO => Some(CoredllValue::Bool(translate_charset_info_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_IMM_ASSOCIATE_CONTEXT_EX
         | ORD_IMM_GET_VIRTUAL_KEY
         | ORD_IMM_GET_IME_MENU_ITEMS_W
@@ -47680,6 +47677,116 @@ fn create_pen_indirect_raw<M: CoredllGuestMemory>(
 
 fn is_ce_create_pen_style(style: u32) -> bool {
     matches!(style, PS_SOLID | PS_DASH | PS_NULL)
+}
+
+fn translate_charset_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    const TCI_SRCCHARSET: u32 = 1;
+    const TCI_SRCCODEPAGE: u32 = 2;
+    const TCI_SRCFONTSIG: u32 = 3;
+    const ANSI_CHARSET: u32 = 0;
+    const DEFAULT_CHARSET: u32 = 1;
+    const SYMBOL_CHARSET: u32 = 2;
+    const SHIFTJIS_CHARSET: u32 = 128;
+    const HANGEUL_CHARSET: u32 = 129;
+    const GB2312_CHARSET: u32 = 134;
+    const CHINESEBIG5_CHARSET: u32 = 136;
+    const OEM_CHARSET: u32 = 255;
+
+    let src_ptr = raw_arg(args, 0);
+    let charset_info_ptr = raw_arg(args, 1);
+    let flags = raw_arg(args, 2);
+    if src_ptr == 0 || charset_info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let info = match flags {
+        TCI_SRCCHARSET => {
+            let Ok(charset) = memory.read_u32(src_ptr) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            };
+            match charset {
+                ANSI_CHARSET | DEFAULT_CHARSET => Some((charset, 1252, 0)),
+                SYMBOL_CHARSET => Some((SYMBOL_CHARSET, 42, 31)),
+                SHIFTJIS_CHARSET => Some((SHIFTJIS_CHARSET, 932, 17)),
+                HANGEUL_CHARSET => Some((HANGEUL_CHARSET, 949, 18)),
+                GB2312_CHARSET => Some((GB2312_CHARSET, 936, 19)),
+                CHINESEBIG5_CHARSET => Some((CHINESEBIG5_CHARSET, 950, 20)),
+                OEM_CHARSET => Some((OEM_CHARSET, 437, 30)),
+                _ => None,
+            }
+        }
+        TCI_SRCCODEPAGE => {
+            let Ok(codepage) = memory.read_u32(src_ptr) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            };
+            match codepage {
+                42 => Some((SYMBOL_CHARSET, codepage, 31)),
+                437 => Some((OEM_CHARSET, codepage, 30)),
+                932 => Some((SHIFTJIS_CHARSET, codepage, 17)),
+                936 => Some((GB2312_CHARSET, codepage, 19)),
+                949 => Some((HANGEUL_CHARSET, codepage, 18)),
+                950 => Some((CHINESEBIG5_CHARSET, codepage, 20)),
+                1252 => Some((ANSI_CHARSET, codepage, 0)),
+                _ => None,
+            }
+        }
+        TCI_SRCFONTSIG => {
+            let Ok(csb0) = memory.read_u32(src_ptr.wrapping_add(16)) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            };
+            [
+                (ANSI_CHARSET, 1252, 0),
+                (SHIFTJIS_CHARSET, 932, 17),
+                (HANGEUL_CHARSET, 949, 18),
+                (GB2312_CHARSET, 936, 19),
+                (CHINESEBIG5_CHARSET, 950, 20),
+                (OEM_CHARSET, 437, 30),
+                (SYMBOL_CHARSET, 42, 31),
+            ]
+            .into_iter()
+            .find(|(_, _, bit)| csb0 & (1u32 << bit) != 0)
+        }
+        _ => None,
+    };
+
+    let Some((charset, codepage, csb_bit)) = info else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let csb0 = 1u32 << csb_bit;
+    let fields = [charset, codepage, 0, 0, 0, 0, csb0, 0];
+    for (index, value) in fields.into_iter().enumerate() {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            charset_info_ptr.wrapping_add((index as u32).saturating_mul(4)),
+            value,
+        ) {
+            return false;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn create_palette_raw<M: CoredllGuestMemory>(

@@ -660,6 +660,12 @@ notes when it is still needed for implementation.
   `SimpleAddRemoveFontPairs`/`SuperAddRemove` invalid-add paths are now
   represented for raw `AddFontResourceW`: readable files with unsupported font
   signatures fail with `ERROR_INVALID_DATA` instead of being registered.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`: raw
+  `TranslateCharsetInfo` now implements CE's `CHARSETINFO` packet instead of
+  reporting unsupported. Coverage verifies `TCI_SRCCHARSET`,
+  `TCI_SRCCODEPAGE`, and `TCI_SRCFONTSIG` mappings for CE CJK charsets plus
+  invalid charset/null-source rejection without touching caller output.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`:
   `ScrollDCBadParam` is now covered for raw `ScrollDC`: null/bad HDCs fail
   with `ERROR_INVALID_HANDLE`, diagonal scroll deltas fail with

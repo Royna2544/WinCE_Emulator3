@@ -118,8 +118,9 @@ use wince_emulation_v3::{
             ORD_SHOW_WINDOW, ORD_SHSIP_PREFERENCE_I, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
             ORD_START_DOC_W, ORD_START_PAGE, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS,
             ORD_SYSTEM_PARAMETERS_INFO_W, ORD_TRACK_POPUP_MENU_EX, ORD_TRANSLATE_ACCELERATOR_W,
-            ORD_TRANSLATE_MESSAGE, ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UNREGISTER_HOT_KEY,
-            ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
+            ORD_TRANSLATE_CHARSET_INFO, ORD_TRANSLATE_MESSAGE, ORD_TRANSPARENT_IMAGE,
+            ORD_UNION_RECT, ORD_UNREGISTER_HOT_KEY, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
+            ORD_WINDOW_FROM_POINT,
         },
         file::{GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
@@ -22307,6 +22308,132 @@ fn coredll_raw_get_char_abc_widths_i_uses_glyph_count_signature() -> Result<()> 
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_translate_charset_info_maps_ce_charset_sources() -> Result<()> {
+    const TCI_SRCCHARSET: u32 = 1;
+    const TCI_SRCCODEPAGE: u32 = 2;
+    const TCI_SRCFONTSIG: u32 = 3;
+    const SHIFTJIS_CHARSET: u32 = 128;
+    const HANGEUL_CHARSET: u32 = 129;
+    const ERROR_SUCCESS: u32 = 0;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let source_ptr = 0x1_0000;
+    let charset_info_ptr = 0x1_0100;
+    memory.map_words(source_ptr, 6);
+    memory.map_words(charset_info_ptr, 8);
+
+    let assert_charset_info = |memory: &TestGuestMemory, charset, codepage, csb0| -> Result<()> {
+        assert_eq!(memory.read_u32(charset_info_ptr)?, charset);
+        assert_eq!(memory.read_u32(charset_info_ptr + 4)?, codepage);
+        for offset in [8, 12, 16, 20, 28] {
+            assert_eq!(memory.read_u32(charset_info_ptr + offset)?, 0);
+        }
+        assert_eq!(memory.read_u32(charset_info_ptr + 24)?, csb0);
+        Ok(())
+    };
+
+    memory.write_word(source_ptr, SHIFTJIS_CHARSET);
+    memory.write_bytes(charset_info_ptr, &[0xcc; 32]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_CHARSET_INFO,
+            [source_ptr, charset_info_ptr, TCI_SRCCHARSET],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_charset_info(&memory, SHIFTJIS_CHARSET, 932, 1 << 17)?;
+
+    memory.write_word(source_ptr, 949);
+    memory.write_bytes(charset_info_ptr, &[0xdd; 32]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_CHARSET_INFO,
+            [source_ptr, charset_info_ptr, TCI_SRCCODEPAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_charset_info(&memory, HANGEUL_CHARSET, 949, 1 << 18)?;
+
+    memory.write_bytes(source_ptr, &[0; 24]);
+    memory.write_word(source_ptr + 16, 1 << 19);
+    memory.write_bytes(charset_info_ptr, &[0xee; 32]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_CHARSET_INFO,
+            [source_ptr, charset_info_ptr, TCI_SRCFONTSIG],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_charset_info(&memory, 134, 936, 1 << 19)?;
+
+    memory.write_word(source_ptr, 0xffff);
+    memory.write_bytes(charset_info_ptr, &[0xaa; 32]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_CHARSET_INFO,
+            [source_ptr, charset_info_ptr, TCI_SRCCHARSET],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_bytes(charset_info_ptr, 32), vec![0xaa; 32]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_CHARSET_INFO,
+            [0, charset_info_ptr, TCI_SRCCHARSET],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     Ok(())
 }
