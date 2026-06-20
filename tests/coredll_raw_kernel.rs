@@ -19921,7 +19921,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     memory.write_word(data + 8, SHNP_INFORM);
     memory.write_word(data + 12, 0);
     memory.write_word(data + 16, 0x000b_9001);
-    memory.write_word(data + 20, 0x10);
+    memory.write_word(data + 20, SHNUM_TITLE | SHNUM_HTML);
     memory.write_bytes(data + 24, &clsid);
     memory.write_word(data + 40, hwnd);
     memory.write_word(data + 52, 0xCAFE_BABE);
@@ -20370,7 +20370,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(record.priority, SHNP_ICONIC);
     assert_eq!(record.duration_cs, 3);
     assert_eq!(record.icon, 0x000b_9002);
-    assert_eq!(record.flags, 0x10);
+    assert_eq!(record.flags, SHNUM_TITLE | SHNUM_HTML);
     assert_eq!(record.hwnd_sink, hwnd);
     assert_eq!(record.lparam, 0xCAFE_BABE);
     assert_eq!(record.title, "Route changed");
@@ -20499,7 +20499,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             ..
         }
     ));
-    assert_eq!(memory.read_u32(out + 20)?, 0x10);
+    assert_eq!(memory.read_u32(out + 20)?, SHNUM_TITLE | SHNUM_HTML);
     assert_eq!(memory.read_u32(out + 40)?, hwnd);
     assert_eq!(memory.read_u32(out + 52)?, 0xCAFE_BABE);
 
@@ -20722,6 +20722,79 @@ fn shnotification_i_add_uses_marshalled_html_pointer_presence() -> Result<()> {
     assert_eq!(record.title, "");
     assert_eq!(record.html, "");
     assert_eq!(record.duration_cs, 5);
+
+    Ok(())
+}
+
+#[test]
+fn shnotification_i_add_captures_content_by_grf_flags_like_ce() -> Result<()> {
+    const SHNOTIFICATIONDATA_SIZE: u32 = 56;
+    const SHNP_ICONIC: u32 = 0x1b2;
+    const SHNUM_HTML: u32 = 0x0008;
+    const SHNUM_TITLE: u32 = 0x0010;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 47;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHN_FLAGS", "", None, 0, 0, 0);
+    let data = 0x3006_8000;
+    let title = 0x3006_9000;
+    let html = 0x3006_a000;
+    let clsid = [
+        0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+        0x40,
+    ];
+    memory.map_words(data, SHNOTIFICATIONDATA_SIZE / 4);
+    memory.map_bytes(title, 64);
+    memory.map_bytes(html, 128);
+    memory.write_word(data, SHNOTIFICATIONDATA_SIZE);
+    memory.write_word(data + 4, 904);
+    memory.write_word(data + 8, SHNP_ICONIC);
+    memory.write_word(data + 12, 0);
+    memory.write_word(data + 20, SHNUM_TITLE);
+    memory.write_bytes(data + 24, &clsid);
+    memory.write_word(data + 40, hwnd);
+    memory.write_wide_z(title, "Flagged title");
+    memory.write_wide_z(html, "<b>Pointer present</b>");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_ADD_I,
+            [data, SHNOTIFICATIONDATA_SIZE, title, html],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    let record = kernel.shell.notification(clsid, 904).expect("notification");
+    assert_eq!(record.title, "Flagged title");
+    assert_eq!(
+        record.html, "",
+        "CE TaskbarBubble only captures HTML on add when SHNUM_HTML is set"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_UPDATE_I,
+            [SHNUM_HTML, data, SHNOTIFICATIONDATA_SIZE, title, html],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    let record = kernel.shell.notification(clsid, 904).expect("notification");
+    assert_eq!(record.title, "Flagged title");
+    assert_eq!(record.html, "<b>Pointer present</b>");
 
     Ok(())
 }

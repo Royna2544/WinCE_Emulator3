@@ -239,6 +239,13 @@ impl ShellSystem {
             return NotificationResult::InvalidParameter;
         }
         let key = (data.clsid, data.id);
+        let mut data = data;
+        if data.flags & SHNUM_TITLE == 0 {
+            data.title.clear();
+        }
+        if data.flags & SHNUM_HTML == 0 {
+            data.html.clear();
+        }
         if data.priority == SHNP_ICONIC
             && self
                 .notifications

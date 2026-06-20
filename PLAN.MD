@@ -210,6 +210,13 @@ notes when it is still needed for implementation.
   coverage verifies missing devices, invalid Dx values, null outputs, bad
   capability buffers, closed requirement/notification/relationship handles,
   and short system-state buffers.
+- `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
+  and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\TASKBAR\taskbarbubble.cpp`:
+  `SHNotificationAddI` now retains title and HTML content according to CE's
+  `SHNUM_TITLE`/`SHNUM_HTML` taskbar-bubble flags instead of treating every
+  marshalled pointer as captured bubble state. Coverage verifies pointer
+  presence still satisfies the add wrapper contract while retained content is
+  flag-gated and an explicit `SHNUM_HTML` update can populate HTML later.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battery.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battimpl.h`,
