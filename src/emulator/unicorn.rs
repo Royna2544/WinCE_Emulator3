@@ -1838,7 +1838,7 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn prepare_cross_thread_visible_message_callout(&mut self, kernel: &mut CeKernel) -> bool {
-        if !self.pending_wndproc_returns.is_empty()
+        if self.pending_wndproc_returns_block_visible_message_callout(kernel)
             || self.blocked_modal_message_box.is_some()
             || self.blocked_popup_menu_modal.is_some()
             || self.blocked_send_message_timeout.is_some()
@@ -2040,6 +2040,20 @@ impl UnicornMips {
             "pushed cross-thread visible-message WNDPROC callout"
         );
         true
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn pending_wndproc_returns_block_visible_message_callout(&self, kernel: &CeKernel) -> bool {
+        self.pending_wndproc_returns.iter().any(|pending| {
+            let direct_send_without_restore = pending.send_thread_id.is_some()
+                && pending.send_restore.is_none()
+                && pending.send_timeout_result_ptr.is_none()
+                && matches!(pending.source, "SendMessageW" | "SendMessageTimeout");
+            !direct_send_without_restore
+                || pending
+                    .send_thread_id
+                    .is_some_and(|thread_id| kernel.gwe.active_sent_message_id(thread_id).is_some())
+        })
     }
 
     #[cfg(feature = "unicorn")]
@@ -25777,6 +25791,166 @@ mod wait_scheduler_tests {
         assert_eq!(resume.thread_id, active_thread_id);
         assert_eq!(resume.import_pc, active_pc);
         assert_eq!(resume.regs, active_regs);
+    }
+
+    #[test]
+    fn visible_message_can_reenter_after_orphaned_direct_send_return() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let active_pc = 0x6001_f888;
+        let return_sp = 0x7ffd_edd8;
+        let wndproc = 0x6004_f0f4;
+        let msg = crate::ce::gwe::WM_LBUTTONDOWN;
+        map_test_wndproc_module(&mut scheduler, wndproc);
+
+        scheduler.current_thread_id = active_thread_id;
+        let mut active_regs = super::MipsGuestContext::zero();
+        active_regs.regs[29] = return_sp;
+        active_regs.regs[31] = 0x6001_f880;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: active_regs,
+        });
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "SendMessageW",
+                hwnd: 0x0002_0004,
+                msg: 0x534c,
+                wparam: 0,
+                lparam: 0,
+                wndproc,
+                return_pc: 0x0005_a1d8,
+                return_sp: 0x7ffd_ef80,
+                caller_regs: Some(super::MipsGuestContext::zero()),
+                class_name: Some("visible_receiver".to_owned()),
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: Some(active_thread_id),
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: None,
+                clear_focus_after_return: None,
+            });
+
+        let hwnd = kernel.create_window_ex_w(
+            active_thread_id,
+            "visible_receiver",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        let _ = kernel.gwe.validate_window(hwnd);
+        assert!(kernel.post_message_w(hwnd, msg, 1, 0x0020_0010));
+
+        assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
+        assert_eq!(scheduler.current_thread_id(), active_thread_id);
+        assert_eq!(scheduler.pending_wndproc_returns.len(), 2);
+        let pending = scheduler.pending_wndproc_returns.last().unwrap();
+        assert_eq!(pending.source, "OrphanedVisibleMessage");
+        assert_eq!(pending.hwnd, hwnd);
+        assert_eq!(pending.msg, msg);
+    }
+
+    #[test]
+    fn visible_message_waits_behind_live_direct_send_return() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let active_pc = 0x6001_f888;
+        let wndproc = 0x6004_f0f4;
+        let msg = crate::ce::gwe::WM_LBUTTONDOWN;
+        map_test_wndproc_module(&mut scheduler, wndproc);
+
+        let hwnd = kernel.create_window_ex_w(
+            active_thread_id,
+            "visible_receiver",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        let _ = kernel.gwe.validate_window(hwnd);
+        assert!(kernel.post_message_w(hwnd, msg, 1, 0x0020_0010));
+        let send_id = kernel
+            .gwe
+            .queue_send_message_for_window(
+                Some(99),
+                hwnd,
+                crate::ce::gwe::Message::new(hwnd, 0x534c, 0, 0, 0),
+                0,
+                None,
+            )
+            .expect("queued send message");
+        assert_eq!(
+            kernel.gwe.get_message(active_thread_id).map(|message| message.msg),
+            Some(0x534c)
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(active_thread_id),
+            Some(send_id)
+        );
+
+        scheduler.current_thread_id = active_thread_id;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: super::MipsGuestContext::zero(),
+        });
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "SendMessageW",
+                hwnd,
+                msg: 0x534c,
+                wparam: 0,
+                lparam: 0,
+                wndproc,
+                return_pc: 0x0005_a1d8,
+                return_sp: 0x7ffd_ef80,
+                caller_regs: Some(super::MipsGuestContext::zero()),
+                class_name: Some("visible_receiver".to_owned()),
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: Some(active_thread_id),
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: None,
+                clear_focus_after_return: None,
+            });
+
+        assert!(!scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
+        assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
+        assert!(
+            kernel
+                .peek_ready_visible_message_w_filtered(active_thread_id, None, msg, msg)
+                .is_some()
+        );
     }
 
     #[test]
