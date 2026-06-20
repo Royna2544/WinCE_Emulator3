@@ -126,6 +126,10 @@ references for historical reconstruction.
   queued remote GPS input; `queued_serial_bytes` grows because the guest has
   not opened the serial device in this run. `MFS1:` and `SMB1:` also remain
   unopened in the same sample.
+- Fresh 2026-06-21 release run no longer logs mounted resource file opens as
+  `ce.devices` "not configured" misses before falling back to host storage.
+  `CreateFileW` now probes the device namespace only for names present in the
+  configured device table; configured CE device names still open normally.
 
 ## Recent Validation
 
@@ -153,6 +157,10 @@ references for historical reconstruction.
   hidden-helper live-pump handoff. Release build passed with existing warnings.
 - Focused raw coredll/kernel validation covers activation-time `BusName`
   capture, `$bus\...` device-info output, and bus-name wildcard search.
+- Focused device-name validation covers the configured-device precheck used by
+  `CreateFileW`, including CE colon suffixes, `\\.\` prefixes, and ordinary
+  mounted file paths. Release build with `--features unicorn` passed with
+  existing warnings after cleaning the stale running executable.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.
