@@ -4305,6 +4305,43 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         vec![0xa3; STORAGE_DEVICE_INFO_SIZE as usize]
     );
 
+    memory.write_bytes(
+        storage_device_info_ptr,
+        &[0xa4; STORAGE_DEVICE_INFO_SIZE as usize],
+    );
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_DEVICE_INFO,
+                0,
+                0,
+                storage_device_info_ptr,
+                STORAGE_DEVICE_INFO_SIZE,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_face);
+    assert_eq!(
+        memory.read_bytes(storage_device_info_ptr, STORAGE_DEVICE_INFO_SIZE as usize),
+        vec![0xa4; STORAGE_DEVICE_INFO_SIZE as usize]
+    );
+
     memory.write_word(bytes_returned_ptr, 0xfeed_face);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -5096,6 +5133,43 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         STORAGE_DEVICE_INFO_SIZE
     );
     assert_sd_storage_device_info(&memory);
+
+    memory.write_bytes(
+        storage_device_info_ptr,
+        &[0xa8; STORAGE_DEVICE_INFO_SIZE as usize],
+    );
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_DISK_DEVICE_INFO,
+                0,
+                0,
+                storage_device_info_ptr,
+                STORAGE_DEVICE_INFO_SIZE,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_babe);
+    assert_eq!(
+        memory.read_bytes(storage_device_info_ptr, STORAGE_DEVICE_INFO_SIZE as usize),
+        vec![0xa8; STORAGE_DEVICE_INFO_SIZE as usize]
+    );
 
     memory.write_bytes(storage_id_ptr, &[0xaa; 16]);
     memory.write_word(bytes_returned_ptr, 0xfeed_babe);

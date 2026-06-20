@@ -946,6 +946,11 @@ notes when it is still needed for implementation.
   failure split, returning `ERROR_FILE_NOT_FOUND` when the configured `Util`
   DLL is absent and `ERROR_NOT_SUPPORTED` when the DLL is loaded but missing
   the requested `FormatVolumeEx`/`ScanVolumeEx` export.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`: mounted
+  store and partition `DeviceIoControl(IOCTL_DISK_DEVICE_INFO)` now follow
+  CE's cached store-device path by requiring the `STORAGEDEVICEINFO` packet in
+  the input buffer rather than accepting an output-only call shape.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\ui.c`, and
   `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\LANG\IME\CIMEUI\imeui.cpp`: raw

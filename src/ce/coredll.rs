@@ -15563,8 +15563,8 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             disk_ptr,
-            if in_ptr != 0 { in_ptr } else { out_ptr },
-            if in_ptr != 0 { in_bytes } else { out_bytes },
+            in_ptr,
+            in_bytes,
             bytes_returned_ptr,
         ),
         IOCTL_DISK_GET_STORAGEID => fsdmgr_disk_storage_id_raw(
@@ -24659,16 +24659,8 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             &info,
-            if input_ptr != 0 {
-                input_ptr
-            } else {
-                output_ptr
-            },
-            if input_ptr != 0 {
-                input_len
-            } else {
-                output_capacity
-            },
+            input_ptr,
+            input_len,
             returned_ptr,
         ),
         IOCTL_DISK_GET_STORAGEID => storage_identification_raw(
@@ -24927,16 +24919,8 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             &info,
-            if input_ptr != 0 {
-                input_ptr
-            } else {
-                output_ptr
-            },
-            if input_ptr != 0 {
-                input_len
-            } else {
-                output_capacity
-            },
+            input_ptr,
+            input_len,
             returned_ptr,
         ),
         IOCTL_DISK_GET_STORAGEID => storage_identification_raw(
