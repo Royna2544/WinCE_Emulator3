@@ -177,7 +177,9 @@ impl CoredllGuestMemory for TestGuestMemory {
     }
 
     fn ensure_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
-        self.map_bytes(addr, len);
+        for index in 0..len {
+            self.bytes.entry(addr.wrapping_add(index)).or_insert(0);
+        }
         Ok(())
     }
 }

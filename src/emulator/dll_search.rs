@@ -8,7 +8,7 @@ use crate::ce::kernel::CeKernel;
 pub fn emulator_provided_import_module(normalized_module_name: &str) -> bool {
     matches!(
         normalized_module_name,
-        "coredll" | "winsock" | "ws2" | "ws2_32" | "ole32" | "oleaut32" | "olece"
+        "coredll" | "winsock" | "ws2" | "ws2_32" | "ole32" | "oleaut32" | "olece" | "toolhelp"
     )
 }
 

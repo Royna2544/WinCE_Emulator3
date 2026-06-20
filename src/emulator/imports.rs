@@ -36,6 +36,7 @@ pub enum ImportModuleKind {
     Mfc,
     Winsock,
     Ole,
+    Toolhelp,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -244,9 +245,15 @@ impl ImportTrapTable {
                         ),
                 )?
             }
-            ImportModuleKind::Winsock | ImportModuleKind::Ole => ImportTrapReturn::v0(
-                dispatch_external_stub_to_u32(kernel, trap, memory, context.thread_id, args),
-            ),
+            ImportModuleKind::Winsock | ImportModuleKind::Ole | ImportModuleKind::Toolhelp => {
+                ImportTrapReturn::v0(dispatch_external_stub_to_u32(
+                    kernel,
+                    trap,
+                    memory,
+                    context.thread_id,
+                    args,
+                ))
+            }
             ImportModuleKind::Fsdmgr => {
                 ImportTrapReturn::v0(crate::ce::coredll::dispatch_fsdmgr_import_raw(
                     kernel,
@@ -613,6 +620,15 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
             args,
         ),
         ImportModuleKind::Ole => ole_stub_return(kernel, memory, thread_id, name, args),
+        ImportModuleKind::Toolhelp => crate::ce::coredll::dispatch_toolhelp_import_raw(
+            kernel,
+            memory,
+            thread_id,
+            trap.ordinal,
+            trap.name.as_deref(),
+            args,
+        )
+        .unwrap_or(0),
         ImportModuleKind::Coredll => 0,
         ImportModuleKind::Fsdmgr => 0,
         ImportModuleKind::Mfc => {
@@ -791,6 +807,8 @@ fn classify_import_module(module_name: &str) -> Option<ImportModuleKind> {
         Some(ImportModuleKind::Winsock)
     } else if normalized == "ole32" || normalized == "oleaut32" || normalized == "olece" {
         Some(ImportModuleKind::Ole)
+    } else if normalized == "toolhelp" {
+        Some(ImportModuleKind::Toolhelp)
     } else {
         None
     }

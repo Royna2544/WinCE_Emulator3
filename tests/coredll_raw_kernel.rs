@@ -3,7 +3,10 @@ use std::fs;
 use wince_emulation_v3::{
     Result,
     ce::{
-        coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
+        coredll::{
+            CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue,
+            dispatch_toolhelp_import_raw,
+        },
         coredll_ordinals::{
             ORD_ACTIVATE_DEVICE, ORD_ACTIVATE_DEVICE_EX, ORD_BATTERY_DRVR_GET_LEVELS,
             ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION, ORD_BATTERY_GET_LIFE_TIME_INFO,
@@ -6578,6 +6581,7 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
     const TH32CS_SNAPMODULE: u32 = 0x0000_0008;
     const TH32HEAPLIST_SIZE: u32 = 24;
+    const HEAPLIST32_SIZE: u32 = 16;
     const HEAPENTRY32_SIZE: u32 = 36;
     const HF32_DEFAULT: u32 = 1;
     const LF32_FIXED: u32 = 1;
@@ -6882,6 +6886,267 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         .collect::<Vec<_>>();
     assert!(heap_entry_addresses.contains(&heap_alloc_a));
     assert!(heap_entry_addresses.contains(&heap_alloc_b));
+
+    let public_snapshot = dispatch_toolhelp_import_raw(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        None,
+        Some("CreateToolhelp32Snapshot"),
+        &[TH32CS_SNAPHEAPLIST | TH32CS_SNAPPROCESS, 0],
+    )
+    .expect("toolhelp CreateToolhelp32Snapshot");
+    assert_ne!(public_snapshot, 0);
+    assert_ne!(public_snapshot, INVALID_TOOLHELP_SNAPSHOT);
+    assert_eq!(
+        read_guest_le_u32(&memory, public_snapshot),
+        THSNAP_SIZE,
+        "public snapshot handle=0x{public_snapshot:08x}"
+    );
+    assert_eq!(read_guest_le_u32(&memory, public_snapshot + 16), 2);
+    assert_eq!(read_guest_le_u32(&memory, public_snapshot + 32), 1);
+
+    let public_process_entry = 0x02_1000;
+    let public_process_short = 0x02_1300;
+    let public_module_entry = 0x02_1600;
+    let public_thread_entry = 0x02_1b00;
+    let public_heap_list = 0x02_1d00;
+    let public_heap_entry = 0x02_1e00;
+    let public_read_source = 0x02_2000;
+    let public_read_dest = 0x02_2010;
+    let public_read_count = 0x02_2020;
+    memory.map_bytes(public_process_entry, PROCESSENTRY32_SIZE);
+    memory.map_bytes(public_process_short, PROCESSENTRY32_SIZE);
+    memory.map_bytes(public_module_entry, MODULEENTRY32_SIZE);
+    memory.map_bytes(public_thread_entry, THREADENTRY32_SIZE);
+    memory.map_bytes(public_heap_list, HEAPLIST32_SIZE);
+    memory.map_bytes(public_heap_entry, HEAPENTRY32_SIZE);
+    memory.map_bytes(public_read_source, 8);
+    memory.map_bytes(public_read_dest, 8);
+    memory.map_words(public_read_count, 1);
+    memory.write_word(public_process_entry, PROCESSENTRY32_SIZE);
+    memory.write_word(public_process_short, PROCESSENTRY32_SIZE - 1);
+    memory.write_word(public_module_entry, MODULEENTRY32_SIZE);
+    memory.write_word(public_thread_entry, THREADENTRY32_SIZE);
+    memory.write_word(public_heap_list, HEAPLIST32_SIZE);
+    memory.write_word(public_heap_entry, HEAPENTRY32_SIZE);
+
+    let current_process_id = kernel.current_process_id();
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            None,
+            Some("Process32First"),
+            &[public_snapshot, public_process_entry],
+        ),
+        Some(1)
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, public_process_entry),
+        PROCESSENTRY32_SIZE
+    );
+    assert_eq!(read_guest_le_u32(&memory, public_snapshot + 36), 1);
+    let first_public_process = read_guest_le_u32(&memory, public_process_entry + 8);
+    assert!(process_ids.contains(&first_public_process));
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            None,
+            Some("Process32Next"),
+            &[public_snapshot, public_process_entry],
+        ),
+        Some(1)
+    );
+    assert_eq!(read_guest_le_u32(&memory, public_snapshot + 36), 2);
+    let second_public_process = read_guest_le_u32(&memory, public_process_entry + 8);
+    assert!(process_ids.contains(&second_public_process));
+    assert_ne!(first_public_process, second_public_process);
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            None,
+            Some("Process32Next"),
+            &[public_snapshot, public_process_entry],
+        ),
+        Some(0)
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_FILES
+    );
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            None,
+            Some("Process32First"),
+            &[public_snapshot, public_process_short],
+        ),
+        Some(0)
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    let public_module_snapshot = dispatch_toolhelp_import_raw(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        Some(2),
+        None,
+        &[TH32CS_SNAPMODULE, 0],
+    )
+    .expect("toolhelp CreateToolhelp32Snapshot ordinal");
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            Some(12),
+            None,
+            &[public_module_snapshot, public_module_entry],
+        ),
+        Some(1)
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, public_module_entry),
+        MODULEENTRY32_SIZE
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, public_module_entry + 20),
+        toolhelp_module_base
+    );
+    assert_eq!(read_guest_le_u32(&memory, public_module_snapshot + 40), 1);
+
+    let public_thread_snapshot = dispatch_toolhelp_import_raw(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        None,
+        Some("CreateToolhelp32Snapshot"),
+        &[TH32CS_SNAPTHREAD, 0],
+    )
+    .expect("toolhelp thread snapshot");
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            None,
+            Some("Thread32First"),
+            &[public_thread_snapshot, public_thread_entry],
+        ),
+        Some(1)
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, public_thread_entry),
+        THREADENTRY32_SIZE
+    );
+    assert_eq!(read_guest_le_u32(&memory, public_thread_snapshot + 44), 1);
+    assert!(thread_ids.contains(&read_guest_le_u32(&memory, public_thread_entry + 8)));
+
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            None,
+            Some("Heap32ListFirst"),
+            &[public_snapshot, public_heap_list],
+        ),
+        Some(1)
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, public_heap_list),
+        HEAPLIST32_SIZE
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, public_heap_list + 4),
+        kernel.current_process_id()
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, public_heap_list + 8),
+        PROCESS_HEAP_HANDLE
+    );
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            None,
+            Some("Heap32First"),
+            &[
+                public_snapshot,
+                public_heap_entry,
+                current_process_id,
+                PROCESS_HEAP_HANDLE,
+            ],
+        ),
+        Some(1)
+    );
+    let public_heap_entry_a = read_guest_le_u32(&memory, public_heap_entry + 8);
+    assert!(heap_entry_addresses.contains(&public_heap_entry_a));
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            None,
+            Some("Heap32Next"),
+            &[public_snapshot, public_heap_entry],
+        ),
+        Some(1)
+    );
+    let public_heap_entry_b = read_guest_le_u32(&memory, public_heap_entry + 8);
+    assert!(heap_entry_addresses.contains(&public_heap_entry_b));
+    assert_ne!(public_heap_entry_a, public_heap_entry_b);
+
+    memory.write_bytes(public_read_source, b"toolhelp");
+    memory.fill(public_read_dest, 0xcc, 8);
+    memory.write_word(public_read_count, 0xffff_ffff);
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            Some(7),
+            None,
+            &[
+                0,
+                public_read_source,
+                public_read_dest,
+                4,
+                public_read_count
+            ],
+        ),
+        Some(1)
+    );
+    assert_eq!(
+        memory.read_bytes(public_read_dest, 8),
+        b"tool\xcc\xcc\xcc\xcc"
+    );
+    assert_eq!(memory.read_u32(public_read_count)?, 4);
+    assert_eq!(
+        dispatch_toolhelp_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            Some(14),
+            None,
+            &[public_snapshot],
+        ),
+        Some(1)
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

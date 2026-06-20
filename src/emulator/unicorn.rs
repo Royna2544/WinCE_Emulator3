@@ -2289,6 +2289,13 @@ impl UnicornMips {
         {
             return;
         }
+        if self.running_guest_thread.is_none()
+            && !active_has_visible_queued_receiver
+            && self.has_runnable_parked_process(kernel)
+            && self.rotate_to_next_parked_process(kernel)
+        {
+            return;
+        }
         if live_pump
             && !self.active_process_has_resumable_context()
             && self.rotate_to_any_runnable_parked_process(kernel)
@@ -5612,6 +5619,14 @@ impl UnicornMips {
             RegisterMIPS, Unicorn,
             unicorn_const::{Arch, HookType, Mode},
         };
+
+        if self.running_guest_thread.is_none()
+            && !self.active_process_has_visible_queued_receiver_work(kernel)
+            && self.has_runnable_parked_process(kernel)
+            && self.rotate_to_next_parked_process(kernel)
+        {
+            return Ok(());
+        }
 
         // ── Unicorn engine init + memory mapping ─────────────────────────────────
         let framebuffer_info = framebuffer.info();
@@ -30819,7 +30834,7 @@ mod guest_thread_stack_tests {
             current_directory: None,
         });
 
-        scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
+        scheduler.rotate_after_run_slice_handoff(&mut kernel, false);
 
         assert_eq!(kernel.current_process_id(), 1);
         assert_eq!(scheduler.current_thread_id, 1);
@@ -31759,6 +31774,76 @@ mod guest_thread_stack_tests {
                 .iter()
                 .any(|process| process.process_state.process_id == 66)
         );
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 67)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn live_pump_handoff_rotates_when_active_has_no_running_thread() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let active_thread = 3;
+        scheduler.set_initial_thread_id(active_thread);
+        scheduler.current_thread_id = active_thread;
+        scheduler.running_guest_thread = None;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0040_1000,
+            regs: MipsGuestContext::zero(),
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0040_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+        ));
+        let _active_hwnd = kernel.create_window_ex_w(
+            active_thread,
+            "active_visible",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+
+        let parked_thread = 1;
+        let parked_cpu = resumable_cpu(parked_thread, 0x0010_2000)?;
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: Some(0x101),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: parked_thread,
+            cpu: Box::new(parked_cpu),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
+
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(scheduler.current_thread_id, parked_thread);
+        assert_eq!(scheduler.running_guest_thread, Some((parked_thread, 0x101)));
+        assert_eq!(scheduler.saved_context.as_ref().unwrap().pc, 0x0010_2000);
         assert!(
             scheduler
                 .parked_child_processes

@@ -35,9 +35,6 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
   edge coverage where current behavior is still only partially proven.
 - Prove device-notification consumer ordering and wake cadence in live startup
   scenarios.
-- Verify remaining CE toolhelp enumeration walkers and edge flags against dump
-  callers before treating process, module, thread, and heap layouts as fully
-  complete.
 - Replace the synthetic `GetCallStackSnapshot` frame with real saved-context
   unwinding when guest diagnostics require deeper stack fidelity.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or

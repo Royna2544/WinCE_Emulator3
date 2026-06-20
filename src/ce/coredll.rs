@@ -62716,6 +62716,7 @@ fn write_process_memory_raw<M: CoredllGuestMemory>(
     )
 }
 
+const TH32CS_SNAPHEAPLIST: u32 = 0x0000_0001;
 const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
 const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
 const TH32CS_SNAPMODULE: u32 = 0x0000_0008;
@@ -62732,6 +62733,198 @@ const MAX_PATH_WCHARS: usize = 260;
 const HF32_DEFAULT: u32 = 1;
 const LF32_FIXED: u32 = 1;
 const INVALID_TOOLHELP_SNAPSHOT: u32 = 0xffff_ffff;
+
+pub fn dispatch_toolhelp_import_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    ordinal: Option<u32>,
+    name: Option<&str>,
+    args: &[u32],
+) -> Option<u32> {
+    let normalized = name.map(normalize_name);
+    match (ordinal, normalized.as_deref()) {
+        (Some(1), _) | (_, Some("dllmain")) => Some(1),
+        (Some(2), _) | (_, Some("createtoolhelp32snapshot")) => {
+            Some(create_toolhelp32_snapshot_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+            ))
+        }
+        (Some(3), _) | (_, Some("heap32first")) => Some(u32::from(heap32_first_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
+        (Some(4), _) | (_, Some("heap32next")) => Some(u32::from(heap32_next_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        (Some(5), _) | (_, Some("heap32listfirst")) => Some(u32::from(heap32_list_first_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        (Some(6), _) | (_, Some("heap32listnext")) => Some(u32::from(heap32_list_next_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        (Some(7), _) | (_, Some("toolhelp32readprocessmemory")) => Some(u32::from(
+            toolhelp32_read_process_memory_raw(kernel, memory, thread_id, args),
+        )),
+        (Some(8), _) | (_, Some("process32first")) => {
+            Some(u32::from(toolhelp_fixed_entry_first_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                ToolhelpFixedEntryKind::Process,
+            )))
+        }
+        (Some(9), _) | (_, Some("process32next")) => {
+            Some(u32::from(toolhelp_fixed_entry_next_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                ToolhelpFixedEntryKind::Process,
+            )))
+        }
+        (Some(10), _) | (_, Some("thread32first")) => {
+            Some(u32::from(toolhelp_fixed_entry_first_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                ToolhelpFixedEntryKind::Thread,
+            )))
+        }
+        (Some(11), _) | (_, Some("thread32next")) => {
+            Some(u32::from(toolhelp_fixed_entry_next_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                ToolhelpFixedEntryKind::Thread,
+            )))
+        }
+        (Some(12), _) | (_, Some("module32first")) => {
+            Some(u32::from(toolhelp_fixed_entry_first_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                ToolhelpFixedEntryKind::Module,
+            )))
+        }
+        (Some(13), _) | (_, Some("module32next")) => {
+            Some(u32::from(toolhelp_fixed_entry_next_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                ToolhelpFixedEntryKind::Module,
+            )))
+        }
+        (Some(14), _) | (_, Some("closetoolhelp32snapshot")) => Some(u32::from(
+            close_toolhelp32_snapshot_raw(kernel, thread_id, raw_arg(args, 0)),
+        )),
+        _ => None,
+    }
+}
+
+fn create_toolhelp32_snapshot_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    flags: u32,
+    process_id: u32,
+) -> u32 {
+    let snapshot = thcreate_snapshot_raw(kernel, memory, thread_id, &[flags, process_id]);
+    if snapshot != INVALID_TOOLHELP_SNAPSHOT
+        && flags & TH32CS_SNAPHEAPLIST != 0
+        && (process_id == 0 || process_id == kernel.current_process_id())
+    {
+        let _ = get_heap_snapshot_raw(kernel, memory, thread_id, snapshot);
+    }
+    snapshot
+}
+
+fn close_toolhelp32_snapshot_raw(kernel: &mut CeKernel, thread_id: u32, snapshot: u32) -> bool {
+    if snapshot != INVALID_TOOLHELP_SNAPSHOT && snapshot != 0 {
+        let _ = kernel.memory.virtual_free(snapshot, 0, MEM_RELEASE);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn toolhelp32_read_process_memory_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let process_id_or_handle = raw_arg(args, 0);
+    let process_handle =
+        if process_id_or_handle == 0 || process_id_or_handle == kernel.current_process_id() {
+            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE
+        } else if kernel.process_id_for_handle(process_id_or_handle).is_some() {
+            process_id_or_handle
+        } else {
+            let Some(handle) = kernel.open_process_handle(process_id_or_handle) else {
+                let _ = write_optional_count(kernel, memory, thread_id, raw_arg(args, 4), 0);
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            };
+            let ok = process_memory_copy_raw(
+                kernel,
+                memory,
+                thread_id,
+                handle,
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+                raw_arg(args, 3),
+                raw_arg(args, 4),
+                false,
+            );
+            let _ = kernel.close_handle(handle);
+            return ok;
+        };
+    process_memory_copy_raw(
+        kernel,
+        memory,
+        thread_id,
+        process_handle,
+        raw_arg(args, 1),
+        raw_arg(args, 2),
+        raw_arg(args, 3),
+        raw_arg(args, 4),
+        false,
+    )
+}
 
 fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -63012,6 +63205,598 @@ fn build_heap_snapshot_bytes(kernel: &CeKernel, flags: u32) -> (Vec<u8>, usize) 
         );
     }
     (bytes, heaps.len())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ToolhelpSnapshotHeader {
+    cb_inuse: u32,
+    proc_count: u32,
+    mod_count: u32,
+    thread_count: u32,
+    heap_list_count: u32,
+    proc_idx: u32,
+    mod_idx: u32,
+    thread_idx: u32,
+    heap_list_offset: u32,
+    heap_entry_list_offset: u32,
+    heap_entry_idx: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ToolhelpFixedEntryKind {
+    Process,
+    Module,
+    Thread,
+}
+
+impl ToolhelpFixedEntryKind {
+    fn entry_size(self) -> u32 {
+        match self {
+            Self::Process => PROCESSENTRY32_SIZE as u32,
+            Self::Module => MODULEENTRY32_SIZE as u32,
+            Self::Thread => THREADENTRY32_SIZE as u32,
+        }
+    }
+
+    fn count(self, header: &ToolhelpSnapshotHeader) -> u32 {
+        match self {
+            Self::Process => header.proc_count,
+            Self::Module => header.mod_count,
+            Self::Thread => header.thread_count,
+        }
+    }
+
+    fn cursor(self, header: &ToolhelpSnapshotHeader) -> u32 {
+        match self {
+            Self::Process => header.proc_idx,
+            Self::Module => header.mod_idx,
+            Self::Thread => header.thread_idx,
+        }
+    }
+
+    fn cursor_offset(self) -> u32 {
+        match self {
+            Self::Process => 36,
+            Self::Module => 40,
+            Self::Thread => 44,
+        }
+    }
+
+    fn array_base(self, snapshot: u32, header: &ToolhelpSnapshotHeader) -> Option<u32> {
+        let mut base = snapshot.checked_add(THSNAP_SIZE as u32)?;
+        match self {
+            Self::Process => Some(base),
+            Self::Module => {
+                base =
+                    base.checked_add(header.proc_count.checked_mul(PROCESSENTRY32_SIZE as u32)?)?;
+                Some(base)
+            }
+            Self::Thread => {
+                base =
+                    base.checked_add(header.proc_count.checked_mul(PROCESSENTRY32_SIZE as u32)?)?;
+                base =
+                    base.checked_add(header.mod_count.checked_mul(MODULEENTRY32_SIZE as u32)?)?;
+                Some(base)
+            }
+        }
+    }
+}
+
+fn toolhelp_fixed_entry_first_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    snapshot: u32,
+    entry_ptr: u32,
+    kind: ToolhelpFixedEntryKind,
+) -> bool {
+    if !toolhelp_entry_size_valid(kernel, memory, thread_id, entry_ptr, kind.entry_size()) {
+        return false;
+    }
+    let Some(header) = read_toolhelp_snapshot_header(kernel, memory, thread_id, snapshot) else {
+        return false;
+    };
+    if kind.count(&header) == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+        return false;
+    }
+    let Some(source) = toolhelp_fixed_entry_addr(snapshot, &header, kind, 0) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !copy_toolhelp_entry(
+        kernel,
+        memory,
+        thread_id,
+        source,
+        entry_ptr,
+        kind.entry_size(),
+    ) {
+        return false;
+    }
+    if !write_guest_toolhelp_le_u32(
+        kernel,
+        memory,
+        thread_id,
+        snapshot.wrapping_add(kind.cursor_offset()),
+        1,
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn toolhelp_fixed_entry_next_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    snapshot: u32,
+    entry_ptr: u32,
+    kind: ToolhelpFixedEntryKind,
+) -> bool {
+    if !toolhelp_entry_size_valid(kernel, memory, thread_id, entry_ptr, kind.entry_size()) {
+        return false;
+    }
+    let Some(header) = read_toolhelp_snapshot_header(kernel, memory, thread_id, snapshot) else {
+        return false;
+    };
+    let count = kind.count(&header);
+    let cursor = kind.cursor(&header);
+    if count == 0 || cursor == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if cursor >= count {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+        return false;
+    }
+    let Some(source) = toolhelp_fixed_entry_addr(snapshot, &header, kind, cursor) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !copy_toolhelp_entry(
+        kernel,
+        memory,
+        thread_id,
+        source,
+        entry_ptr,
+        kind.entry_size(),
+    ) {
+        return false;
+    }
+    if !write_guest_toolhelp_le_u32(
+        kernel,
+        memory,
+        thread_id,
+        snapshot.wrapping_add(kind.cursor_offset()),
+        cursor.saturating_add(1),
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn heap32_list_first_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    snapshot: u32,
+    heap_list_ptr: u32,
+) -> bool {
+    if !toolhelp_entry_size_valid(kernel, memory, thread_id, heap_list_ptr, HEAPLIST32_SIZE) {
+        return false;
+    }
+    let Some(header) = read_toolhelp_snapshot_header(kernel, memory, thread_id, snapshot) else {
+        return false;
+    };
+    let Some(heap_offset) = first_heap_list_offset(&header) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if header.heap_list_count == 0
+        || !valid_heap_list(kernel, memory, thread_id, snapshot, heap_offset, &header)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+        return false;
+    }
+    if !copy_toolhelp_entry(
+        kernel,
+        memory,
+        thread_id,
+        snapshot.wrapping_add(heap_offset),
+        heap_list_ptr,
+        HEAPLIST32_SIZE,
+    ) {
+        return false;
+    }
+    if !write_guest_toolhelp_le_u32(kernel, memory, thread_id, snapshot + 48, heap_offset) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn heap32_list_next_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    snapshot: u32,
+    heap_list_ptr: u32,
+) -> bool {
+    if !toolhelp_entry_size_valid(kernel, memory, thread_id, heap_list_ptr, HEAPLIST32_SIZE) {
+        return false;
+    }
+    let Some(header) = read_toolhelp_snapshot_header(kernel, memory, thread_id, snapshot) else {
+        return false;
+    };
+    if header.heap_list_count == 0 || header.heap_list_offset == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(current_total) =
+        read_heap_list_total_size(kernel, memory, thread_id, snapshot, header.heap_list_offset)
+    else {
+        return false;
+    };
+    let Some(next_offset) = header.heap_list_offset.checked_add(current_total) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+        return false;
+    };
+    if !valid_heap_list(kernel, memory, thread_id, snapshot, next_offset, &header) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+        return false;
+    }
+    if !copy_toolhelp_entry(
+        kernel,
+        memory,
+        thread_id,
+        snapshot.wrapping_add(next_offset),
+        heap_list_ptr,
+        HEAPLIST32_SIZE,
+    ) {
+        return false;
+    }
+    if !write_guest_toolhelp_le_u32(kernel, memory, thread_id, snapshot + 48, next_offset) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn heap32_first_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    snapshot: u32,
+    heap_entry_ptr: u32,
+    process_id: u32,
+    heap_id: u32,
+) -> bool {
+    if !toolhelp_entry_size_valid(
+        kernel,
+        memory,
+        thread_id,
+        heap_entry_ptr,
+        HEAPENTRY32_SIZE as u32,
+    ) {
+        return false;
+    }
+    let Some(header) = read_toolhelp_snapshot_header(kernel, memory, thread_id, snapshot) else {
+        return false;
+    };
+    let Some(heap_offset) = find_heap_list_offset(
+        kernel, memory, thread_id, snapshot, &header, process_id, heap_id,
+    ) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(heap_list) = read_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        snapshot.wrapping_add(heap_offset).wrapping_add(16),
+        4,
+    ) else {
+        return false;
+    };
+    let entry_count = read_toolhelp_le_u32(&heap_list, 0);
+    if !write_guest_toolhelp_le_u32(kernel, memory, thread_id, snapshot + 52, heap_offset) {
+        return false;
+    }
+    if entry_count == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+        return false;
+    }
+    let first_entry = snapshot
+        .wrapping_add(heap_offset)
+        .wrapping_add(TH32HEAPLIST_SIZE as u32);
+    if !copy_toolhelp_entry(
+        kernel,
+        memory,
+        thread_id,
+        first_entry,
+        heap_entry_ptr,
+        HEAPENTRY32_SIZE as u32,
+    ) {
+        return false;
+    }
+    if !write_guest_toolhelp_le_u32(kernel, memory, thread_id, snapshot + 56, 1) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn heap32_next_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    snapshot: u32,
+    heap_entry_ptr: u32,
+) -> bool {
+    if !toolhelp_entry_size_valid(
+        kernel,
+        memory,
+        thread_id,
+        heap_entry_ptr,
+        HEAPENTRY32_SIZE as u32,
+    ) {
+        return false;
+    }
+    let Some(header) = read_toolhelp_snapshot_header(kernel, memory, thread_id, snapshot) else {
+        return false;
+    };
+    if header.heap_entry_idx == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(entry_count_bytes) = read_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        snapshot
+            .wrapping_add(header.heap_entry_list_offset)
+            .wrapping_add(16),
+        4,
+    ) else {
+        return false;
+    };
+    let entry_count = read_toolhelp_le_u32(&entry_count_bytes, 0);
+    let entry_offset = match header
+        .heap_entry_list_offset
+        .checked_add(TH32HEAPLIST_SIZE as u32)
+        .and_then(|base| {
+            base.checked_add(header.heap_entry_idx.checked_mul(HEAPENTRY32_SIZE as u32)?)
+        }) {
+        Some(offset) => offset,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+            return false;
+        }
+    };
+    if header.heap_entry_idx >= entry_count || entry_offset >= header.cb_inuse {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_FILES);
+        return false;
+    }
+    if !copy_toolhelp_entry(
+        kernel,
+        memory,
+        thread_id,
+        snapshot.wrapping_add(entry_offset),
+        heap_entry_ptr,
+        HEAPENTRY32_SIZE as u32,
+    ) {
+        return false;
+    }
+    if !write_guest_toolhelp_le_u32(
+        kernel,
+        memory,
+        thread_id,
+        snapshot + 56,
+        header.heap_entry_idx.saturating_add(1),
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn toolhelp_entry_size_valid<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    entry_ptr: u32,
+    required_size: u32,
+) -> bool {
+    if entry_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(size) = read_guest_u32(kernel, memory, thread_id, entry_ptr) else {
+        return false;
+    };
+    if size < required_size {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    true
+}
+
+fn read_toolhelp_snapshot_header<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    snapshot: u32,
+) -> Option<ToolhelpSnapshotHeader> {
+    if snapshot == 0 || snapshot == INVALID_TOOLHELP_SNAPSHOT {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let header = read_guest_bytes(kernel, memory, thread_id, snapshot, THSNAP_SIZE as u32)?;
+    if read_toolhelp_le_u32(&header, 0) != THSNAP_SIZE as u32 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    Some(ToolhelpSnapshotHeader {
+        cb_inuse: read_toolhelp_le_u32(&header, 4),
+        proc_count: read_toolhelp_le_u32(&header, 16),
+        mod_count: read_toolhelp_le_u32(&header, 20),
+        thread_count: read_toolhelp_le_u32(&header, 24),
+        heap_list_count: read_toolhelp_le_u32(&header, 32),
+        proc_idx: read_toolhelp_le_u32(&header, 36),
+        mod_idx: read_toolhelp_le_u32(&header, 40),
+        thread_idx: read_toolhelp_le_u32(&header, 44),
+        heap_list_offset: read_toolhelp_le_u32(&header, 48),
+        heap_entry_list_offset: read_toolhelp_le_u32(&header, 52),
+        heap_entry_idx: read_toolhelp_le_u32(&header, 56),
+    })
+}
+
+fn toolhelp_fixed_entry_addr(
+    snapshot: u32,
+    header: &ToolhelpSnapshotHeader,
+    kind: ToolhelpFixedEntryKind,
+    index: u32,
+) -> Option<u32> {
+    if index >= kind.count(header) {
+        return None;
+    }
+    kind.array_base(snapshot, header)?
+        .checked_add(index.checked_mul(kind.entry_size())?)
+}
+
+fn copy_toolhelp_entry<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    source: u32,
+    destination: u32,
+    size: u32,
+) -> bool {
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, source, size) else {
+        return false;
+    };
+    write_guest_bytes(kernel, memory, thread_id, destination, &bytes)
+}
+
+fn first_heap_list_offset(header: &ToolhelpSnapshotHeader) -> Option<u32> {
+    (THSNAP_SIZE as u32)
+        .checked_add(header.proc_count.checked_mul(PROCESSENTRY32_SIZE as u32)?)?
+        .checked_add(header.mod_count.checked_mul(MODULEENTRY32_SIZE as u32)?)?
+        .checked_add(header.thread_count.checked_mul(THREADENTRY32_SIZE as u32)?)
+}
+
+fn read_heap_list_total_size<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    snapshot: u32,
+    heap_offset: u32,
+) -> Option<u32> {
+    let bytes = read_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        snapshot.wrapping_add(heap_offset).wrapping_add(20),
+        4,
+    )?;
+    Some(read_toolhelp_le_u32(&bytes, 0))
+}
+
+fn valid_heap_list<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    snapshot: u32,
+    heap_offset: u32,
+    header: &ToolhelpSnapshotHeader,
+) -> bool {
+    let Some(total_size) =
+        read_heap_list_total_size(kernel, memory, thread_id, snapshot, heap_offset)
+    else {
+        return false;
+    };
+    total_size >= TH32HEAPLIST_SIZE as u32
+        && total_size < header.cb_inuse
+        && heap_offset < header.cb_inuse
+        && heap_offset
+            .checked_add(total_size)
+            .is_some_and(|end| end <= header.cb_inuse)
+}
+
+fn find_heap_list_offset<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    snapshot: u32,
+    header: &ToolhelpSnapshotHeader,
+    process_id: u32,
+    heap_id: u32,
+) -> Option<u32> {
+    let mut offset = first_heap_list_offset(header)?;
+    for _ in 0..header.heap_list_count {
+        if offset > header.cb_inuse
+            || !valid_heap_list(kernel, memory, thread_id, snapshot, offset, header)
+        {
+            return None;
+        }
+        let heap_list = read_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            snapshot.wrapping_add(offset),
+            TH32HEAPLIST_SIZE as u32,
+        )?;
+        let entry_process = read_toolhelp_le_u32(&heap_list, 4);
+        let entry_heap = read_toolhelp_le_u32(&heap_list, 8);
+        if entry_process == process_id && entry_heap == heap_id {
+            return Some(offset);
+        }
+        offset = offset.checked_add(read_heap_list_total_size(
+            kernel, memory, thread_id, snapshot, offset,
+        )?)?;
+    }
+    None
 }
 
 fn write_heap_list32(

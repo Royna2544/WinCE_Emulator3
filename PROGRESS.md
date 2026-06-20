@@ -42,6 +42,9 @@ references for historical reconstruction.
   memory blocks.
 - Toolhelp heap snapshots now append live process heap lists and fixed heap
   allocation entries through raw `GetHeapSnapshot` memory blocks.
+- Public `toolhelp.dll` imports now create/close snapshots, walk process,
+  thread, module, heap-list, and heap-entry records, and read current-process
+  memory through CE-shaped snapshot buffers.
 
 ## Latest Confirmed State
 
