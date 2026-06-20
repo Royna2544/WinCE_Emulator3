@@ -797,6 +797,13 @@ notes when it is still needed for implementation.
   through the opened partition handle, scatter-gather splitting, shared
   mounted-store identity, request status updates, zero byte-counts, and invalid
   SG request rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\NOTIFY\fsnotify.cpp`: raw
+  `GetEventData`/`SetEventData` now preserve the CE event `dwData` payload
+  used by filesystem notification events instead of reporting unsupported or
+  discarding writes. Coverage verifies zero-payload last-error clearing,
+  nonzero payload reads without clobbering last-error, successful updates, and
+  invalid event handles.
 
 ## Active Roadmap
 

@@ -4315,16 +4315,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, thread_id, args,
         ))),
         // Event data (user-event payload)
-        ORD_GET_EVENT_DATA => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
-        ORD_SET_EVENT_DATA => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_GET_EVENT_DATA => Some(CoredllValue::U32(get_event_data_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SET_EVENT_DATA => Some(CoredllValue::Bool(set_event_data_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         // Message queues
         ORD_OPEN_MSG_QUEUE => Some(CoredllValue::Handle(open_msg_queue_raw(
             kernel,
@@ -27271,6 +27272,30 @@ fn is_named_event_signaled_raw<M: CoredllGuestMemory>(
         return false;
     };
     kernel.is_named_event_signaled_w(&name)
+}
+
+fn get_event_data_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    let Some(data) = kernel.get_event_data(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    if data == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    data
+}
+
+fn set_event_data_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32, data: u32) -> bool {
+    if !kernel.set_event_data(handle, data) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn create_semaphore_w_raw<M: CoredllGuestMemory>(

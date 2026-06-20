@@ -110,6 +110,7 @@ fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
         name: Some("smoke".to_owned()),
         manual_reset: true,
         signaled: false,
+        data: 0,
     }));
     assert!(matches!(
         kernel.handles.get(event_handle).unwrap(),

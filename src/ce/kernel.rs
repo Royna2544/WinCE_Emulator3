@@ -6533,6 +6533,40 @@ impl CeKernel {
         success
     }
 
+    pub fn get_event_data(&mut self, handle: u32) -> Option<u32> {
+        let data = self.handles.get_event_data(handle);
+        self.record_event_trace(EventTraceRecord {
+            op: "GetEventData",
+            handle: Some(handle),
+            name: None,
+            manual_reset: None,
+            signaled: None,
+            result: Some(data.is_some()),
+            detail: Some(match data {
+                Some(data) => format!("{}/data=0x{data:08x}", self.describe_handle(handle)),
+                None => self.describe_handle(handle),
+            }),
+        });
+        data
+    }
+
+    pub fn set_event_data(&mut self, handle: u32, data: u32) -> bool {
+        let success = self.handles.set_event_data(handle, data);
+        self.record_event_trace(EventTraceRecord {
+            op: "SetEventData",
+            handle: Some(handle),
+            name: None,
+            manual_reset: None,
+            signaled: None,
+            result: Some(success),
+            detail: Some(format!(
+                "{}/data=0x{data:08x}",
+                self.describe_handle(handle)
+            )),
+        });
+        success
+    }
+
     pub fn pulse_event(&mut self, handle: u32) -> bool {
         self.pulse_event_with_trace_detail(handle, None)
     }

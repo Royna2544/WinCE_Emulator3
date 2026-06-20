@@ -48,6 +48,7 @@ pub struct EventObject {
     pub name: Option<String>,
     pub manual_reset: bool,
     pub signaled: bool,
+    pub data: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -314,10 +315,11 @@ impl HandleTable {
     pub fn describe_handle(&self, handle: u32) -> String {
         match self.get(handle) {
             Ok(KernelObject::Event(event)) => format!(
-                "event(name={},manual={},signaled={})",
+                "event(name={},manual={},signaled={},data=0x{:08x})",
                 event.name.as_deref().unwrap_or("<unnamed>"),
                 event.manual_reset,
-                event.signaled
+                event.signaled,
+                event.data
             ),
             Ok(KernelObject::Mutex(mutex)) => format!(
                 "mutex(name={},owner={},locks={})",
@@ -456,6 +458,7 @@ impl HandleTable {
             name,
             manual_reset,
             signaled: initial_state,
+            data: 0,
         }))
     }
 
@@ -949,6 +952,21 @@ impl HandleTable {
             return false;
         };
         event.signaled = false;
+        true
+    }
+
+    pub fn get_event_data(&self, handle: u32) -> Option<u32> {
+        let Ok(KernelObject::Event(event)) = self.get(handle) else {
+            return None;
+        };
+        Some(event.data)
+    }
+
+    pub fn set_event_data(&mut self, handle: u32, data: u32) -> bool {
+        let Ok(KernelObject::Event(event)) = self.get_mut(handle) else {
+            return false;
+        };
+        event.data = data;
         true
     }
 

@@ -1712,13 +1712,31 @@ impl UnicornMips {
             let _ = kernel.gwe.validate_window(message.hwnd);
             return true;
         }
-        let wndproc = self
-            .receiver_process_wndproc_for_process(
-                original_wndproc,
-                window.process_id,
-                kernel.current_process_id(),
-            )
-            .unwrap_or(original_wndproc);
+        let Some(wndproc) = self.receiver_process_wndproc_for_process(
+            original_wndproc,
+            window.process_id,
+            kernel.current_process_id(),
+        ) else {
+            kernel.record_window_lifecycle_trace(
+                "skip_unmapped_wndproc",
+                thread_id,
+                Some(message.hwnd),
+                Some(0),
+                Some(format!(
+                    "source=OrphanedVisibleMessage/msg=0x{:08x}/wndproc=0x{original_wndproc:08x}/class={}/mapped_blobs={}",
+                    message.msg,
+                    window.class_name,
+                    self.mapped_blobs.len()
+                )),
+            );
+            if message.msg == crate::ce::gwe::WM_PAINT {
+                let _ = kernel.gwe.validate_window(message.hwnd);
+            } else {
+                kernel.gwe.post_message(thread_id, message);
+                kernel.queue_message_wake_candidates(thread_id);
+            }
+            return false;
+        };
 
         let return_sp = saved.regs.regs[29];
         let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
@@ -2041,8 +2059,13 @@ impl UnicornMips {
         };
         let wndproc = window.wndproc;
         !is_guest_wndproc(wndproc)
-            || window.process_id == kernel.current_process_id()
-            || self.receiver_process_wndproc(wndproc).is_some()
+            || self
+                .receiver_process_wndproc_for_process(
+                    wndproc,
+                    window.process_id,
+                    kernel.current_process_id(),
+                )
+                .is_some()
     }
 
     #[cfg(feature = "unicorn")]
@@ -3196,6 +3219,9 @@ impl UnicornMips {
         process_id: u32,
         current_process_id: u32,
     ) -> Option<u32> {
+        if is_ce_high_process_slot_callback(wndproc) {
+            return Some(wndproc);
+        }
         let local = self.receiver_process_wndproc(wndproc);
         if local.is_some_and(|mapped| mapped != wndproc) {
             return local;
@@ -3205,8 +3231,8 @@ impl UnicornMips {
         {
             return local;
         }
-        if is_ce_high_process_slot_callback(wndproc) {
-            return Some(wndproc);
+        if local == Some(wndproc) && wndproc >= CE_PROCESS_SLOT_SIZE {
+            return None;
         }
         if let Some(parked) = self
             .parked_child_processes
@@ -44338,7 +44364,22 @@ mod unicorn_tests {
         );
         assert_eq!(
             child.receiver_process_wndproc_for_process(0x4019_f0f4, 67, 67),
-            Some(0x4019_f0f4)
+            None
+        );
+
+        let mut loaded_child = super::UnicornMips::new().unwrap();
+        loaded_child
+            .loaded_modules
+            .push(crate::emulator::types::LoadedPeModuleInfo {
+                name: "commctrl.dll".to_owned(),
+                base: 0x4015_0000,
+                image_size: 0x7f000,
+                ..Default::default()
+            });
+
+        assert_eq!(
+            loaded_child.receiver_process_wndproc_for_process(0x4019_f0f4, 67, 67),
+            None
         );
     }
 
