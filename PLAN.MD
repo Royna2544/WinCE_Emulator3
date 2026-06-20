@@ -144,6 +144,12 @@ notes when it is still needed for implementation.
   requiring both a valid process object and writable output pointer, returning
   no-debugger state for valid current or launched processes and
   `ERROR_INVALID_PARAMETER` for null/bad inputs.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\dbgapi.c`: raw
+  `DebugActiveProcess`/`DebugActiveProcessStop` now track CE debugger
+  attachment state instead of returning unsupported. Coverage verifies invalid
+  and self-process rejection, duplicate attach `ERROR_ACCESS_DENIED`, debugger
+  presence queries through duplicate handles, same-thread detach, and
+  wrong-thread/repeated detach rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c` and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: raw `CreateThread` now
   mirrors CE's `NKCreateThread` parameter gate by rejecting null start

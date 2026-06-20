@@ -6231,11 +6231,79 @@ impl CeKernel {
         self.handles.process_id(handle)
     }
 
+    fn process_id_from_id_or_handle(&self, process_id_or_handle: u32) -> Option<u32> {
+        if process_id_or_handle == self.current_process_id || process_id_or_handle == u32::MAX {
+            return Some(self.current_process_id);
+        }
+        if self.handles.process_id_exists(process_id_or_handle) {
+            return Some(process_id_or_handle);
+        }
+        self.process_id_for_handle(process_id_or_handle)
+    }
+
     pub fn open_process_handle(&mut self, process_id: u32) -> Option<u32> {
         if process_id == self.current_process_id || process_id == u32::MAX {
             return Some(CE_CURRENT_PROCESS_PSEUDO_HANDLE);
         }
         self.handles.open_process(process_id)
+    }
+
+    pub fn is_remote_debugger_present_for_handle(&self, handle: u32) -> Option<bool> {
+        let process_id = self.process_id_for_handle(handle)?;
+        Some(
+            self.handles
+                .process_debugger_thread_id(process_id)
+                .is_some(),
+        )
+    }
+
+    pub fn debug_active_process(
+        &mut self,
+        process_id_or_handle: u32,
+        debugger_thread_id: u32,
+    ) -> u32 {
+        let Some(process_id) = self.process_id_from_id_or_handle(process_id_or_handle) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if process_id == self.current_process_id {
+            return ERROR_INVALID_PARAMETER;
+        }
+        if self
+            .handles
+            .process_debugger_thread_id(process_id)
+            .is_some()
+        {
+            return ERROR_ACCESS_DENIED;
+        }
+        if self
+            .handles
+            .set_process_debugger_thread_id(process_id, Some(debugger_thread_id))
+        {
+            0
+        } else {
+            ERROR_INVALID_PARAMETER
+        }
+    }
+
+    pub fn debug_active_process_stop(
+        &mut self,
+        process_id_or_handle: u32,
+        debugger_thread_id: u32,
+    ) -> u32 {
+        let Some(process_id) = self.process_id_from_id_or_handle(process_id_or_handle) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        if self.handles.process_debugger_thread_id(process_id) != Some(debugger_thread_id) {
+            return ERROR_INVALID_PARAMETER;
+        }
+        if self
+            .handles
+            .set_process_debugger_thread_id(process_id, None)
+        {
+            0
+        } else {
+            ERROR_INVALID_PARAMETER
+        }
     }
 
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {

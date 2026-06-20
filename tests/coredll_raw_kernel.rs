@@ -17,20 +17,20 @@ use wince_emulation_v3::{
             ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
             ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W,
             ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
-            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
-            ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
-            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
-            ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
-            ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
-            ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE, ORD_FILE_TIME_TO_SYSTEM_TIME,
-            ORD_FREE_LIBRARY, ORD_GET_APIADDRESS, ORD_GET_CALL_STACK_SNAPSHOT,
-            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
-            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
-            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
-            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER,
-            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
-            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
-            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
+            ORD_DEBUG_ACTIVE_PROCESS, ORD_DEBUG_ACTIVE_PROCESS_STOP, ORD_DELETE_CRITICAL_SECTION,
+            ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON,
+            ORD_DEVICE_POWER_NOTIFY, ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W,
+            ORD_DRAW_ICON_EX, ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION,
+            ORD_ENUM_CLIPBOARD_FORMATS, ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES,
+            ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_APIADDRESS,
+            ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
+            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
+            ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS,
+            ORD_GET_DEVICE_POWER, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
+            ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT,
+            ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
             ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_PRIORITY_CLIPBOARD_FORMAT,
             ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W,
@@ -5232,6 +5232,172 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             thread_id,
             ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
             [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x2000_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEBUG_ACTIVE_PROCESS,
+            [current_process_id],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEBUG_ACTIVE_PROCESS,
+            [0xdead_beef],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEBUG_ACTIVE_PROCESS,
+            [launch.process_id],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    memory.write_u32(debugger_present_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            [opened_process, debugger_present_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(debugger_present_ptr)?, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEBUG_ACTIVE_PROCESS,
+            [opened_process],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
+    );
+
+    let wrong_debugger_thread_id = thread_id + 1000;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            wrong_debugger_thread_id,
+            ORD_DEBUG_ACTIVE_PROCESS_STOP,
+            [opened_process],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(wrong_debugger_thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    memory.write_u32(debugger_present_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            [opened_process, debugger_present_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(debugger_present_ptr)?, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEBUG_ACTIVE_PROCESS_STOP,
+            [opened_process],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    memory.write_u32(debugger_present_ptr, 0xffff_ffff)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            [opened_process, debugger_present_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(debugger_present_ptr)?, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEBUG_ACTIVE_PROCESS_STOP,
+            [opened_process],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(false),

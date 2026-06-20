@@ -220,6 +220,7 @@ pub struct ProcessObject {
     pub process_id: u32,
     pub exit_code: u32,
     pub signaled: bool,
+    pub debugger_thread_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -597,6 +598,7 @@ impl HandleTable {
             process_id,
             exit_code: 259,
             signaled: false,
+            debugger_thread_id: None,
         }))
     }
 
@@ -896,6 +898,42 @@ impl HandleTable {
             return None;
         };
         Some(process.process_id)
+    }
+
+    pub fn process_id_exists(&self, process_id: u32) -> bool {
+        self.objects.values().any(|object| {
+            matches!(
+                object,
+                KernelObject::Process(process) if process.process_id == process_id
+            )
+        })
+    }
+
+    pub fn process_debugger_thread_id(&self, process_id: u32) -> Option<u32> {
+        self.objects.values().find_map(|object| match object {
+            KernelObject::Process(process) if process.process_id == process_id => {
+                process.debugger_thread_id
+            }
+            _ => None,
+        })
+    }
+
+    pub fn set_process_debugger_thread_id(
+        &mut self,
+        process_id: u32,
+        debugger_thread_id: Option<u32>,
+    ) -> bool {
+        let mut found = false;
+        for object in self.objects.values_mut() {
+            let KernelObject::Process(process) = object else {
+                continue;
+            };
+            if process.process_id == process_id {
+                process.debugger_thread_id = debugger_thread_id;
+                found = true;
+            }
+        }
+        found
     }
 
     pub fn set_event(&mut self, handle: u32) -> bool {

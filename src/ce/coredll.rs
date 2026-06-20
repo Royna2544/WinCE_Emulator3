@@ -2497,13 +2497,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_DEBUG_ACTIVE_PROCESS | ORD_DEBUG_ACTIVE_PROCESS_STOP => {
-            // Not supported; return FALSE.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_DEBUG_ACTIVE_PROCESS => Some(CoredllValue::Bool(debug_active_process_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_DEBUG_ACTIVE_PROCESS_STOP => Some(CoredllValue::Bool(debug_active_process_stop_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_WAIT_FOR_DEBUG_EVENT => {
             // WaitForDebugEvent(lpDebugEvent, dwMilliseconds) — no debugger; return FALSE.
             kernel
@@ -27383,13 +27382,48 @@ fn check_remote_debugger_present_raw<M: CoredllGuestMemory>(
 ) -> bool {
     let process_handle = raw_arg(args, 0);
     let out_ptr = raw_arg(args, 1);
-    if out_ptr == 0 || kernel.process_id_for_handle(process_handle).is_none() {
+    let Some(debugger_present) = kernel.is_remote_debugger_present_for_handle(process_handle)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if out_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    if !write_guest_u32(kernel, memory, thread_id, out_ptr, 0) {
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        out_ptr,
+        u32::from(debugger_present),
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn debug_active_process_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let process_id_or_handle = raw_arg(args, 0);
+    let error = kernel.debug_active_process(process_id_or_handle, thread_id);
+    if error != 0 {
+        kernel.threads.set_last_error(thread_id, error);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn debug_active_process_stop_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let process_id_or_handle = raw_arg(args, 0);
+    let error = kernel.debug_active_process_stop(process_id_or_handle, thread_id);
+    if error != 0 {
+        kernel.threads.set_last_error(thread_id, error);
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
