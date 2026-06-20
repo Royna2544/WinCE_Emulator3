@@ -23565,7 +23565,12 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
 ) -> Option<bool> {
     let handled = matches!(
         ioctl_code,
-        DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO | IOCTL_DISK_DEVICE_INFO | IOCTL_DISK_GET_STORAGEID
+        DISK_IOCTL_GETINFO
+            | IOCTL_DISK_GETINFO
+            | DISK_IOCTL_GETNAME
+            | IOCTL_DISK_GETNAME
+            | IOCTL_DISK_DEVICE_INFO
+            | IOCTL_DISK_GET_STORAGEID
     );
     if !handled {
         return None;
@@ -23573,6 +23578,23 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
     let info = store_manager_info_for_handle(kernel, handle)?;
     Some(match ioctl_code {
         DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO => store_disk_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            &info,
+            if output_ptr != 0 {
+                output_ptr
+            } else {
+                input_ptr
+            },
+            if output_ptr != 0 {
+                output_capacity
+            } else {
+                input_len
+            },
+            returned_ptr,
+        ),
+        DISK_IOCTL_GETNAME | IOCTL_DISK_GETNAME => store_disk_get_name_raw(
             kernel,
             memory,
             thread_id,
@@ -23616,6 +23638,26 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         ),
         _ => unreachable!(),
     })
+}
+
+fn store_disk_get_name_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info: &StoreManagerInfo,
+    out_ptr: u32,
+    out_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    disk_name_raw(
+        kernel,
+        memory,
+        thread_id,
+        &info.device_name,
+        out_ptr,
+        out_len,
+        returned_ptr,
+    )
 }
 
 fn store_disk_info_raw<M: CoredllGuestMemory>(
@@ -23949,14 +23991,34 @@ fn partition_disk_get_name_raw<M: CoredllGuestMemory>(
     out_len: u32,
     returned_ptr: u32,
 ) -> bool {
+    disk_name_raw(
+        kernel,
+        memory,
+        thread_id,
+        &info.volume_name,
+        out_ptr,
+        out_len,
+        returned_ptr,
+    )
+}
+
+fn disk_name_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    name: &str,
+    out_ptr: u32,
+    out_len: u32,
+    returned_ptr: u32,
+) -> bool {
     if out_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let mut bytes = Vec::with_capacity((info.volume_name.len() + 1) * 2);
-    for unit in info.volume_name.encode_utf16().chain(std::iter::once(0)) {
+    let mut bytes = Vec::with_capacity((name.len() + 1) * 2);
+    for unit in name.encode_utf16().chain(std::iter::once(0)) {
         bytes.extend_from_slice(&unit.to_le_bytes());
     }
     let needed = bytes.len() as u32;

@@ -140,8 +140,10 @@ notes when it is still needed for implementation.
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: store-handle
   `DeviceIoControl` now exposes the cached disk paths CE uses before
   partition mounting. Coverage verifies `IOCTL_DISK_GETINFO` with shared
-  in/out `DISK_INFO`, cached `IOCTL_DISK_DEVICE_INFO`, byte counts, mounted
-  profile/device flags, and invalid cached-device-info no-touch behavior.
+  in/out `DISK_INFO`, cached `IOCTL_DISK_DEVICE_INFO`, store
+  `IOCTL_DISK_GETNAME`/`DISK_IOCTL_GETNAME`, byte counts, mounted
+  profile/device flags, and invalid cached-device-info/name no-touch
+  behavior.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: store and partition

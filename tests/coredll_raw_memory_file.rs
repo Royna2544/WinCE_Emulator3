@@ -3799,6 +3799,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const CE_VOLUME_INFO_SIZE: u32 = 144;
     const FSD_DISK_INFO_SIZE: u32 = 24;
     const STORAGE_DEVICE_INFO_SIZE: u32 = 80;
+    const DISK_IOCTL_GETNAME: u32 = 9;
     const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
     const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
     const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
@@ -4155,6 +4156,68 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 16);
     assert_synthetic_storage_id(&memory);
+
+    memory.write_bytes(disk_name_ptr, &[0xab; 64]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_GETNAME,
+                0,
+                0,
+                disk_name_ptr,
+                64,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 12);
+    assert_eq!(
+        read_fixed_wide(&memory.read_bytes(disk_name_ptr, 64), 0, 8),
+        "DSK1:"
+    );
+
+    memory.write_bytes(disk_name_ptr, &[0xac; 64]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                DISK_IOCTL_GETNAME,
+                disk_name_ptr,
+                8,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_face);
+    assert_eq!(memory.read_bytes(disk_name_ptr, 64), vec![0xac; 64]);
 
     memory.write_bytes(storage_id_ptr, &[0xa5; 16]);
     memory.write_word(bytes_returned_ptr, 0xfeed_face);
