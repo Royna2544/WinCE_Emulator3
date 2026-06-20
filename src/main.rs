@@ -940,8 +940,12 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
-        if args.remote_server.is_some() {
+        if should_sleep_remote_idle(args.remote_server.is_some(), cpu.has_saved_context()) {
             std::thread::sleep(Duration::from_millis(16));
+            continue;
+        }
+        if args.remote_server.is_some() && cpu.has_saved_context() {
+            reported_blocked_message_wait = false;
             continue;
         }
         break;
@@ -1043,6 +1047,10 @@ fn should_use_host_idle_message_poll_slice(
     idle_message_wait_only: bool,
 ) -> bool {
     desktop == DesktopMode::Host && !has_saved_context && idle_message_wait_only
+}
+
+fn should_sleep_remote_idle(remote_server_enabled: bool, has_saved_context: bool) -> bool {
+    remote_server_enabled && !has_saved_context
 }
 
 fn should_idle_host_message_pump(
@@ -4104,6 +4112,13 @@ mod tests {
             false,
             false,
         ));
+    }
+
+    #[test]
+    fn remote_idle_sleep_only_without_saved_context() {
+        assert!(should_sleep_remote_idle(true, false));
+        assert!(!should_sleep_remote_idle(true, true));
+        assert!(!should_sleep_remote_idle(false, false));
     }
 
     #[test]
