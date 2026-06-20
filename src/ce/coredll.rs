@@ -40,8 +40,8 @@ use crate::{
         },
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
-            CriticalSectionObject, FileMappingView, KernelObject, PowerRequirementObject,
-            ThreadResumeResult, ThreadSuspendResult,
+            CriticalSectionObject, FileMappingView, KernelObject, PowerNotificationObject,
+            PowerRequirementObject, ThreadResumeResult, ThreadSuspendResult,
         },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, HKey,
@@ -4308,12 +4308,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_REQUEST_POWER_NOTIFICATIONS | ORD_STOP_POWER_NOTIFICATIONS => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_REQUEST_POWER_NOTIFICATIONS => Some(CoredllValue::Handle(
+            request_power_notifications_raw(kernel, thread_id, raw_arg(args, 0), raw_arg(args, 1)),
+        )),
+        ORD_STOP_POWER_NOTIFICATIONS => Some(CoredllValue::U32(stop_power_notifications_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_DEVICE_POWER_NOTIFY => Some(CoredllValue::U32(device_power_notify_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -20618,6 +20620,48 @@ fn release_power_requirement_raw(kernel: &mut CeKernel, thread_id: u32, handle: 
         || !matches!(
             kernel.handles.get(handle),
             Ok(KernelObject::PowerRequirement(_))
+        )
+    {
+        return power_status(kernel, thread_id, ERROR_INVALID_HANDLE);
+    }
+    match kernel.close_handle(handle) {
+        Ok(_) => power_status(kernel, thread_id, ERROR_SUCCESS),
+        Err(_) => power_status(kernel, thread_id, ERROR_INVALID_HANDLE),
+    }
+}
+
+fn request_power_notifications_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    message_queue: u32,
+    flags: u32,
+) -> u32 {
+    if message_queue == 0
+        || !matches!(
+            kernel.handles.get(message_queue),
+            Ok(KernelObject::MessageQueue(_))
+        )
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    let handle = kernel
+        .handles
+        .insert(KernelObject::PowerNotification(PowerNotificationObject {
+            message_queue,
+            flags,
+        }));
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    handle
+}
+
+fn stop_power_notifications_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    if handle == 0
+        || !matches!(
+            kernel.handles.get(handle),
+            Ok(KernelObject::PowerNotification(_))
         )
     {
         return power_status(kernel, thread_id, ERROR_INVALID_HANDLE);

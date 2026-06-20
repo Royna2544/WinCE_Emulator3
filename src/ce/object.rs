@@ -29,6 +29,7 @@ pub enum KernelObject {
     Window(u32),
     WaveOut(u32),
     PowerRequirement(PowerRequirementObject),
+    PowerNotification(PowerNotificationObject),
     FileMapping(FileMappingObject),
     CriticalSection(CriticalSectionObject),
     Thread(ThreadObject),
@@ -115,6 +116,12 @@ pub struct PowerRequirementObject {
     pub device_flags: u32,
     pub system_state: Option<String>,
     pub system_flags: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PowerNotificationObject {
+    pub message_queue: u32,
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -315,6 +322,10 @@ impl HandleTable {
                 requirement.device_flags,
                 requirement.system_state.as_deref().unwrap_or("<none>"),
                 requirement.system_flags
+            ),
+            Ok(KernelObject::PowerNotification(notification)) => format!(
+                "power_notification(queue=0x{:08x},flags=0x{:08x})",
+                notification.message_queue, notification.flags
             ),
             Ok(KernelObject::FileMapping(mapping)) => format!(
                 "mapping(name={},size={},views={},closed={})",
@@ -879,6 +890,7 @@ impl HandleTable {
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
             | KernelObject::PowerRequirement(_)
+            | KernelObject::PowerNotification(_)
             | KernelObject::FileMapping(_)
             | KernelObject::CriticalSection(_) => WaitResult::Failed,
             KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
@@ -931,6 +943,7 @@ impl HandleTable {
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
             | KernelObject::PowerRequirement(_)
+            | KernelObject::PowerNotification(_)
             | KernelObject::FileMapping(_)
             | KernelObject::CriticalSection(_) => return None,
         })

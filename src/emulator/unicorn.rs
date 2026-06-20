@@ -1744,26 +1744,27 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn reconcile_active_visible_window_thread(&mut self, kernel: &CeKernel) -> bool {
-        if self.active_process_has_visible_receiver_work(kernel)
-            || self.saved_context.as_ref().is_none_or(|saved| {
-                !Self::saved_cpu_context_is_resumable(saved)
-            })
-        {
+        if self.active_process_has_visible_receiver_work(kernel) || self.saved_context.is_none() {
             return false;
         }
         let active_process_id = kernel.current_process_id();
-        let Some(thread_id) = kernel.gwe.windows_snapshot().into_iter().find_map(|window| {
-            if window.process_id != active_process_id
-                || window.thread_id == 0
-                || window.destroyed
-                || !window.visible
-            {
-                return None;
-            }
-            (Self::thread_has_visible_receiver_work(window.thread_id, kernel)
-                || Self::thread_has_receiver_work(window.thread_id, kernel))
-            .then_some(window.thread_id)
-        }) else {
+        let Some(thread_id) = kernel
+            .gwe
+            .windows_snapshot()
+            .into_iter()
+            .find_map(|window| {
+                if window.process_id != active_process_id
+                    || window.thread_id == 0
+                    || window.destroyed
+                    || !window.visible
+                {
+                    return None;
+                }
+                (Self::thread_has_visible_receiver_work(window.thread_id, kernel)
+                    || Self::thread_has_receiver_work(window.thread_id, kernel))
+                .then_some(window.thread_id)
+            })
+        else {
             return false;
         };
         if self.thread_has_blocked_scheduler_context(thread_id) {
@@ -1771,15 +1772,6 @@ impl UnicornMips {
         }
         self.current_thread_id = thread_id;
         self.initial_thread_id = thread_id;
-        self.running_guest_thread = kernel
-            .guest_thread_handle_by_id(thread_id)
-            .map(|handle| (thread_id, handle))
-            .or_else(|| {
-                (thread_id == MAIN_GUEST_THREAD_ID).then_some((
-                    thread_id,
-                    crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
-                ))
-            });
         true
     }
 
@@ -29941,9 +29933,60 @@ mod guest_thread_stack_tests {
         });
         let hwnd =
             kernel.create_window_ex_w(1, "visible_ui", "", None, 0, crate::ce::gwe::WS_VISIBLE, 0);
+        let wndproc = 0x1000_4000;
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
         assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_USER + 10, 0, 0));
 
         assert!(scheduler.preserve_current_on_process_handoff(&kernel));
+
+        Ok(())
+    }
+
+    #[test]
+    fn stale_child_thread_identity_recovers_active_visible_window_thread() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(3);
+        scheduler.current_thread_id = 5;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            regs: MipsGuestContext::zero(),
+        });
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            ra: GUEST_THREAD_RETURN_STUB_ADDR,
+            ..Default::default()
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let wndproc = 0x6004_f0f4;
+        let hwnd =
+            kernel.create_window_ex_w(1, "visible_ui", "", None, 0, crate::ce::gwe::WS_VISIBLE, 0);
+        kernel
+            .gwe
+            .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc);
+        assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_USER + 10, 0, 0));
+
+        assert!(!scheduler.active_process_has_visible_receiver_work(&kernel));
+        assert!(scheduler.reconcile_active_visible_window_thread(&kernel));
+
+        assert_eq!(scheduler.current_thread_id, 1);
+        assert_eq!(scheduler.active_thread_ids(), vec![1]);
+        assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
+        assert!(scheduler.prepare_active_orphaned_visible_message_callout(&mut kernel));
+        assert_eq!(
+            scheduler.saved_context.as_ref().map(|saved| saved.pc),
+            Some(wndproc)
+        );
 
         Ok(())
     }
@@ -29971,6 +30014,13 @@ mod guest_thread_stack_tests {
         });
         let hwnd =
             kernel.create_window_ex_w(1, "visible_ui", "", None, 0, crate::ce::gwe::WS_VISIBLE, 0);
+        let wndproc = 0x1000_4000;
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
         assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_USER + 10, 0, 0));
 
         assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
