@@ -6714,11 +6714,13 @@ fn coredll_raw_fs_io_control_refresh_and_flush_are_no_ops() -> Result<()> {
     const FSCTL_COPY_EXTERNAL_COMPLETE: u32 = 0x0009_0050;
     const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
     const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
+    const FSCTL_SET_SIMULATION_MODE: u32 = 0x0009_0088;
     const FSCTL_STORAGE_MEDIA_CHANGE_EVENT: u32 = 0x0009_00ac;
     const STORAGE_MEDIA_CHANGE_EVENT_DETACHED: u32 = 0;
     const STORAGE_MEDIA_CHANGE_EVENT_ATTACHED: u32 = 1;
     const STORAGE_MEDIA_ATTACH_RESULT_UNCHANGED: u32 = 0;
     const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
+    const FS_SIMULATION_MODE_INFO_SIZE: u32 = 8;
     const ERROR_INVALID_PARAMETER: u32 = 87;
     const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
     const ERROR_NOT_SUPPORTED: u32 = 50;
@@ -6734,9 +6736,11 @@ fn coredll_raw_fs_io_control_refresh_and_flush_are_no_ops() -> Result<()> {
     let bytes_returned_ptr = 0x1_8000u32;
     let media_event_ptr = 0x1_8300u32;
     let media_result_ptr = 0x1_8310u32;
+    let simulation_mode_ptr = 0x1_8320u32;
     memory.map_words(bytes_returned_ptr, 1);
     memory.map_words(media_event_ptr, 1);
     memory.map_words(media_result_ptr, 1);
+    memory.map_words(simulation_mode_ptr, 2);
 
     // FSCTL_REFRESH_VOLUME via CeFsIoControlW: no-op, returns true, bytes_returned = 0
     let path_ptr = 0x1_8100u32;
@@ -6919,6 +6923,97 @@ fn coredll_raw_fs_io_control_refresh_and_flush_are_no_ops() -> Result<()> {
                 FILE_COPY_EXTERNAL_SIZE,
                 copy_external_out_ptr,
                 4,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(simulation_mode_ptr, FS_SIMULATION_MODE_INFO_SIZE);
+    memory.write_word(simulation_mode_ptr + 4, 1);
+    memory.write_word(bytes_returned_ptr, 0xDEAD_BEEF);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_FS_IO_CONTROL_W,
+            [
+                path_ptr,
+                FSCTL_SET_SIMULATION_MODE,
+                simulation_mode_ptr,
+                FS_SIMULATION_MODE_INFO_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+    assert_eq!(
+        memory.read_u32(bytes_returned_ptr)?,
+        0xDEAD_BEEF,
+        "host-backed FSD simulation-mode fallback must not report bytes"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_FS_IO_CONTROL_W,
+            [
+                path_ptr,
+                FSCTL_SET_SIMULATION_MODE,
+                simulation_mode_ptr,
+                FS_SIMULATION_MODE_INFO_SIZE - 4,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_word(simulation_mode_ptr, FS_SIMULATION_MODE_INFO_SIZE);
+    memory.write_word(simulation_mode_ptr + 4, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_FS_IO_CONTROL_W,
+            [
+                path_ptr,
+                FSCTL_SET_SIMULATION_MODE,
+                simulation_mode_ptr,
+                FS_SIMULATION_MODE_INFO_SIZE,
+                0,
+                0,
                 bytes_returned_ptr,
                 0
             ],

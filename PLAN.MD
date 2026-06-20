@@ -933,6 +933,12 @@ notes when it is still needed for implementation.
   cache-filter input-size predicate, accepting non-null caller packets up to
   the 4-byte `FILE_CACHE_INFO` size before evaluating the info level and
   rejecting oversized packets as invalid.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`: volume
+  `CeFsIoControlW(FSCTL_SET_SIMULATION_MODE)` now recognizes CE's
+  `FS_SIMULATION_MODE_INFO` packet before the host-backed FSD fallback,
+  rejecting null, short, bad-size, or non-0/1 mode packets as invalid and
+  preserving the lower-FSD `ERROR_NOT_SUPPORTED` result for valid requests.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\ui.c`, and
   `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\LANG\IME\CIMEUI\imeui.cpp`: raw

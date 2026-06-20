@@ -138,12 +138,14 @@ const FSCTL_SET_ZERO_DATA: u32 = 0x0009_80c8;
 const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
 const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
 const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
+const FSCTL_SET_SIMULATION_MODE: u32 = 0x0009_0088;
 const FSCTL_SET_FILE_CACHE: u32 = 0x0009_0090;
 const FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR: u32 = 0x0009_00a8;
 const FSCTL_STORAGE_MEDIA_CHANGE_EVENT: u32 = 0x0009_00ac;
 const IOCTL_FILE_WRITE_GATHER: u32 = 0x0009_0044;
 const IOCTL_FILE_READ_SCATTER: u32 = 0x0009_0048;
 const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
+const FS_SIMULATION_MODE_INFO_SIZE: u32 = 8;
 const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
 const COMPRESSION_FORMAT_NONE: u16 = 0;
@@ -10240,6 +10242,9 @@ fn fs_io_control_volume_info_raw<M: CoredllGuestMemory>(
             out_size,
             bytes_returned_ptr,
         ),
+        FSCTL_SET_SIMULATION_MODE => {
+            fs_io_control_set_simulation_mode_raw(kernel, memory, thread_id, in_ptr, in_size)
+        }
         FSCTL_SET_FILE_CACHE => {
             kernel
                 .threads
@@ -10284,6 +10289,43 @@ fn fs_io_control_volume_info_raw<M: CoredllGuestMemory>(
             false
         }
     }
+}
+
+fn fs_io_control_set_simulation_mode_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    in_ptr: u32,
+    in_size: u32,
+) -> bool {
+    if in_ptr == 0 || in_size < FS_SIMULATION_MODE_INFO_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(cb_size) = memory.read_u32(in_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Ok(simulation_mode) = memory.read_u32(in_ptr + 4) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if cb_size != FS_SIMULATION_MODE_INFO_SIZE || simulation_mode > 1 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
 }
 
 fn fs_io_control_storage_media_change_event_raw<M: CoredllGuestMemory>(
