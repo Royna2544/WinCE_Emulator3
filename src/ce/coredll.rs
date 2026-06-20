@@ -2493,10 +2493,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_THREAD_CONTEXT | ORD_SET_THREAD_CONTEXT => {
             // Unicorn callout (try_enter_thread_context_callout) serves these from
             // live/suspended/blocked CPU state; this is the non-Unicorn fallback.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
+            Some(CoredllValue::Bool(thread_context_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+            )))
         }
         ORD_GET_OPEN_FILE_NAME_W | ORD_GET_SAVE_FILE_NAME_W => Some(CoredllValue::Bool(
             common_file_dialog_w_raw(kernel, memory, thread_id, raw_arg(args, 0)),
@@ -9869,6 +9872,52 @@ fn common_file_dialog_w_raw<M: CoredllGuestMemory>(
         return false;
     };
     if struct_size != OPEN_FILE_NAME_W_SIZE || file_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
+}
+
+fn thread_context_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    handle: u32,
+    context_ptr: u32,
+) -> bool {
+    const MIPS_CONTEXT_FLAGS_OFFSET: u32 = 0x124;
+    const MIPS_NK_CONTEXT_FULL: u32 = 0x0001_0007;
+
+    if kernel
+        .guest_thread_id_for_handle(handle, thread_id)
+        .is_none()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if context_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(flags) = read_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        context_ptr.wrapping_add(MIPS_CONTEXT_FLAGS_OFFSET),
+    ) else {
+        return false;
+    };
+    if flags & !MIPS_NK_CONTEXT_FULL != 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);

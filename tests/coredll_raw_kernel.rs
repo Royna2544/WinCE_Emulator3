@@ -45,22 +45,22 @@ use wince_emulation_v3::{
             ORD_GET_PROCESS_VERSION, ORD_GET_SAVE_FILE_NAME_W, ORD_GET_STDIO_PATH_W,
             ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION, ORD_GET_SYSTEM_POWER_STATE,
             ORD_GET_SYSTEM_POWER_STATUS_EX, ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME,
-            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
-            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
-            ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
-            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
-            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
-            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
-            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
-            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE,
-            ORD_IMAGE_LIST_GET_IMAGE_COUNT, ORD_IMAGE_LIST_GET_IMAGE_INFO,
-            ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE, ORD_IMAGE_LIST_REMOVE,
-            ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
-            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_ICON_SIZE,
-            ORD_IMAGE_LIST_SET_IMAGE_COUNT, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
-            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_CONTEXT, ORD_GET_THREAD_ID,
+            ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
+            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD,
+            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
+            ORD_IMAGE_LIST_COPY_DITHER_IMAGE, ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY,
+            ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE,
+            ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX,
+            ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG,
+            ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
+            ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
+            ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_IMAGE_LIST_SET_BK_COLOR, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            ORD_IMAGE_LIST_SET_ICON_SIZE, ORD_IMAGE_LIST_SET_IMAGE_COUNT,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_APIREADY, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE,
             ORD_IS_EXITING, ORD_IS_NAMED_EVENT_SIGNALED, ORD_IS_PRIMARY_THREAD,
             ORD_IS_PROCESS_DYING, ORD_KERN_EXTRACT_ICONS, ORD_KERNEL_IO_CONTROL,
@@ -82,12 +82,12 @@ use wince_emulation_v3::{
             ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
             ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER,
             ORD_SET_EVENT_DATA, ORD_SET_LAST_ERROR, ORD_SET_POWER_REQUIREMENT,
-            ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_PRIORITY,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
-            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
-            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_CONTEXT,
+            ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I,
+            ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
+            ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I,
+            ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH,
+            ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
             ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS, ORD_STRING_COMPRESS,
             ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
@@ -233,6 +233,128 @@ fn coredll_raw_common_file_dialog_validates_openfilenamew_before_unsupported() -
                 value: CoredllValue::Bool(false),
                 ..
             }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_NOT_SUPPORTED
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_thread_context_validates_handle_pointer_and_flags() -> Result<()> {
+    const MIPS_CONTEXT_FLAGS_OFFSET: u32 = 0x124;
+    const MIPS_NK_CONTEXT_FULL: u32 = 0x0001_0007;
+    const MIPS_PUBLIC_EXTENDED_INTEGER: u32 = 0x0000_0010;
+
+    fn call_thread_context(
+        table: &CoredllExportTable,
+        kernel: &mut CeKernel,
+        memory: &mut TestGuestMemory,
+        thread_id: u32,
+        ordinal: u32,
+        handle: u32,
+        context_ptr: u32,
+    ) -> bool {
+        match table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ordinal,
+            [handle, context_ptr],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(ok),
+                ..
+            } => ok,
+            other => panic!("thread context dispatch failed: {other:?}"),
+        }
+    }
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let thread_id = 7;
+    let mut memory = TestGuestMemory::default();
+    let context_ptr = 0x1_2000;
+    memory.map_words(context_ptr + MIPS_CONTEXT_FLAGS_OFFSET, 1);
+    memory.write_word(
+        context_ptr + MIPS_CONTEXT_FLAGS_OFFSET,
+        MIPS_NK_CONTEXT_FULL | MIPS_PUBLIC_EXTENDED_INTEGER,
+    );
+
+    for ordinal in [ORD_GET_THREAD_CONTEXT, ORD_SET_THREAD_CONTEXT] {
+        assert!(!call_thread_context(
+            &table,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ordinal,
+            0,
+            context_ptr,
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
+
+        assert!(!call_thread_context(
+            &table,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ordinal,
+            CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            0,
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
+
+        assert!(!call_thread_context(
+            &table,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ordinal,
+            CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            0x1_3000,
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
+
+        assert!(!call_thread_context(
+            &table,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ordinal,
+            CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            context_ptr,
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
+    }
+
+    memory.write_word(
+        context_ptr + MIPS_CONTEXT_FLAGS_OFFSET,
+        MIPS_NK_CONTEXT_FULL,
+    );
+    for ordinal in [ORD_GET_THREAD_CONTEXT, ORD_SET_THREAD_CONTEXT] {
+        assert!(!call_thread_context(
+            &table,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ordinal,
+            CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            context_ptr,
         ));
         assert_eq!(
             kernel.threads.get_last_error(thread_id),

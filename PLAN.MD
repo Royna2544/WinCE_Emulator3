@@ -971,6 +971,15 @@ notes when it is still needed for implementation.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
   raw `ImageList_GetIconSize` now preserves CE validation ordering by
   resolving the image-list handle before rejecting null output pointers.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\ksmips.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw
+  `GetThreadContext`/`SetThreadContext` now preserve the CE front-door
+  validation path before the non-Unicorn unsupported fallback, rejecting bad
+  thread handles, null/unmapped `CONTEXT` pointers, and MIPS context flags
+  outside the NK `CONTEXT_FULL` mask. Coverage verifies both get and set
+  validation ordering plus valid-packet fallback behavior.
 
 ## Active Roadmap
 
