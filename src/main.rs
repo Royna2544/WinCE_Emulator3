@@ -849,13 +849,13 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if live_pump_slice
-            && !cpu.active_process_has_visible_windows(kernel)
-            && !cpu.active_process_has_receiver_work(kernel)
-            && cpu.rotate_to_visible_window_parked_process(kernel)
-        {
+        if rotate_hidden_active_to_visible_parked_for_live_pump(
+            cpu,
+            kernel,
+            desktop,
+            live_pump_slice,
+        ) {
             reported_blocked_message_wait = false;
-            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         let snapshot_state = cpu.last_debug_snapshot().map(|snapshot| {
@@ -929,6 +929,17 @@ fn run_cpu_loop(
                 reported_blocked_message_wait = true;
             }
         }
+        if args.remote_server.is_some()
+            && rotate_hidden_active_to_visible_parked_for_live_pump(
+                cpu,
+                kernel,
+                desktop,
+                live_pump_slice,
+            )
+        {
+            reported_blocked_message_wait = false;
+            continue;
+        }
         if args.remote_server.is_some() {
             std::thread::sleep(Duration::from_millis(16));
             continue;
@@ -937,6 +948,23 @@ fn run_cpu_loop(
     }
     desktop.show_stopped_message("Emulator process stopped")?;
     Ok(())
+}
+
+fn rotate_hidden_active_to_visible_parked_for_live_pump(
+    cpu: &mut UnicornMips,
+    kernel: &mut CeKernel,
+    desktop: &mut DesktopRuntime,
+    live_pump_slice: bool,
+) -> bool {
+    if live_pump_slice
+        && !cpu.active_process_has_visible_windows(kernel)
+        && !cpu.active_process_has_receiver_work(kernel)
+        && cpu.rotate_to_visible_window_parked_process(kernel)
+    {
+        publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+        return true;
+    }
+    false
 }
 
 fn rotate_to_cross_process_send_target(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
