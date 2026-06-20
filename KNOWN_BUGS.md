@@ -18,11 +18,11 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 - Loader parity is strongest in the Unicorn runtime path. Raw/non-Unicorn
   loader behavior needs explicit audit before all load variants can be treated
   as equivalent.
-- Mounted storage remains synthetic for several lower layers: physical
-  block-driver forwarding, external cache/filter DLLs, real mounted-volume
-  availability/powerdown, broader ACL persistence/enforcement, utility DLL
-  execution, callable FMD callbacks, hardware-backed FLS discovery, and
-  lower-FSD `FsIoControl` forwarding.
+- Mounted storage remains synthetic for several lower layers beyond covered
+  public AFS mount registration: physical block-driver forwarding, external
+  cache/filter DLLs, real mounted-volume availability/powerdown, broader ACL
+  persistence/enforcement, utility DLL execution, callable FMD callbacks,
+  hardware-backed FLS discovery, and lower-FSD `FsIoControl` forwarding.
 - GDI/text/IME fidelity is still incomplete for rendered IME UI callbacks,
   caret timing, broader font/style fallback, glyph metrics outside fixture
   ranges, complex clipping, palette/device-color behavior, alpha/mask variants,

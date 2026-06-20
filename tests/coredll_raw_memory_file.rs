@@ -15,18 +15,18 @@ use wince_emulation_v3::{
             ORD_CEIL, ORD_CHAR_LOWER_BUFF_W, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W,
             ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS,
             ORD_COSH, ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W,
-            ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W, ORD_DEVICE_IO_CONTROL,
-            ORD_DPA_CLONE, ORD_DPA_CREATE, ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK,
-            ORD_DPA_ENUM_CALLBACK, ORD_DPA_GET_PTR, ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD,
-            ORD_DPCMP, ORD_DPDIV, ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL,
-            ORD_DSA_CLONE, ORD_DSA_CREATE, ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK,
-            ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM,
-            ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION,
-            ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH,
-            ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
-            ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W,
-            ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FLOOR,
-            ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE,
+            ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W, ORD_DEREGISTER_AFS,
+            ORD_DEREGISTER_AFSNAME, ORD_DEVICE_IO_CONTROL, ORD_DPA_CLONE, ORD_DPA_CREATE,
+            ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK, ORD_DPA_ENUM_CALLBACK, ORD_DPA_GET_PTR,
+            ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL,
+            ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE, ORD_DSA_CREATE,
+            ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK, ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR,
+            ORD_DSA_GROW, ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD,
+            ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE,
+            ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
+            ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
+            ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W,
+            ORD_FLOOR, ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE,
             ORD_FLUSH_VIEW_OF_FILE_MAYBE, ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FPADD, ORD_FPCMP,
             ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP, ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD,
             ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES, ORD_GET_COMM_MODEM_STATUS,
@@ -48,16 +48,17 @@ use wince_emulation_v3::{
             ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
             ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W,
             ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W,
-            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_REGISTRY_DELETE_VALUE,
-            ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD,
-            ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC,
-            ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE,
-            ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC,
-            ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE,
-            ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W,
-            ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME, ORD_SETUP_COMM,
-            ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF,
-            ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
+            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_REGISTER_AFSEX,
+            ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD,
+            ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING,
+            ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
+            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC,
+            ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
+            ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
+            ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER,
+            ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP,
+            ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND,
+            ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
             ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN,
             ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM,
             ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP, ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE,
@@ -4630,6 +4631,204 @@ fn coredll_raw_fs_io_control_refresh_and_flush_are_no_ops() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_NOT_SUPPORTED
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_public_afs_registration_reserves_binds_and_removes_mounts() -> Result<()> {
+    const AFS_FLAG_HIDDEN: u32 = 0x0001;
+    const AFS_FLAG_SYSTEM: u32 = 0x0020;
+    const AFS_FLAG_PERMANENT: u32 = 0x0040;
+    const AFS_VERSION: u32 = 0x0000_0004;
+    const ERROR_INVALID_INDEX: u32 = 1413;
+    const INVALID_MOUNT_INDEX: u32 = u32::MAX;
+    const INVALID_FILE_ATTRIBUTES: u32 = u32::MAX;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let name_ptr = 0x3100_0000;
+    let path_ptr = 0x3100_0100;
+    memory.write_wide_z(name_ptr, "RouteCache");
+    memory.write_wide_z(path_ptr, "\\RouteCache");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_AFSNAME,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(INVALID_MOUNT_INDEX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    let index = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REGISTER_AFSNAME,
+        [name_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(index),
+            ..
+        } => index,
+        other => panic!("unexpected RegisterAFSName result: {other:?}"),
+    };
+    assert!(index >= 2);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_AFSNAME,
+            [name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(duplicate),
+            ..
+        } if duplicate == index
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ALREADY_EXISTS
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_AFSEX,
+            [index, 0, 0xfeed_cafe, AFS_VERSION, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_AFSEX,
+            [
+                index,
+                0x1234,
+                0xfeed_cafe,
+                AFS_VERSION,
+                AFS_FLAG_HIDDEN | AFS_FLAG_SYSTEM | AFS_FLAG_PERMANENT,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    let attrs = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_FILE_ATTRIBUTES_W,
+        [path_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(attrs),
+            ..
+        } => attrs,
+        other => panic!("unexpected GetFileAttributesW result: {other:?}"),
+    };
+    assert_ne!(attrs, INVALID_FILE_ATTRIBUTES);
+    assert_eq!(
+        attrs & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM),
+        FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_AFSEX,
+            [index, 0x1234, 0xbeef, AFS_VERSION, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ALREADY_EXISTS
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEREGISTER_AFSNAME,
+            [0x7fff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_INDEX
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEREGISTER_AFS,
+            [index],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FILE_ATTRIBUTES_W,
+            [path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(INVALID_FILE_ATTRIBUTES),
+            ..
+        }
+    ));
 
     Ok(())
 }

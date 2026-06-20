@@ -3389,22 +3389,18 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Handle(0))
         }
-        ORD_DEREGISTER_AFS | ORD_DEREGISTER_AFSNAME => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
-        ORD_REGISTER_AFSNAME => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
-        ORD_REGISTER_AFSEX => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_DEREGISTER_AFS | ORD_DEREGISTER_AFSNAME => Some(CoredllValue::Bool(
+            deregister_afs_raw(kernel, thread_id, raw_arg(args, 0)),
+        )),
+        ORD_REGISTER_AFSNAME => Some(CoredllValue::U32(register_afs_name_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_REGISTER_AFSEX => Some(CoredllValue::Bool(register_afs_ex_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_GET_FILE_ATTRIBUTES_EX_W => Some(CoredllValue::Bool(get_file_attributes_ex_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -16400,6 +16396,40 @@ fn afs_unmount_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
             false
         }
     }
+}
+
+fn register_afs_name_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    name_ptr: u32,
+) -> u32 {
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
+    let (index, status) = kernel.register_afs_name(&name);
+    kernel.threads.set_last_error(thread_id, status);
+    index
+}
+
+fn register_afs_ex_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let status = kernel.register_afs_ex(
+        raw_arg(args, 0),
+        raw_arg(args, 1),
+        raw_arg(args, 2),
+        raw_arg(args, 4),
+    );
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
+}
+
+fn deregister_afs_raw(kernel: &mut CeKernel, thread_id: u32, index: u32) -> bool {
+    let status = kernel.deregister_afs(index);
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
 }
 
 fn close_handle_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {

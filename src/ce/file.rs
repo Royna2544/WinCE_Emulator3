@@ -717,6 +717,17 @@ impl HostFileSystem {
         })
     }
 
+    pub fn update_mount_table_flags(&mut self, guest_root: &str, flags: u32) -> bool {
+        let guest_root = normalize_guest_path(guest_root);
+        let Some(mount) = self.mounts.get_mut(&guest_root) else {
+            return false;
+        };
+        mount.hidden = flags & AFS_FLAG_HIDDEN != 0;
+        mount.system = flags & AFS_FLAG_SYSTEM != 0;
+        mount.removable = flags & AFS_FLAG_PERMANENT == 0;
+        true
+    }
+
     pub fn io_stats(&self) -> FileIoStats {
         self.io_stats
     }

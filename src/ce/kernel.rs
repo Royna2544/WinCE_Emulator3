@@ -40,7 +40,11 @@ use crate::{
             NotifyIconData, ShellChangeNotifyRegistration, ShellNotificationCallbackMethod,
             ShellNotificationCallbackRecord, ShellNotificationRecord, ShellSystem,
         },
-        thread::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_SUCCESS, ThreadSystem},
+        thread::{
+            ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
+            ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_OUT_OF_STRUCTURES, ERROR_SUCCESS,
+            ThreadSystem,
+        },
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
@@ -254,6 +258,8 @@ pub struct CeKernel {
     fsdmgr_fmd_region_tables: BTreeMap<u32, Vec<[u32; 7]>>,
     fsdmgr_fmd_reserved_regions: BTreeMap<(u32, [u8; 8]), Vec<u8>>,
     fsdmgr_fmd_interface_disk: Option<u32>,
+    afs_mount_slots: BTreeMap<u32, AfsMountSlot>,
+    next_afs_mount_index: u32,
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
     next_fsdmgr_volume_lock: u32,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -270,6 +276,18 @@ pub struct CeKernel {
     display_perf_unhandled: u32,
     window_backing_stores: BTreeMap<u32, FramebufferBackingStore>,
 }
+
+#[derive(Debug, Clone)]
+struct AfsMountSlot {
+    name: String,
+    guest_root: String,
+    owner_process_id: u32,
+    volume_handle: Option<u32>,
+}
+
+const FIRST_USER_AFS_INDEX: u32 = 2;
+const INVALID_MOUNT_INDEX: u32 = u32::MAX;
+const ERROR_INVALID_INDEX: u32 = 1413;
 
 /// Font family entry for CE system font enumeration (EnumFontFamiliesExW).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1022,6 +1040,8 @@ impl CeKernel {
             fsdmgr_fmd_region_tables: BTreeMap::new(),
             fsdmgr_fmd_reserved_regions: BTreeMap::new(),
             fsdmgr_fmd_interface_disk: None,
+            afs_mount_slots: BTreeMap::new(),
+            next_afs_mount_index: FIRST_USER_AFS_INDEX,
             fsdmgr_volume_locks: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             modal_dialog_results: BTreeMap::new(),
@@ -2537,6 +2557,117 @@ impl CeKernel {
             );
         }
         Ok(handle)
+    }
+
+    pub fn register_afs_name(&mut self, mount_name: &str) -> (u32, u32) {
+        if mount_name.trim().is_empty() {
+            return (INVALID_MOUNT_INDEX, ERROR_INVALID_PARAMETER);
+        }
+        if let Some((index, _)) = self
+            .afs_mount_slots
+            .iter()
+            .find(|(_, slot)| slot.name.eq_ignore_ascii_case(mount_name))
+        {
+            return (*index, ERROR_ALREADY_EXISTS);
+        }
+        if matches!(
+            self.files.existing_fsdmgr_mount_root(mount_name),
+            Ok(Some(_))
+        ) {
+            return (INVALID_MOUNT_INDEX, ERROR_ALREADY_EXISTS);
+        }
+
+        let index = match self.allocate_afs_mount_index() {
+            Some(index) => index,
+            None => return (INVALID_MOUNT_INDEX, ERROR_OUT_OF_STRUCTURES),
+        };
+        let (guest_root, _) = match self.files.register_fsdmgr_mount_name(mount_name) {
+            Ok(result) => result,
+            Err(Error::AlreadyExists(_)) => return (INVALID_MOUNT_INDEX, ERROR_ALREADY_EXISTS),
+            Err(Error::OutOfStructures(_)) => {
+                return (INVALID_MOUNT_INDEX, ERROR_OUT_OF_STRUCTURES);
+            }
+            Err(Error::InvalidArgument(_)) => {
+                return (INVALID_MOUNT_INDEX, ERROR_INVALID_PARAMETER);
+            }
+            Err(_) => return (INVALID_MOUNT_INDEX, ERROR_INVALID_PARAMETER),
+        };
+        self.afs_mount_slots.insert(
+            index,
+            AfsMountSlot {
+                name: mount_name.trim().trim_matches(['\\', '/']).to_owned(),
+                guest_root,
+                owner_process_id: self.current_process_id,
+                volume_handle: None,
+            },
+        );
+        (index, ERROR_SUCCESS)
+    }
+
+    pub fn register_afs_ex(
+        &mut self,
+        index: u32,
+        api_set_handle: u32,
+        volume_context: u32,
+        flags: u32,
+    ) -> u32 {
+        if api_set_handle == 0 || api_set_handle == u32::MAX {
+            return ERROR_INVALID_HANDLE;
+        }
+        let Some(slot) = self.afs_mount_slots.get_mut(&index) else {
+            return ERROR_FILE_NOT_FOUND;
+        };
+        if slot.owner_process_id != self.current_process_id {
+            return ERROR_ACCESS_DENIED;
+        }
+        if slot.volume_handle.is_some() {
+            return ERROR_ALREADY_EXISTS;
+        }
+        let guest_root = slot.guest_root.clone();
+        self.files.update_mount_table_flags(&guest_root, flags);
+        let handle = self.handles.insert(KernelObject::Volume(VolumeObject {
+            owner_process_id: self.current_process_id,
+            guest_root: guest_root.clone(),
+            disk_ptr: None,
+            fsd_volume_context: (volume_context != 0).then_some(volume_context),
+        }));
+        if let Some(slot) = self.afs_mount_slots.get_mut(&index) {
+            slot.volume_handle = Some(handle);
+        }
+        if flags & 0x0001 == 0 {
+            self.post_shell_file_change_notifications(SHCNE_DRIVEADD, Some(&guest_root), None);
+            self.signal_file_change_notifications(SHCNE_DRIVEADD, Some(&guest_root), None);
+            self.send_notify_message_w(0, HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, 0);
+        }
+        ERROR_SUCCESS
+    }
+
+    pub fn deregister_afs(&mut self, index: u32) -> u32 {
+        let Some(slot) = self.afs_mount_slots.remove(&index) else {
+            return ERROR_INVALID_INDEX;
+        };
+        if slot.owner_process_id != self.current_process_id {
+            self.afs_mount_slots.insert(index, slot);
+            return ERROR_ACCESS_DENIED;
+        }
+        if let Some(handle) = slot.volume_handle {
+            self.drop_fsdmgr_volume_locks_for_handle(handle);
+            let _ = self.handles.close(handle);
+        }
+        self.files.update_mount_table_flags(&slot.guest_root, 0);
+        self.unmount_guest_root(&slot.guest_root);
+        ERROR_SUCCESS
+    }
+
+    fn allocate_afs_mount_index(&mut self) -> Option<u32> {
+        for _ in 0..0x1000 {
+            let index = self.next_afs_mount_index.max(FIRST_USER_AFS_INDEX);
+            self.next_afs_mount_index = self.next_afs_mount_index.saturating_add(1);
+            if !self.afs_mount_slots.contains_key(&index) {
+                return Some(index);
+            }
+        }
+        None
     }
 
     fn volume_handle_for_guest_root(&self, guest_root: &str) -> Option<u32> {

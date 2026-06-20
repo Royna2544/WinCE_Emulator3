@@ -28,6 +28,17 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwindbas.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\extfile.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwindbas.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mextfile.h`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`:
+  public raw `RegisterAFSName`/`RegisterAFSEx`/`DeregisterAFS*` now reserve,
+  bind, flag, and remove CE-style AFS mount slots instead of reporting
+  unsupported or unconditional success. Coverage verifies null-name rejection,
+  duplicate-name index/error behavior, invalid API-set handles, hidden/system/
+  permanent mount flags feeding the mounted namespace, duplicate volume binding,
+  invalid deregistration indices, and successful unmount cleanup.
 - `C:\WINCE600\PUBLIC\COMMON\DDK\INC\devload.h` and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\windev.h`: raw `GetDeviceKeys` now
   returns deterministic CE-style active and driver registry paths for enabled
