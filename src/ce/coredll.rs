@@ -28114,6 +28114,13 @@ fn read_guest_wide_arg<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<St
     read_guest_wide_z(memory, ptr, 512).ok()
 }
 
+fn read_guest_wide_path_arg<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<String> {
+    if ptr <= 0xffff {
+        return None;
+    }
+    read_guest_wide_z(memory, ptr, 512).ok()
+}
+
 fn read_optional_guest_wide_arg<M: CoredllGuestMemory>(
     memory: &M,
     ptr: u32,
@@ -34425,7 +34432,7 @@ fn kern_extract_icons_raw<M: CoredllGuestMemory>(
     let icon_index = raw_i32_arg(args, 1);
     let large_out = raw_arg(args, 2);
     let small_out = raw_arg(args, 3);
-    let Some(path) = read_guest_wide_arg(memory, file_ptr).map(|path| path.replace('/', "\\"))
+    let Some(path) = read_guest_wide_path_arg(memory, file_ptr).map(|path| path.replace('/', "\\"))
     else {
         kernel
             .threads
@@ -34589,7 +34596,7 @@ fn extract_icon_ex_w_raw<M: CoredllGuestMemory>(
     let large_out = raw_arg(args, 2);
     let small_out = raw_arg(args, 3);
     let icon_count = raw_arg(args, 4);
-    let Some(path) = read_guest_wide_arg(memory, file_ptr).map(|path| path.replace('/', "\\"))
+    let Some(path) = read_guest_wide_path_arg(memory, file_ptr).map(|path| path.replace('/', "\\"))
     else {
         kernel
             .threads

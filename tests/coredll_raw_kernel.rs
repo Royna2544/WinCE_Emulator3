@@ -11955,6 +11955,28 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     memory.map_words(large_icon_ptr, 2);
     memory.map_words(small_icon_ptr, 2);
 
+    memory.write_u32(large_icon_ptr, 0xface_cafe)?;
+    memory.write_u32(small_icon_ptr, 0xc001_d00d)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [0x1234, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(large_icon_ptr)?, 0xface_cafe);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, 0xc001_d00d);
+
     let ret = table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -13855,6 +13877,28 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
     memory.map_halfwords(path_ptr, 64);
     memory.map_words(large_out, 2);
     memory.write_wide_z(path_ptr, r"\Docs\multi-size-icons.exe");
+
+    memory.write_u32(large_out, 0xdead_beef)?;
+    memory.write_u32(small_out, 0xfeed_face)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [0x1234, 1, large_out, small_out, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(large_out)?, 0xdead_beef);
+    assert_eq!(memory.read_u32(small_out)?, 0xfeed_face);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

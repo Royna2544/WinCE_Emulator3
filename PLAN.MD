@@ -697,6 +697,12 @@ notes when it is still needed for implementation.
   RT_GROUP_ICON entries by choosing 32x32 and 16x16 resources instead of
   blindly extracting directory entries 0 and 1, while preserving CE's partial
   missing-resource behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`: raw `ExtractIconExW` and
+  `KernExtractIcons` now validate file-name parameters as guest `LPCWSTR`
+  paths instead of accepting atom-style low values. Coverage verifies invalid
+  path pointers fail with `ERROR_INVALID_PARAMETER` without mutating large or
+  small icon output slots.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\icon.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\WTL\INCLUDE\atlgdi.h`: raw
