@@ -724,6 +724,11 @@ notes when it is still needed for implementation.
      detach notifications succeed as ignored zero-byte events, while attach
      notifications report `StorageMediaAttachResultUnchanged`. Coverage
      verifies CE input/output sizing, AFS routing, and invalid event rejection.
+   - File-handle `DeviceIoControl(FSCTL_SET_ZERO_DATA)` now consumes CE's
+     `FILE_ZERO_DATA_INFORMATION` layout from `fsioctl.h` and zeros the
+     requested existing host-backed file range without growing the file.
+     Coverage verifies middle-range zeroing, EOF clipping, invalid range
+     rejection, and read-only handle access denial.
 
 6. Expand input, text, GDI, and drawing fidelity.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph
