@@ -2849,12 +2849,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_LOAD_DRIVER => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_LOAD_DRIVER => Some(CoredllValue::Handle(load_driver_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_INTERRUPT_INITIALIZE | ORD_INTERRUPT_DONE | ORD_INTERRUPT_DISABLE => {
             kernel
                 .threads
@@ -21681,6 +21681,7 @@ const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x0000_0008;
 const LOAD_LIBRARY_IN_KERNEL: u32 = 0x0000_8000;
 const MF_NO_THREAD_CALLS: u32 = 0x0000_0400;
 const LLIB_NO_PAGING: u32 = 0x0001;
+const LOAD_DRIVER_FLAGS: u32 = LLIB_NO_PAGING << 16;
 const LOAD_KERNEL_LIBRARY_FLAGS: u32 =
     LOAD_LIBRARY_IN_KERNEL | MF_NO_THREAD_CALLS | (LLIB_NO_PAGING << 16);
 const PROCESSOR_ARCHITECTURE_MIPS: u32 = 1;
@@ -21809,6 +21810,32 @@ fn load_kernel_library_raw<M: CoredllGuestMemory>(
     if let Some(handle) =
         kernel.retain_loaded_module_by_name_for_load(&name, LOAD_KERNEL_LIBRARY_FLAGS)
     {
+        kernel.threads.set_last_error(thread_id, 0);
+        return handle;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+    0
+}
+
+fn load_driver_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    name_ptr: u32,
+) -> u32 {
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if is_coredll_module_name(&name) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return COREDLL_MODULE_HANDLE;
+    }
+    if let Some(handle) = kernel.retain_loaded_module_by_name_for_load(&name, LOAD_DRIVER_FLAGS) {
         kernel.threads.set_last_error(thread_id, 0);
         return handle;
     }

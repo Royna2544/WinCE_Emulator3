@@ -96,6 +96,12 @@ notes when it is still needed for implementation.
   it has no discardable committed code pages yet; coverage verifies valid
   module/process requests, public two-argument module calls, invalid flags,
   current-process rejection, and invalid module/process handles.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\loader.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`: raw `LoadDriver` now mirrors
+  CE's `LoadLibraryExW(file, NULL, MAKELONG(0, LLIB_NO_PAGING))` wrapper
+  instead of reporting unsupported. Coverage verifies refcounting, no-paging
+  load flags, normal export lookup, missing-driver failure, and invalid name
+  pointer rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`

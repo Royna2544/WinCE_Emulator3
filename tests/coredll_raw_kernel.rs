@@ -48,9 +48,9 @@ use wince_emulation_v3::{
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
             ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LOAD_CURSOR_W, ORD_LOAD_IMAGE_W, ORD_LOAD_KERNEL_LIBRARY, ORD_LOAD_LIBRARY_EX_W,
-            ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W,
-            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_IMAGE_W, ORD_LOAD_KERNEL_LIBRARY,
+            ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
+            ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
             ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE, ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W,
             ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS, ORD_PAGE_OUT_MODULE, ORD_PEEK_MESSAGE_W,
             ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM, ORD_QUERY_INSTRUCTION_SET,
@@ -5894,9 +5894,13 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     let resource_name_ptr = 0x1_9080;
     let proc_name_ptr = 0x1_90c0;
     let deferred_name_ptr = 0x1_9100;
+    let driver_name_ptr = 0x1_9180;
+    let driver_proc_name_ptr = 0x1_91c0;
+    let missing_name_ptr = 0x1_9040;
     let module_base = 0x6300_0000;
     let resource_base = 0x6310_0000;
     let deferred_base = 0x6320_0000;
+    let driver_base = 0x6328_0000;
 
     kernel.register_loaded_module_with_metadata(
         "dynamic.dll",
@@ -5942,6 +5946,22 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
         },
     );
     memory.write_wide_z(deferred_name_ptr, "deferred.dll");
+
+    kernel.register_loaded_module_with_metadata(
+        "storage_driver.dll",
+        driver_base,
+        std::collections::BTreeMap::from([("Init".to_owned(), driver_base + 0x1110)]),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\storage_driver.dll".to_owned()),
+            image_size: 0x10000,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    memory.write_wide_z(driver_name_ptr, "storage_driver.dll");
+    memory.write_bytes(driver_proc_name_ptr, b"Init\0");
+    memory.write_wide_z(missing_name_ptr, "missing.dll");
 
     for _ in 0..2 {
         assert!(matches!(
@@ -6065,6 +6085,39 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_LOAD_DRIVER,
+            [driver_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == driver_base
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let driver = kernel.loaded_module_by_handle(driver_base).unwrap();
+    assert_eq!(driver.ref_count, 2);
+    assert_eq!(driver.load_flags & (0x0001 << 16), 0x0001 << 16);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROC_ADDRESS_A,
+            [driver_base, driver_proc_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(address),
+            ..
+        } if address == driver_base + 0x1110
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_GET_PROC_ADDRESS_A,
             [resource_base, proc_name_ptr],
         ),
@@ -6076,6 +6129,42 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_DRIVER,
+            [missing_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_DRIVER,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
     );
 
     assert!(matches!(
@@ -6096,8 +6185,6 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
         ERROR_FILE_NOT_FOUND
     );
 
-    let missing_name_ptr = 0x1_9040;
-    memory.write_wide_z(missing_name_ptr, "missing.dll");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
