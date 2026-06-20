@@ -23571,6 +23571,8 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
             | IOCTL_DISK_GET_STORAGEID
+            | DISK_IOCTL_INITIALIZED
+            | IOCTL_DISK_INITIALIZED
             | IOCTL_DISK_FLUSH_CACHE
     );
     if !handled {
@@ -23637,7 +23639,9 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             output_capacity,
             returned_ptr,
         ),
-        IOCTL_DISK_FLUSH_CACHE => disk_flush_cache_raw(kernel, memory, thread_id, returned_ptr),
+        DISK_IOCTL_INITIALIZED | IOCTL_DISK_INITIALIZED | IOCTL_DISK_FLUSH_CACHE => {
+            disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
+        }
         _ => unreachable!(),
     })
 }
@@ -23740,6 +23744,8 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
             | IOCTL_DISK_GET_STORAGEID
+            | DISK_IOCTL_INITIALIZED
+            | IOCTL_DISK_INITIALIZED
             | IOCTL_DISK_FLUSH_CACHE
     );
     if !handled {
@@ -23806,12 +23812,14 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             output_capacity,
             returned_ptr,
         ),
-        IOCTL_DISK_FLUSH_CACHE => disk_flush_cache_raw(kernel, memory, thread_id, returned_ptr),
+        DISK_IOCTL_INITIALIZED | IOCTL_DISK_INITIALIZED | IOCTL_DISK_FLUSH_CACHE => {
+            disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
+        }
         _ => unreachable!(),
     })
 }
 
-fn disk_flush_cache_raw<M: CoredllGuestMemory>(
+fn disk_zero_byte_success_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,

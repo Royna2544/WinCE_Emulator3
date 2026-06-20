@@ -3799,11 +3799,13 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const CE_VOLUME_INFO_SIZE: u32 = 144;
     const FSD_DISK_INFO_SIZE: u32 = 24;
     const STORAGE_DEVICE_INFO_SIZE: u32 = 80;
+    const DISK_IOCTL_INITIALIZED: u32 = 4;
     const DISK_IOCTL_GETNAME: u32 = 9;
     const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
     const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
     const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
     const IOCTL_DISK_GETINFO: u32 = 0x0007_1c00;
+    const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
     const IOCTL_DISK_GETNAME: u32 = 0x0007_1c20;
     const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
     const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
@@ -4140,6 +4142,32 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
             [
                 store_handle,
                 IOCTL_DISK_FLUSH_CACHE,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_INITIALIZED,
                 0,
                 0,
                 0,
@@ -4731,6 +4759,32 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
             [
                 partition_handle,
                 IOCTL_DISK_FLUSH_CACHE,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                DISK_IOCTL_INITIALIZED,
                 0,
                 0,
                 0,
