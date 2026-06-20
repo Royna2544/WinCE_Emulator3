@@ -1686,9 +1686,6 @@ impl UnicornMips {
             crate::ce::gwe::WM_ACTIVATE
                 | crate::ce::gwe::WM_SETFOCUS
                 | crate::ce::gwe::WM_KILLFOCUS
-                | crate::ce::gwe::WM_MOUSEMOVE
-                | crate::ce::gwe::WM_LBUTTONDOWN
-                | crate::ce::gwe::WM_LBUTTONUP
                 | crate::ce::gwe::WM_PAINT
         ) {
             let _ = kernel.gwe.validate_window(message.hwnd);
