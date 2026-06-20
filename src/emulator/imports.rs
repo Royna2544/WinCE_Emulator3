@@ -6170,6 +6170,22 @@ mod tests {
             crate::ce::thread::ERROR_FILE_NOT_FOUND
         );
 
+        kernel.register_loaded_module("fatutil.dll", 0x7020_0000, BTreeMap::new(), BTreeMap::new());
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
+                [disk_handle, 0],
+            ),
+            Some(crate::ce::thread::ERROR_NOT_SUPPORTED)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            crate::ce::thread::ERROR_NOT_SUPPORTED
+        );
+
         assert_eq!(
             table.dispatch_trap(
                 &mut kernel,
@@ -6178,11 +6194,11 @@ mod tests {
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
                 [disk_handle, 0],
             ),
-            Some(crate::ce::thread::ERROR_FILE_NOT_FOUND)
+            Some(crate::ce::thread::ERROR_NOT_SUPPORTED)
         );
         assert_eq!(
             kernel.threads.get_last_error(11),
-            crate::ce::thread::ERROR_FILE_NOT_FOUND
+            crate::ce::thread::ERROR_NOT_SUPPORTED
         );
     }
 

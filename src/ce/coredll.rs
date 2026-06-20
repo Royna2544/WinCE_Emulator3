@@ -13995,8 +13995,11 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
             let status = kernel.fsdmgr_flush_cache(raw_arg(args, 0));
             fsdmgr_cache_status_raw(kernel, thread_id, status)
         }
-        FsdmgrImport::FsdmgrFormatVolume | FsdmgrImport::FsdmgrScanVolume => {
-            fsdmgr_volume_util_status_raw(kernel, thread_id, raw_arg(args, 0))
+        FsdmgrImport::FsdmgrFormatVolume => {
+            fsdmgr_volume_util_status_raw(kernel, thread_id, raw_arg(args, 0), "FormatVolumeEx")
+        }
+        FsdmgrImport::FsdmgrScanVolume => {
+            fsdmgr_volume_util_status_raw(kernel, thread_id, raw_arg(args, 0), "ScanVolumeEx")
         }
         FsdmgrImport::FsdmgrGetDiskInfo => fsdmgr_get_disk_info_raw(
             kernel,
@@ -14956,16 +14959,33 @@ fn stop_device_notifications_raw(
     true
 }
 
-fn fsdmgr_volume_util_status_raw(kernel: &mut CeKernel, thread_id: u32, disk_ptr: u32) -> u32 {
+fn fsdmgr_volume_util_status_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    disk_ptr: u32,
+    api_name: &str,
+) -> u32 {
     let status = if disk_ptr == 0 {
         ERROR_GEN_FAILURE
-    } else if kernel
+    } else if let Some(units) = kernel
         .fsdmgr_registry_value(disk_ptr, "Util")
         .as_ref()
         .and_then(fsdmgr_registry_string_units)
-        .is_some()
     {
-        ERROR_FILE_NOT_FOUND
+        let util_name =
+            String::from_utf16_lossy(units.split(|unit| *unit == 0).next().unwrap_or_default());
+        if let Some(module) = kernel.loaded_module_handle(&util_name) {
+            if kernel
+                .resolve_loaded_module_proc_by_name(module, api_name)
+                .is_some()
+            {
+                ERROR_GEN_FAILURE
+            } else {
+                ERROR_NOT_SUPPORTED
+            }
+        } else {
+            ERROR_FILE_NOT_FOUND
+        }
     } else {
         ERROR_FILE_NOT_FOUND
     };

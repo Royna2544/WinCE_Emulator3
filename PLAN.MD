@@ -939,6 +939,11 @@ notes when it is still needed for implementation.
   `FS_SIMULATION_MODE_INFO` packet before the host-backed FSD fallback,
   rejecting null, short, bad-size, or non-0/1 mode packets as invalid and
   preserving the lower-FSD `ERROR_NOT_SUPPORTED` result for valid requests.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdmgrapi.cpp`:
+  `FSDMGR_FormatVolume` and `FSDMGR_ScanVolume` now preserve CE's utility-DLL
+  failure split, returning `ERROR_FILE_NOT_FOUND` when the configured `Util`
+  DLL is absent and `ERROR_NOT_SUPPORTED` when the DLL is loaded but missing
+  the requested `FormatVolumeEx`/`ScanVolumeEx` export.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\ui.c`, and
   `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\LANG\IME\CIMEUI\imeui.cpp`: raw
