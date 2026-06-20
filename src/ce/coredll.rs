@@ -125,6 +125,7 @@ const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
 const ERROR_PATH_NOT_FOUND: u32 = 3;
 const FSCTL_COPY_EXTERNAL_START: u32 = 0x0009_004c;
 const FSCTL_COPY_EXTERNAL_COMPLETE: u32 = 0x0009_0050;
+const FSCTL_GET_STREAM_INFORMATION: u32 = 0x0009_4038;
 const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
 const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
 const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
@@ -135,6 +136,8 @@ const IOCTL_FILE_READ_SCATTER: u32 = 0x0009_0048;
 const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
 const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
+const FILE_STREAM_INFO_STANDARD: u32 = 0;
+const FILE_STREAM_INFO_SIZE: u32 = 52;
 const FILE_SCATTER_GATHER_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_RAM_BYTES: u64 = 64 * 1024 * 1024;
@@ -23725,6 +23728,31 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
             }
         }
     }
+    if ioctl_code == FSCTL_GET_STREAM_INFORMATION {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_get_stream_information_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    handle,
+                    input_ptr,
+                    input_len,
+                    output_ptr,
+                    output_capacity,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
     if matches!(
         ioctl_code,
         FSCTL_GET_VOLUME_INFO | FSCTL_REFRESH_VOLUME | FSCTL_FLUSH_BUFFERS
@@ -24468,6 +24496,131 @@ fn file_handle_get_volume_info_raw<M: CoredllGuestMemory>(
     let info = kernel.files.volume_info_for_path(Some(&path));
     if !write_ce_volume_info(kernel, memory, thread_id, output_ptr, &info)
         || !write_optional_count(kernel, memory, thread_id, returned_ptr, CE_VOLUME_INFO_SIZE)
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn file_handle_get_stream_information_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    input_ptr: u32,
+    input_len: u32,
+    output_ptr: u32,
+    output_capacity: u32,
+    returned_ptr: u32,
+) -> bool {
+    if output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if output_capacity < FILE_STREAM_INFO_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+        write_optional_count(
+            kernel,
+            memory,
+            thread_id,
+            returned_ptr,
+            FILE_STREAM_INFO_SIZE,
+        );
+        return false;
+    }
+
+    let info_level = if input_len >= 4 {
+        if input_ptr == 0 {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        }
+        match memory.read_u32(input_ptr) {
+            Ok(value) => value,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    } else {
+        match memory.read_u32(output_ptr) {
+            Ok(value) => value,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    };
+    if info_level != FILE_STREAM_INFO_STANDARD {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+
+    let attributes = match kernel.file_attributes_by_handle(handle) {
+        Ok(attributes) => attributes,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        }
+    };
+    let (creation_time, last_access_time, last_write_time) = match kernel.get_file_time(handle) {
+        Ok(times) => times,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        }
+    };
+    let size = match kernel.get_file_size(handle) {
+        Ok(size) => size as u64,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        }
+    };
+
+    let mut bytes = Vec::with_capacity(FILE_STREAM_INFO_SIZE as usize);
+    bytes.extend_from_slice(&FILE_STREAM_INFO_STANDARD.to_le_bytes());
+    bytes.extend_from_slice(&attributes.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for value in [creation_time, last_access_time, last_write_time, size, size] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    debug_assert_eq!(bytes.len(), FILE_STREAM_INFO_SIZE as usize);
+
+    if !write_guest_bytes(kernel, memory, thread_id, output_ptr, &bytes)
+        || !write_optional_count(
+            kernel,
+            memory,
+            thread_id,
+            returned_ptr,
+            FILE_STREAM_INFO_SIZE,
+        )
     {
         return false;
     }

@@ -6558,6 +6558,115 @@ fn coredll_raw_file_handle_set_file_cache_follows_cache_filter_shape() -> Result
 }
 
 #[test]
+fn coredll_raw_file_handle_get_stream_information_reports_standard_stream() -> Result<()> {
+    const FSCTL_GET_STREAM_INFORMATION: u32 = 0x0009_4038;
+    const FILE_STREAM_INFO_STANDARD: u32 = 0;
+    const FILE_STREAM_INFO_SIZE: u32 = 52;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let root = unique_test_root("file_handle_get_stream_information");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("stream.bin"), b"ce stream data").unwrap();
+    kernel.files = HostFileSystem::new(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let path_ptr = 0x1_a000u32;
+    let stream_info_ptr = 0x1_a100u32;
+    let bytes_returned_ptr = 0x1_a200u32;
+    memory.write_wide_z(path_ptr, "\\stream.bin");
+    memory.map_bytes(stream_info_ptr, FILE_STREAM_INFO_SIZE);
+    memory.map_words(bytes_returned_ptr, 1);
+    memory.write_word(stream_info_ptr, FILE_STREAM_INFO_STANDARD);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_GET_STREAM_INFORMATION,
+                0,
+                0,
+                stream_info_ptr,
+                FILE_STREAM_INFO_SIZE,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, FILE_STREAM_INFO_SIZE);
+    let stream_info = memory.read_bytes(stream_info_ptr, FILE_STREAM_INFO_SIZE as usize);
+    let stream_u32 =
+        |offset: usize| u32::from_le_bytes(stream_info[offset..offset + 4].try_into().unwrap());
+    assert_eq!(stream_u32(0), FILE_STREAM_INFO_STANDARD);
+    assert_eq!(
+        stream_u32(4) & FILE_ATTRIBUTE_ARCHIVE,
+        FILE_ATTRIBUTE_ARCHIVE
+    );
+    assert_eq!(stream_u32(8), 0);
+    assert_ne!(stream_u32(12), 0);
+    assert_eq!(stream_u32(36), b"ce stream data".len() as u32);
+    assert_eq!(stream_u32(40), 0);
+    assert_eq!(stream_u32(44), b"ce stream data".len() as u32);
+    assert_eq!(stream_u32(48), 0);
+
+    memory.write_word(bytes_returned_ptr, 0xdead_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_GET_STREAM_INFORMATION,
+                0,
+                0,
+                stream_info_ptr,
+                FILE_STREAM_INFO_SIZE - 4,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, FILE_STREAM_INFO_SIZE);
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_copy_file_w_copies_between_ce_paths() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

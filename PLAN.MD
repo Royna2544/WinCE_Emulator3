@@ -714,6 +714,11 @@ notes when it is still needed for implementation.
    - Continue physical block-driver, cache/filter, FMD, utility-DLL,
      file-security ACL, mounted-volume availability, and lower-FSD forwarding
      work beyond the current synthetic host-backed path.
+   - `DeviceIoControl(FSCTL_GET_STREAM_INFORMATION)` now follows the CE
+     `fsioctl.h` `FILE_STREAM_INFO` layout for open file handles, reporting
+     the standard stream's attributes, CE FILETIMEs, logical size, and physical
+     size while preserving short-buffer byte-count behavior. Coverage verifies
+     the caller-initialized info-level packet shape used by CE callers.
 
 6. Expand input, text, GDI, and drawing fidelity.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph
