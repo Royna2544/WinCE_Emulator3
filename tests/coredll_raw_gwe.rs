@@ -8202,7 +8202,7 @@ fn coredll_raw_create_dibsection_rejects_bad_nonzero_hdc() -> Result<()> {
 }
 
 #[test]
-fn coredll_raw_create_dibsection_pal_colors_accepts_indexed_depths() -> Result<()> {
+fn coredll_raw_create_dibsection_pal_colors_is_8bpp_only() -> Result<()> {
     const DIB_PAL_COLORS: u32 = 1;
 
     let table = CoredllExportTable::default();
@@ -8235,132 +8235,7 @@ fn coredll_raw_create_dibsection_pal_colors_accepts_indexed_depths() -> Result<(
     memory.map_bytes(colors, 1024);
     memory.map_bytes(retrieved, 1024);
 
-    for bits_pixel in [1u16, 2, 4, 8] {
-        let mut header = [0u8; 40];
-        header[0..4].copy_from_slice(&40u32.to_le_bytes());
-        header[4..8].copy_from_slice(&2i32.to_le_bytes());
-        header[8..12].copy_from_slice(&2i32.to_le_bytes());
-        header[12..14].copy_from_slice(&1u16.to_le_bytes());
-        header[14..16].copy_from_slice(&bits_pixel.to_le_bytes());
-        header[16..20].copy_from_slice(&0u32.to_le_bytes());
-        memory.write_bytes(info, &header);
-        memory.write_word(info, 40);
-        memory.write_word(bits_out, 0xaaaa_5555);
-
-        let bitmap = match table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
-            ORD_CREATE_DIBSECTION,
-            [mem_dc, info, DIB_PAL_COLORS, bits_out, 0, 0],
-        ) {
-            CoredllDispatch::Returned {
-                value: CoredllValue::Handle(handle),
-                ..
-            } => handle,
-            other => panic!("CreateDIBSection({bits_pixel}bpp DIB_PAL_COLORS): {other:?}"),
-        };
-        assert_ne!(
-            bitmap,
-            0,
-            "bits_pixel={bits_pixel} gle={}",
-            kernel.threads.get_last_error(thread_id)
-        );
-        assert_ne!(memory.read_u32(bits_out)?, 0xaaaa_5555);
-
-        let previous = match table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
-            ORD_SELECT_OBJECT,
-            [mem_dc, bitmap],
-        ) {
-            CoredllDispatch::Returned {
-                value: CoredllValue::Handle(handle),
-                ..
-            } => handle,
-            other => panic!("SelectObject({bits_pixel}bpp DIB_PAL_COLORS): {other:?}"),
-        };
-        assert_ne!(previous, 0);
-
-        let entries = 1_u32 << bits_pixel;
-        for index in 0..entries {
-            let offset = colors + index * 4;
-            memory.write_bytes(
-                offset,
-                &[
-                    index.wrapping_mul(29) as u8,
-                    index.wrapping_mul(47).wrapping_add(3) as u8,
-                    index.wrapping_mul(61).wrapping_add(7) as u8,
-                    0,
-                ],
-            );
-        }
-        assert!(matches!(
-            table.dispatch_raw_ordinal_with_memory(
-                &mut kernel,
-                &mut memory,
-                thread_id,
-                ORD_SET_DIBCOLOR_TABLE,
-                [mem_dc, 0, entries, colors],
-            ),
-            CoredllDispatch::Returned {
-                value: CoredllValue::U32(count),
-                ..
-            } if count == entries
-        ));
-        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-
-        assert!(matches!(
-            table.dispatch_raw_ordinal_with_memory(
-                &mut kernel,
-                &mut memory,
-                thread_id,
-                ORD_GET_DIBCOLOR_TABLE,
-                [mem_dc, 0, entries, retrieved],
-            ),
-            CoredllDispatch::Returned {
-                value: CoredllValue::U32(count),
-                ..
-            } if count == entries
-        ));
-        for index in 0..entries {
-            assert_eq!(
-                memory.read_bytes(retrieved + index * 4, 4),
-                memory.read_bytes(colors + index * 4, 4),
-                "CE GetSetDIBColorTable round-trip for {bits_pixel}bpp DIB_PAL_COLORS entry {index}"
-            );
-        }
-
-        assert!(matches!(
-            table.dispatch_raw_ordinal_with_memory(
-                &mut kernel,
-                &mut memory,
-                thread_id,
-                ORD_SELECT_OBJECT,
-                [mem_dc, previous],
-            ),
-            CoredllDispatch::Returned {
-                value: CoredllValue::Handle(handle),
-                ..
-            } if handle == bitmap
-        ));
-        assert!(matches!(
-            table.dispatch_raw_ordinal_with_memory(
-                &mut kernel,
-                &mut memory,
-                thread_id,
-                ORD_DELETE_OBJECT,
-                [bitmap],
-            ),
-            CoredllDispatch::Returned {
-                value: CoredllValue::Bool(true),
-                ..
-            }
-        ));
-    }
-
-    for bits_pixel in [16u16, 24, 32] {
+    for bits_pixel in [1u16, 2, 4, 16, 24, 32] {
         let mut header = [0u8; 40];
         header[0..4].copy_from_slice(&40u32.to_le_bytes());
         header[4..8].copy_from_slice(&2i32.to_le_bytes());
@@ -8388,10 +8263,134 @@ fn coredll_raw_create_dibsection_pal_colors_accepts_indexed_depths() -> Result<(
         assert_eq!(
             kernel.threads.get_last_error(thread_id),
             ERROR_INVALID_PARAMETER,
-            "bits_pixel={bits_pixel}"
+            "CE myCreateDIBSection expects {bits_pixel}bpp DIB_PAL_COLORS to fail"
         );
         assert_eq!(memory.read_u32(bits_out)?, 0xaaaa_5555);
     }
+
+    let bits_pixel = 8u16;
+    let mut header = [0u8; 40];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&2i32.to_le_bytes());
+    header[8..12].copy_from_slice(&2i32.to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&bits_pixel.to_le_bytes());
+    header[16..20].copy_from_slice(&0u32.to_le_bytes());
+    memory.write_bytes(info, &header);
+    memory.write_word(info, 40);
+    memory.write_word(bits_out, 0xaaaa_5555);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_DIBSECTION,
+        [mem_dc, info, DIB_PAL_COLORS, bits_out, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateDIBSection(8bpp DIB_PAL_COLORS): {other:?}"),
+    };
+    assert_ne!(
+        bitmap,
+        0,
+        "8bpp DIB_PAL_COLORS should succeed, gle={}",
+        kernel.threads.get_last_error(thread_id)
+    );
+    assert_ne!(memory.read_u32(bits_out)?, 0xaaaa_5555);
+
+    let previous = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SELECT_OBJECT,
+        [mem_dc, bitmap],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("SelectObject(8bpp DIB_PAL_COLORS): {other:?}"),
+    };
+    assert_ne!(previous, 0);
+
+    let entries = 256_u32;
+    for index in 0..entries {
+        let offset = colors + index * 4;
+        memory.write_bytes(
+            offset,
+            &[
+                index.wrapping_mul(29) as u8,
+                index.wrapping_mul(47).wrapping_add(3) as u8,
+                index.wrapping_mul(61).wrapping_add(7) as u8,
+                0,
+            ],
+        );
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DIBCOLOR_TABLE,
+            [mem_dc, 0, entries, colors],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(count),
+            ..
+        } if count == entries
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DIBCOLOR_TABLE,
+            [mem_dc, 0, entries, retrieved],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(count),
+            ..
+        } if count == entries
+    ));
+    for index in 0..entries {
+        assert_eq!(
+            memory.read_bytes(retrieved + index * 4, 4),
+            memory.read_bytes(colors + index * 4, 4),
+            "CE GetSetDIBColorTable round-trip for 8bpp DIB_PAL_COLORS entry {index}"
+        );
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, previous],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == bitmap
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
 
     Ok(())
 }

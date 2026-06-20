@@ -24,6 +24,9 @@ references for historical reconstruction.
 - GDI/text/IME behavior covers many raw CE edge cases for DIBs, bitmaps,
   palettes, draw APIs, alpha/mask paths, selected font metrics, IME state, and
   TESTIME-backed dictionary behavior.
+- CE `CreateDIBSection(DIB_PAL_COLORS)` now follows the GDIAPI helper's 8 bpp
+  rule: 8 bpp DIBSections keep mutable color tables, while 1/2/4 bpp and
+  truecolor requests fail during creation.
 - Remote runtime behavior exposes status, frame capture, touch/key input,
   GPS/NMEA serial injection, debug handle snapshots, and audio/control WebSocket
   plumbing.

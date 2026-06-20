@@ -608,11 +608,11 @@ notes when it is still needed for implementation.
   `CreateBitmapBitsTest` is now covered for caller-provided initial bits:
   `CreateBitmap(..., lpBits)` copies the source bytes into owned bitmap
   storage instead of aliasing the caller buffer.
-- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
-  `GetSetDIBColorTable` and the 2 bpp `GradientFill` setup path are now
-  covered for indexed `CreateDIBSection(DIB_PAL_COLORS)` surfaces: 1/2/4/8 bpp
-  DIBSections create successfully and round-trip mutable color tables, while
-  truecolor `DIB_PAL_COLORS` still fails.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\verify.cpp` and `draw.cpp`:
+  `GetSetDIBColorTable` is now covered for CE's 8 bpp-only
+  `CreateDIBSection(DIB_PAL_COLORS)` rule: 8 bpp DIBSections create
+  successfully and round-trip mutable color tables, while 1/2/4 bpp and
+  truecolor `DIB_PAL_COLORS` fail.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`:
   `SetBitmapBitsOnePixel` is now covered beyond `CreateBitmap`: bottom-up
   DIBSECTION surfaces across 1/2/4/8/16/24/32 bpp and display-compatible
