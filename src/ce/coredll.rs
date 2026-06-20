@@ -125,6 +125,8 @@ const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
 const ERROR_PATH_NOT_FOUND: u32 = 3;
 const FSCTL_COPY_EXTERNAL_START: u32 = 0x0009_004c;
 const FSCTL_COPY_EXTERNAL_COMPLETE: u32 = 0x0009_0050;
+const FSCTL_GET_COMPRESSION: u32 = 0x0009_003c;
+const FSCTL_SET_COMPRESSION: u32 = 0x0009_c040;
 const FSCTL_GET_STREAM_INFORMATION: u32 = 0x0009_4038;
 const FSCTL_SET_ZERO_DATA: u32 = 0x0009_80c8;
 const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
@@ -138,6 +140,7 @@ const IOCTL_FILE_READ_SCATTER: u32 = 0x0009_0048;
 const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
 const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
+const COMPRESSION_FORMAT_NONE: u16 = 0;
 const FILE_STREAM_INFO_STANDARD: u32 = 0;
 const FILE_STREAM_INFO_SIZE: u32 = 52;
 const FILE_ZERO_DATA_INFORMATION_SIZE: u32 = 16;
@@ -23839,6 +23842,50 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
             }
         }
     }
+    if ioctl_code == FSCTL_GET_COMPRESSION {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_get_compression_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    output_ptr,
+                    output_capacity,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
+    if ioctl_code == FSCTL_SET_COMPRESSION {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_set_compression_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    input_ptr,
+                    input_len,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
     if ioctl_code == FSCTL_SET_ZERO_DATA {
         match kernel.is_file_handle(handle) {
             Ok(true) => {
@@ -24731,6 +24778,78 @@ fn file_handle_get_stream_information_raw<M: CoredllGuestMemory>(
             FILE_STREAM_INFO_SIZE,
         )
     {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn file_handle_get_compression_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    output_ptr: u32,
+    output_capacity: u32,
+    returned_ptr: u32,
+) -> bool {
+    if output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if output_capacity < 2 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 2);
+        return false;
+    }
+    if !write_guest_u16(
+        kernel,
+        memory,
+        thread_id,
+        output_ptr,
+        COMPRESSION_FORMAT_NONE,
+    ) || !write_optional_count(kernel, memory, thread_id, returned_ptr, 2)
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn file_handle_set_compression_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    input_ptr: u32,
+    input_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    if input_ptr == 0 || input_len < 2 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    let Ok(format) = memory.read_u16(input_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    if format != COMPRESSION_FORMAT_NONE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);

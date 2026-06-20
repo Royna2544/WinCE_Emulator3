@@ -719,6 +719,12 @@ notes when it is still needed for implementation.
      the standard stream's attributes, CE FILETIMEs, logical size, and physical
      size while preserving short-buffer byte-count behavior. Coverage verifies
      the caller-initialized info-level packet shape used by CE callers.
+   - File-handle `DeviceIoControl(FSCTL_GET_COMPRESSION/FSCTL_SET_COMPRESSION)`
+     now uses the CE `fsioctl.h` control codes and `COMPRESSION_FORMAT_*`
+     contract for host-backed uncompressed files. Coverage verifies
+     `COMPRESSION_FORMAT_NONE` reporting, short output buffers, accepting
+     no-op `NONE` updates, unsupported compressed formats, and invalid input
+     packets.
    - `CeFsIoControlW`/`AFS_FsIoControlW(FSCTL_STORAGE_MEDIA_CHANGE_EVENT)`
      now follows CE's mounted-volume media-change path for host-backed mounts:
      detach notifications succeed as ignored zero-byte events, while attach

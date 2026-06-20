@@ -6830,6 +6830,199 @@ fn coredll_raw_file_handle_get_stream_information_reports_standard_stream() -> R
 }
 
 #[test]
+fn coredll_raw_file_handle_compression_reports_uncompressed() -> Result<()> {
+    const FSCTL_GET_COMPRESSION: u32 = 0x0009_003c;
+    const FSCTL_SET_COMPRESSION: u32 = 0x0009_c040;
+    const COMPRESSION_FORMAT_NONE: u16 = 0;
+    const COMPRESSION_FORMAT_LZNT1: u16 = 2;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let root = unique_test_root("file_handle_compression");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("plain.bin"), b"plain ce data").unwrap();
+    kernel.files = HostFileSystem::new(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let path_ptr = 0x1_ac00u32;
+    let format_ptr = 0x1_ad00u32;
+    let bytes_returned_ptr = 0x1_ae00u32;
+    memory.write_wide_z(path_ptr, "\\plain.bin");
+    memory.map_halfwords(format_ptr, 1);
+    memory.map_words(bytes_returned_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+
+    memory.write_halfword(format_ptr, 0xffff);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_GET_COMPRESSION,
+                0,
+                0,
+                format_ptr,
+                2,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u16(format_ptr)?, COMPRESSION_FORMAT_NONE);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 2);
+
+    memory.write_halfword(format_ptr, 0xbeef);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_GET_COMPRESSION,
+                0,
+                0,
+                format_ptr,
+                1,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 2);
+    assert_eq!(memory.read_u16(format_ptr)?, 0xbeef);
+
+    memory.write_halfword(format_ptr, COMPRESSION_FORMAT_NONE);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_SET_COMPRESSION,
+                format_ptr,
+                2,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_halfword(format_ptr, COMPRESSION_FORMAT_LZNT1);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_SET_COMPRESSION,
+                format_ptr,
+                2,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_SET_COMPRESSION,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_file_handle_set_zero_data_zeros_existing_range() -> Result<()> {
     const FSCTL_SET_ZERO_DATA: u32 = 0x0009_80c8;
     const ERROR_ACCESS_DENIED: u32 = 5;
