@@ -74,6 +74,12 @@ notes when it is still needed for implementation.
   `LOAD_LIBRARY_AS_DATAFILE` records both datafile and no-resolve state so
   `GetProcAddress` rejects the handle, while a later normal load still clears
   a prior pure `DONT_RESOLVE_DLL_REFERENCES` request.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\vm.h`: raw virtual allocations
+  with explicit unaligned addresses now reserve the full CE page range from
+  `PAGEALIGN_DOWN(lpAddress)` through `PAGEALIGN_UP(lpAddress + size)`.
+  Coverage verifies the rounded base, expanded allocation size, and accessible
+  requested end address.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c` and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`: raw
   `GetModuleFileNameW` now accepts registered DLL module handles as well as

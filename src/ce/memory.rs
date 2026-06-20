@@ -318,13 +318,17 @@ impl MemorySystem {
         if size == 0 || allocation_type & (MEM_COMMIT | MEM_RESERVE) == 0 {
             return None;
         }
-        let size = align_up(size, VIRTUAL_ALIGN)?;
-        let base = if address == 0 {
+        let (base, size) = if address == 0 {
+            let size = align_up(size, VIRTUAL_ALIGN)?;
             let base = self.next_virtual_ptr;
             self.next_virtual_ptr = self.next_virtual_ptr.checked_add(size)?;
-            base
+            (base, size)
         } else {
-            align_down(address, VIRTUAL_ALIGN)
+            let base = align_down(address, VIRTUAL_ALIGN);
+            let end = address.checked_add(size)?;
+            let aligned_end = align_up(end, VIRTUAL_ALIGN)?;
+            let size = aligned_end.checked_sub(base)?;
+            (base, size)
         };
         if self.virtual_overlaps(base, size) {
             return None;
@@ -560,6 +564,19 @@ mod tests {
 
         // allocation_type=0 → None regardless of size
         assert!(memory.virtual_alloc(0, 0x1000, 0, 4).is_none());
+    }
+
+    #[test]
+    fn virtual_alloc_with_unaligned_address_covers_requested_end() {
+        let mut memory = MemorySystem::default();
+        let base = memory
+            .virtual_alloc(0x500a_9d46, 0x1_0000, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
+
+        assert_eq!(base, 0x500a_0000);
+        let allocation = memory.virtual_allocation(base).unwrap();
+        assert_eq!(allocation.size, 0x2_0000);
+        assert!(memory.contains_allocated_range(0x500b_9d48, 2));
     }
 
     #[test]
