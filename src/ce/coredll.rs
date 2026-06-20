@@ -29782,13 +29782,15 @@ fn load_image_w_raw<M: CoredllGuestMemory>(
     let module = raw_arg(args, 0);
     let name = raw_arg(args, 1);
     let image_type = raw_arg(args, 2);
+    let cx = raw_i32_arg(args, 3);
+    let cy = raw_i32_arg(args, 4);
     let flags = raw_arg(args, 5);
 
     if image_type == IMAGE_CURSOR {
         return load_cursor_w_raw(kernel, thread_id, module, name);
     }
     if image_type == IMAGE_ICON {
-        return load_icon_w_raw(kernel, thread_id, module, name);
+        return load_image_icon_w_raw(kernel, memory, thread_id, module, name, cx, cy, flags);
     }
     if image_type != IMAGE_BITMAP {
         kernel
@@ -29870,6 +29872,75 @@ fn load_icon_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32
         RT_GROUP_ICON as u16,
         0x000b_8000,
     )
+}
+
+fn load_image_icon_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    module: u32,
+    name: u32,
+    cx: i32,
+    cy: i32,
+    flags: u32,
+) -> u32 {
+    if module == 0 && name <= u16::MAX as u32 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0x000b_8000 | name;
+    }
+
+    let module = normalized_module(kernel, module);
+    let name = ResourceId::from_guest_arg(name);
+    let Some(group_handle) =
+        kernel
+            .resources
+            .find_resource(module, name, ResourceId::Integer(RT_GROUP_ICON as u16))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+        return 0;
+    };
+    let Some(group_bytes) = resource_bytes(kernel, memory, thread_id, group_handle) else {
+        return 0;
+    };
+    let Ok(entries) = parse_icon_group_entries(&group_bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+        return 0;
+    };
+    let target = load_image_icon_target_size(cx, cy, flags);
+    let Some(entry) = select_pe_icon_group_entry(&entries, target) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+        return 0;
+    };
+    match extract_resource_icon_by_id(kernel, memory, thread_id, module, entry.id) {
+        Ok(icon) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            icon
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+            0
+        }
+    }
+}
+
+fn load_image_icon_target_size(cx: i32, cy: i32, flags: u32) -> i32 {
+    const LR_DEFAULTSIZE: u32 = 0x0000_0040;
+    let requested = cx.max(cy);
+    if requested > 0 {
+        requested
+    } else if flags & LR_DEFAULTSIZE != 0 {
+        32
+    } else {
+        32
+    }
 }
 
 fn create_icon_indirect_raw<M: CoredllGuestMemory>(
@@ -30326,6 +30397,12 @@ fn pe_icon_group_entries(
         .get(group_offset..group_end)
         .ok_or(PeIconExtractError::Malformed)?;
 
+    parse_icon_group_entries(group_bytes)
+}
+
+fn parse_icon_group_entries(
+    group_bytes: &[u8],
+) -> std::result::Result<Vec<PeIconGroupEntry>, PeIconExtractError> {
     if group_bytes.len() < 6 {
         return Err(PeIconExtractError::Malformed);
     }
@@ -30483,6 +30560,56 @@ fn extract_pe_icon_by_id<M: CoredllGuestMemory>(
         .get(icon_offset..icon_end)
         .ok_or(PeIconExtractError::Malformed)?;
 
+    extract_icon_from_rt_icon_bytes(kernel, memory, thread_id, icon_bytes)
+}
+
+fn extract_resource_icon_by_id<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    module: u32,
+    icon_id: u16,
+) -> std::result::Result<u32, PeIconExtractError> {
+    let resource_handle = kernel
+        .resources
+        .find_resource(
+            module,
+            ResourceId::Integer(icon_id),
+            ResourceId::Integer(RT_ICON as u16),
+        )
+        .ok_or(PeIconExtractError::Malformed)?;
+    let icon_bytes = resource_bytes(kernel, memory, thread_id, resource_handle)
+        .ok_or(PeIconExtractError::Malformed)?;
+    extract_icon_from_rt_icon_bytes(kernel, memory, thread_id, &icon_bytes)
+}
+
+fn resource_bytes<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    resource_handle: u32,
+) -> Option<Vec<u8>> {
+    let Some(data_ptr) = kernel.resources.load_resource(resource_handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return None;
+    };
+    let Some(size) = kernel.resources.sizeof_resource(resource_handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return None;
+    };
+    read_guest_bytes(kernel, memory, thread_id, data_ptr, size)
+}
+
+fn extract_icon_from_rt_icon_bytes<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    icon_bytes: &[u8],
+) -> std::result::Result<u32, PeIconExtractError> {
     // RT_ICON data is a DIB - bitmap header + color table + XOR mask + AND mask
     // The height in the header is 2*h (XOR + AND masks stacked), fix it for color bitmap
     let header_size = read_le_u32(icon_bytes, 0).ok_or(PeIconExtractError::Malformed)?;
@@ -56936,6 +57063,7 @@ const RGN_DIFF: u32 = 4;
 const RGN_COPY: u32 = 5;
 const RT_ACCELERATOR: u32 = 9;
 const RT_BITMAP: u32 = 2;
+const RT_ICON: u32 = 3;
 const RT_GROUP_CURSOR: u32 = 12;
 const RT_GROUP_ICON: u32 = 14;
 const RT_MENU: u32 = 4;

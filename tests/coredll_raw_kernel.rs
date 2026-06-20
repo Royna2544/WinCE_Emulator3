@@ -7729,6 +7729,137 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_load_image_w_selects_requested_icon_resource_size_like_ce() -> Result<()> {
+    const IMAGE_ICON: u32 = 1;
+    const RT_ICON: u32 = 3;
+    const RT_GROUP_ICON: u32 = 14;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+    let module = 0x0040_0000;
+
+    let icon_16 = icon_dib_32bpp(16, 16, 0x30);
+    let icon_32 = icon_dib_32bpp(32, 32, 0x80);
+    let group = rt_group_icon_resource(&[
+        (16, 16, 32, icon_16.len() as u32, 101),
+        (32, 32, 32, icon_32.len() as u32, 102),
+    ]);
+    let group_ptr = 0x2_0000;
+    let icon_16_ptr = 0x2_1000;
+    let icon_32_ptr = 0x2_3000;
+    memory.map_bytes(group_ptr, group.len() as u32);
+    memory.map_bytes(icon_16_ptr, icon_16.len() as u32);
+    memory.map_bytes(icon_32_ptr, icon_32.len() as u32);
+    memory.write_bytes(group_ptr, &group);
+    memory.write_bytes(icon_16_ptr, &icon_16);
+    memory.write_bytes(icon_32_ptr, &icon_32);
+    let group_handle = kernel.resources.register(
+        module,
+        ResourceId::Integer(77),
+        ResourceId::Integer(RT_GROUP_ICON as u16),
+        group_ptr,
+        group.len() as u32,
+    );
+    kernel.resources.register(
+        module,
+        ResourceId::Integer(101),
+        ResourceId::Integer(RT_ICON as u16),
+        icon_16_ptr,
+        icon_16.len() as u32,
+    );
+    kernel.resources.register(
+        module,
+        ResourceId::Integer(102),
+        ResourceId::Integer(RT_ICON as u16),
+        icon_32_ptr,
+        icon_32.len() as u32,
+    );
+
+    let small_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [module, 77, IMAGE_ICON, 16, 16, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(icon),
+            ..
+        } => icon,
+        other => panic!("LoadImageW(16x16 IMAGE_ICON) returned unexpected result: {other:?}"),
+    };
+    assert_ne!(small_icon, 0);
+    assert_ne!(
+        small_icon, group_handle,
+        "CE LoadImageW resolves an RT_GROUP_ICON entry instead of returning the group handle"
+    );
+    let small_bitmap = kernel
+        .resources
+        .icon(small_icon)
+        .and_then(|icon| kernel.resources.bitmap(icon.color_bitmap))
+        .expect("16x16 LoadImageW icon should be bitmap-backed");
+    assert_eq!((small_bitmap.width, small_bitmap.height), (16, 16));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let large_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [module, 77, IMAGE_ICON, 32, 32, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(icon),
+            ..
+        } => icon,
+        other => panic!("LoadImageW(32x32 IMAGE_ICON) returned unexpected result: {other:?}"),
+    };
+    assert_ne!(large_icon, 0);
+    assert_ne!(large_icon, small_icon);
+    let large_bitmap = kernel
+        .resources
+        .icon(large_icon)
+        .and_then(|icon| kernel.resources.bitmap(icon.color_bitmap))
+        .expect("32x32 LoadImageW icon should be bitmap-backed");
+    assert_eq!((large_bitmap.width, large_bitmap.height), (32, 32));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let missing_group = rt_group_icon_resource(&[(16, 16, 32, icon_16.len() as u32, 999)]);
+    let missing_group_ptr = 0x2_7000;
+    memory.map_bytes(missing_group_ptr, missing_group.len() as u32);
+    memory.write_bytes(missing_group_ptr, &missing_group);
+    kernel.resources.register(
+        module,
+        ResourceId::Integer(78),
+        ResourceId::Integer(RT_GROUP_ICON as u16),
+        missing_group_ptr,
+        missing_group.len() as u32,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_IMAGE_W,
+            [module, 78, IMAGE_ICON, 16, 16, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -8081,6 +8212,27 @@ fn pe32_with_sparse_multi_size_icon_group_id() -> Vec<u8> {
     let rsrc = 0x200usize;
     let group_type_dir = rsrc + 0x60;
     put_test_u32(&mut bytes, group_type_dir + 16, 7);
+    bytes
+}
+
+fn rt_group_icon_resource(entries: &[(u8, u8, u16, u32, u16)]) -> Vec<u8> {
+    let mut bytes = vec![0; 6 + entries.len() * 14];
+    put_test_u16(&mut bytes, 0, 0);
+    put_test_u16(&mut bytes, 2, 1);
+    put_test_u16(&mut bytes, 4, entries.len() as u16);
+    for (index, (width, height, bit_count, bytes_in_resource, id)) in
+        entries.iter().copied().enumerate()
+    {
+        let entry = 6 + index * 14;
+        bytes[entry] = width;
+        bytes[entry + 1] = height;
+        bytes[entry + 2] = 0;
+        bytes[entry + 3] = 0;
+        put_test_u16(&mut bytes, entry + 4, 1);
+        put_test_u16(&mut bytes, entry + 6, bit_count);
+        put_test_u32(&mut bytes, entry + 8, bytes_in_resource);
+        put_test_u16(&mut bytes, entry + 12, id);
+    }
     bytes
 }
 

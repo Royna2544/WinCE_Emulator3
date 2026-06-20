@@ -160,6 +160,12 @@ notes when it is still needed for implementation.
   `atlctrlw.h`: `LR_CREATEDIBSECTION` on `LoadImageW(IMAGE_BITMAP)` is now
   honored for raw file/resource bitmap loads, so `GetObjectW` can expose the
   CE DIBSECTION-sized object shape when callers request it.
+- `C:\WINCE600\PUBLIC\VOIP\SDK\SAMPLES\VOIP\VOIPDEMO\SOURCE\voipdemo.cpp`,
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\TASKBAR\taskbar.cpp`, and
+  `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\CTLPNL\CPLMAIN\cplutils.cpp`: CE shell
+  callers rely on `LoadImageW(IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR)` selecting
+  a concrete RT_ICON image from an RT_GROUP_ICON; raw `LoadImageW` now resolves
+  module icon groups into bitmap-backed HICON objects for the requested size.
 
 ## Active Roadmap
 
