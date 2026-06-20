@@ -3184,7 +3184,7 @@ impl UnicornMips {
             if offset >= blob.bytes.len() as u32 {
                 continue;
             }
-            if blob.base < CE_PROCESS_SLOT_SIZE {
+            if Self::mapped_dll_blob_is_process_slot_view(blob) {
                 process_slot_candidate.get_or_insert(candidate);
             } else {
                 fallback.get_or_insert(candidate);
@@ -3209,7 +3209,7 @@ impl UnicornMips {
             return None;
         }
         mapped_blobs.iter().find_map(|blob| {
-            if !blob.name.starts_with("dll:") || blob.base >= CE_PROCESS_SLOT_SIZE {
+            if !Self::mapped_dll_blob_is_process_slot_view(blob) {
                 return None;
             }
             if offset >= blob.bytes.len() as u32 {
@@ -3217,6 +3217,14 @@ impl UnicornMips {
             }
             blob.base.checked_add(offset)
         })
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn mapped_dll_blob_is_process_slot_view(blob: &MappedBlob) -> bool {
+        blob.name.starts_with("dll:")
+            && (blob.base < CE_PROCESS_SLOT_SIZE
+                || mapped_blob_pe_preferred_image_base(blob)
+                    .is_some_and(|base| base < CE_PROCESS_SLOT_SIZE))
     }
 
     #[cfg(feature = "unicorn")]
@@ -12719,6 +12727,37 @@ fn mapped_blob_module_for_pc(mapped_blobs: &[MappedBlob], pc: u32) -> Option<Str
     mapped_blob_module_index_for_pc(mapped_blobs, pc)
         .and_then(|index| mapped_blobs.get(index))
         .map(|blob| compact_mapped_blob_name(&blob.name))
+}
+
+#[cfg(feature = "unicorn")]
+fn mapped_blob_pe_preferred_image_base(blob: &MappedBlob) -> Option<u32> {
+    if blob.bytes.len() < 0x40 || &blob.bytes[0..2] != b"MZ" {
+        return None;
+    }
+    let lfanew = u32::from_le_bytes([
+        blob.bytes[0x3c],
+        blob.bytes[0x3d],
+        blob.bytes[0x3e],
+        blob.bytes[0x3f],
+    ]) as usize;
+    let optional_header = lfanew.checked_add(24)?;
+    let image_base = optional_header.checked_add(0x1c)?;
+    let image_base_end = image_base.checked_add(4)?;
+    if image_base_end > blob.bytes.len()
+        || blob.bytes.get(lfanew..lfanew.checked_add(4)?)? != b"PE\0\0"
+        || u16::from_le_bytes([
+            blob.bytes[optional_header],
+            blob.bytes[optional_header.checked_add(1)?],
+        ]) != 0x010b
+    {
+        return None;
+    }
+    Some(u32::from_le_bytes([
+        blob.bytes[image_base],
+        blob.bytes[image_base + 1],
+        blob.bytes[image_base + 2],
+        blob.bytes[image_base + 3],
+    ]))
 }
 
 #[cfg(feature = "unicorn")]
@@ -43928,6 +43967,36 @@ mod unicorn_tests {
         assert_eq!(
             emulator.mapped_guest_wndproc(0x4019_f0f4),
             Some(0x0014_f0f4)
+        );
+    }
+
+    fn fake_pe_blob(size: usize, preferred_image_base: u32) -> Vec<u8> {
+        let mut bytes = vec![0; size];
+        bytes[0..2].copy_from_slice(b"MZ");
+        bytes[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        bytes[0x98..0x9a].copy_from_slice(&0x010bu16.to_le_bytes());
+        bytes[0xb4..0xb8].copy_from_slice(&preferred_image_base.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn mapped_guest_wndproc_maps_shared_callback_to_relocated_process_slot_dll() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4015_0000,
+            bytes: fake_pe_blob(0x7f000, 0x4015_0000),
+        });
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:mfcce400.dll".to_owned(),
+            base: 0x6000_0000,
+            bytes: fake_pe_blob(0x8b000, 0x0010_0000),
+        });
+
+        assert_eq!(
+            emulator.mapped_guest_wndproc(0x4019_f0f4),
+            Some(0x6004_f0f4)
         );
     }
 
