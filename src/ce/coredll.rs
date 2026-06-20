@@ -4150,12 +4150,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::U32(0))
         }
-        ORD_GET_DEVICE_BY_INDEX => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_GET_DEVICE_BY_INDEX => Some(CoredllValue::Bool(get_device_by_index_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_COM_THREAD_BASE_FUNC => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -58789,6 +58786,63 @@ fn enum_devices_raw<M: CoredllGuestMemory>(
 ) -> u32 {
     let names = kernel.devices.enabled_names();
     enum_wide_multi_sz_raw(kernel, memory, thread_id, args, &names)
+}
+
+fn get_device_by_index_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+    const DEVICE_FIND_DATA_DWOID: u32 = 36;
+
+    let index = raw_arg(args, 0);
+    let find_data_ptr = raw_arg(args, 1);
+    if find_data_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(legacy_name) = kernel.devices.legacy_name_by_index(index) else {
+        return false;
+    };
+
+    for (offset, value) in [
+        (0, FILE_ATTRIBUTE_NORMAL),
+        (4, 0),
+        (8, 0),
+        (12, 0),
+        (16, 0),
+        (20, 0),
+        (24, 0),
+        (28, 0),
+        (32, 0),
+        (DEVICE_FIND_DATA_DWOID, u32::MAX),
+    ] {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            find_data_ptr.wrapping_add(offset),
+            value,
+        ) {
+            return false;
+        }
+    }
+    if !write_guest_wide_fixed(
+        kernel,
+        memory,
+        thread_id,
+        find_data_ptr.wrapping_add(WIN32_FIND_DATAW_FILE_NAME),
+        &legacy_name,
+        WIN32_FIND_DATAW_FILE_NAME_CHARS,
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn get_device_keys_raw<M: CoredllGuestMemory>(

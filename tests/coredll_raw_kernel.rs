@@ -27,9 +27,9 @@ use wince_emulation_v3::{
             ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
             ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
             ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES,
-            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS,
-            ORD_GET_DEVICE_POWER, ORD_GET_EVENT_DATA, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_BY_INDEX,
+            ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER, ORD_GET_EVENT_DATA,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
             ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
             ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
@@ -741,8 +741,12 @@ fn coredll_raw_device_enumerators_return_ce_multisz_lists() -> Result<()> {
     let thread_id = 7;
     let size_ptr = 0x2100;
     let list_ptr = 0x2200;
+    let find_data_ptr = 0x2400;
     memory.map_words(size_ptr, 1);
     memory.map_halfwords(list_ptr, 32);
+    memory.map_bytes(find_data_ptr, 560);
+    memory.map_words(find_data_ptr, 10);
+    memory.map_halfwords(find_data_ptr + 40, 260);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -867,6 +871,80 @@ fn coredll_raw_device_enumerators_return_ce_multisz_lists() -> Result<()> {
     assert_eq!(memory.read_wide_z(list_ptr + 12, 16), "I2C1:");
     assert_eq!(memory.read_u16(list_ptr + 24)?, 0);
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_bytes(find_data_ptr, &[0xcc; 560]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_BY_INDEX,
+            [0, find_data_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(memory.read_u32(find_data_ptr)?, 0x80);
+    for offset in [4, 8, 12, 16, 20, 24, 28, 32] {
+        assert_eq!(memory.read_u32(find_data_ptr + offset)?, 0);
+    }
+    assert_eq!(memory.read_u32(find_data_ptr + 36)?, u32::MAX);
+    assert_eq!(memory.read_wide_z(find_data_ptr + 40, 260), "COM7:");
+
+    memory.write_bytes(find_data_ptr, &[0xdd; 560]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_BY_INDEX,
+            [1, find_data_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(find_data_ptr + 40, 260), "I2C1:");
+
+    kernel.threads.set_last_error(thread_id, 0x1234);
+    memory.write_bytes(find_data_ptr, &[0xee; 560]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_BY_INDEX,
+            [2, find_data_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0x1234);
+    assert_eq!(memory.read_bytes(find_data_ptr, 560), vec![0xee; 560]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_BY_INDEX,
+            [0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     Ok(())
 }

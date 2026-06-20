@@ -251,6 +251,13 @@ impl DeviceNamespace {
             .collect()
     }
 
+    pub fn legacy_name_by_index(&self, index: u32) -> Option<String> {
+        self.devices
+            .values()
+            .nth(index as usize)
+            .map(|device| device.guest.clone())
+    }
+
     pub fn device_keys(&self, guest_name: &str) -> Option<(String, String)> {
         let normalized = normalize_device_name(guest_name);
         self.device_key_entries().into_iter().find_map(|entry| {

@@ -413,6 +413,14 @@ notes when it is still needed for implementation.
   argument rejection, unknown/disabled device lookup failures, length-only
   queries, `ERROR_MORE_DATA` size reporting, case-insensitive device matching,
   and successful `Drivers\Active\N` / `Drivers\BuiltIn\NAME` output.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devapi.c`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwinbase.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: raw `GetDeviceByIndex`
+  now enumerates enabled configured legacy device names through CE-shaped
+  `WIN32_FIND_DATAW` output instead of reporting unsupported. Coverage
+  verifies enabled-only indexing, `FILE_ATTRIBUTE_NORMAL`, zeroed times/sizes,
+  CE `dwOID == 0xffffffff`, null output rejection, and out-of-range no-touch
+  behavior.
 - `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\DEVLOAD\devreg.cpp`,
   `C:\WINCE600\PUBLIC\COMMON\DDK\INC\devload.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\windev.h`: raw `OpenDeviceKey` now
