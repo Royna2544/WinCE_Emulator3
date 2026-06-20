@@ -933,6 +933,12 @@ notes when it is still needed for implementation.
   cache-filter input-size predicate, accepting non-null caller packets up to
   the 4-byte `FILE_CACHE_INFO` size before evaluating the info level and
   rejecting oversized packets as invalid.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\SAMPLES\TESTIME\ui.c`, and
+  `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\LANG\IME\CIMEUI\imeui.cpp`: raw
+  `ImmSetStatusWindowPos` now stores the IME status point and queues the
+  owning UI window's `WM_IME_NOTIFY/IMN_SETSTATUSWINDOWPOS` callback, matching
+  the CE IME UI control path instead of silently updating the context only.
 
 ## Active Roadmap
 

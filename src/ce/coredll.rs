@@ -44929,6 +44929,8 @@ fn imm_set_status_window_pos_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> bool {
+    const IMN_SETSTATUSWINDOWPOS: u32 = 0x000c;
+
     let Some(himc) = resolve_imm_status_context(kernel, raw_arg(args, 0)) else {
         kernel
             .threads
@@ -44944,7 +44946,19 @@ fn imm_set_status_window_pos_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
-    context.status_window_pos = point;
+    let hwnd = {
+        context.status_window_pos = point;
+        context.hwnd
+    };
+    if let Some(hwnd) = hwnd {
+        let _ = kernel.post_message_w_for_thread(
+            thread_id,
+            hwnd,
+            crate::ce::gwe::WM_IME_NOTIFY,
+            IMN_SETSTATUSWINDOWPOS,
+            0,
+        );
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
