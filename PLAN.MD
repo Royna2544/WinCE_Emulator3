@@ -29,6 +29,16 @@ notes when it is still needed for implementation.
 ## Recent CE-Backed Progress
 
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\SHELL\shell.c`, and
+  `C:\WINCE600\PRIVATE\SHELL\SHELLPSL\HAVEAYGSHELL\shellpsl.cpp`: raw
+  `ReadProcessMemory`/`WriteProcessMemory` now validate process handles and
+  copy mapped guest memory bytes with CE-style optional byte-count reporting
+  instead of returning `ERROR_NOT_SUPPORTED`. Coverage verifies reads, writes,
+  invalid process handles, unmapped source failures, and byte-count reset on
+  failure.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kwin32.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\UTILS\CMD2\cmdexec.cxx`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and shell/task

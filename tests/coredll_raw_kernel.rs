@@ -52,10 +52,10 @@ use wince_emulation_v3::{
             ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS,
             ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM,
             ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE,
-            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD,
-            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
-            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_READ_PROCESS_MEMORY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR,
+            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS,
+            ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
+            ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
             ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
             ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
             ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
@@ -67,6 +67,7 @@ use wince_emulation_v3::{
             ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
             ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
             ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_MSG_QUEUE,
+            ORD_WRITE_PROCESS_MEMORY,
         },
         devices::{
             CommDcb, DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind,
@@ -3619,8 +3620,109 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_ne!(opened_process, 0);
     assert_ne!(opened_process, CE_CURRENT_PROCESS_PSEUDO_HANDLE);
     assert_ne!(opened_process, launch.process_handle);
+    let process_source_ptr = 0x5080;
+    let process_dest_ptr = 0x5090;
+    let process_count_ptr = 0x50a0;
+    memory.map_bytes(process_source_ptr, 8);
+    memory.map_bytes(process_dest_ptr, 8);
+    memory.map_words(process_count_ptr, 1);
+    memory.write_bytes(process_source_ptr, b"abcd1234");
+    memory.fill(process_dest_ptr, 0xcc, 8);
+    memory.write_word(process_count_ptr, 0xffff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_PROCESS_MEMORY,
+            [
+                opened_process,
+                process_source_ptr,
+                process_dest_ptr,
+                4,
+                process_count_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_bytes(process_dest_ptr, 8),
+        b"abcd\xcc\xcc\xcc\xcc"
+    );
+    assert_eq!(memory.read_u32(process_count_ptr)?, 4);
+    memory.write_bytes(process_dest_ptr, b"WXYZ5678");
+    memory.fill(process_source_ptr, 0, 8);
+    memory.write_word(process_count_ptr, 0xffff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_PROCESS_MEMORY,
+            [
+                opened_process,
+                process_source_ptr,
+                process_dest_ptr,
+                4,
+                process_count_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(process_source_ptr, 8), b"WXYZ\0\0\0\0");
+    assert_eq!(memory.read_u32(process_count_ptr)?, 4);
+    memory.write_word(process_count_ptr, 0xffff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_PROCESS_MEMORY,
+            [opened_process, 0, process_dest_ptr, 4, process_count_ptr,],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(process_count_ptr)?, 0);
+    memory.write_word(process_count_ptr, 0xffff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_PROCESS_MEMORY,
+            [
+                0xdead_beef,
+                process_source_ptr,
+                process_dest_ptr,
+                4,
+                process_count_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert_eq!(memory.read_u32(process_count_ptr)?, 0);
     let launch_process_index = launch.process_id.saturating_sub(0x42).saturating_add(1);
-    let process_exit_ptr = 0x5080;
+    let process_exit_ptr = 0x50b0;
     memory.map_words(process_exit_ptr, 1);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -3743,6 +3845,113 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     ));
     assert_eq!(memory.read_u32(process_exit_ptr)?, 259);
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    let process_transfer_ptr = 0x5090;
+    let process_read_source = 0x5200;
+    let process_read_dest = 0x5220;
+    let process_write_source = 0x5240;
+    memory.map_words(process_transfer_ptr, 1);
+    memory.map_bytes(process_read_source, 8);
+    memory.map_bytes(process_read_dest, 8);
+    memory.map_bytes(process_write_source, 3);
+    memory.write_bytes(process_read_source, &[0x10, 0x20, 0x30, 0x40, 0, 0, 0, 0]);
+    memory.write_bytes(process_read_dest, &[0xa5; 8]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_PROCESS_MEMORY,
+            [
+                opened_process,
+                process_read_source,
+                process_read_dest,
+                4,
+                process_transfer_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_bytes(process_read_dest, 8),
+        vec![0x10, 0x20, 0x30, 0x40, 0xa5, 0xa5, 0xa5, 0xa5]
+    );
+    assert_eq!(memory.read_u32(process_transfer_ptr)?, 4);
+    memory.write_bytes(process_write_source, &[0x99, 0x88, 0x77]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_PROCESS_MEMORY,
+            [
+                opened_process,
+                process_read_source + 4,
+                process_write_source,
+                3,
+                process_transfer_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_bytes(process_read_source, 8),
+        vec![0x10, 0x20, 0x30, 0x40, 0x99, 0x88, 0x77, 0]
+    );
+    assert_eq!(memory.read_u32(process_transfer_ptr)?, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_PROCESS_MEMORY,
+            [
+                0xdead_beef,
+                process_read_source,
+                process_read_dest,
+                1,
+                process_transfer_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert_eq!(memory.read_u32(process_transfer_ptr)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_PROCESS_MEMORY,
+            [
+                opened_process,
+                0x00ab_cdef,
+                process_read_dest,
+                1,
+                process_transfer_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(process_transfer_ptr)?, 0);
     let process_wait = kernel.register_blocked_waiter(
         8,
         0x108,

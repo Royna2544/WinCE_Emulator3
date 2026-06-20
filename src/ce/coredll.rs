@@ -2724,12 +2724,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_READ_PROCESS_MEMORY | ORD_WRITE_PROCESS_MEMORY => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_READ_PROCESS_MEMORY => Some(CoredllValue::Bool(read_process_memory_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_WRITE_PROCESS_MEMORY => Some(CoredllValue::Bool(write_process_memory_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_THCREATE_SNAPSHOT => {
             kernel
                 .threads
@@ -56979,6 +56979,106 @@ pub(crate) fn read_guest_bytes<M: CoredllGuestMemory>(
         return None;
     }
     Some(bytes)
+}
+
+fn read_process_memory_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    process_memory_copy_raw(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 0),
+        raw_arg(args, 1),
+        raw_arg(args, 2),
+        raw_arg(args, 3),
+        raw_arg(args, 4),
+        false,
+    )
+}
+
+fn write_process_memory_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    process_memory_copy_raw(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 0),
+        raw_arg(args, 2),
+        raw_arg(args, 1),
+        raw_arg(args, 3),
+        raw_arg(args, 4),
+        true,
+    )
+}
+
+fn process_memory_copy_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    process_handle: u32,
+    source: u32,
+    destination: u32,
+    size: u32,
+    transferred_ptr: u32,
+    write: bool,
+) -> bool {
+    if !write_optional_count(kernel, memory, thread_id, transferred_ptr, 0) {
+        return false;
+    }
+    if (size as i32) < 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if kernel.process_id_for_handle(process_handle).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if size == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, source, size) else {
+        return false;
+    };
+    if !write_guest_bytes(kernel, memory, thread_id, destination, &bytes) {
+        return false;
+    }
+    if !write_optional_count(kernel, memory, thread_id, transferred_ptr, size) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    if write {
+        tracing::trace!(
+            target: "ce.process",
+            thread_id,
+            process_handle,
+            destination = format_args!("0x{destination:08x}"),
+            size,
+            "WriteProcessMemory"
+        );
+    } else {
+        tracing::trace!(
+            target: "ce.process",
+            thread_id,
+            process_handle,
+            source = format_args!("0x{source:08x}"),
+            size,
+            "ReadProcessMemory"
+        );
+    }
+    true
 }
 
 fn read_guest_narrow_preview<M: CoredllGuestMemory>(

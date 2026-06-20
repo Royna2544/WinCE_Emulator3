@@ -26,6 +26,9 @@ references for historical reconstruction.
 - Remote runtime behavior exposes status, frame capture, touch/key input,
   GPS/NMEA serial injection, debug handle snapshots, and audio/control WebSocket
   plumbing.
+- Process-handle behavior includes opening launched process IDs as distinct
+  handles plus raw `ReadProcessMemory`/`WriteProcessMemory` byte copies with
+  CE-style handle validation and transferred-byte counts.
 
 ## Latest Confirmed State
 
@@ -50,6 +53,8 @@ references for historical reconstruction.
   scheduler regressions.
 - Release/live validation survived the prior crash window, served framebuffer
   snapshots, consumed remote touch, and drained remote GPS into `COM7:`.
+- Focused raw kernel ordinal validation covers duplicated process handles,
+  shared process exit state, and process memory read/write copies.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.
