@@ -251,6 +251,14 @@ notes when it is still needed for implementation.
   instead of reporting unsupported. Coverage verifies refcounting, no-paging
   load flags, normal export lookup, missing-driver failure, and invalid name
   pointer rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\filesystem.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwinbase.h`: raw `LoadFSD`/`LoadFSDEx`
+  now validate device handles, FSD names, sync/async flags, and required
+  `FSD_MountDisk`/`FSD_UnmountDisk` driver exports instead of returning
+  `ERROR_NOT_SUPPORTED`. Coverage verifies successful FSD driver retention
+  with CE no-paging load flags, missing drivers, malformed FSD drivers,
+  invalid device handles, invalid flags, and invalid name pointers.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\IORM\iorm.c`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwinbase.h`, and

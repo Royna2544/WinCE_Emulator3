@@ -287,6 +287,7 @@ const SE_ERR_NOASSOC: u32 = 31;
 const ERROR_BAD_FORMAT_LOCAL: u32 = 11;
 const ERROR_FILE_EXISTS_LOCAL: u32 = 80;
 const ERROR_MOD_NOT_FOUND_LOCAL: u32 = 126;
+const ERROR_PROC_NOT_FOUND_LOCAL: u32 = 127;
 const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
 const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
 const ERROR_PIPE_NOT_CONNECTED: u32 = 233;
@@ -3463,12 +3464,22 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 3),
             raw_arg(args, 4),
         ))),
-        ORD_LOAD_FSD | ORD_LOAD_FSDEX => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_LOAD_FSD => Some(CoredllValue::Bool(load_fsd_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            LOADFSD_ASYNCH,
+        ))),
+        ORD_LOAD_FSDEX => Some(CoredllValue::Bool(load_fsd_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_DEREGISTER_AFS | ORD_DEREGISTER_AFSNAME => Some(CoredllValue::Bool(
             deregister_afs_raw(kernel, thread_id, raw_arg(args, 0)),
         )),
@@ -22996,6 +23007,8 @@ const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x0000_0008;
 const LOAD_LIBRARY_IN_KERNEL: u32 = 0x0000_8000;
 const MF_NO_THREAD_CALLS: u32 = 0x0000_0400;
 const LLIB_NO_PAGING: u32 = 0x0001;
+const LOADFSD_ASYNCH: u32 = 0x0000;
+const LOADFSD_SYNCH: u32 = 0x0001;
 const LOAD_DRIVER_FLAGS: u32 = LLIB_NO_PAGING << 16;
 const LOAD_KERNEL_LIBRARY_FLAGS: u32 =
     LOAD_LIBRARY_IN_KERNEL | MF_NO_THREAD_CALLS | (LLIB_NO_PAGING << 16);
@@ -23158,6 +23171,68 @@ fn load_driver_raw<M: CoredllGuestMemory>(
         .threads
         .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
     0
+}
+
+fn load_fsd_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    device_handle: u32,
+    name_ptr: u32,
+    flags: u32,
+) -> bool {
+    if flags != LOADFSD_ASYNCH && flags != LOADFSD_SYNCH {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if !matches!(
+        kernel.handles.get(device_handle),
+        Ok(KernelObject::Device(_))
+    ) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(existing_handle) = kernel.loaded_module_handle(&name) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return false;
+    };
+    let Some(module) = kernel.loaded_module_by_handle(existing_handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if !module.exports_by_name.contains_key("fsd_mountdisk")
+        || !module.exports_by_name.contains_key("fsd_unmountdisk")
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_PROC_NOT_FOUND_LOCAL);
+        return false;
+    }
+    if kernel
+        .retain_loaded_module_by_name_for_load(&name, LOAD_DRIVER_FLAGS)
+        .is_none()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn query_instruction_set_raw<M: CoredllGuestMemory>(

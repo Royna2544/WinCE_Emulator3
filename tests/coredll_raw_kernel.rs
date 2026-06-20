@@ -53,13 +53,13 @@ use wince_emulation_v3::{
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
             ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_IMAGE_W, ORD_LOAD_KERNEL_LIBRARY,
-            ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
-            ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE, ORD_OPEN_CLIPBOARD, ORD_OPEN_DEVICE_KEY,
-            ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS, ORD_PAGE_OUT_MODULE,
-            ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM,
-            ORD_QUERY_INSTRUCTION_SET, ORD_QUERY_PERFORMANCE_COUNTER,
+            ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_FSD, ORD_LOAD_FSDEX, ORD_LOAD_IMAGE_W,
+            ORD_LOAD_KERNEL_LIBRARY, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
+            ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE,
+            ORD_OPEN_CLIPBOARD, ORD_OPEN_DEVICE_KEY, ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE,
+            ORD_OPEN_PROCESS, ORD_PAGE_OUT_MODULE, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS,
+            ORD_PURGE_COMM, ORD_QUERY_INSTRUCTION_SET, ORD_QUERY_PERFORMANCE_COUNTER,
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE, ORD_READ_PROCESS_MEMORY,
             ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_DEVICE, ORD_REGISTER_POWER_RELATIONSHIP,
             ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX, ORD_RELEASE_POWER_RELATIONSHIP,
@@ -8040,6 +8040,223 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_NOT_SUPPORTED
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_load_fsd_validates_device_driver_and_exports() -> Result<()> {
+    const LOADFSD_ASYNCH: u32 = 0x0000;
+    const LOADFSD_SYNCH: u32 = 0x0001;
+    const ERROR_PROC_NOT_FOUND: u32 = 127;
+    const LLIB_NO_PAGING: u32 = 0x0001;
+    const LOAD_DRIVER_FLAGS: u32 = LLIB_NO_PAGING << 16;
+
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.devices = DeviceConfigFile {
+        version: 1,
+        defaults: DeviceDefaults::default(),
+        devices: vec![DeviceConfig {
+            guest: "COM9:".to_owned(),
+            kind: DeviceKind::Serial,
+            backend: DeviceBackend::Stub,
+            host: None,
+            remote_gps: false,
+            enabled: true,
+            note: None,
+        }],
+    };
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 44;
+    let type_ptr = 0x1_9400;
+    let fsd_name_ptr = 0x1_9480;
+    let bad_fsd_name_ptr = 0x1_9500;
+    let missing_name_ptr = 0x1_9580;
+    let fsd_base = 0x6340_0000;
+    let bad_fsd_base = 0x6350_0000;
+
+    memory.write_wide_z(type_ptr, "COM");
+    memory.write_wide_z(fsd_name_ptr, "fatfsd.dll");
+    memory.write_wide_z(bad_fsd_name_ptr, "badfsd.dll");
+    memory.write_wide_z(missing_name_ptr, "missingfsd.dll");
+    kernel.register_loaded_module_with_metadata(
+        "fatfsd.dll",
+        fsd_base,
+        std::collections::BTreeMap::from([
+            ("FSD_MountDisk".to_owned(), fsd_base + 0x1000),
+            ("FSD_UnmountDisk".to_owned(), fsd_base + 0x1100),
+        ]),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\fatfsd.dll".to_owned()),
+            image_size: 0x18000,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    kernel.register_loaded_module_with_metadata(
+        "badfsd.dll",
+        bad_fsd_base,
+        std::collections::BTreeMap::from([("FSD_MountDisk".to_owned(), bad_fsd_base + 0x1000)]),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\badfsd.dll".to_owned()),
+            image_size: 0x10000,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(device),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REGISTER_DEVICE,
+        [type_ptr, 9, 0, 0],
+    )
+    else {
+        panic!("RegisterDevice did not return a handle");
+    };
+    assert_ne!(device, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_FSD,
+            [device, fsd_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    let fsd = kernel.loaded_module_by_handle(fsd_base).unwrap();
+    assert_eq!(fsd.ref_count, 2);
+    assert_eq!(fsd.load_flags & LOAD_DRIVER_FLAGS, LOAD_DRIVER_FLAGS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_FSDEX,
+            [device, fsd_name_ptr, LOADFSD_SYNCH],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(
+        kernel.loaded_module_by_handle(fsd_base).unwrap().ref_count,
+        3
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_FSDEX,
+            [device, fsd_name_ptr, 0x2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_FSDEX,
+            [0xffff_1234, fsd_name_ptr, LOADFSD_ASYNCH],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_FSD,
+            [device, bad_fsd_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_PROC_NOT_FOUND
+    );
+    assert_eq!(
+        kernel
+            .loaded_module_by_handle(bad_fsd_base)
+            .unwrap()
+            .ref_count,
+        1
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_FSD,
+            [device, missing_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_FSD,
+            [device, 0x7fff_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
     );
 
     Ok(())
