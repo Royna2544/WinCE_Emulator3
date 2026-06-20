@@ -122,6 +122,17 @@ notes when it is still needed for implementation.
   returns CE-layout volume metadata from an opened partition handle, invalid
   volume-info inputs leave caller buffers untouched, and
   `FSCTL_REFRESH_VOLUME` succeeds as a zero-byte no-op.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\partition.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsdmgr.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: partition-handle
+  `DeviceIoControl` now exposes CE-shaped cached disk metadata for mounted
+  host-backed partitions. Coverage verifies `IOCTL_DISK_GETINFO`,
+  `IOCTL_DISK_DEVICE_INFO`, and `IOCTL_DISK_GETNAME` through an opened
+  partition handle, including byte counts, profile/device flags, mounted
+  volume names, and insufficient-buffer rejection for disk names.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now
