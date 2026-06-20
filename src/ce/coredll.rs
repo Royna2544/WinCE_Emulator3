@@ -6157,14 +6157,19 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             args,
         ))),
-        ORD_START_DOC_W | ORD_START_PAGE | ORD_END_PAGE | ORD_END_DOC | ORD_ABORT_DOC
-        | ORD_SET_ABORT_PROC => {
+        ORD_START_DOC_W | ORD_START_PAGE | ORD_END_PAGE | ORD_END_DOC | ORD_ABORT_DOC => {
             // Printer/spooler APIs: not supported on CE emulator targets.
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::U32(0xffff_ffff)) // SP_ERROR = -1
         }
+        ORD_SET_ABORT_PROC => Some(CoredllValue::U32(set_abort_proc_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_STRETCH_DIBITS => Some(CoredllValue::U32(stretch_dibits_raw(
             kernel,
             memory,
@@ -53700,6 +53705,20 @@ fn is_valid_hdc(kernel: &CeKernel, hdc: u32) -> bool {
         return false;
     };
     hwnd == kernel.gwe.get_desktop_window() || kernel.gwe.is_window(hwnd)
+}
+
+fn set_abort_proc_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, abort_proc: u32) -> u32 {
+    const SP_ERROR: u32 = 0xffff_ffff;
+
+    if !is_valid_hdc(kernel, hdc) || !kernel.resources.set_abort_proc(hdc, abort_proc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return SP_ERROR;
+    }
+
+    kernel.threads.set_last_error(thread_id, 0);
+    1
 }
 
 fn normalize_rect(rect: Rect) -> Rect {

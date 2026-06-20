@@ -438,6 +438,7 @@ pub struct DcState {
     pub text_char_extra: i32,
     pub layout: u32,
     pub poly_fill_mode: i32,
+    pub abort_proc: u32,
 }
 
 pub const POLY_FILL_ALTERNATE: i32 = 1;
@@ -465,6 +466,7 @@ impl Default for DcState {
             text_char_extra: 0,
             layout: 0, // left-to-right
             poly_fill_mode: POLY_FILL_ALTERNATE,
+            abort_proc: 0,
         }
     }
 }
@@ -2530,6 +2532,15 @@ impl ResourceSystem {
             old
         } else {
             0
+        }
+    }
+
+    pub fn set_abort_proc(&mut self, hdc: u32, abort_proc: u32) -> bool {
+        if let Some(s) = self.dc_states.get_mut(&hdc) {
+            s.abort_proc = abort_proc;
+            true
+        } else {
+            false
         }
     }
 

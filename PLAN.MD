@@ -28,6 +28,13 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\doc.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\MGDI\INC\dc.hpp`, and
+  `C:\WINCE600\PUBLIC\DIRECTX\SDK\SAMPLES\DXMISC\DXVIEW\dxprint.c`:
+  raw `SetAbortProc` now follows CE's HDC validation contract instead of the
+  generic unsupported-printer stub. Bad/null/deleted HDCs return `SP_ERROR`
+  with `ERROR_INVALID_HANDLE`, while valid DCs store the abort callback on DC
+  state for later print/spooler parity work.
 - `C:\WINCE600\PUBLIC\RDP\OAK\UIT\SHELL\WBTSHELL\wbttskbr.cpp`,
   `C:\WINCE600\PUBLIC\VOIP\OAK\PHONE\PHONEAPP\PHONECORE\hotkeys.cpp`, and
   `C:\WINCE600\PUBLIC\VOIP\OAK\PHONE\HOMESCREEN\hotkeys.cpp`:
