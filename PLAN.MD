@@ -68,6 +68,11 @@ notes when it is still needed for implementation.
   `MF_NO_THREAD_CALLS`, and `LLIB_NO_PAGING` load flags, increments the module
   refcount, preserves exported `IOControl` lookup, and reports CE-style missing
   or invalid library-name failures.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
+  raw `IsSystemFile` now follows CE's system-volume/file-attribute contract
+  instead of returning unconditional false. Coverage verifies system-mounted
+  files, non-system mounted files, missing paths, and null path rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`

@@ -4391,10 +4391,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         // IsSystemFile
-        ORD_IS_SYSTEM_FILE => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_IS_SYSTEM_FILE => Some(CoredllValue::Bool(fs_is_system_file_w_raw(
+            kernel, memory, thread_id, args[0],
+        ))),
         // CeLogGetZones
         ORD_CE_LOG_GET_ZONES => {
             kernel.threads.set_last_error(thread_id, 0);
