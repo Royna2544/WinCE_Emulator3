@@ -32,6 +32,9 @@ references for historical reconstruction.
 - Raw stack diagnostic behavior includes a minimal `GetCallStackSnapshot`
   surface for normal and extended frame buffers, skip handling, flag validation,
   and CE-style last-error reporting.
+- Stub/raw no-feature validation now keeps visible receiver work aligned with
+  the Unicorn runtime, including sent messages, queued visible messages, and
+  dirty visible windows.
 - Toolhelp process snapshots now expose the current process and launched child
   process entries through raw `THCreateSnapshot` memory blocks.
 - Toolhelp thread snapshots now expose current and launched thread entries,

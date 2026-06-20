@@ -59,12 +59,10 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
   a running implementation diary.
 - Keep registry fixtures and launch docs on `registry.reg`; temporary JSON
   parser regressions should use temporary fixtures only.
-- Decide whether no-feature `cargo test` is a supported validation profile. If
-  yes, audit feature-gated Unicorn references and add it to the validation
-  queue.
 
 ## Validation Queue
 
+- Stub/raw smoke: `cargo test -j 1`
 - Shell/resource/GDI: `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel`
 - GWE/message/menu/modal: `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
 - File/storage: `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`

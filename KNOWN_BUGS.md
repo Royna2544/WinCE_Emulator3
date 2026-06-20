@@ -56,8 +56,8 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 ## Build And Validation Risks
 
 - The normal validation profile uses `--features unicorn,trace,win32-desktop`.
-  No-feature test support needs an explicit decision and cfg audit before it
-  can be a required gate.
+  No-feature `cargo test -j 1` is now a supported smoke profile for stub/raw
+  runtime paths, but it is not a substitute for the Unicorn feature gate.
 - `registry.reg` loading accepts REGEDIT text through UTF-8/lossy decoding and
   decodes typed `hex(2)`/`hex(7)` values as UTF-16. Non-UTF-8 ANSI quoted
   strings from future REGEDIT4 exports may need code-page-aware decoding.

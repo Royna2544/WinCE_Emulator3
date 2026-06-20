@@ -93,24 +93,39 @@ impl UnicornMips {
         "  trampoline jumps: unavailable\n".to_owned()
     }
 
-    pub fn active_process_has_visible_receiver_work(&self, _kernel: &CeKernel) -> bool {
-        false
+    pub fn active_process_has_visible_receiver_work(&self, kernel: &CeKernel) -> bool {
+        self.thread_has_visible_receiver_work(self.initial_thread_id, kernel)
     }
 
-    pub fn active_process_has_visible_queued_receiver_work(&self, _kernel: &CeKernel) -> bool {
-        false
+    pub fn active_process_has_visible_queued_receiver_work(&self, kernel: &CeKernel) -> bool {
+        self.thread_has_visible_queued_receiver_work(self.initial_thread_id, kernel)
     }
 
     pub fn active_process_has_visible_windows(&self, _kernel: &CeKernel) -> bool {
         false
     }
 
-    pub fn current_thread_has_visible_receiver_work(&self, _kernel: &CeKernel) -> bool {
-        false
+    pub fn current_thread_has_visible_receiver_work(&self, kernel: &CeKernel) -> bool {
+        self.thread_has_visible_receiver_work(self.initial_thread_id, kernel)
     }
 
     pub fn active_process_has_receiver_work(&self, _kernel: &CeKernel) -> bool {
         false
+    }
+
+    fn thread_has_visible_receiver_work(&self, thread_id: u32, kernel: &CeKernel) -> bool {
+        kernel.thread_has_pending_sent_message(thread_id)
+            || kernel
+                .gwe
+                .has_visible_window_message_filtered(thread_id, None, 0, 0)
+            || kernel.gwe.thread_has_dirty_visible_window(thread_id)
+    }
+
+    fn thread_has_visible_queued_receiver_work(&self, thread_id: u32, kernel: &CeKernel) -> bool {
+        kernel.thread_has_pending_sent_message(thread_id)
+            || kernel
+                .gwe
+                .has_visible_queued_message_filtered(thread_id, None, 0, 0)
     }
 
     pub fn has_runnable_parked_process(&self, _kernel: &CeKernel) -> bool {
