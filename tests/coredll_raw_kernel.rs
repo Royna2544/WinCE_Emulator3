@@ -54,30 +54,30 @@ use wince_emulation_v3::{
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_APIREADY, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE,
-            ORD_KERN_EXTRACT_ICONS, ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO,
-            ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_FSD,
-            ORD_LOAD_FSDEX, ORD_LOAD_IMAGE_W, ORD_LOAD_KERNEL_LIBRARY, ORD_LOAD_LIBRARY_EX_W,
-            ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W,
-            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE, ORD_OPEN_CLIPBOARD, ORD_OPEN_DEVICE_KEY,
-            ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS, ORD_PAGE_OUT_MODULE,
-            ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM, ORD_QUERY_APISET_ID,
-            ORD_QUERY_INSTRUCTION_SET, ORD_QUERY_PERFORMANCE_COUNTER,
-            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE, ORD_READ_PROCESS_MEMORY,
-            ORD_REGISTER_APISET, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_DEVICE,
-            ORD_REGISTER_POWER_RELATIONSHIP, ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_POWER_RELATIONSHIP, ORD_RELEASE_POWER_REQUIREMENT, ORD_RELEASE_SEMAPHORE,
-            ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_REQUEST_POWER_NOTIFICATIONS,
-            ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_DESTROY_LIST, ORD_RESOURCE_MARK_AS_SHAREABLE,
-            ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST, ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD,
-            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
-            ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER, ORD_SET_LAST_ERROR,
-            ORD_SET_POWER_REQUIREMENT, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_PRIORITY,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
-            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
-            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_IS_EXITING, ORD_IS_PRIMARY_THREAD, ORD_IS_PROCESS_DYING, ORD_KERN_EXTRACT_ICONS,
+            ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
+            ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_FSD, ORD_LOAD_FSDEX, ORD_LOAD_IMAGE_W,
+            ORD_LOAD_KERNEL_LIBRARY, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
+            ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE,
+            ORD_OPEN_CLIPBOARD, ORD_OPEN_DEVICE_KEY, ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE,
+            ORD_OPEN_PROCESS, ORD_PAGE_OUT_MODULE, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS,
+            ORD_PURGE_COMM, ORD_QUERY_APISET_ID, ORD_QUERY_INSTRUCTION_SET,
+            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE,
+            ORD_READ_PROCESS_MEMORY, ORD_REGISTER_APISET, ORD_REGISTER_CLIPBOARD_FORMAT_W,
+            ORD_REGISTER_DEVICE, ORD_REGISTER_POWER_RELATIONSHIP, ORD_REGISTER_TASK_BAR,
+            ORD_RELEASE_MUTEX, ORD_RELEASE_POWER_RELATIONSHIP, ORD_RELEASE_POWER_REQUIREMENT,
+            ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS,
+            ORD_REQUEST_POWER_NOTIFICATIONS, ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_DESTROY_LIST,
+            ORD_RESOURCE_MARK_AS_SHAREABLE, ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST,
+            ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
+            ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER,
+            ORD_SET_LAST_ERROR, ORD_SET_POWER_REQUIREMENT, ORD_SET_SYSTEM_POWER_STATE,
+            ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I,
+            ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
+            ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I,
+            ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH,
+            ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
             ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS, ORD_STRING_COMPRESS,
             ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
@@ -100,7 +100,7 @@ use wince_emulation_v3::{
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
-            LoadedModuleMetadata, MessageQueueOptions,
+            CurrentProcessState, LoadedModuleMetadata, MessageQueueOptions,
         },
         memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
@@ -6346,6 +6346,109 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_primary_thread_and_process_dying_follow_ce_loader_state() -> Result<()> {
+    fn call_bool(
+        table: &CoredllExportTable,
+        kernel: &mut CeKernel,
+        memory: &mut TestGuestMemory,
+        thread_id: u32,
+        ordinal: u32,
+    ) -> bool {
+        match table.dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ordinal, []) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(value),
+                ..
+            } => value,
+            other => panic!("expected bool return for ordinal {ordinal}, got {other:?}"),
+        }
+    }
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+
+    assert!(call_bool(
+        &table,
+        &mut kernel,
+        &mut memory,
+        1,
+        ORD_IS_PRIMARY_THREAD
+    ));
+    assert!(!call_bool(
+        &table,
+        &mut kernel,
+        &mut memory,
+        2,
+        ORD_IS_PRIMARY_THREAD
+    ));
+    assert_eq!(kernel.threads.get_last_error(1), ERROR_SUCCESS);
+    assert_eq!(kernel.threads.get_last_error(2), ERROR_SUCCESS);
+
+    let parent_state = kernel.current_process_state();
+    let launch =
+        kernel.queue_process_launch(Some("\\Program Files\\Child\\child.exe".to_owned()), None);
+    let _ = kernel.take_pending_process_launches();
+    kernel.set_current_process_id(launch.process_id);
+    kernel.reset_current_process_exit_state();
+
+    assert!(call_bool(
+        &table,
+        &mut kernel,
+        &mut memory,
+        launch.thread_id,
+        ORD_IS_PRIMARY_THREAD
+    ));
+    assert!(!call_bool(
+        &table,
+        &mut kernel,
+        &mut memory,
+        1,
+        ORD_IS_PRIMARY_THREAD
+    ));
+    assert!(!call_bool(
+        &table,
+        &mut kernel,
+        &mut memory,
+        launch.thread_id,
+        ORD_IS_PROCESS_DYING
+    ));
+    assert!(!call_bool(
+        &table,
+        &mut kernel,
+        &mut memory,
+        launch.thread_id,
+        ORD_IS_EXITING
+    ));
+
+    kernel.set_current_process_state(CurrentProcessState {
+        process_id: launch.process_id,
+        exit_code: 0x55,
+        signaled: true,
+    });
+    assert!(call_bool(
+        &table,
+        &mut kernel,
+        &mut memory,
+        launch.thread_id,
+        ORD_IS_PROCESS_DYING
+    ));
+    assert!(call_bool(
+        &table,
+        &mut kernel,
+        &mut memory,
+        launch.thread_id,
+        ORD_IS_EXITING
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(launch.thread_id),
+        ERROR_SUCCESS
+    );
+
+    kernel.set_current_process_state(parent_state);
     Ok(())
 }
 

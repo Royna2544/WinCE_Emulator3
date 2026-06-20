@@ -2582,6 +2582,28 @@ impl CeKernel {
         self.current_process_id
     }
 
+    pub fn is_primary_thread_for_current_process(&self, thread_id: u32) -> bool {
+        self.primary_thread_id_for_current_process()
+            .is_some_and(|primary_thread_id| primary_thread_id == thread_id)
+    }
+
+    fn primary_thread_id_for_current_process(&self) -> Option<u32> {
+        if self.current_process_id == 1 {
+            return Some(1);
+        }
+        self.pending_process_launches
+            .iter()
+            .find(|launch| launch.process_id == self.current_process_id)
+            .map(|launch| launch.thread_id)
+            .or_else(|| {
+                self.recent_process_ops.iter().rev().find_map(|record| {
+                    (record.process_id == Some(self.current_process_id))
+                        .then_some(record.thread_id)
+                        .flatten()
+                })
+            })
+    }
+
     pub fn toolhelp_process_snapshots(&self) -> Vec<ToolhelpProcessSnapshot> {
         let mut snapshots = vec![ToolhelpProcessSnapshot {
             process_id: self.current_process_id,

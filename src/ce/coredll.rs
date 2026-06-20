@@ -2554,9 +2554,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Handle(0))
         }
         ORD_IS_PRIMARY_THREAD => {
-            // IsPrimaryThread() — TRUE if the calling thread is the primary (first) thread.
-            // The primary thread is the one with the smallest allocated ID (first allocated = 2).
-            let is_primary = kernel.threads.is_primary_thread(thread_id);
+            // IsPrimaryThread() follows CE's per-process g_dwMainThId check.
+            let is_primary = kernel.is_primary_thread_for_current_process(thread_id);
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(is_primary))
         }

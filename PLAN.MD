@@ -69,6 +69,12 @@ notes when it is still needed for implementation.
   diagnostics: raw `GetCallStackSnapshot` now returns one synthetic in-process
   frame for normal and extended buffers, validates supported flags, and handles
   skipped frames without fabricating deeper stacks.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\loader.cpp`: raw
+  `IsPrimaryThread` now follows CE's per-process `g_dwMainThId` check instead
+  of treating the first allocated emulator thread as globally primary.
+  Coverage verifies the boot process, child-process primary thread identity
+  after launch records are drained, and `IsProcessDying`/`IsExiting` reporting
+  from the current process exit state.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kdriver.c` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\loader.h`: raw
   `LoadKernelLibrary` now resolves registered CE kernel libraries instead of
@@ -737,7 +743,10 @@ notes when it is still needed for implementation.
   `SetWindowLongW(GWL_WNDPROC)` import thunks now also normalize CE process-slot
   callback values through the caller module before the raw coredll call, so
   route UI subclass procedures land on the loaded MFC/commctrl guest code that
-  owns the slot offset.
+  owns the slot offset. `SetClassLongW(GCL_WNDPROC)` and `RegisterClassW`
+  import thunks use the same caller-module mapping before class state is
+  committed, covering window classes that install CE process-slot callbacks at
+  registration time.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
   `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble

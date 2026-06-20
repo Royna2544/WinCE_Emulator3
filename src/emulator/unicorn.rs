@@ -8266,6 +8266,21 @@ impl UnicornMips {
                         caller_module.as_deref(),
                         &mut args,
                     );
+                    normalize_set_class_long_wndproc_arg(
+                        unsafe { &*mapped_blobs_ptr },
+                        trap.module_kind,
+                        trap.ordinal,
+                        caller_module.as_deref(),
+                        &mut args,
+                    );
+                    normalize_register_class_wndproc_arg(
+                        memory.uc,
+                        unsafe { &*mapped_blobs_ptr },
+                        trap.module_kind,
+                        trap.ordinal,
+                        caller_module.as_deref(),
+                        &args,
+                    );
                 }
                 let stack_words = read_unicorn_stack_words(memory.uc, sp, 0x30);
                 let Some(import_return) = traps
@@ -12719,6 +12734,85 @@ fn normalize_set_window_long_wndproc_arg(
         "mapped SetWindowLongW WNDPROC callback through caller module"
     );
     args[2] = mapped;
+}
+
+#[cfg(feature = "unicorn")]
+fn normalize_set_class_long_wndproc_arg(
+    mapped_blobs: &[MappedBlob],
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    caller_module: Option<&str>,
+    args: &mut [u32],
+) {
+    const GCL_WNDPROC: i32 = -24;
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || !matches!(
+            ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_SET_CLASS_LONG_W)
+                | Some(crate::ce::coredll_ordinals::ORD_SET_CLASS_LONG)
+        )
+        || args.get(1).copied().map(|index| index as i32) != Some(GCL_WNDPROC)
+    {
+        return;
+    }
+    let Some(value) = args.get(2).copied() else {
+        return;
+    };
+    let Some(mapped) =
+        mapped_ce_slot_callback_for_caller_module(mapped_blobs, caller_module, value)
+    else {
+        return;
+    };
+    tracing::debug!(
+        target: "ce.gwe",
+        callback = format_args!("0x{value:08x}"),
+        mapped = format_args!("0x{mapped:08x}"),
+        caller_module,
+        "mapped SetClassLong WNDPROC callback through caller module"
+    );
+    args[2] = mapped;
+}
+
+#[cfg(feature = "unicorn")]
+fn normalize_register_class_wndproc_arg<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    mapped_blobs: &[MappedBlob],
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    caller_module: Option<&str>,
+    args: &[u32],
+) {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_REGISTER_CLASS_W)
+    {
+        return;
+    }
+    let Some(class_ptr) = args.first().copied().filter(|ptr| *ptr != 0) else {
+        return;
+    };
+    let mut wndclass = [0u8; crate::ce::gwe::WNDCLASSW_SIZE];
+    if uc.mem_read(u64::from(class_ptr), &mut wndclass).is_err() {
+        return;
+    }
+    let value = u32::from_le_bytes([wndclass[4], wndclass[5], wndclass[6], wndclass[7]]);
+    let Some(mapped) =
+        mapped_ce_slot_callback_for_caller_module(mapped_blobs, caller_module, value)
+    else {
+        return;
+    };
+    if uc
+        .mem_write(u64::from(class_ptr + 4), &mapped.to_le_bytes())
+        .is_ok()
+    {
+        tracing::debug!(
+            target: "ce.gwe",
+            class_ptr = format_args!("0x{class_ptr:08x}"),
+            callback = format_args!("0x{value:08x}"),
+            mapped = format_args!("0x{mapped:08x}"),
+            caller_module,
+            "mapped RegisterClassW WNDPROC callback through caller module"
+        );
+    }
 }
 
 fn write_call_target_import(
@@ -43809,6 +43903,68 @@ mod unicorn_tests {
         );
 
         assert_eq!(args[2], 0x4019_f0f4);
+    }
+
+    #[test]
+    fn set_class_long_wndproc_maps_ce_slot_callback_through_caller_module() {
+        let mut args = [0x0002_0000, (-24i32) as u32, 0x6004_f0f4, 0, 0, 0];
+        let blobs = vec![
+            super::MappedBlob {
+                name: "dll:commctrl.dll".to_owned(),
+                base: 0x4015_0000,
+                bytes: vec![0; 0x7f000],
+            },
+            super::MappedBlob {
+                name: "dll:mfcce400.dll".to_owned(),
+                base: 0x0010_0000,
+                bytes: vec![0; 0x8b000],
+            },
+        ];
+
+        super::normalize_set_class_long_wndproc_arg(
+            &blobs,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SET_CLASS_LONG_W),
+            Some("dll:mfcce400.dll"),
+            &mut args,
+        );
+
+        assert_eq!(args[2], 0x0014_f0f4);
+    }
+
+    #[test]
+    fn register_class_wndproc_maps_ce_slot_callback_through_caller_module() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x0010_0000, 0x1000, Prot::ALL).unwrap();
+        let class_ptr = 0x0010_0100;
+        let mut wndclass = [0u8; crate::ce::gwe::WNDCLASSW_SIZE];
+        wndclass[4..8].copy_from_slice(&0x6004_f0f4u32.to_le_bytes());
+        uc.mem_write(class_ptr, &wndclass).unwrap();
+        let blobs = vec![
+            super::MappedBlob {
+                name: "dll:commctrl.dll".to_owned(),
+                base: 0x4015_0000,
+                bytes: vec![0; 0x7f000],
+            },
+            super::MappedBlob {
+                name: "dll:mfcce400.dll".to_owned(),
+                base: 0x0010_0000,
+                bytes: vec![0; 0x8b000],
+            },
+        ];
+
+        super::normalize_register_class_wndproc_arg(
+            &mut uc,
+            &blobs,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_REGISTER_CLASS_W),
+            Some("dll:mfcce400.dll"),
+            &[class_ptr as u32, 0, 0, 0, 0, 0],
+        );
+
+        let mut mapped = [0u8; 4];
+        uc.mem_read(class_ptr + 4, &mut mapped).unwrap();
+        assert_eq!(u32::from_le_bytes(mapped), 0x0014_f0f4);
     }
 
     #[test]
