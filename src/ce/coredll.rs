@@ -33244,6 +33244,18 @@ fn image_list_get_image_info_raw<M: CoredllGuestMemory>(
             ))
         }
     } else {
+        let Some(list) = kernel.resources.image_list(handle) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        };
+        if index < 0 || index as usize >= list.images.len() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
         kernel.resources.image_list_info(handle, index).map(|info| {
             (
                 info.bitmap,

@@ -453,6 +453,11 @@ notes when it is still needed for implementation.
   RT_GROUP_ICON entries by choosing 32x32 and 16x16 resources instead of
   blindly extracting directory entries 0 and 1, while preserving CE's partial
   missing-resource behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
+  raw `ImageList_GetImageInfo` now separates invalid image-list handles from
+  invalid image indices/null output buffers and leaves the caller's
+  `IMAGEINFO` storage untouched on failure, matching CE's validation-before-
+  write path.
 - Runtime live-pump/iNavi route frontier: when the active process is parked
   in a hidden `GetMessage` wait and a visible parked process has a ready wait
   unblock, `rotate_after_run_slice_handoff` now resumes the ready parked

@@ -14742,6 +14742,48 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert_eq!(memory.read_i32(image_info_ptr + 24)?, 32);
     assert_eq!(memory.read_i32(image_info_ptr + 28)?, 18);
 
+    memory.write_word(image_info_ptr, 0xCAFE_BABE);
+    memory.write_word(image_info_ptr + 4, 0xFACE_CAFE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            [0xDEAD_0001, 0, image_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert_eq!(memory.read_u32(image_info_ptr)?, 0xCAFE_BABE);
+    assert_eq!(memory.read_u32(image_info_ptr + 4)?, 0xFACE_CAFE);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            [image_list, 99, image_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(image_info_ptr)?, 0xCAFE_BABE);
+    assert_eq!(memory.read_u32(image_info_ptr + 4)?, 0xFACE_CAFE);
+
     let no_mask_overlay_list = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
