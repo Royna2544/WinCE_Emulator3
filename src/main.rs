@@ -864,6 +864,17 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
+        if live_pump_slice
+            && should_rotate_live_pump_priority_parked_process(
+                cpu.active_process_has_visible_queued_receiver_work(kernel),
+                cpu.has_live_pump_priority_parked_process(kernel),
+            )
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if live_pump_slice && rotate_idle_active_to_visible_parked(cpu, kernel, desktop) {
             reported_blocked_message_wait = false;
             continue;
@@ -1326,6 +1337,13 @@ fn should_rotate_idle_nonrunning_runnable_parked_process(
     !active_has_running_guest_thread
         && !active_has_visible_queued_receiver_work
         && has_runnable_parked_process
+}
+
+fn should_rotate_live_pump_priority_parked_process(
+    active_has_visible_queued_receiver_work: bool,
+    has_live_pump_priority_parked_process: bool,
+) -> bool {
+    !active_has_visible_queued_receiver_work && has_live_pump_priority_parked_process
 }
 
 fn should_rotate_idle_saved_remote_active(
@@ -4199,6 +4217,19 @@ mod tests {
         ));
         assert!(!should_rotate_idle_saved_remote_active(
             true, true, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn live_pump_priority_parked_rotation_waits_for_visible_queue_to_drain() {
+        assert!(should_rotate_live_pump_priority_parked_process(
+            false, true
+        ));
+        assert!(!should_rotate_live_pump_priority_parked_process(
+            true, true
+        ));
+        assert!(!should_rotate_live_pump_priority_parked_process(
+            false, false
         ));
     }
 
