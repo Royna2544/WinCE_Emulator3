@@ -47115,6 +47115,54 @@ fn coredll_raw_rect_visible_respects_bitmap_and_screen_bounds() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_create_solid_brush_rejects_clr_invalid() -> Result<()> {
+    const CLR_INVALID: u32 = 0xffff_ffff;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 131_u32;
+
+    kernel.threads.set_last_error(thread_id, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_SOLID_BRUSH,
+            [CLR_INVALID],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    let brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x00ff_00ff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush(valid color) returned unexpected: {other:?}"),
+    };
+    assert_ne!(brush, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_pat_blt_rejects_source_dependent_rop3_without_source() -> Result<()> {
     const BLACKNESS: u32 = 0x0000_0042;
     const WHITENESS: u32 = 0x00ff_0062;

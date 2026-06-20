@@ -5915,6 +5915,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_CREATE_SOLID_BRUSH => Some(CoredllValue::Handle(create_solid_brush_raw(
             kernel,
+            thread_id,
             raw_arg(args, 0),
         ))),
         ORD_CREATE_PATTERN_BRUSH => Some(CoredllValue::Handle(create_pattern_brush_raw(
@@ -41931,7 +41932,14 @@ fn add_font_resource_w_raw<M: CoredllGuestMemory>(
     }
 }
 
-fn create_solid_brush_raw(kernel: &mut CeKernel, color: u32) -> u32 {
+fn create_solid_brush_raw(kernel: &mut CeKernel, thread_id: u32, color: u32) -> u32 {
+    if color == CLR_INVALID {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
     kernel.resources.create_brush(color)
 }
 

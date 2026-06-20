@@ -103,6 +103,10 @@ notes when it is still needed for implementation.
   `passNull2DC(EExtEscape)` is now covered for `QUERYESCSUPPORT` invalid-HDC
   edges: null and bad HDC inputs return unsupported and report
   `ERROR_INVALID_PARAMETER`, matching CE's parameter-first validation.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\brush.cpp`:
+  `SimpleCreateSolidBrushTest` is now covered for the CE `CLR_INVALID`
+  rejection path: `CreateSolidBrush(0xffffffff)` fails with
+  `ERROR_INVALID_PARAMETER`, while valid colors still create brush handles.
 
 ## Active Roadmap
 
