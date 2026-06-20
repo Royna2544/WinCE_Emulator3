@@ -125,6 +125,8 @@ const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
 const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
 const FILE_SCATTER_GATHER_PAGE_SIZE: u32 = 4096;
+const CE_SYSTEM_PAGE_SIZE: u32 = 4096;
+const CE_SYSTEM_RAM_BYTES: u64 = 64 * 1024 * 1024;
 const FILE_SEGMENT_ELEMENT_SIZE: u32 = 8;
 const DISK_IOCTL_GETINFO: u32 = 1;
 const DISK_IOCTL_SETINFO: u32 = 5;
@@ -3935,12 +3937,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Handle(0))
         }
-        ORD_GET_SYSTEM_MEMORY_DIVISION => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_GET_SYSTEM_MEMORY_DIVISION => Some(CoredllValue::Bool(get_system_memory_division_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SET_SYSTEM_MEMORY_DIVISION => {
             kernel
                 .threads
@@ -9686,6 +9685,42 @@ fn write_store_information<M: CoredllGuestMemory>(
             thread_id,
             info_ptr.wrapping_add(4),
             free_size,
+        )
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_system_memory_division_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let store_pages_ptr = raw_arg(args, 0);
+    let ram_pages_ptr = raw_arg(args, 1);
+    let page_size_ptr = raw_arg(args, 2);
+    if store_pages_ptr == 0 || ram_pages_ptr == 0 || page_size_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let object_store = kernel.files.object_store();
+    let store_pages =
+        (object_store.total_bytes / u64::from(CE_SYSTEM_PAGE_SIZE)).min(u32::MAX as u64) as u32;
+    let ram_pages = (CE_SYSTEM_RAM_BYTES / u64::from(CE_SYSTEM_PAGE_SIZE)) as u32;
+    if !write_guest_u32(kernel, memory, thread_id, store_pages_ptr, store_pages)
+        || !write_guest_u32(kernel, memory, thread_id, ram_pages_ptr, ram_pages)
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            page_size_ptr,
+            CE_SYSTEM_PAGE_SIZE,
         )
     {
         return false;

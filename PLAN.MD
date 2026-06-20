@@ -80,6 +80,13 @@ notes when it is still needed for implementation.
   checks instead of returning a placeholder zero. Coverage verifies
   query-current, exact MIPSII matches, incompatible ARM/MIPS requests, and
   invalid output pointer failure.
+- `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwindbas.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwindbas.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\OOMUI\oomui.cpp`: raw
+  `GetSystemMemoryDivision` now fills CE's store-pages, RAM-pages, and
+  page-size outputs instead of reporting unsupported. Coverage verifies the
+  object-store page count against `GetStoreInformation`, the emulator RAM/page
+  constants, null output rejection, and unmapped output failure.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`
