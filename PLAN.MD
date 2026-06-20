@@ -637,6 +637,10 @@ notes when it is still needed for implementation.
   creation: null, stale, and non-bitmap handles fail with
   `ERROR_INVALID_HANDLE`, while valid bitmap pattern brushes keep private
   backing after the caller bitmap is deleted.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\da.cpp`:
+  `TestSetBkModeRandom` is now covered for raw `SetBkMode`: byte-sized
+  nonstandard CE modes round-trip through `GetBkMode`, and `SetBkMode`
+  returns the previous stored mode for both standard and nonstandard values.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`:
   `passNull2Font(ERemoveFontResource)` is now covered for raw
   `RemoveFontResourceW`: null paths fail with `ERROR_INVALID_PARAMETER`,

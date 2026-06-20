@@ -51047,6 +51047,75 @@ fn coredll_raw_gdi_set_bk_mode_returns_previous_mode() -> Result<()> {
     );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
+    // CE's GDIAPI da.cpp TestSetBkModeRandom expects byte-sized nonstandard
+    // modes to round-trip and for SetBkMode to report the previous value.
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_BK_MODE,
+                [dc, 0x7e],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(2),
+                ..
+            }
+        ),
+        "SET_BK_MODE must return previous mode before a byte-sized CE mode"
+    );
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_BK_MODE,
+                [dc],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0x7e),
+                ..
+            }
+        ),
+        "GET_BK_MODE must round-trip nonstandard byte-sized CE modes"
+    );
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_BK_MODE,
+                [dc, 0xfe],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0x7e),
+                ..
+            }
+        ),
+        "SET_BK_MODE must return the previous nonstandard CE mode"
+    );
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_BK_MODE,
+                [dc],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0xfe),
+                ..
+            }
+        ),
+        "GET_BK_MODE must keep the last byte-sized CE mode"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     assert!(
         matches!(
             table.dispatch_raw_ordinal_with_memory(
