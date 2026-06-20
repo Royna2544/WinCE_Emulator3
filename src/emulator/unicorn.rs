@@ -3878,6 +3878,7 @@ impl UnicornMips {
         self.guest_thread_stack_slots =
             std::mem::take(&mut *state.guest_thread_stack_slots.borrow_mut());
         self.clear_orphaned_blocked_get_message_state(kernel);
+        let _ = self.clear_escaped_visible_message_callouts(kernel);
         let _ = self.clear_orphaned_direct_send_callouts(kernel);
         self.prune_active_process_from_parked_readonly_with_thread_duplicates(kernel, true);
     }
@@ -9321,6 +9322,7 @@ impl UnicornMips {
         self.clear_orphaned_blocked_get_message_state(kernel);
         let _ = self.complete_escaped_saved_get_message_sent_callout(kernel);
         let _ = self.complete_escaped_direct_send_message_callout(kernel);
+        let _ = self.clear_escaped_visible_message_callouts(kernel);
         let _ = self.clear_orphaned_direct_send_callouts(kernel);
         let _ = self.clear_orphaned_send_depths(kernel);
         self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
@@ -25905,7 +25907,10 @@ mod wait_scheduler_tests {
             )
             .expect("queued send message");
         assert_eq!(
-            kernel.gwe.get_message(active_thread_id).map(|message| message.msg),
+            kernel
+                .gwe
+                .get_message(active_thread_id)
+                .map(|message| message.msg),
             Some(0x534c)
         );
         assert_eq!(
