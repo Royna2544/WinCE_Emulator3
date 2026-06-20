@@ -3904,6 +3904,7 @@ impl UnicornMips {
             || self.running_guest_thread.is_some()
             || !self.pending_guest_thread_returns.is_empty()
             || self.blocked_guest_thread.is_some()
+            || self.blocked_modal_message_box.is_some()
             || !self.blocked_wait_threads.is_empty()
             || self.blocked_send_message_timeout.is_some()
             || self.blocked_clipboard_data.is_some()
@@ -28750,6 +28751,51 @@ mod guest_thread_stack_tests {
             &parked
         ));
 
+        Ok(())
+    }
+
+    #[test]
+    fn active_modal_message_box_does_not_report_terminal_child_return() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let thread_id = 5;
+        let mut memory = ModalTestMemory::default();
+        let text_ptr = 0x2000;
+        let caption_ptr = 0x2100;
+        memory.write_wide_z(text_ptr, "Quit Happyway");
+        memory.write_wide_z(caption_ptr, "Button");
+
+        let mut cpu = UnicornMips::new()?;
+        cpu.set_initial_thread_id(thread_id);
+        cpu.current_thread_id = thread_id;
+        cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            ra: GUEST_THREAD_RETURN_STUB_ADDR,
+            v0: 0,
+            ..Default::default()
+        });
+
+        assert_eq!(cpu.active_terminal_child_process_return_code(), Some(0));
+
+        let modal_state = crate::ce::coredll::message_box_w_prepare(
+            &mut kernel,
+            &memory,
+            None,
+            None,
+            thread_id,
+            &[0, text_ptr, caption_ptr, 0],
+        )
+        .map_err(|result| Error::Backend(format!("prepare MessageBoxW returned {result}")))?;
+        cpu.blocked_modal_message_box = Some(BlockedModalMessageBox {
+            wait_id: 1,
+            thread_id,
+            thread_handle: 0x200,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            modal_state,
+        });
+
+        assert_eq!(cpu.active_terminal_child_process_return_code(), None);
         Ok(())
     }
 
