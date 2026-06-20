@@ -953,7 +953,8 @@ fn run_cpu_loop(
         if should_rotate_idle_saved_remote_active(
             args.remote_server.is_some(),
             cpu.has_saved_context(),
-            cpu.active_process_has_receiver_work(kernel),
+            cpu.has_running_guest_thread(),
+            cpu.active_process_has_visible_queued_receiver_work(kernel),
             cpu.active_process_has_visible_windows(kernel),
             cpu.has_runnable_parked_process(kernel),
         ) && cpu.rotate_to_next_parked_process(kernel)
@@ -1317,13 +1318,15 @@ fn should_rotate_idle_nonrunning_runnable_parked_process(
 fn should_rotate_idle_saved_remote_active(
     remote_server: bool,
     has_saved_context: bool,
-    active_has_receiver_work: bool,
+    active_has_running_guest_thread: bool,
+    active_has_visible_receiver_work: bool,
     active_has_visible_windows: bool,
     has_runnable_parked_process: bool,
 ) -> bool {
     remote_server
         && has_saved_context
-        && !active_has_receiver_work
+        && !active_has_running_guest_thread
+        && !active_has_visible_receiver_work
         && !active_has_visible_windows
         && has_runnable_parked_process
 }
@@ -4164,22 +4167,25 @@ mod tests {
     #[test]
     fn idle_saved_remote_hidden_active_rotates_to_runnable_parked_process() {
         assert!(should_rotate_idle_saved_remote_active(
-            true, true, false, false, true
+            true, true, false, false, false, true
         ));
         assert!(!should_rotate_idle_saved_remote_active(
-            false, true, false, false, true
+            false, true, false, false, false, true
         ));
         assert!(!should_rotate_idle_saved_remote_active(
-            true, false, false, false, true
+            true, false, false, false, false, true
         ));
         assert!(!should_rotate_idle_saved_remote_active(
-            true, true, true, false, true
+            true, true, true, false, false, true
         ));
         assert!(!should_rotate_idle_saved_remote_active(
-            true, true, false, true, true
+            true, true, false, true, false, true
         ));
         assert!(!should_rotate_idle_saved_remote_active(
-            true, true, false, false, false
+            true, true, false, false, true, true
+        ));
+        assert!(!should_rotate_idle_saved_remote_active(
+            true, true, false, false, false, false
         ));
     }
 

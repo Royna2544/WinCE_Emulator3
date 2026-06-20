@@ -848,7 +848,10 @@ notes when it is still needed for implementation.
   own visible windows or receiver work, so child image launches cannot strand
   the parent route UI while rotating into the parked child process. Remote live
   pump idling now only sleeps when there is no saved guest context to resume,
-  keeping remote route UI progress moving between host wall-clock slices.
+  keeping remote route UI progress moving between host wall-clock slices. The
+  saved-context idle rotation now also requires no active running guest thread
+  and no visible queued receiver work, preserving visible callout delivery
+  ahead of generic parked-process rotation.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
   `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble
