@@ -2907,6 +2907,113 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_draw_icon_ex_uses_flicker_free_brush_background() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 5;
+
+    let (_, mask_bitmap, mask_bits, mask_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    let (_, color_bitmap, color_bits, color_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 1);
+    write_rgb565(&mut memory, mask_bits, mask_stride, 0, 0, 0xffff);
+    write_rgb565(&mut memory, mask_bits, mask_stride, 1, 0, 0x0000);
+    write_rgb565(&mut memory, color_bits, color_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, color_bits, color_stride, 1, 0, 0xf800);
+
+    let icon_info = 0x1_5400;
+    memory.map_words(icon_info, 5);
+    memory.write_word(icon_info, 1);
+    memory.write_word(icon_info + 4, 0);
+    memory.write_word(icon_info + 8, 0);
+    memory.write_word(icon_info + 12, mask_bitmap);
+    memory.write_word(icon_info + 16, color_bitmap);
+    let icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_ICON_INDIRECT,
+        [icon_info],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(icon),
+            ..
+        } => icon,
+        other => panic!("CreateIconIndirect did not return an icon: {other:?}"),
+    };
+    assert_ne!(icon, 0);
+
+    let background_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x00ff_00ff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(brush),
+            ..
+        } => brush,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    assert_ne!(background_brush, 0);
+
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [dst_dc, 1, 0, icon, 2, 1, 0, background_brush, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 1, 0),
+        0xf81f,
+        "CE DrawIconEx should pre-fill masked target pixels with hbrFlickerFreeDraw"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 2, 0),
+        0xf800,
+        "opaque icon pixels still draw over the flicker-free brush background"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dst_bits, dst_stride, 0, 0),
+        0x0000,
+        "DrawIconEx should not fill outside the icon target rectangle"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [dst_dc, 1, 1, icon, 2, 1, 0, 0x1234_5678, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_system_parameters_info_returns_ce_strings_and_work_area() -> Result<()> {
     const SPI_GETWORKAREA: u32 = 0x0030;
     const SPI_GETOEMINFO: u32 = 0x0102;

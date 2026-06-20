@@ -616,6 +616,14 @@ notes when it is still needed for implementation.
   RT_GROUP_ICON entries by choosing 32x32 and 16x16 resources instead of
   blindly extracting directory entries 0 and 1, while preserving CE's partial
   missing-resource behavior.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\icon.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\WTL\INCLUDE\atlgdi.h`: raw
+  `DrawIconEx` now honors `hbrFlickerFreeDraw` by validating the brush and
+  pre-filling the resolved icon target rectangle before masked icon pixels are
+  drawn. Coverage verifies masked bitmap-backed icons retain the brush-filled
+  background for transparent pixels, opaque pixels still draw normally, and
+  invalid brush handles fail with `ERROR_INVALID_HANDLE`.
 - `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mshellap.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`, and
   `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\TASKMAN\minserver.cpp`: raw

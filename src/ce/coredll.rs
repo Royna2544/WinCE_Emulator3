@@ -33841,7 +33841,7 @@ fn delete_icon_object_and_owned_bitmaps(kernel: &mut CeKernel, icon: u32, object
 fn draw_icon_ex_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
-    framebuffer: Option<&mut dyn Framebuffer>,
+    mut framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
@@ -33851,6 +33851,7 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
     let icon = raw_arg(args, 3);
     let width = raw_i32_arg(args, 4);
     let height = raw_i32_arg(args, 5);
+    let background_brush = raw_arg(args, 7);
     let draw_flags = raw_arg(args, 8);
     if !is_valid_hdc(kernel, hdc) || !is_icon_handle(kernel, icon) {
         kernel
@@ -33904,6 +33905,19 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return false;
         }
+        let Some(background) = draw_icon_flicker_free_background_bitmap(
+            kernel,
+            memory,
+            thread_id,
+            hdc,
+            x,
+            y,
+            width,
+            height,
+            background_brush,
+        ) else {
+            return false;
+        };
         let image = crate::ce::resource::ImageListImage {
             bitmap: source_bitmap,
             mask: if effective_flags == DI_NORMAL && color_bitmap != 0 && !mask_only {
@@ -33916,11 +33930,14 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
             source_y: 0,
             transparent_color: None,
         };
-        if let Some(fb) = framebuffer {
+        if let Some(fb) = framebuffer.as_mut() {
+            if let Some((rect, paint)) = background {
+                fill_framebuffer_rect_for_hdc_paint(kernel, memory, &mut **fb, hdc, rect, paint);
+            }
             render_image_list_bitmap_entry_framebuffer(
                 kernel,
                 memory,
-                fb,
+                &mut **fb,
                 hdc,
                 x,
                 y,
@@ -33961,6 +33978,19 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
+    let Some(background) = draw_icon_flicker_free_background_bitmap(
+        kernel,
+        memory,
+        thread_id,
+        hdc,
+        x,
+        y,
+        width,
+        height,
+        background_brush,
+    ) else {
+        return false;
+    };
     let flags = ((icon >> SHELL_ICON_OVERLAY_SHIFT) & 0x0f) << 8;
     let draw = ImageListDraw {
         image_list: SHELL_SYSTEM_IMAGE_LIST_HANDLE,
@@ -33979,10 +34009,43 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
         rop: SRCCOPY,
     };
     if !render_image_list_draw_bitmap(kernel, memory, draw) {
-        render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
+        if let Some(fb) = framebuffer.take() {
+            if let Some((rect, paint)) = background {
+                fill_framebuffer_rect_for_hdc_paint(kernel, memory, fb, hdc, rect, paint);
+            }
+            render_image_list_draw_framebuffer(kernel, memory, Some(fb), draw);
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn draw_icon_flicker_free_background_bitmap<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hdc: u32,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    brush: u32,
+) -> Option<Option<(Rect, BrushPaint)>> {
+    if brush == 0 {
+        return Some(None);
+    }
+    let Some(paint) = brush_paint(kernel, brush) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return None;
+    };
+    let rect = Rect::from_origin_size(x, y, width, height);
+    if fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, paint.clone()) {
+        Some(None)
+    } else {
+        Some(Some((rect, paint)))
+    }
 }
 
 fn is_icon_handle(kernel: &CeKernel, icon: u32) -> bool {
