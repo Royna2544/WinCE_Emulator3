@@ -662,6 +662,11 @@ notes when it is still needed for implementation.
   `ERROR_INVALID_HANDLE` for null/bad HDCs and `ERROR_INVALID_PARAMETER` for
   null or unwritable output points instead of silently succeeding or folding
   bad handles into parameter errors.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\text.cpp`:
+  `passNull2Text(EDrawTextW)` is now represented for raw `DrawTextW` HDC
+  validation: null and bad HDCs fail with `ERROR_INVALID_HANDLE`, while null
+  text or rectangle pointers on a valid DC continue to fail with
+  `ERROR_INVALID_PARAMETER`.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`:
   `ProgramError` is now covered for raw DC lifecycle validation:
   `ReleaseDC(NULL, hdc)` rejects a previously deleted DC with

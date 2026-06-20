@@ -56678,7 +56678,13 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     rect_ptr: u32,
     format: u32,
 ) -> u32 {
-    if hdc == 0 || text_ptr == 0 || rect_ptr == 0 {
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if text_ptr == 0 || rect_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);

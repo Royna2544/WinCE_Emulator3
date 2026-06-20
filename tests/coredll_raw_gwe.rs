@@ -53647,7 +53647,10 @@ fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
     };
     assert_ne!(dc, 0);
 
-    // hdc=0 must return 0+ERROR_INVALID_PARAMETER.
+    let bad_hdc = 0x1234_5678_u32;
+
+    // CE text.cpp::passNull2Text expects null/bad HDC failures to report
+    // ERROR_INVALID_HANDLE, separately from null text/rect parameter failures.
     assert!(
         matches!(
             table.dispatch_raw_ordinal_with_memory(
@@ -53664,6 +53667,10 @@ fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
         ),
         "DRAW_TEXT_W with hdc=0 must return 0"
     );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
 
     // Prepare text "Hello" (5 UTF-16 code units) and rect.
     let text_ptr = 0x2_0000_u32;
@@ -53676,6 +53683,69 @@ fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
     memory.write_word(rect_ptr + 4, 0);
     memory.write_word(rect_ptr + 8, 100);
     memory.write_word(rect_ptr + 12, 20);
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DRAW_TEXT_W,
+                [bad_hdc, text_ptr, 5_u32, rect_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ),
+        "DRAW_TEXT_W with a bad HDC must return 0"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DRAW_TEXT_W,
+                [dc, 0, 5_u32, rect_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ),
+        "DRAW_TEXT_W with a null text pointer must return 0"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DRAW_TEXT_W,
+                [dc, text_ptr, 5_u32, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ),
+        "DRAW_TEXT_W with a null rect pointer must return 0"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     // DrawTextW returns the text height in logical units (CE default font height = 16).
     assert!(
