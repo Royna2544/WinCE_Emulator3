@@ -68,6 +68,12 @@ notes when it is still needed for implementation.
   `MF_NO_THREAD_CALLS`, and `LLIB_NO_PAGING` load flags, increments the module
   refcount, preserves exported `IOControl` lookup, and reports CE-style missing
   or invalid library-name failures.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\loader.cpp` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c`: raw
+  `LoadLibraryExW` now preserves CE no-import load flags on retained modules.
+  `LOAD_LIBRARY_AS_DATAFILE` records both datafile and no-resolve state so
+  `GetProcAddress` rejects the handle, while a later normal load still clears
+  a prior pure `DONT_RESOLVE_DLL_REFERENCES` request.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract

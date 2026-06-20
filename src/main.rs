@@ -863,6 +863,7 @@ fn run_cpu_loop(
             let should_rotate_process = should_rotate_parked_process(
                 cpu.has_parked_child_processes(),
                 has_runnable_parked_process,
+                cpu.has_live_pump_priority_parked_process(kernel),
                 cpu.has_ready_parked_send_unblock(kernel),
                 cpu.has_ready_parked_wait_unblock(kernel),
                 message_waiter,
@@ -959,6 +960,7 @@ fn wall_clock_limit_expired(limit_ms: u64, elapsed: Duration) -> bool {
 fn should_rotate_parked_process(
     has_parked_child_processes: bool,
     has_runnable_parked_process: bool,
+    has_live_pump_priority_parked_process: bool,
     has_ready_parked_send_unblock: bool,
     has_ready_parked_wait_unblock: bool,
     message_waiter: bool,
@@ -975,7 +977,7 @@ fn should_rotate_parked_process(
             || has_ready_parked_wait_unblock);
     let ready_live_wall_stop = live_pump_slice
         && host_wall_clock_stop
-        && (has_runnable_parked_process
+        && (has_live_pump_priority_parked_process
             || has_ready_parked_send_unblock
             || has_ready_parked_wait_unblock
             || message_waiter);
@@ -1074,6 +1076,7 @@ fn active_has_pending_parked_create_process(cpu: &UnicornMips, kernel: &CeKernel
     should_rotate_for_pending_parked_create_process(
         cpu.has_runnable_parked_process(kernel),
         cpu.active_process_has_visible_receiver_work(kernel),
+        cpu.active_process_has_visible_windows(kernel),
         active_stopped_in_create_process_w(cpu),
         kernel_has_unreturned_parked_process(kernel),
     )
@@ -1082,11 +1085,13 @@ fn active_has_pending_parked_create_process(cpu: &UnicornMips, kernel: &CeKernel
 fn should_rotate_for_pending_parked_create_process(
     has_runnable_parked_process: bool,
     active_has_visible_receiver_work: bool,
+    active_has_visible_windows: bool,
     active_stopped_in_create_process_w: bool,
     kernel_has_unreturned_parked_process: bool,
 ) -> bool {
     has_runnable_parked_process
         && !active_has_visible_receiver_work
+        && !active_has_visible_windows
         && (active_stopped_in_create_process_w || kernel_has_unreturned_parked_process)
 }
 
@@ -2210,6 +2215,7 @@ fn monitor_continue_process_handoff(
     let should_rotate_process = should_rotate_parked_process(
         cpu.has_parked_child_processes(),
         cpu.has_runnable_parked_process(kernel),
+        cpu.has_live_pump_priority_parked_process(kernel),
         cpu.has_ready_parked_send_unblock(kernel),
         cpu.has_ready_parked_wait_unblock(kernel),
         message_waiter,
@@ -4069,37 +4075,40 @@ mod tests {
     #[test]
     fn live_wall_stop_rotates_only_for_ready_work() {
         assert!(!should_rotate_parked_process(
-            true, false, false, false, false, true, true, false
+            true, false, false, false, false, false, true, true, false
         ));
         assert!(should_rotate_parked_process(
-            true, false, true, false, true, false, false, true
+            true, false, false, true, false, true, false, false, true
         ));
         assert!(should_rotate_parked_process(
-            true, true, false, false, true, false, false, true
+            true, true, false, false, false, true, false, false, true
         ));
         assert!(should_rotate_parked_process(
-            true, true, false, false, true, false, true, true
+            true, true, false, false, false, true, false, true, true
         ));
         assert!(should_rotate_parked_process(
-            true, true, false, false, true, false, true, false
+            true, true, false, false, false, true, false, true, false
         ));
         assert!(!should_rotate_parked_process(
-            true, false, false, false, true, false, false, true
+            true, false, false, false, false, true, false, false, true
         ));
         assert!(should_rotate_parked_process(
-            true, false, false, true, false, true, true, true
+            true, false, false, false, true, false, true, true, true
         ));
         assert!(should_rotate_parked_process(
-            true, true, false, false, false, true, true, true
+            true, true, true, false, false, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
-            true, false, false, false, false, true, true, true
+            true, true, false, false, false, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
-            true, false, false, false, false, true, false, false
+            true, false, false, false, false, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
-            false, false, true, true, true, true, true, false
+            true, false, false, false, false, false, true, false, false
+        ));
+        assert!(!should_rotate_parked_process(
+            false, false, false, true, true, true, true, true, false
         ));
     }
 
@@ -4158,19 +4167,22 @@ mod tests {
     #[test]
     fn pending_create_process_handoff_preserves_active_visible_ui_work() {
         assert!(should_rotate_for_pending_parked_create_process(
-            true, false, true, false
+            true, false, false, true, false
         ));
         assert!(should_rotate_for_pending_parked_create_process(
-            true, false, false, true
+            true, false, false, false, true
         ));
         assert!(!should_rotate_for_pending_parked_create_process(
-            true, true, true, true
+            true, true, false, true, true
         ));
         assert!(!should_rotate_for_pending_parked_create_process(
-            false, false, true, true
+            true, false, true, true, true
         ));
         assert!(!should_rotate_for_pending_parked_create_process(
-            true, false, false, false
+            false, false, false, true, true
+        ));
+        assert!(!should_rotate_for_pending_parked_create_process(
+            true, false, false, false, false
         ));
     }
 

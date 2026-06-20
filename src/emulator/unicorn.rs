@@ -2206,7 +2206,7 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn has_live_pump_priority_parked_process(&self, kernel: &CeKernel) -> bool {
+    pub fn has_live_pump_priority_parked_process(&self, kernel: &CeKernel) -> bool {
         self.parked_child_processes
             .iter()
             .filter(|process| !self.parked_process_matches_current_active(process, kernel))

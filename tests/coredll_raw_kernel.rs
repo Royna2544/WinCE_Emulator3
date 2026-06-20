@@ -7229,11 +7229,15 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     let deferred_name_ptr = 0x1_9100;
     let driver_name_ptr = 0x1_9180;
     let driver_proc_name_ptr = 0x1_91c0;
+    let late_resource_name_ptr = 0x1_9200;
+    let noresolve_name_ptr = 0x1_9280;
     let missing_name_ptr = 0x1_9040;
     let module_base = 0x6300_0000;
     let resource_base = 0x6310_0000;
     let deferred_base = 0x6320_0000;
     let driver_base = 0x6328_0000;
+    let late_resource_base = 0x6330_0000;
+    let noresolve_base = 0x6340_0000;
 
     kernel.register_loaded_module_with_metadata(
         "dynamic.dll",
@@ -7264,6 +7268,37 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     );
     memory.write_wide_z(resource_name_ptr, "resource.dll");
     memory.write_bytes(proc_name_ptr, b"VisibleExport\0");
+
+    kernel.register_loaded_module_with_metadata(
+        "late_resource.dll",
+        late_resource_base,
+        std::collections::BTreeMap::from([(
+            "visibleexport".to_owned(),
+            late_resource_base + 0x1234,
+        )]),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\late_resource.dll".to_owned()),
+            image_size: 0x10000,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    memory.write_wide_z(late_resource_name_ptr, "late_resource.dll");
+
+    kernel.register_loaded_module_with_metadata(
+        "noresolve_request.dll",
+        noresolve_base,
+        std::collections::BTreeMap::from([("visibleexport".to_owned(), noresolve_base + 0x1234)]),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\noresolve_request.dll".to_owned()),
+            image_size: 0x10000,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    memory.write_wide_z(noresolve_name_ptr, "noresolve_request.dll");
 
     kernel.register_loaded_module_with_metadata(
         "deferred.dll",
@@ -7376,6 +7411,104 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
         } if handle == resource_base
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_EX_W,
+            [late_resource_name_ptr, 0, 0x0000_0002],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == late_resource_base
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        kernel
+            .loaded_module_by_handle(late_resource_base)
+            .unwrap()
+            .load_flags
+            & 0x0000_0003,
+        0x0000_0003
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROC_ADDRESS_A,
+            [late_resource_base, proc_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_EX_W,
+            [noresolve_name_ptr, 0, 0x0000_0001],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == noresolve_base
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        kernel
+            .loaded_module_by_handle(noresolve_base)
+            .unwrap()
+            .load_flags
+            & 0x0000_0001,
+        0x0000_0001
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROC_ADDRESS_A,
+            [noresolve_base, proc_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(address),
+            ..
+        } if address == noresolve_base + 0x1234
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_W,
+            [noresolve_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == noresolve_base
+    ));
+    assert_eq!(
+        kernel
+            .loaded_module_by_handle(noresolve_base)
+            .unwrap()
+            .load_flags
+            & 0x0000_0001,
+        0
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
