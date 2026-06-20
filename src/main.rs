@@ -987,7 +987,8 @@ fn should_rotate_parked_process(
             || has_ready_parked_wait_unblock);
     let ready_live_wall_stop = live_pump_slice
         && host_wall_clock_stop
-        && (has_live_pump_priority_parked_process
+        && (has_runnable_parked_process
+            || has_live_pump_priority_parked_process
             || has_ready_parked_send_unblock
             || has_ready_parked_wait_unblock
             || message_waiter);
@@ -4108,7 +4109,7 @@ mod tests {
         assert!(should_rotate_parked_process(
             true, true, true, false, false, false, true, true, true
         ));
-        assert!(!should_rotate_parked_process(
+        assert!(should_rotate_parked_process(
             true, true, false, false, false, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
