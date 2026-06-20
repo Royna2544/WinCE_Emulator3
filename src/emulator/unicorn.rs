@@ -2949,6 +2949,8 @@ impl UnicornMips {
             !self.parked_process_matches_current_active(process, kernel)
                 && Self::parked_process_has_resumable_context(process)
                 && Self::parked_process_can_resume_from_live_pump(process, kernel)
+                && (Self::parked_process_has_visible_windows(process, kernel)
+                    || Self::parked_process_has_receiver_work(process, kernel))
         });
         let Some(index) = index else { return false };
         let Some(parked) = self.parked_child_processes.remove(index) else {
