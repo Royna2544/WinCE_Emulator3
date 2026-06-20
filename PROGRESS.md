@@ -94,6 +94,11 @@ references for historical reconstruction.
   hidden active slice. This matches the after-slice policy and covers the
   observed state where hidden `happyway_win` had no receiver work while a
   visible iNavi thread was parked on a ready sleep wait.
+- Live-pump generic parked-process rotation now keeps a visible active process
+  in front at both after-slice handoff and run entry. The 2026-06-21 fresh
+  release run advanced beyond the earlier splash-only sample into real
+  mapdata/SearchDB/mapinfo loading while keeping remote input accepted; the
+  debug snapshot can still land on hidden `happyway_win` between slices.
 - `YAS526B.dll` dump validation confirmed `MFS_IOControl` dispatches exact
   IOCTLs `0xb0000000`, `0xb0000004`, `0xb0000008`, `0xb000000c`, and
   `0xb0000010`. The virtual `MFS1:` shim now follows the dumped contract:
@@ -117,6 +122,10 @@ references for historical reconstruction.
 - Activated configured devices now capture registry `BusName`, expose it in
   CE `DEVMGR_DEVICE_INFORMATION` as `$bus\...`, and use that activation-time
   value for `DeviceSearchByBusName` wildcard matching.
+- Current post-fix live device sample still has no open `COM7:` handle after
+  queued remote GPS input; `queued_serial_bytes` grows because the guest has
+  not opened the serial device in this run. `MFS1:` and `SMB1:` also remain
+  unopened in the same sample.
 
 ## Recent Validation
 

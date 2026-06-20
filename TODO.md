@@ -4,16 +4,17 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
-- Trace the current iNavi splash/map transition generically after `COM7:`
-  opens and drains remote GPS: identify the CE wait, event, message, window
-  state, or readiness condition that should hide, destroy, or demote the
-  splash/window stack.
+- Trace the current iNavi splash/map transition generically through the
+  post-mapdata startup path: the latest fresh run loads mapdata/SearchDB/mapinfo
+  but still does not open `COM7:`, so identify the CE wait, event, message,
+  window state, file result, or readiness condition gating serial startup.
 - Trace why the real splash window keeps receiving repeated touch/key WndProc
   callouts without transitioning to the map UI after iNavi resumes from the
   hidden helper-process slice.
-- Disassemble/sample the current hot guest PCs around `0x0030f948`,
-  `0x00339da8`, and `0x0034432c` against the real `iNavi.exe` to separate
-  normal resource lookup from a repeated readiness wait.
+- Disassemble/sample the current hot guest PCs around `0x0030f54c`,
+  `0x00339c8c`/`0x00339d90`, and later mapdata loaders against the real
+  `iNavi.exe` to separate normal resource/image work from a repeated readiness
+  wait.
 - Extend `SendMessageTimeout` and message-wait coverage for broader reentrant
   waits, nested sends, timeout cleanup, `ReplyMessage`, abort-if-hung behavior,
   and live modal-loop interaction.
@@ -42,9 +43,10 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
   unwinding when guest diagnostics require deeper stack fidelity.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or
   real caller traces before adding accelerometer command behavior.
-- Continue live device traces after the app opens `COM7:`. GPS now drains into
-  the guest serial RX path; keep watching for the later `MFS1:`/`SMB1:` opens
-  and validate their dumped-DLL contracts in live traces.
+- Continue live device traces until the app opens `COM7:` in the current
+  startup path. Remote GPS is queued but not drained in the latest sample;
+  keep watching for later `MFS1:`/`SMB1:` opens and validate their dumped-DLL
+  contracts in live traces.
 - Re-run the live startup after the device-information ordinal fix and confirm
   whether guest device probing now reaches `COM7:` earlier or still remains
   blocked behind the splash/readiness path.

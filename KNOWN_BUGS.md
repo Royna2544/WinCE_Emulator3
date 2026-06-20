@@ -5,12 +5,11 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 ## Open Issues
 
 - iNavi route-flow completion remains open beyond process startup, shell
-  readiness, real splash rendering, remote input delivery, and initial hidden
-  map child-window creation. The latest live sample resumes iNavi from the
-  hidden `happyway_win` helper slice and accepts touch/key WndProc callouts on
-  the real splash window, but the splash artwork still remains visible, so the
-  missing behavior is likely a CE wait/event/message/window transition or app
-  readiness signal.
+  readiness, real splash rendering, remote input delivery, and initial mapdata
+  loading. The latest live sample reaches mapdata/SearchDB/mapinfo file work
+  and accepts touch/key WndProc callouts on the real splash window, but the
+  splash artwork still remains visible, so the missing behavior is likely a CE
+  wait/event/message/window transition, file result, or app readiness signal.
 - Scheduler/message semantics are not complete for every reentrant wait,
   cancellation, nested send, abort-if-hung, modal-loop, and cross-thread
   result-delivery combination.
@@ -35,19 +34,21 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 - Popup/menu/modal behavior still needs broader live nested-modal routing,
   unusual cascade cancellation, timeout edges, and user-driven dispatch
   validation.
-- Sensor emulation remains partial. GPS/NMEA now reaches `COM7:` in live runs
-  and drains into the guest serial RX path, but parsed-position consumption,
-  `ReadFile`/`WaitCommEvent` cadence, and later `MFS1:`/`SMB1:` live command
-  contracts still need real trace evidence.
+- Sensor emulation remains partial. GPS/NMEA can reach `COM7:` in some live
+  runs and drain into the guest serial RX path, but the latest fresh run still
+  has no open `COM7:` handle and queues remote GPS bytes. Parsed-position
+  consumption, `ReadFile`/`WaitCommEvent` cadence, and later `MFS1:`/`SMB1:`
+  live command contracts still need real trace evidence.
 - Fresh splash-phase samples still spend time in `UID1:` probing and
   resource/map loading before `COM7:` opens, so sensor data cannot explain the
-  earliest visible splash interval. The later post-`COM7:` transition remains
-  open.
+  earliest visible splash interval. The current post-mapdata path still has
+  not opened `COM7:`, so the serial-start gate itself remains open.
 - Startup profiling still reaches the real `happyway_win.exe+0x7b56c`
   traffic/shared-memory loop, but the live scheduler now resumes iNavi from
-  that helper-process slice and prioritizes ready parked waits at live-pump
-  entry. The remaining delay is not explained by unreadable MessageBox UI,
-  remote input routing, or pre-COM7 sensor queuing.
+  that helper-process slice, prioritizes ready parked waits at live-pump entry,
+  and keeps visible active processes ahead of generic parked runnable rotation.
+  The remaining delay is not explained by unreadable MessageBox UI, remote
+  input routing, or pre-COM7 sensor queuing.
 - The stale `happyway_win` escaped visible-message callout no longer remains
   in `pending-wndproc`; keep watching for fresh send-stack or wait-state leaks
   before treating the splash transition as purely app readiness.
