@@ -99,13 +99,13 @@ use wince_emulation_v3::{
             ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_REGISTER_HOT_KEY, ORD_REGISTER_SIPANEL,
             ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
             ORD_REMOVE_FONT_RESOURCE_W, ORD_REMOVE_MENU, ORD_RESTORE_DC, ORD_ROUND_RECT,
-            ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SCROLL_DC, ORD_SELECT_CLIP_RGN,
-            ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
-            ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
-            ORD_SET_ABORT_PROC, ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU,
-            ORD_SET_BITMAP_BITS, ORD_SET_BK_COLOR, ORD_SET_BK_MODE, ORD_SET_BRUSH_ORG_EX,
-            ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME, ORD_SET_CARET_POS, ORD_SET_CURSOR,
-            ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
+            ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SCROLL_DC, ORD_SCROLL_WINDOW_EX,
+            ORD_SELECT_CLIP_RGN, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
+            ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W,
+            ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ABORT_PROC, ORD_SET_ACTIVE_WINDOW,
+            ORD_SET_ASSOCIATED_MENU, ORD_SET_BITMAP_BITS, ORD_SET_BK_COLOR, ORD_SET_BK_MODE,
+            ORD_SET_BRUSH_ORG_EX, ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME, ORD_SET_CARET_POS,
+            ORD_SET_CURSOR, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
             ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
             ORD_SET_KEYBOARD_TARGET, ORD_SET_LAYOUT, ORD_SET_LOCAL_TIME, ORD_SET_MENU,
             ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_PIXEL,
@@ -59456,6 +59456,161 @@ fn coredll_raw_scroll_dc_sets_update_rect_and_region_like_ce() -> Result<()> {
         ));
         assert_rect(&memory, box_ptr, expected);
     }
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_scroll_window_ex_sets_update_rect_and_region_like_ce() -> Result<()> {
+    const NULLREGION: u32 = 1;
+    const SIMPLEREGION: u32 = 2;
+    const SW_INVALIDATE: u32 = 0x0002;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 5;
+    let scroll_ptr = 0x1_2800_u32;
+    let clip_ptr = 0x1_2810_u32;
+    let update_ptr = 0x1_2820_u32;
+    let box_ptr = 0x1_2830_u32;
+    for ptr in [scroll_ptr, clip_ptr, update_ptr, box_ptr] {
+        memory.map_words(ptr, 4);
+    }
+
+    let write_rect = |memory: &mut TestGuestMemory, ptr: u32, rect: (i32, i32, i32, i32)| {
+        memory.write_u32(ptr, rect.0 as u32).unwrap();
+        memory.write_u32(ptr + 4, rect.1 as u32).unwrap();
+        memory.write_u32(ptr + 8, rect.2 as u32).unwrap();
+        memory.write_u32(ptr + 12, rect.3 as u32).unwrap();
+    };
+    let assert_rect = |memory: &TestGuestMemory, ptr: u32, expected: (i32, i32, i32, i32)| {
+        assert_eq!(memory.read_u32(ptr).unwrap() as i32, expected.0);
+        assert_eq!(memory.read_u32(ptr + 4).unwrap() as i32, expected.1);
+        assert_eq!(memory.read_u32(ptr + 8).unwrap() as i32, expected.2);
+        assert_eq!(memory.read_u32(ptr + 12).unwrap() as i32, expected.3);
+    };
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "SCROLL_WINDOW_EX",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect {
+            left: 0,
+            top: 0,
+            right: 100,
+            bottom: 100,
+        },
+    );
+    let region = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(update) did not return a region: {other:?}"),
+    };
+
+    // C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h exposes hrgnUpdate/prcUpdate,
+    // and CE scroll tests expect the update region box to mirror the exposed rect.
+    write_rect(&mut memory, scroll_ptr, (10, 20, 70, 90));
+    write_rect(&mut memory, clip_ptr, (25, 30, 60, 80));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SCROLL_WINDOW_EX,
+            [
+                hwnd,
+                1,
+                0,
+                scroll_ptr,
+                clip_ptr,
+                region,
+                update_ptr,
+                SW_INVALIDATE
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SIMPLEREGION),
+            ..
+        }
+    ));
+    assert_rect(&memory, update_ptr, (25, 30, 26, 80));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_RGN_BOX,
+            [region, box_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SIMPLEREGION),
+            ..
+        }
+    ));
+    assert_rect(&memory, box_ptr, (25, 30, 26, 80));
+
+    write_rect(&mut memory, update_ptr, (-1, -1, -1, -1));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SCROLL_WINDOW_EX,
+            [hwnd, 0, 0, scroll_ptr, clip_ptr, region, update_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(NULLREGION),
+            ..
+        }
+    ));
+    assert_rect(&memory, update_ptr, (0, 0, 0, 0));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_RGN_BOX,
+            [region, box_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(NULLREGION),
+            ..
+        }
+    ));
+    assert_rect(&memory, box_ptr, (0, 0, 0, 0));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SCROLL_WINDOW_EX,
+            [hwnd, 1, 0, scroll_ptr, clip_ptr, 0xdead_beef, update_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
 
     Ok(())
 }

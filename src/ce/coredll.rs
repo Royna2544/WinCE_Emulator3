@@ -45171,7 +45171,7 @@ fn scroll_window_ex_raw<M: CoredllGuestMemory>(
     let dy = raw_i32_arg(args, 2);
     let prc_scroll = raw_arg(args, 3);
     let prc_clip = raw_arg(args, 4);
-    // args[5] = hrgnUpdate — region update not supported
+    let update_region = raw_arg(args, 5);
     let prc_update = raw_arg(args, 6);
     let fu_scroll = raw_arg(args, 7);
 
@@ -45179,6 +45179,12 @@ fn scroll_window_ex_raw<M: CoredllGuestMemory>(
     const SW_ERASE: u32 = 0x0004;
 
     if !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    if update_region != 0 && kernel.resources.region(update_region).is_none() {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -45201,8 +45207,16 @@ fn scroll_window_ex_raw<M: CoredllGuestMemory>(
                 Some(i) => eff = i,
                 None => {
                     if prc_update != 0 {
-                        let _ =
-                            write_guest_bytes(kernel, memory, thread_id, prc_update, &[0u8; 16]);
+                        let _ = write_guest_rect(
+                            kernel,
+                            memory,
+                            thread_id,
+                            prc_update,
+                            Rect::default(),
+                        );
+                    }
+                    if update_region != 0 {
+                        let _ = kernel.resources.set_region_rects(update_region, Vec::new());
                     }
                     kernel.threads.set_last_error(thread_id, 0);
                     return NULLREGION as i32;
@@ -45216,8 +45230,16 @@ fn scroll_window_ex_raw<M: CoredllGuestMemory>(
                 Some(i) => eff = i,
                 None => {
                     if prc_update != 0 {
-                        let _ =
-                            write_guest_bytes(kernel, memory, thread_id, prc_update, &[0u8; 16]);
+                        let _ = write_guest_rect(
+                            kernel,
+                            memory,
+                            thread_id,
+                            prc_update,
+                            Rect::default(),
+                        );
+                    }
+                    if update_region != 0 {
+                        let _ = kernel.resources.set_region_rects(update_region, Vec::new());
                     }
                     kernel.threads.set_last_error(thread_id, 0);
                     return NULLREGION as i32;
@@ -45228,7 +45250,10 @@ fn scroll_window_ex_raw<M: CoredllGuestMemory>(
 
     if eff.is_empty() || (dx == 0 && dy == 0) {
         if prc_update != 0 {
-            let _ = write_guest_bytes(kernel, memory, thread_id, prc_update, &[0u8; 16]);
+            let _ = write_guest_rect(kernel, memory, thread_id, prc_update, Rect::default());
+        }
+        if update_region != 0 {
+            let _ = kernel.resources.set_region_rects(update_region, Vec::new());
         }
         kernel.threads.set_last_error(thread_id, 0);
         return NULLREGION as i32;
@@ -45244,6 +45269,14 @@ fn scroll_window_ex_raw<M: CoredllGuestMemory>(
 
     if prc_update != 0 {
         let _ = write_guest_rect(kernel, memory, thread_id, prc_update, exposed);
+    }
+    if update_region != 0 {
+        let rects = if exposed.is_empty() {
+            Vec::new()
+        } else {
+            vec![exposed]
+        };
+        let _ = kernel.resources.set_region_rects(update_region, rects);
     }
 
     if fu_scroll & SW_INVALIDATE != 0 && !exposed.is_empty() {
