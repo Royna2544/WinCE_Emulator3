@@ -4382,12 +4382,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(false))
         }
         // LoadKernelLibrary
-        ORD_LOAD_KERNEL_LIBRARY => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_LOAD_KERNEL_LIBRARY => Some(CoredllValue::Handle(load_kernel_library_raw(
+            kernel, memory, thread_id, args[0],
+        ))),
         // QueryInstructionSet — return PROCESSOR_FEATURE bits; report ARMv4T (0)
         ORD_QUERY_INSTRUCTION_SET => {
             kernel.threads.set_last_error(thread_id, 0);
@@ -21592,6 +21589,11 @@ const COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
 const LOAD_LIBRARY_AS_DATAFILE: u32 = 0x0000_0002;
 const DONT_RESOLVE_DLL_REFERENCES: u32 = 0x0000_0001;
 const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x0000_0008;
+const LOAD_LIBRARY_IN_KERNEL: u32 = 0x0000_8000;
+const MF_NO_THREAD_CALLS: u32 = 0x0000_0400;
+const LLIB_NO_PAGING: u32 = 0x0001;
+const LOAD_KERNEL_LIBRARY_FLAGS: u32 =
+    LOAD_LIBRARY_IN_KERNEL | MF_NO_THREAD_CALLS | (LLIB_NO_PAGING << 16);
 
 fn get_module_handle_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -21640,6 +21642,34 @@ fn load_library_w_raw<M: CoredllGuestMemory>(
         return COREDLL_MODULE_HANDLE;
     }
     if let Some(handle) = kernel.retain_loaded_module_by_name_for_load(&name, 0) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return handle;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+    0
+}
+
+fn load_kernel_library_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    name_ptr: u32,
+) -> u32 {
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if is_coredll_module_name(&name) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return COREDLL_MODULE_HANDLE;
+    }
+    if let Some(handle) =
+        kernel.retain_loaded_module_by_name_for_load(&name, LOAD_KERNEL_LIBRARY_FLAGS)
+    {
         kernel.threads.set_last_error(thread_id, 0);
         return handle;
     }

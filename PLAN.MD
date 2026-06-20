@@ -61,6 +61,13 @@ notes when it is still needed for implementation.
   diagnostics: raw `GetCallStackSnapshot` now returns one synthetic in-process
   frame for normal and extended buffers, validates supported flags, and handles
   skipped frames without fabricating deeper stacks.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kdriver.c` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\loader.h`: raw
+  `LoadKernelLibrary` now resolves registered CE kernel libraries instead of
+  returning `ERROR_NOT_SUPPORTED`, applies the CE `LOAD_LIBRARY_IN_KERNEL`,
+  `MF_NO_THREAD_CALLS`, and `LLIB_NO_PAGING` load flags, increments the module
+  refcount, preserves exported `IOControl` lookup, and reports CE-style missing
+  or invalid library-name failures.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`

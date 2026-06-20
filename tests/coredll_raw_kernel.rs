@@ -47,25 +47,25 @@ use wince_emulation_v3::{
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
             ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LOAD_CURSOR_W, ORD_LOAD_IMAGE_W, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W,
-            ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
-            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE,
-            ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS,
-            ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM,
-            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE,
-            ORD_READ_PROCESS_MEMORY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR,
-            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS,
-            ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
-            ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
-            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
-            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
-            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
-            ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS,
-            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
-            ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_LOAD_CURSOR_W, ORD_LOAD_IMAGE_W, ORD_LOAD_KERNEL_LIBRARY, ORD_LOAD_LIBRARY_EX_W,
+            ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE, ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W,
+            ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS,
+            ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
+            ORD_READ_MSG_QUEUE, ORD_READ_PROCESS_MEMORY, ORD_REGISTER_CLIPBOARD_FORMAT_W,
+            ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
+            ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD, ORD_SELECT_OBJECT,
+            ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS,
+            ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS,
+            ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
+            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
+            ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
+            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
+            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
+            ORD_SLEEP_TILL_TICK, ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS,
+            ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
+            ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
             ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
             ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
             ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
@@ -6093,6 +6093,116 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_NOT_SUPPORTED
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_load_kernel_library_applies_ce_flags_and_keeps_exports_visible() -> Result<()> {
+    const LOAD_LIBRARY_IN_KERNEL: u32 = 0x0000_8000;
+    const MF_NO_THREAD_CALLS: u32 = 0x0000_0400;
+    const LLIB_NO_PAGING: u32 = 0x0001;
+    const LOAD_KERNEL_LIBRARY_FLAGS: u32 =
+        LOAD_LIBRARY_IN_KERNEL | MF_NO_THREAD_CALLS | (LLIB_NO_PAGING << 16);
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 43;
+    let module_name_ptr = 0x1_9200;
+    let proc_name_ptr = 0x1_9280;
+    let missing_name_ptr = 0x1_9300;
+    let module_base = 0x6330_0000;
+    let io_control = module_base + 0x2440;
+
+    kernel.register_loaded_module_with_metadata(
+        "kernel_driver.dll",
+        module_base,
+        std::collections::BTreeMap::from([("IOControl".to_owned(), io_control)]),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\kernel_driver.dll".to_owned()),
+            image_size: 0x14000,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    memory.write_wide_z(module_name_ptr, "kernel_driver.dll");
+    memory.write_bytes(proc_name_ptr, b"IOControl\0");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_KERNEL_LIBRARY,
+            [module_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == module_base
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let loaded = kernel.loaded_module_by_handle(module_base).unwrap();
+    assert_eq!(loaded.ref_count, 2);
+    assert_eq!(
+        loaded.load_flags & LOAD_KERNEL_LIBRARY_FLAGS,
+        LOAD_KERNEL_LIBRARY_FLAGS
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROC_ADDRESS_A,
+            [module_base, proc_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(address),
+            ..
+        } if address == io_control
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(missing_name_ptr, "missing_kernel_driver.dll");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_KERNEL_LIBRARY,
+            [missing_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_KERNEL_LIBRARY,
+            [0x7fff_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
     );
 
     Ok(())
