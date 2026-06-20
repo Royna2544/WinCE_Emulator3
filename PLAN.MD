@@ -785,7 +785,11 @@ notes when it is still needed for implementation.
   committed, covering window classes that install CE process-slot callbacks at
   registration time. When both process-slot and shared DLL aliases can satisfy
   the same high-slot callback offset, mapped WNDPROC resolution now prefers the
-  process-slot DLL image so callbacks stay in the receiver process view.
+  process-slot DLL image so callbacks stay in the receiver process view. Hidden
+  active child processes with pending window-targeted messages are no longer
+  treated as terminal exits before those messages are pumped, preserving the CE
+  wait/message transition instead of handing control back to the parked parent
+  too early.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
   `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble

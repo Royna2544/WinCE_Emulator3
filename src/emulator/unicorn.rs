@@ -4281,6 +4281,7 @@ impl UnicornMips {
             || self.blocked_send_message_timeout.is_some()
             || self.blocked_clipboard_data.is_some()
             || Self::process_has_visible_windows(kernel, kernel.current_process_id())
+            || Self::process_has_live_window_message_work(kernel, kernel.current_process_id())
         {
             return None;
         }
@@ -4295,6 +4296,17 @@ impl UnicornMips {
                 && !window.destroyed
                 && window.rect.width() > 0
                 && window.rect.height() > 0
+        })
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn process_has_live_window_message_work(kernel: &CeKernel, process_id: u32) -> bool {
+        kernel.gwe.windows_snapshot().into_iter().any(|window| {
+            window.process_id == process_id
+                && !window.destroyed
+                && kernel
+                    .gwe
+                    .has_message_filtered(window.thread_id, Some(window.hwnd), 0, 0)
         })
     }
 
@@ -30065,7 +30077,7 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
-    fn active_terminal_child_exit_hands_back_to_parked_parent() -> Result<()> {
+    fn active_terminal_child_return_waits_for_hidden_window_messages() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
@@ -30099,6 +30111,54 @@ mod guest_thread_stack_tests {
         let child_hwnd =
             kernel.create_window_ex_w(launch.thread_id, "hidden_child", "", None, 0, 0, 0);
         assert!(kernel.post_message_w(child_hwnd, crate::ce::gwe::WM_USER + 1, 0, 0));
+
+        assert_eq!(
+            scheduler.active_terminal_child_process_return_code(&kernel),
+            None
+        );
+        assert!(!scheduler.complete_active_process_thread_exit_with_framebuffer(&mut kernel, None));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn active_terminal_child_exit_hands_back_to_parked_parent() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            Some("iNavi|SDMMC Disk\\mapdata".to_owned()),
+        );
+        scheduler.set_initial_thread_id(launch.thread_id);
+        scheduler.current_thread_id = launch.thread_id;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            regs: MipsGuestContext::zero(),
+        });
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            ra: GUEST_THREAD_RETURN_STUB_ADDR,
+            v0: 0x24,
+            ..Default::default()
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0040_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+        ));
+        let child_hwnd =
+            kernel.create_window_ex_w(launch.thread_id, "hidden_child", "", None, 0, 0, 0);
 
         let parent_thread = 1;
         let mut parent_cpu = UnicornMips::new()?;
