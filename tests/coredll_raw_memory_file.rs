@@ -3801,6 +3801,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
     const IOCTL_DISK_GETINFO: u32 = 0x0007_1c00;
     const IOCTL_DISK_GETNAME: u32 = 0x0007_1c20;
+    const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
     const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
     const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
     const STORE_ATTRIBUTE_AUTOMOUNT: u32 = 0x0000_0020;
@@ -3869,6 +3870,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     let disk_info_ptr = 0x3023_0000;
     let storage_device_info_ptr = 0x3024_0000;
     let disk_name_ptr = 0x3025_0000;
+    let storage_id_ptr = 0x3026_0000;
     memory.map_halfwords(name_ptr, 32);
     memory.map_words(info_level_ptr, 1);
     memory.map_words(bytes_returned_ptr, 1);
@@ -3878,6 +3880,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     memory.map_bytes(disk_info_ptr, FSD_DISK_INFO_SIZE);
     memory.map_bytes(storage_device_info_ptr, STORAGE_DEVICE_INFO_SIZE);
     memory.map_bytes(disk_name_ptr, 64);
+    memory.map_bytes(storage_id_ptr, 16);
     memory.write_word(info_level_ptr, 0);
 
     let read_le_u32 = |bytes: &[u8], offset: usize| -> u32 {
@@ -3966,6 +3969,13 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
             STORAGE_DEVICE_TYPE_FLASH | STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE
         );
         assert_eq!(read_le_u32(&info, 76), STORAGE_DEVICE_FLAG_READWRITE);
+    };
+    let assert_synthetic_storage_id = |memory: &TestGuestMemory| {
+        let info = memory.read_bytes(storage_id_ptr, 16);
+        assert_eq!(read_le_u32(&info, 0), 16);
+        assert_eq!(read_le_u32(&info, 4), 0x03);
+        assert_eq!(read_le_u32(&info, 8), 0);
+        assert_eq!(read_le_u32(&info, 12), 0);
     };
     let assert_flash_store = |memory: &TestGuestMemory| {
         let info = memory.read_bytes(info_ptr, STORE_INFO_SIZE as usize);
@@ -4112,6 +4122,65 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         memory.read_bytes(storage_device_info_ptr, STORAGE_DEVICE_INFO_SIZE as usize),
         vec![0xa3; STORAGE_DEVICE_INFO_SIZE as usize]
     );
+
+    memory.write_bytes(storage_id_ptr, &[0xa4; 16]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_GET_STORAGEID,
+                0,
+                0,
+                storage_id_ptr,
+                16,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 16);
+    assert_synthetic_storage_id(&memory);
+
+    memory.write_bytes(storage_id_ptr, &[0xa5; 16]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_GET_STORAGEID,
+                0,
+                0,
+                storage_id_ptr,
+                12,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_face);
+    assert_eq!(memory.read_bytes(storage_id_ptr, 16), vec![0xa5; 16]);
 
     memory.write_wide_z(name_ptr, "SDMMC Disk");
     let partition_handle = match table.dispatch_raw_ordinal_with_memory(
@@ -4293,6 +4362,34 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         STORAGE_DEVICE_INFO_SIZE
     );
     assert_sd_storage_device_info(&memory);
+
+    memory.write_bytes(storage_id_ptr, &[0xaa; 16]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_DISK_GET_STORAGEID,
+                0,
+                0,
+                storage_id_ptr,
+                16,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 16);
+    assert_synthetic_storage_id(&memory);
 
     memory.write_bytes(disk_name_ptr, &[0xa8; 64]);
     memory.write_word(bytes_returned_ptr, 0xfeed_babe);

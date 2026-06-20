@@ -214,6 +214,9 @@ const STORE_PROFILE_NAME_CHARS: usize = 32;
 const STORE_SECTOR_SIZE: u32 = 512;
 const FSD_DISK_INFO_SIZE: u32 = 24;
 const FDI_READONLY: u32 = 0x0000_0010;
+const STORAGE_IDENTIFICATION_SIZE: u32 = 16;
+const STORAGE_MANUFACTUREID_INVALID: u32 = 0x0000_0001;
+const STORAGE_SERIALNUM_INVALID: u32 = 0x0000_0002;
 const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
 const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
 const STORE_ATTRIBUTE_AUTOMOUNT: u32 = 0x0000_0020;
@@ -23352,7 +23355,7 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
 ) -> Option<bool> {
     let handled = matches!(
         ioctl_code,
-        DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO | IOCTL_DISK_DEVICE_INFO
+        DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO | IOCTL_DISK_DEVICE_INFO | IOCTL_DISK_GET_STORAGEID
     );
     if !handled {
         return None;
@@ -23391,6 +23394,14 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             } else {
                 output_capacity
             },
+            returned_ptr,
+        ),
+        IOCTL_DISK_GET_STORAGEID => storage_identification_raw(
+            kernel,
+            memory,
+            thread_id,
+            output_ptr,
+            output_capacity,
             returned_ptr,
         ),
         _ => unreachable!(),
@@ -23474,6 +23485,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | DISK_IOCTL_GETNAME
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
+            | IOCTL_DISK_GET_STORAGEID
     );
     if !handled {
         return None;
@@ -23529,6 +23541,14 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             } else {
                 output_capacity
             },
+            returned_ptr,
+        ),
+        IOCTL_DISK_GET_STORAGEID => storage_identification_raw(
+            kernel,
+            memory,
+            thread_id,
+            output_ptr,
+            output_capacity,
             returned_ptr,
         ),
         _ => unreachable!(),
@@ -23664,6 +23684,45 @@ fn write_storage_device_info_raw<M: CoredllGuestMemory>(
         thread_id,
         returned_ptr,
         STORAGE_DEVICE_INFO_SIZE,
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn storage_identification_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    out_ptr: u32,
+    out_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    if out_ptr == 0 || out_len < STORAGE_IDENTIFICATION_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let mut bytes = Vec::with_capacity(STORAGE_IDENTIFICATION_SIZE as usize);
+    append_store_dword(&mut bytes, STORAGE_IDENTIFICATION_SIZE);
+    append_store_dword(
+        &mut bytes,
+        STORAGE_MANUFACTUREID_INVALID | STORAGE_SERIALNUM_INVALID,
+    );
+    append_store_dword(&mut bytes, 0);
+    append_store_dword(&mut bytes, 0);
+    debug_assert_eq!(bytes.len(), STORAGE_IDENTIFICATION_SIZE as usize);
+    if !write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes) {
+        return false;
+    }
+    if !write_optional_count(
+        kernel,
+        memory,
+        thread_id,
+        returned_ptr,
+        STORAGE_IDENTIFICATION_SIZE,
     ) {
         return false;
     }

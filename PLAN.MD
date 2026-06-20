@@ -142,6 +142,13 @@ notes when it is still needed for implementation.
   partition mounting. Coverage verifies `IOCTL_DISK_GETINFO` with shared
   in/out `DISK_INFO`, cached `IOCTL_DISK_DEVICE_INFO`, byte counts, mounted
   profile/device flags, and invalid cached-device-info no-touch behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: store and partition
+  `DeviceIoControl(IOCTL_DISK_GET_STORAGEID)` now follow StoreMgr's cached
+  storage-identification path. Coverage verifies the CE-layout
+  `STORAGE_IDENTIFICATION` size/flags, byte counts, and invalid short-output
+  rejection before any caller-buffer writes.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now
