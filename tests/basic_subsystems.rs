@@ -10593,6 +10593,20 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
         4,
         "CE SetDragCursorImage merges a cursor image without replacing the drag hotspot"
     );
+    assert_eq!(
+        res.set_image_list_drag_cursor(drag_il, 0, -2, -3),
+        Some(true)
+    );
+    assert_eq!(
+        res.image_list_drag().unwrap().image_list,
+        merged_drag_list,
+        "CE SetDragCursorImage ignores hotspot-only updates for the same cursor source"
+    );
+    assert_eq!(
+        res.image_list_drag().unwrap().hotspot_x,
+        4,
+        "same-cursor SetDragCursorImage no-op keeps the original drag hotspot"
+    );
     // set_image_list_drag_cursor with bad index → Some(false).
     assert_eq!(
         res.set_image_list_drag_cursor(drag_il, 99, 0, 0),

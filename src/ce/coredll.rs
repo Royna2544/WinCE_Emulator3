@@ -36918,6 +36918,32 @@ fn image_list_set_drag_cursor_raw<M: CoredllGuestMemory>(
     let hotspot_x = raw_i32_arg(args, 2);
     let hotspot_y = raw_i32_arg(args, 3);
     let mut framebuffer = framebuffer;
+    if kernel
+        .resources
+        .image_list_drag_cursor_matches(handle, index)
+    {
+        match kernel
+            .resources
+            .set_image_list_drag_cursor(handle, index, hotspot_x, hotspot_y)
+        {
+            Some(true) => {
+                kernel.threads.set_last_error(thread_id, 0);
+                return true;
+            }
+            Some(false) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+            None => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return false;
+            }
+        }
+    }
     let old_internal_owned_bitmaps: Vec<(u32, Vec<u32>)> = kernel
         .resources
         .image_list_drag_internal_handles()

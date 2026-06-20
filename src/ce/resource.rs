@@ -504,6 +504,7 @@ pub struct ResourceSystem {
     image_list_drag_lock_hwnd: u32,
     image_list_drag_dither: u32,
     image_list_drag_merged: u32,
+    image_list_drag_cursor: Option<(u32, i32)>,
     image_list_drag_backing_store: Option<ImageListDragBackingStore>,
 }
 
@@ -541,6 +542,7 @@ impl Default for ResourceSystem {
             image_list_drag_lock_hwnd: 0,
             image_list_drag_dither: 0,
             image_list_drag_merged: 0,
+            image_list_drag_cursor: None,
             image_list_drag_backing_store: None,
         }
     }
@@ -1999,6 +2001,7 @@ impl ResourceSystem {
         self.image_list_drag_hotspot_y = hotspot_y;
         self.image_list_drag_dither = drag_list;
         self.image_list_drag_merged = 0;
+        self.image_list_drag_cursor = None;
         self.image_list_drag_backing_store = None;
         self.image_list_drag = Some(ImageListDragState {
             image_list: drag_list,
@@ -2031,6 +2034,7 @@ impl ResourceSystem {
         self.image_list_drag_hotspot_y = hotspot_y;
         self.image_list_drag_dither = drag_list;
         self.image_list_drag_merged = 0;
+        self.image_list_drag_cursor = None;
         self.image_list_drag_backing_store = None;
         self.image_list_drag = Some(ImageListDragState {
             image_list: drag_list,
@@ -2056,6 +2060,9 @@ impl ResourceSystem {
         if self.image_list_drag.is_none() {
             return Some(true);
         }
+        if self.image_list_drag_cursor == Some((handle, index)) {
+            return Some(true);
+        }
         if !self.image_list_has_index(handle, index) {
             return Some(false);
         }
@@ -2069,6 +2076,7 @@ impl ResourceSystem {
             self.image_lists.remove(&self.image_list_drag_merged);
         }
         self.image_list_drag_merged = merged;
+        self.image_list_drag_cursor = Some((handle, index));
         let drag = self.image_list_drag.as_mut()?;
         drag.image_list = merged;
         drag.index = 0;
@@ -2087,6 +2095,9 @@ impl ResourceSystem {
         if self.image_list_drag.is_none() {
             return Some(true);
         }
+        if self.image_list_drag_cursor == Some((handle, index)) {
+            return Some(true);
+        }
         if !self.image_list_has_index(handle, index) || images.is_empty() {
             return Some(false);
         }
@@ -2103,10 +2114,15 @@ impl ResourceSystem {
             self.image_lists.remove(&self.image_list_drag_merged);
         }
         self.image_list_drag_merged = merged;
+        self.image_list_drag_cursor = Some((handle, index));
         let drag = self.image_list_drag.as_mut()?;
         drag.image_list = merged;
         drag.index = 0;
         Some(true)
+    }
+
+    pub fn image_list_drag_cursor_matches(&self, handle: u32, index: i32) -> bool {
+        self.image_list_drag.is_some() && self.image_list_drag_cursor == Some((handle, index))
     }
 
     pub fn image_list_drag_enter(&mut self, hwnd: u32, x: i32, y: i32) -> bool {
@@ -2169,6 +2185,7 @@ impl ResourceSystem {
         }
         self.image_list_drag_merged = 0;
         self.image_list_drag_dither = 0;
+        self.image_list_drag_cursor = None;
         self.image_list_drag_backing_store = None;
         true
     }

@@ -55531,6 +55531,42 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pixels() -> Result<()> {
         other => panic!("ImageList_GetDragImage returned unexpected result: {other:?}"),
     };
     assert_ne!(drag_list, 0);
+    let internal_handles_before_repeat = kernel.resources.image_list_drag_internal_handles();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            [cursor_list, 0, 5, 6],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let repeated_drag_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+        [drag_point, drag_hotspot],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("repeated ImageList_GetDragImage returned unexpected result: {other:?}"),
+    };
+    assert_eq!(
+        repeated_drag_list, drag_list,
+        "CE SetDragCursorImage ignores hotspot-only updates for the same cursor source"
+    );
+    assert_eq!(
+        kernel.resources.image_list_drag_internal_handles(),
+        internal_handles_before_repeat,
+        "same-cursor SetDragCursorImage should not replace the transient merged drag list"
+    );
     let drag_bitmap = kernel
         .resources
         .image_list(drag_list)

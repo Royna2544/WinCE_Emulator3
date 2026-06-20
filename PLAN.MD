@@ -655,6 +655,12 @@ notes when it is still needed for implementation.
   invalid image indices/null output buffers and leaves the caller's
   `IMAGEINFO` storage untouched on failure, matching CE's validation-before-
   write path.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
+  raw `ImageList_SetDragCursorImage` now tracks the source cursor image list
+  and index separately from the transient merged drag image so repeated calls
+  with the same source cursor succeed as CE no-ops, even when the hotspot
+  arguments differ. Coverage verifies the helper state and raw ordinal path
+  keep the existing merged drag image instead of replacing it.
 - Runtime live-pump/iNavi route frontier: when the active process is parked
   in a hidden `GetMessage` wait and a visible parked process has a ready wait
   unblock, `rotate_after_run_slice_handoff` now resumes the ready parked
