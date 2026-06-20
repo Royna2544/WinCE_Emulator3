@@ -890,6 +890,16 @@ notes when it is still needed for implementation.
   before generic device dispatch, validating DWORD encryption/extended-flag
   packets and sparse-file zero-byte requests before reporting the host-backed
   FSD's unsupported status.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devapi.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devfile.c`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devload.c`: raw
+  `GetDeviceInformationByDeviceHandle` and `GetDeviceInformationByFileHandle`
+  now validate the CE `DEVMGR_DEVICE_INFORMATION` size before writing and fill
+  the CE 1584-byte layout with the live handle, empty parent, legacy name,
+  driver registry key, `$device\...` name, and empty bus name. Coverage verifies
+  activated device handles, file-open device handles, null/short buffers, and
+  stale-handle `ERROR_NOT_FOUND` behavior.
 
 ## Active Roadmap
 

@@ -66,9 +66,9 @@ use crate::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
             ERROR_FILE_NOT_FOUND, ERROR_INVALID_ACCESS, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_LOCK_VIOLATION,
-            ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_OWNER, ERROR_NOT_SAME_DEVICE,
-            ERROR_NOT_SUPPORTED, ERROR_OUT_OF_STRUCTURES, ERROR_RESOURCE_NAME_NOT_FOUND,
-            ERROR_SIGNAL_REFUSED,
+            ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_FOUND, ERROR_NOT_OWNER,
+            ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED, ERROR_OUT_OF_STRUCTURES,
+            ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
         },
     },
     error::{Error, Result},
@@ -220,6 +220,9 @@ const FMD_RAW_WRITE_BLOCKS_REQ_SIZE: u32 = 16;
 const FMD_INFO_SIZE: u32 = 20;
 const FMD_INFO_EX_SIZE: u32 = 48;
 const FMD_INFO_EX_REGION_OFFSET: u32 = 20;
+const DEVMGR_DEVICE_INFORMATION_SIZE: u32 = 1584;
+const DEVMGR_DEVICE_LEGACY_NAME_CHARS: usize = 6;
+const DEVMGR_DEVICE_MAX_PATH_CHARS: usize = 260;
 pub const FSDMGR_FMD_CALLBACK_TRAP_STRIDE: u32 = 0x10;
 pub const FSDMGR_FMD_CALLBACK_TRAP_COUNT: u32 = 13;
 pub const FSDMGR_FMD_CALLBACK_TRAP_BASE: u32 = 0x7fff_4f30;
@@ -4153,6 +4156,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_DEVICE_BY_INDEX => Some(CoredllValue::Bool(get_device_by_index_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE | ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE => {
+            Some(CoredllValue::Bool(get_device_information_by_handle_raw(
+                kernel, memory, thread_id, args,
+            )))
+        }
         ORD_COM_THREAD_BASE_FUNC => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -58842,6 +58850,112 @@ fn get_device_by_index_raw<M: CoredllGuestMemory>(
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_device_information_by_handle_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    const H_DEVICE_OFFSET: u32 = 4;
+    const H_PARENT_DEVICE_OFFSET: u32 = 8;
+    const LEGACY_NAME_OFFSET: u32 = 12;
+    const DEVICE_KEY_OFFSET: u32 = 24;
+    const DEVICE_NAME_OFFSET: u32 = 544;
+    const BUS_NAME_OFFSET: u32 = 1064;
+
+    let handle = raw_arg(args, 0);
+    let info_ptr = raw_arg(args, 1);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(caller_size) = read_guest_u32(kernel, memory, thread_id, info_ptr) else {
+        return false;
+    };
+    if caller_size < DEVMGR_DEVICE_INFORMATION_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let guest_name = match kernel.handles.get(handle) {
+        Ok(KernelObject::Device(device)) => device.guest_name.clone(),
+        Ok(_) | Err(_) => {
+            kernel.threads.set_last_error(
+                thread_id,
+                if handle == 0 {
+                    ERROR_INVALID_PARAMETER
+                } else {
+                    ERROR_NOT_FOUND
+                },
+            );
+            return false;
+        }
+    };
+    let entry = device_key_entry_for_guest_name(kernel, &guest_name);
+    let driver_key = entry
+        .as_ref()
+        .map(|entry| entry.driver_key.as_str())
+        .unwrap_or("");
+    let device_name = format!(r"$device\{}", guest_name.trim_end_matches(':'));
+
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr,
+        DEVMGR_DEVICE_INFORMATION_SIZE,
+    ) || !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr.wrapping_add(H_DEVICE_OFFSET),
+        handle,
+    ) || !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr.wrapping_add(H_PARENT_DEVICE_OFFSET),
+        0,
+    ) || !write_guest_wide_fixed(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr.wrapping_add(LEGACY_NAME_OFFSET),
+        &guest_name,
+        DEVMGR_DEVICE_LEGACY_NAME_CHARS,
+    ) || !write_guest_wide_fixed(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr.wrapping_add(DEVICE_KEY_OFFSET),
+        driver_key,
+        DEVMGR_DEVICE_MAX_PATH_CHARS,
+    ) || !write_guest_wide_fixed(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr.wrapping_add(DEVICE_NAME_OFFSET),
+        &device_name,
+        DEVMGR_DEVICE_MAX_PATH_CHARS,
+    ) || !write_guest_wide_fixed(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr.wrapping_add(BUS_NAME_OFFSET),
+        "",
+        DEVMGR_DEVICE_MAX_PATH_CHARS,
+    ) {
+        return false;
+    }
+
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
     true
 }
 

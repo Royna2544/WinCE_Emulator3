@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
-use wince_emulation_v3::{Error, Result, ce::coredll::CoredllGuestMemory};
+use wince_emulation_v3::{ce::coredll::CoredllGuestMemory, Error, Result};
 
 const TEST_HEAP_RANGE_START: u32 = 0x3000_0000;
 const TEST_HEAP_RANGE_END: u32 = 0x5000_0000;

@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 127] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 129] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13835,6 +13835,14 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 127] = &[
     CoredllOrdinalDef {
         name: "CeFsIoControlW",
         ordinal: ORD_CE_FS_IO_CONTROL_W,
+    },
+    CoredllOrdinalDef {
+        name: "GetDeviceInformationByDeviceHandle",
+        ordinal: ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE,
+    },
+    CoredllOrdinalDef {
+        name: "GetDeviceInformationByFileHandle",
+        ordinal: ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE,
     },
     CoredllOrdinalDef {
         name: "AFS_FsIoControlW",

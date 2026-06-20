@@ -1,7 +1,6 @@
 use std::fs;
 
 use wince_emulation_v3::{
-    Result,
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
@@ -13,19 +12,19 @@ use wince_emulation_v3::{
             ORD_COPY_RECT, ORD_CREATE_BITMAP, ORD_CREATE_BITMAP_FROM_POINTER, ORD_CREATE_CARET,
             ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC,
             ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_DIBPATTERN_BRUSH_PT,
-            ORD_CREATE_DIBSECTION, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FONT_INDIRECT_W,
-            ORD_CREATE_ICON_INDIRECT, ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE,
-            ORD_CREATE_PATTERN_BRUSH, ORD_CREATE_PEN, ORD_CREATE_PEN_INDIRECT,
-            ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN, ORD_CREATE_RECT_RGN_INDIRECT,
-            ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W, ORD_DEF_DLG_PROC_W,
-            ORD_DEF_WINDOW_PROC_W, ORD_DEFAULT_IME_WND_GET, ORD_DELETE_DC, ORD_DELETE_MENU,
-            ORD_DELETE_OBJECT, ORD_DESTROY_ACCELERATOR_TABLE, ORD_DESTROY_CARET, ORD_DESTROY_ICON,
-            ORD_DESTROY_MENU, ORD_DESTROY_WINDOW, ORD_DIALOG_BOX_INDIRECT_PARAM_W,
-            ORD_DISABLE_CARET_SYSTEM_WIDE, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_EDGE,
-            ORD_DRAW_FOCUS_RECT, ORD_DRAW_FRAME_CONTROL, ORD_DRAW_ICON_EX, ORD_DRAW_MENU_BAR,
-            ORD_DRAW_TEXT_W, ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE, ORD_ENABLE_MENU_ITEM,
-            ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_DOC, ORD_END_PAGE, ORD_END_PAINT,
-            ORD_ENUM_FONT_FAMILIES_EX_W, ORD_ENUM_FONT_FAMILIES_W, ORD_ENUM_FONTS_W,
+            ORD_CREATE_DIBSECTION, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W,
+            ORD_CREATE_FONT_INDIRECT_W, ORD_CREATE_ICON_INDIRECT, ORD_CREATE_MENU,
+            ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PATTERN_BRUSH, ORD_CREATE_PEN,
+            ORD_CREATE_PEN_INDIRECT, ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN,
+            ORD_CREATE_RECT_RGN_INDIRECT, ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W,
+            ORD_DEFAULT_IME_WND_GET, ORD_DEF_DLG_PROC_W, ORD_DEF_WINDOW_PROC_W, ORD_DELETE_DC,
+            ORD_DELETE_MENU, ORD_DELETE_OBJECT, ORD_DESTROY_ACCELERATOR_TABLE, ORD_DESTROY_CARET,
+            ORD_DESTROY_ICON, ORD_DESTROY_MENU, ORD_DESTROY_WINDOW,
+            ORD_DIALOG_BOX_INDIRECT_PARAM_W, ORD_DISABLE_CARET_SYSTEM_WIDE, ORD_DISPATCH_MESSAGE_W,
+            ORD_DRAW_EDGE, ORD_DRAW_FOCUS_RECT, ORD_DRAW_FRAME_CONTROL, ORD_DRAW_ICON_EX,
+            ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W, ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE,
+            ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_DOC, ORD_END_PAGE,
+            ORD_END_PAINT, ORD_ENUM_FONTS_W, ORD_ENUM_FONT_FAMILIES_EX_W, ORD_ENUM_FONT_FAMILIES_W,
             ORD_ENUM_WINDOWS, ORD_EQUAL_RECT, ORD_EQUAL_RGN, ORD_EXCLUDE_CLIP_RECT, ORD_EXT_ESCAPE,
             ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FILL_RGN, ORD_FIND_RESOURCE,
             ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W, ORD_FLUSH_VIEW_OF_FILE, ORD_GET_ACTIVE_WINDOW,
@@ -35,35 +34,36 @@ use wince_emulation_v3::{
             ORD_GET_CHAR_WIDTH32, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT,
             ORD_GET_CLIP_BOX, ORD_GET_CLIP_RGN, ORD_GET_CURRENT_OBJECT,
             ORD_GET_CURRENT_POSITION_EX, ORD_GET_CURSOR, ORD_GET_CURSOR_POS, ORD_GET_DC,
-            ORD_GET_DESKTOP_WINDOW, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS,
-            ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT,
-            ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS, ORD_GET_FONT_DATA, ORD_GET_FOREGROUND_INFO,
-            ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE, ORD_GET_FOREGROUND_KEYBOARD_TARGET,
-            ORD_GET_FOREGROUND_WINDOW, ORD_GET_ICON_INFO, ORD_GET_KEY_STATE,
+            ORD_GET_DESKTOP_WINDOW, ORD_GET_DEVICE_CAPS, ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE,
+            ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
+            ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
+            ORD_GET_FONT_DATA, ORD_GET_FOREGROUND_INFO, ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE,
+            ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW, ORD_GET_ICON_INFO,
             ORD_GET_KEYBOARD_LAYOUT, ORD_GET_KEYBOARD_LAYOUT_LIST, ORD_GET_KEYBOARD_LAYOUT_NAME_W,
-            ORD_GET_KEYBOARD_TARGET, ORD_GET_LAYOUT, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
-            ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
-            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_MONITOR_INFO,
-            ORD_GET_NEAREST_COLOR, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM,
-            ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_OBJECT_TYPE, ORD_GET_OBJECT_W,
-            ORD_GET_OUTLINE_TEXT_METRICS_W, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT, ORD_GET_PIXEL,
-            ORD_GET_QUEUE_STATUS, ORD_GET_REGION_DATA, ORD_GET_RGN_BOX, ORD_GET_ROP2,
-            ORD_GET_STOCK_OBJECT, ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR,
-            ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS,
-            ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA,
-            ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
-            ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W,
-            ORD_GET_VIEWPORT_EXT_EX, ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW,
-            ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_ORG_EX,
-            ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W,
-            ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT, ORD_GET_WINDOW_THREAD_PROCESS_ID,
-            ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL, ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD,
-            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
-            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
-            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
-            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
-            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_GET_KEYBOARD_TARGET, ORD_GET_KEY_STATE, ORD_GET_LAYOUT, ORD_GET_MENU,
+            ORD_GET_MENU_ITEM_INFO_W, ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP,
+            ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT,
+            ORD_GET_MONITOR_INFO, ORD_GET_NEAREST_COLOR, ORD_GET_NEAREST_PALETTE_INDEX,
+            ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_OBJECT_TYPE,
+            ORD_GET_OBJECT_W, ORD_GET_OUTLINE_TEXT_METRICS_W, ORD_GET_PALETTE_ENTRIES,
+            ORD_GET_PARENT, ORD_GET_PIXEL, ORD_GET_QUEUE_STATUS, ORD_GET_REGION_DATA,
+            ORD_GET_RGN_BOX, ORD_GET_ROP2, ORD_GET_STOCK_OBJECT, ORD_GET_STRETCH_BLT_MODE,
+            ORD_GET_SUB_MENU, ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS,
+            ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH,
+            ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR,
+            ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W,
+            ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W, ORD_GET_VIEWPORT_EXT_EX,
+            ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW, ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W,
+            ORD_GET_WINDOW_ORG_EX, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
+            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
+            ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL,
+            ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
+            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_CREATE,
+            ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE,
+            ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW,
+            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE,
+            ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
             ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
             ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
             ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
@@ -77,14 +77,14 @@ use wince_emulation_v3::{
             ORD_IMM_GET_IMCLOCK_COUNT, ORD_IMM_GET_IMEFILE_NAME_W, ORD_IMM_GET_KEYBOARD_LAYOUT,
             ORD_IMM_GET_OPEN_STATUS, ORD_IMM_GET_PROPERTY, ORD_IMM_GET_REGISTER_WORD_STYLE_W,
             ORD_IMM_GET_STATUS_WINDOW_POS, ORD_IMM_IS_IME, ORD_IMM_IS_UIMESSAGE_W,
-            ORD_IMM_LOCK_IMC, ORD_IMM_LOCK_IMCC, ORD_IMM_NOTIFY_IME, ORD_IMM_RE_SIZE_IMCC,
-            ORD_IMM_REGISTER_WORD_W, ORD_IMM_RELEASE_CONTEXT, ORD_IMM_SET_CANDIDATE_WINDOW,
+            ORD_IMM_LOCK_IMC, ORD_IMM_LOCK_IMCC, ORD_IMM_NOTIFY_IME, ORD_IMM_REGISTER_WORD_W,
+            ORD_IMM_RELEASE_CONTEXT, ORD_IMM_RE_SIZE_IMCC, ORD_IMM_SET_CANDIDATE_WINDOW,
             ORD_IMM_SET_COMPOSITION_FONT_W, ORD_IMM_SET_COMPOSITION_STRING_W,
             ORD_IMM_SET_COMPOSITION_WINDOW, ORD_IMM_SET_CONVERSION_STATUS, ORD_IMM_SET_OPEN_STATUS,
             ORD_IMM_SET_STATUS_WINDOW_POS, ORD_IMM_SIPANEL_STATE, ORD_IMM_UNLOCK_IMC,
-            ORD_IMM_UNLOCK_IMCC, ORD_IMM_UNREGISTER_WORD_W, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT,
-            ORD_INSERT_MENU_W, ORD_INTERSECT_CLIP_RECT, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
-            ORD_INVERT_RECT, ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY,
+            ORD_IMM_UNLOCK_IMCC, ORD_IMM_UNREGISTER_WORD_W, ORD_INFLATE_RECT, ORD_INSERT_MENU_W,
+            ORD_INTERSECT_CLIP_RECT, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_INVERT_RECT,
+            ORD_IN_SEND_MESSAGE, ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY,
             ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT,
             ORD_KEYBD_VKEY_TO_UNICODE, ORD_KILL_TIMER, ORD_LINE_TO, ORD_LOAD_ACCELERATORS_W,
             ORD_LOAD_BITMAP_W, ORD_LOAD_CURSOR_W, ORD_LOAD_ICON_W, ORD_LOAD_KEYBOARD_LAYOUT_W,
@@ -96,7 +96,7 @@ use wince_emulation_v3::{
             ORD_OFFSET_VIEWPORT_ORG_EX, ORD_PAT_BLT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE,
             ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE,
             ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION, ORD_REALIZE_PALETTE,
-            ORD_RECT_IN_REGION, ORD_RECT_VISIBLE, ORD_RECTANGLE, ORD_REDRAW_WINDOW,
+            ORD_RECTANGLE, ORD_RECT_IN_REGION, ORD_RECT_VISIBLE, ORD_REDRAW_WINDOW,
             ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_REGISTER_HOT_KEY, ORD_REGISTER_SIPANEL,
             ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
             ORD_REMOVE_FONT_RESOURCE_W, ORD_REMOVE_MENU, ORD_RESTORE_DC, ORD_ROUND_RECT,
@@ -111,7 +111,7 @@ use wince_emulation_v3::{
             ORD_SET_KEYBOARD_TARGET, ORD_SET_LAYOUT, ORD_SET_LOCAL_TIME, ORD_SET_MENU,
             ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_PIXEL,
             ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_RECT_RGN, ORD_SET_ROP2,
-            ORD_SET_STRETCH_BLT_MODE, ORD_SET_SYS_COLORS, ORD_SET_SYSTEM_TIME, ORD_SET_TEXT_ALIGN,
+            ORD_SET_STRETCH_BLT_MODE, ORD_SET_SYSTEM_TIME, ORD_SET_SYS_COLORS, ORD_SET_TEXT_ALIGN,
             ORD_SET_TEXT_CHARACTER_EXTRA, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
             ORD_SET_VIEWPORT_ORG_EX, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_ORG_EX,
             ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_CARET,
@@ -125,19 +125,19 @@ use wince_emulation_v3::{
         file::{GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
-            BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, BS_RADIOBUTTON, DC_HASDEFID,
+            ImeCandidateListState, Message, PeekFlags, Point, Rect, BS_AUTORADIOBUTTON,
+            BS_DEFPUSHBUTTON, BS_PUSHBUTTON, BS_RADIOBUTTON, DC_HASDEFID,
             DEFAULT_KEYBOARD_LAYOUT_HKL, DEFAULT_KEYBOARD_LAYOUT_NAME, DLGC_BUTTON,
             DLGC_DEFPUSHBUTTON, DLGC_HASSETSEL, DLGC_RADIOBUTTON, DLGC_STATIC,
             DLGC_UNDEFPUSHBUTTON, DLGC_WANTARROWS, DLGC_WANTCHARS, DM_GETDEFID, DM_SETDEFID,
-            GCS_COMPSTR, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_EXSTYLE,
-            GWL_STYLE, GWL_USERDATA, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, HTTOPLEFT,
+            GCS_COMPSTR, GWL_EXSTYLE, GWL_STYLE, GWL_USERDATA, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT,
+            GW_HWNDPREV, GW_OWNER, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, HTTOPLEFT,
             HWND_BROADCAST, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, ICON_BIG, ICON_SMALL,
-            ImeCandidateListState, KEY_SHIFT_ANY_SHIFT_FLAG, KEY_STATE_DOWN_FLAG,
-            KEY_STATE_GET_ASYNC_DOWN_FLAG, KEY_STATE_PREV_DOWN_FLAG, MA_ACTIVATE,
-            MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message,
-            PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, SC_CLOSE,
-            SIPF_ON, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT,
-            SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            KEY_SHIFT_ANY_SHIFT_FLAG, KEY_STATE_DOWN_FLAG, KEY_STATE_GET_ASYNC_DOWN_FLAG,
+            KEY_STATE_PREV_DOWN_FLAG, MA_ACTIVATE, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST,
+            MSGSRC_SOFTWARE_SEND, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, SC_CLOSE,
+            SIPF_ON, SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT, SMF_TIMEOUT, SM_CXBORDER, SM_CXSCREEN,
+            SM_CYSCREEN, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
             SWP_SHOWWINDOW, VK_CAPITAL, VK_CONTROL, VK_LCONTROL, VK_LSHIFT, VK_MENU, VK_NUMLOCK,
             VK_SCROLL, VK_SHIFT, WA_ACTIVE, WA_CLICKACTIVE, WA_INACTIVE, WM_ACTIVATE,
             WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CHARTOITEM, WM_CLOSE, WM_COMMAND,
@@ -167,10 +167,11 @@ use wince_emulation_v3::{
         },
     },
     config::RuntimeConfig,
+    Result,
 };
 
 mod support;
-use support::{TestGuestMemory, unique_test_root};
+use support::{unique_test_root, TestGuestMemory};
 
 const ERROR_INVALID_DATA: u32 = 13;
 const MINIMAL_TRUETYPE_FONT_BYTES: &[u8] = b"\x00\x01\x00\x00fake-ce-font";
@@ -2770,18 +2771,14 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
     );
     assert!(kernel.resources.bitmap(indirect.mask_bitmap).is_none());
     assert!(kernel.resources.bitmap(indirect.color_bitmap).is_none());
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, indirect_mask_bits)
-            .is_none()
-    );
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, indirect_color_bits)
-            .is_none()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, indirect_mask_bits)
+        .is_none());
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, indirect_color_bits)
+        .is_none());
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -9658,12 +9655,10 @@ fn coredll_raw_delete_object_frees_owned_dib_section_bits() -> Result<()> {
             .map(|bitmap| bitmap.bits_owned),
         Some(true)
     );
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
-            .is_some()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
+        .is_some());
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -9680,12 +9675,10 @@ fn coredll_raw_delete_object_frees_owned_dib_section_bits() -> Result<()> {
     ));
 
     assert!(kernel.resources.bitmap(bitmap).is_none());
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
-            .is_none()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
+        .is_none());
 
     Ok(())
 }
@@ -9728,12 +9721,10 @@ fn coredll_raw_delete_object_frees_owned_compatible_bitmap_bits() -> Result<()> 
 
     let object = kernel.resources.bitmap(bitmap).expect("bitmap object");
     assert!(object.bits_owned);
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, object.bits_ptr)
-            .is_some()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, object.bits_ptr)
+        .is_some());
     let bits_ptr = object.bits_ptr;
 
     assert!(matches!(
@@ -9751,12 +9742,10 @@ fn coredll_raw_delete_object_frees_owned_compatible_bitmap_bits() -> Result<()> 
     ));
 
     assert!(kernel.resources.bitmap(bitmap).is_none());
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
-            .is_none()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
+        .is_none());
 
     Ok(())
 }
@@ -12823,8 +12812,8 @@ fn coredll_raw_mask_blt_mirrors_negative_destination_height_between_selected_dib
 }
 
 #[test]
-fn coredll_raw_mask_blt_mirrors_negative_destination_width_and_height_between_selected_dibs()
--> Result<()> {
+fn coredll_raw_mask_blt_mirrors_negative_destination_width_and_height_between_selected_dibs(
+) -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
     const WHITENESS: u32 = 0x00ff_0062;
     fn makerop4(foreground: u32, background: u32) -> u32 {
@@ -12888,8 +12877,8 @@ fn coredll_raw_mask_blt_mirrors_negative_destination_width_and_height_between_se
 }
 
 #[test]
-fn coredll_raw_mask_blt_null_mask_mirrors_negative_destination_width_between_selected_dibs()
--> Result<()> {
+fn coredll_raw_mask_blt_null_mask_mirrors_negative_destination_width_between_selected_dibs(
+) -> Result<()> {
     const SRCCOPY: u32 = 0x00cc_0020;
 
     let table = CoredllExportTable::default();
@@ -14943,8 +14932,8 @@ fn coredll_raw_alpha_blend_honors_ce_destination_alpha_negation_between_32bpp_di
 }
 
 #[test]
-fn coredll_raw_alpha_blend_applies_nonpremultiplied_per_pixel_alpha_between_selected_dibs()
--> Result<()> {
+fn coredll_raw_alpha_blend_applies_nonpremultiplied_per_pixel_alpha_between_selected_dibs(
+) -> Result<()> {
     fn blend_function(source_alpha: u8) -> u32 {
         (2u32 << 24) | (u32::from(source_alpha) << 16)
     }
@@ -18104,8 +18093,8 @@ fn coredll_raw_transparent_image_fully_clipped_top_left_framebuffer_is_noop() ->
 }
 
 #[test]
-fn coredll_raw_transparent_image_almost_fully_clipped_top_left_selected_dib_keeps_one_pixel()
--> Result<()> {
+fn coredll_raw_transparent_image_almost_fully_clipped_top_left_selected_dib_keeps_one_pixel(
+) -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
     const WHITE565: u16 = 0xffff;
     const RED565: u16 = 0xf800;
@@ -18170,8 +18159,8 @@ fn coredll_raw_transparent_image_almost_fully_clipped_top_left_selected_dib_keep
 }
 
 #[test]
-fn coredll_raw_transparent_image_almost_fully_clipped_top_left_framebuffer_keeps_one_pixel()
--> Result<()> {
+fn coredll_raw_transparent_image_almost_fully_clipped_top_left_framebuffer_keeps_one_pixel(
+) -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
     const WHITE565: u16 = 0xffff;
     const RED565: u16 = 0xf800;
@@ -19145,8 +19134,8 @@ fn coredll_raw_transparent_image_fully_clipped_bottom_right_framebuffer_is_noop(
 }
 
 #[test]
-fn coredll_raw_transparent_image_almost_fully_clipped_bottom_right_selected_dib_keeps_one_pixel()
--> Result<()> {
+fn coredll_raw_transparent_image_almost_fully_clipped_bottom_right_selected_dib_keeps_one_pixel(
+) -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
     const WHITE565: u16 = 0xffff;
     const RED565: u16 = 0xf800;
@@ -19199,8 +19188,8 @@ fn coredll_raw_transparent_image_almost_fully_clipped_bottom_right_selected_dib_
 }
 
 #[test]
-fn coredll_raw_transparent_image_almost_fully_clipped_bottom_right_framebuffer_keeps_one_pixel()
--> Result<()> {
+fn coredll_raw_transparent_image_almost_fully_clipped_bottom_right_framebuffer_keeps_one_pixel(
+) -> Result<()> {
     const MAGENTA_COLORREF: u32 = 0x00ff_00ff;
     const WHITE565: u16 = 0xffff;
     const RED565: u16 = 0xf800;
@@ -22434,6 +22423,91 @@ fn coredll_raw_translate_charset_info_maps_ce_charset_sources() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_device_information_by_file_handle_reports_serial_identity() -> Result<()> {
+    const ERROR_SUCCESS: u32 = 0;
+    const DEVMGR_DEVICE_INFORMATION_SIZE: u32 = 1584;
+    const LEGACY_NAME_OFFSET: u32 = 12;
+    const DEVICE_KEY_OFFSET: u32 = 24;
+    const DEVICE_NAME_OFFSET: u32 = 544;
+    const BUS_NAME_OFFSET: u32 = 1064;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let path_ptr = 0x1_0000;
+    let info_ptr = 0x1_1000;
+    memory.map_halfwords(path_ptr, 16);
+    memory.map_words(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE / 4);
+    memory.map_halfwords(info_ptr + LEGACY_NAME_OFFSET, 6);
+    memory.map_halfwords(info_ptr + DEVICE_KEY_OFFSET, 260);
+    memory.map_halfwords(info_ptr + DEVICE_NAME_OFFSET, 260);
+    memory.map_halfwords(info_ptr + BUS_NAME_OFFSET, 260);
+    memory.write_wide_z(path_ptr, "COM7:");
+    memory.write_word(info_ptr, DEVMGR_DEVICE_INFORMATION_SIZE);
+
+    let handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW(COM7:) did not return a handle: {other:?}"),
+    };
+    assert_ne!(handle, 0);
+
+    match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE,
+        [handle, info_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        } => {}
+        other => panic!(
+            "GetDeviceInformationByFileHandle failed: {other:?}, last_error={}",
+            kernel.threads.get_last_error(thread_id)
+        ),
+    }
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(memory.read_u32(info_ptr)?, DEVMGR_DEVICE_INFORMATION_SIZE);
+    assert_eq!(memory.read_u32(info_ptr + 4)?, handle);
+    assert_eq!(memory.read_u32(info_ptr + 8)?, 0);
+    assert_eq!(
+        memory.read_wide_z(info_ptr + LEGACY_NAME_OFFSET, 6),
+        "COM7:"
+    );
+    assert_eq!(
+        memory.read_wide_z(info_ptr + DEVICE_KEY_OFFSET, 260),
+        r"Drivers\BuiltIn\COM7"
+    );
+    assert_eq!(
+        memory.read_wide_z(info_ptr + DEVICE_NAME_OFFSET, 260),
+        r"$device\COM7"
+    );
+    assert_eq!(memory.read_wide_z(info_ptr + BUS_NAME_OFFSET, 260), "");
 
     Ok(())
 }
@@ -27071,18 +27145,16 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(child),
-                WM_PAINT,
-                WM_PAINT,
-                wince_emulation_v3::ce::gwe::PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(child),
+            WM_PAINT,
+            WM_PAINT,
+            wince_emulation_v3::ce::gwe::PeekFlags::NO_REMOVE
+        )
+        .is_none());
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -27941,12 +28013,10 @@ fn coredll_raw_windowposchanged_carries_guest_windowpos_payload() -> Result<()> 
     assert_eq!(memory.read_i32(window_pos_ptr + 16)?, 120);
     assert_eq!(memory.read_i32(window_pos_ptr + 20)?, 90);
     assert_eq!(memory.read_u32(window_pos_ptr + 24)?, 0x0004 | 0x0010);
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
-            .is_some()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
+        .is_some());
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -27961,12 +28031,10 @@ fn coredll_raw_windowposchanged_carries_guest_windowpos_payload() -> Result<()> 
             ..
         }
     ));
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
-            .is_none()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
+        .is_none());
 
     Ok(())
 }
@@ -29005,11 +29073,9 @@ fn coredll_raw_message_ipc_state_tracks_source_send_and_timeout() -> Result<()> 
     ));
     kernel.gwe.end_send_message(thread_id);
 
-    assert!(
-        kernel
-            .gwe
-            .queue_sent_message_for_window(hwnd, Message::new(hwnd, WM_USER + 16, 0x16, 0x17, 0))
-    );
+    assert!(kernel
+        .gwe
+        .queue_sent_message_for_window(hwnd, Message::new(hwnd, WM_USER + 16, 0x16, 0x17, 0)));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -29108,12 +29174,10 @@ fn coredll_raw_send_notify_message_is_async_across_threads() -> Result<()> {
         }
     ));
     assert!(!kernel.gwe.is_window(same_thread_hwnd));
-    assert!(
-        kernel
-            .gwe
-            .window(same_thread_hwnd)
-            .is_some_and(|window| window.destroy_message_sent)
-    );
+    assert!(kernel
+        .gwe
+        .window(same_thread_hwnd)
+        .is_some_and(|window| window.destroy_message_sent));
     assert!(!kernel.gwe.in_send_message(caller_thread));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -29221,12 +29285,10 @@ fn coredll_raw_send_notify_message_is_async_across_threads() -> Result<()> {
     ));
     assert!(!kernel.gwe.in_send_message(receiver_thread));
     assert!(!kernel.gwe.is_window(cross_thread_hwnd));
-    assert!(
-        kernel
-            .gwe
-            .window(cross_thread_hwnd)
-            .is_some_and(|window| window.destroy_message_sent)
-    );
+    assert!(kernel
+        .gwe
+        .window(cross_thread_hwnd)
+        .is_some_and(|window| window.destroy_message_sent));
 
     Ok(())
 }
@@ -29817,11 +29879,9 @@ fn coredll_raw_send_message_timeout_same_thread_dispatches_synchronously() -> Re
     );
     kernel.gwe.record_thread_dispatched(thread_id, 0);
     kernel.timers.sleep_ms(5001);
-    assert!(
-        kernel
-            .gwe
-            .is_thread_hung(thread_id, kernel.timers.tick_count(), 5000)
-    );
+    assert!(kernel
+        .gwe
+        .is_thread_hung(thread_id, kernel.timers.tick_count(), 5000));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -29938,11 +29998,9 @@ fn coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction() ->
     );
     kernel.gwe.record_thread_dispatched(receiver_thread, 0);
     kernel.timers.sleep_ms(4999);
-    assert!(
-        !kernel
-            .gwe
-            .is_thread_hung(receiver_thread, kernel.timers.tick_count(), 5000)
-    );
+    assert!(!kernel
+        .gwe
+        .is_thread_hung(receiver_thread, kernel.timers.tick_count(), 5000));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -30613,11 +30671,9 @@ fn coredll_raw_send_message_timeout_block_abortifhung_aborts_when_thread_is_hung
         kernel.create_window_ex_w(receiver_thread, "SMTO_BLOCK_HUNG_CLASS", "", None, 0, 0, 0);
     kernel.gwe.record_thread_dispatched(receiver_thread, 0);
     kernel.timers.sleep_ms(5001);
-    assert!(
-        kernel
-            .gwe
-            .is_thread_hung(receiver_thread, kernel.timers.tick_count(), 5000)
-    );
+    assert!(kernel
+        .gwe
+        .is_thread_hung(receiver_thread, kernel.timers.tick_count(), 5000));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -30673,11 +30729,9 @@ fn coredll_raw_send_message_timeout_abortifhung_only_queues_below_hung_threshold
     );
     kernel.gwe.record_thread_dispatched(receiver_thread, 0);
     kernel.timers.sleep_ms(4999);
-    assert!(
-        !kernel
-            .gwe
-            .is_thread_hung(receiver_thread, kernel.timers.tick_count(), 5000)
-    );
+    assert!(!kernel
+        .gwe
+        .is_thread_hung(receiver_thread, kernel.timers.tick_count(), 5000));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -30779,24 +30833,18 @@ fn coredll_raw_send_message_timeout_broadcast_targets_top_level_windows() -> Res
         0xfeed_cafe,
         "broadcast SendMessageTimeout has no single result to write"
     );
-    assert!(
-        kernel
-            .gwe
-            .sent_message_ids_for_windows(&[same_thread_hwnd])
-            .is_empty()
-    );
-    assert!(
-        kernel
-            .gwe
-            .sent_message_ids_for_windows(&[child_hwnd])
-            .is_empty()
-    );
-    assert!(
-        kernel
-            .gwe
-            .sent_message_ids_for_windows(&[destroyed_hwnd])
-            .is_empty()
-    );
+    assert!(kernel
+        .gwe
+        .sent_message_ids_for_windows(&[same_thread_hwnd])
+        .is_empty());
+    assert!(kernel
+        .gwe
+        .sent_message_ids_for_windows(&[child_hwnd])
+        .is_empty());
+    assert!(kernel
+        .gwe
+        .sent_message_ids_for_windows(&[destroyed_hwnd])
+        .is_empty());
 
     let first = kernel
         .gwe
@@ -30897,12 +30945,10 @@ fn coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows
     assert_eq!(kernel.threads.get_last_error(caller_thread), 0);
 
     assert!(!kernel.gwe.is_window(same_thread_hwnd));
-    assert!(
-        kernel
-            .gwe
-            .window(same_thread_hwnd)
-            .is_some_and(|window| window.destroy_message_sent)
-    );
+    assert!(kernel
+        .gwe
+        .window(same_thread_hwnd)
+        .is_some_and(|window| window.destroy_message_sent));
     assert!(kernel.gwe.is_window(cross_thread_hwnd));
     assert!(kernel.gwe.is_window(child_hwnd));
     assert!(!kernel.gwe.is_window(destroyed_hwnd));
@@ -30931,18 +30977,16 @@ fn coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows
             ..
         } if v == ((QS_SENDMESSAGE << 16) | QS_SENDMESSAGE)
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                receiver_thread,
-                Some(child_hwnd),
-                WM_CLOSE,
-                WM_CLOSE,
-                PeekFlags::NO_REMOVE,
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            receiver_thread,
+            Some(child_hwnd),
+            WM_CLOSE,
+            WM_CLOSE,
+            PeekFlags::NO_REMOVE,
+        )
+        .is_none());
 
     assert_next_message(
         &table,
@@ -30997,12 +31041,10 @@ fn coredll_raw_send_message_records_nc_destroy_lifecycle() -> Result<()> {
         }
     ));
     assert!(kernel.gwe.is_window(hwnd));
-    assert!(
-        kernel
-            .gwe
-            .window(hwnd)
-            .is_some_and(|window| window.destroy_message_sent && !window.nc_destroy_message_sent)
-    );
+    assert!(kernel
+        .gwe
+        .window(hwnd)
+        .is_some_and(|window| window.destroy_message_sent && !window.nc_destroy_message_sent));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -31018,12 +31060,10 @@ fn coredll_raw_send_message_records_nc_destroy_lifecycle() -> Result<()> {
         }
     ));
     assert!(kernel.gwe.is_window(hwnd));
-    assert!(
-        kernel
-            .gwe
-            .window(hwnd)
-            .is_some_and(|window| window.destroy_message_sent && window.nc_destroy_message_sent)
-    );
+    assert!(kernel
+        .gwe
+        .window(hwnd)
+        .is_some_and(|window| window.destroy_message_sent && window.nc_destroy_message_sent));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -31039,12 +31079,10 @@ fn coredll_raw_send_message_records_nc_destroy_lifecycle() -> Result<()> {
         }
     ));
     assert!(!kernel.gwe.is_window(hwnd));
-    assert!(
-        kernel
-            .gwe
-            .window(hwnd)
-            .is_some_and(|window| window.destroy_message_sent && window.nc_destroy_message_sent)
-    );
+    assert!(kernel
+        .gwe
+        .window(hwnd)
+        .is_some_and(|window| window.destroy_message_sent && window.nc_destroy_message_sent));
 
     Ok(())
 }
@@ -32312,11 +32350,9 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
     ));
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 21);
-    assert!(
-        !notifications
-            .iter()
-            .any(|notification| { notification.msg == WM_COMMAND && notification.wparam == 800 })
-    );
+    assert!(!notifications
+        .iter()
+        .any(|notification| { notification.msg == WM_COMMAND && notification.wparam == 800 }));
 
     let submenu_parent = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -32470,11 +32506,9 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             (hwnd, WM_COMMAND, 903, 0),
         ]
     );
-    assert!(
-        notifications
-            .iter()
-            .any(|notification| { notification.msg == WM_COMMAND && notification.wparam == 903 })
-    );
+    assert!(notifications
+        .iter()
+        .any(|notification| { notification.msg == WM_COMMAND && notification.wparam == 903 }));
 
     assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_RIGHT, 0));
     assert!(matches!(
@@ -32490,18 +32524,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_KEYDOWN,
-                WM_KEYDOWN,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 37);
     assert_eq!(
@@ -32574,18 +32606,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_KEYDOWN,
-                WM_KEYDOWN,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 45);
     assert_eq!(
@@ -32695,18 +32725,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_LBUTTONDOWN,
-                WM_LBUTTONUP,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONUP,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 58);
     assert_eq!(
@@ -32742,18 +32770,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_CANCELMODE,
-                WM_CANCELMODE,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_CANCELMODE,
+            WM_CANCELMODE,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 62);
     assert_eq!(
@@ -32791,18 +32817,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_LBUTTONDOWN,
-                WM_LBUTTONUP,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONUP,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 66);
     assert_eq!(
@@ -32846,18 +32870,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_RBUTTONDOWN,
-                WM_RBUTTONUP,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_RBUTTONDOWN,
+            WM_RBUTTONUP,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 70);
     assert_eq!(
@@ -32906,18 +32928,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_MOUSEMOVE,
-                WM_MOUSEMOVE,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_MOUSEMOVE,
+            WM_MOUSEMOVE,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 74);
     assert_eq!(
@@ -32965,18 +32985,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_CHAR,
-                WM_CHAR,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_CHAR,
+            WM_CHAR,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 78);
     assert_eq!(
@@ -33073,18 +33091,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_KEYDOWN,
-                WM_KEYDOWN,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     assert_eq!(
         kernel
             .resources
@@ -33136,18 +33152,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_KEYDOWN,
-                WM_KEYDOWN,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     assert_eq!(
         kernel
             .resources
@@ -33204,18 +33218,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_MOUSEMOVE,
-                WM_MOUSEMOVE,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_MOUSEMOVE,
+            WM_MOUSEMOVE,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     assert_eq!(
         kernel
             .resources
@@ -33471,18 +33483,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_KEYDOWN,
-                WM_KEYDOWN,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     assert_eq!(
         kernel
             .resources
@@ -33776,18 +33786,16 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none(),
         "popup modal pump should dispatch owner non-menu messages before owner selection"
     );
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_KEYDOWN,
-                WM_KEYDOWN,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
     let notifications = kernel.resources.popup_notifications();
     assert_eq!(notifications.len(), 131);
     assert_eq!(
@@ -34334,18 +34342,16 @@ fn coredll_raw_track_popup_menu_tap_opens_submenu_before_selecting() -> Result<(
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_LBUTTONDOWN,
-                WM_LBUTTONUP,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONUP,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
 
     Ok(())
 }
@@ -38393,18 +38399,16 @@ fn coredll_raw_translate_accelerator_honors_modifiers_and_syskey() -> Result<()>
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .peek_message_filtered(
-                thread_id,
-                Some(hwnd),
-                WM_COMMAND,
-                WM_COMMAND,
-                PeekFlags::NO_REMOVE
-            )
-            .is_none()
-    );
+    assert!(kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_COMMAND,
+            WM_COMMAND,
+            PeekFlags::NO_REMOVE
+        )
+        .is_none());
 
     assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_CONTROL, 0));
     assert!(matches!(
@@ -40149,12 +40153,10 @@ fn coredll_raw_def_window_proc_handles_hit_test_and_syscommand_close() -> Result
         }
     ));
     assert!(!kernel.gwe.is_window(hwnd));
-    assert!(
-        kernel
-            .gwe
-            .window(hwnd)
-            .is_some_and(|window| window.destroy_message_sent)
-    );
+    assert!(kernel
+        .gwe
+        .window(hwnd)
+        .is_some_and(|window| window.destroy_message_sent));
 
     Ok(())
 }
@@ -40802,11 +40804,9 @@ fn coredll_raw_msgwait_signaled_handle_precedes_qs_sendmessage() -> Result<()> {
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .has_new_queue_input(receiver_thread, QS_SENDMESSAGE)
-    );
+    assert!(kernel
+        .gwe
+        .has_new_queue_input(receiver_thread, QS_SENDMESSAGE));
 
     Ok(())
 }
@@ -41090,11 +41090,9 @@ fn coredll_raw_msgwait_second_signaled_handle_precedes_qs_allinput() -> Result<(
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .has_new_queue_input(receiver_thread, QS_SENDMESSAGE)
-    );
+    assert!(kernel
+        .gwe
+        .has_new_queue_input(receiver_thread, QS_SENDMESSAGE));
 
     Ok(())
 }
@@ -41454,11 +41452,9 @@ fn coredll_raw_get_update_rgn_copies_pending_paint_bounds() -> Result<()> {
         Some(Rect::default())
     );
 
-    assert!(
-        kernel
-            .gwe
-            .invalidate_window(hwnd, Some(Rect::from_origin_size(10, 12, 30, 22)), true)
-    );
+    assert!(kernel
+        .gwe
+        .invalidate_window(hwnd, Some(Rect::from_origin_size(10, 12, 30, 22)), true));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -42728,11 +42724,9 @@ fn coredll_raw_get_update_queries_consume_pending_erase_only() -> Result<()> {
         Rect::from_origin_size(0, 0, 100, 80),
     );
     assert!(kernel.gwe.validate_window(hwnd));
-    assert!(
-        kernel
-            .gwe
-            .invalidate_window(hwnd, Some(Rect::from_origin_size(5, 6, 30, 20)), true)
-    );
+    assert!(kernel
+        .gwe
+        .invalidate_window(hwnd, Some(Rect::from_origin_size(5, 6, 30, 20)), true));
     assert_eq!(
         kernel.gwe.update_rect(hwnd),
         Some(wince_emulation_v3::ce::gwe::PaintUpdate {
@@ -42785,11 +42779,9 @@ fn coredll_raw_get_update_queries_consume_pending_erase_only() -> Result<()> {
     assert_eq!(memory.read_u32(paint_ptr + 4)?, 0);
     assert!(kernel.gwe.update_rect(hwnd).is_none());
 
-    assert!(
-        kernel
-            .gwe
-            .invalidate_window(hwnd, Some(Rect::from_origin_size(10, 12, 30, 22)), true)
-    );
+    assert!(kernel
+        .gwe
+        .invalidate_window(hwnd, Some(Rect::from_origin_size(10, 12, 30, 22)), true));
     let region = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -43121,11 +43113,9 @@ fn coredll_raw_destroy_parent_invalidates_children_and_purges_messages() -> Resu
     let child = kernel.create_window_ex_w(thread_id, "CHILD", "", Some(parent), 1, 0, 0);
     let grandchild = kernel.create_window_ex_w(thread_id, "GRANDCHILD", "", Some(child), 2, 0, 0);
     assert!(kernel.post_message_w_for_thread(thread_id, grandchild, WM_USER + 6, 1, 2));
-    assert!(
-        kernel
-            .gwe
-            .queue_sent_message_for_window(child, Message::new(child, WM_USER + 7, 3, 4, 0))
-    );
+    assert!(kernel
+        .gwe
+        .queue_sent_message_for_window(child, Message::new(child, WM_USER + 7, 3, 4, 0)));
     assert_eq!(kernel.set_timer(Some(parent), Some(71), 0), 71);
     assert_eq!(kernel.set_timer(Some(child), Some(72), 0), 72);
     assert_eq!(kernel.set_timer(Some(grandchild), Some(73), 0), 73);
@@ -43144,24 +43134,18 @@ fn coredll_raw_destroy_parent_invalidates_children_and_purges_messages() -> Resu
             ..
         }
     ));
-    assert!(
-        kernel
-            .gwe
-            .window(parent)
-            .is_some_and(|window| window.destroy_message_sent)
-    );
-    assert!(
-        kernel
-            .gwe
-            .window(child)
-            .is_some_and(|window| window.destroy_message_sent)
-    );
-    assert!(
-        kernel
-            .gwe
-            .window(grandchild)
-            .is_some_and(|window| window.destroy_message_sent)
-    );
+    assert!(kernel
+        .gwe
+        .window(parent)
+        .is_some_and(|window| window.destroy_message_sent));
+    assert!(kernel
+        .gwe
+        .window(child)
+        .is_some_and(|window| window.destroy_message_sent));
+    assert!(kernel
+        .gwe
+        .window(grandchild)
+        .is_some_and(|window| window.destroy_message_sent));
     let parent_order = kernel
         .gwe
         .window(parent)
@@ -43722,11 +43706,9 @@ fn coredll_raw_visible_caret_invalidates_and_marks_framebuffer_dirty() -> Result
     );
 
     let _ = framebuffer.take_dirty_rects();
-    assert!(
-        kernel
-            .gwe
-            .validate_window_rect(hwnd, Some(Rect::from_origin_size(5, 7, 2, 6)))
-    );
+    assert!(kernel
+        .gwe
+        .validate_window_rect(hwnd, Some(Rect::from_origin_size(5, 7, 2, 6))));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer(
             &mut kernel,
@@ -44452,8 +44434,8 @@ fn coredll_raw_def_window_proc_rbuttondblclk_sends_context_menu() -> Result<()> 
     kernel.gwe.set_window_pos(hwnd, None, 50, 100, 200, 300, 0);
 
     let rbdbl_lparam = (20u32) << 16 | 10u32; // client (10, 20)
-    // WM_RBUTTONDBLCLK generates WM_CONTEXTMENU just like WM_RBUTTONUP.
-    // Top-level window: no parent to forward to, window survives.
+                                              // WM_RBUTTONDBLCLK generates WM_CONTEXTMENU just like WM_RBUTTONUP.
+                                              // Top-level window: no parent to forward to, window survives.
     table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -56202,12 +56184,10 @@ fn coredll_raw_image_list_begin_drag_clones_source_pixels() -> Result<()> {
         .bitmap(drag_bitmap)
         .expect("drag bitmap backing")
         .bits_ptr;
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
-            .is_some()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+        .is_some());
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -56259,12 +56239,10 @@ fn coredll_raw_image_list_begin_drag_clones_source_pixels() -> Result<()> {
     ));
     assert!(kernel.resources.image_list(drag_list).is_none());
     assert!(kernel.resources.bitmap(drag_bitmap).is_none());
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
-            .is_none()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+        .is_none());
 
     Ok(())
 }
@@ -56478,12 +56456,10 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pixels() -> Result<()> {
     ));
     assert!(kernel.resources.image_list(drag_list).is_none());
     assert!(kernel.resources.bitmap(drag_bitmap).is_none());
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
-            .is_none()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+        .is_none());
 
     Ok(())
 }
@@ -56861,12 +56837,10 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pseudo_icon_pixels() -> Resul
     ));
     assert!(kernel.resources.image_list(drag_list).is_none());
     assert!(kernel.resources.bitmap(drag_bitmap).is_none());
-    assert!(
-        kernel
-            .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
-            .is_none()
-    );
+    assert!(kernel
+        .memory
+        .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+        .is_none());
 
     Ok(())
 }
@@ -60276,9 +60250,7 @@ fn coredll_raw_scroll_dc_sets_update_rect_and_region_like_ce() -> Result<()> {
                 &mut memory,
                 thread_id,
                 ORD_SCROLL_DC,
-                [
-                    hdc, dx as u32, dy as u32, scroll_ptr, clip_ptr, region, update_ptr
-                ],
+                [hdc, dx as u32, dy as u32, scroll_ptr, clip_ptr, region, update_ptr],
             ),
             CoredllDispatch::Returned {
                 value: CoredllValue::Bool(true),

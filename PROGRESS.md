@@ -79,6 +79,10 @@ references for historical reconstruction.
 - `MultiByteToWideChar`/`WideCharToMultiByte` now skip host Windows conversion
   calls for zero-flag ASCII input under Korean ACP/UTF-8, preserving explicit
   length and null-terminated return counts.
+- Raw `GetDeviceInformationByDeviceHandle` and
+  `GetDeviceInformationByFileHandle` now resolve through coredll ordinals and
+  write the CE `DEVMGR_DEVICE_INFORMATION` layout for live device handles,
+  including legacy name, registry driver key, and `$device\...` name.
 
 ## Recent Validation
 
@@ -96,6 +100,9 @@ references for historical reconstruction.
   serialization, and `GetHeapSnapshot` heap-list and entry serialization.
 - Focused raw kernel conversion validation covers Korean ACP conversion plus
   ASCII ACP fast-path sizing and explicit-length no-NUL behavior.
+- Focused raw coredll/kernel validation covers device-information success for
+  activated and file-open device handles plus null, short-buffer, and stale
+  handle failures.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.

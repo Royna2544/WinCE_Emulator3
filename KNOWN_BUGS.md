@@ -78,3 +78,6 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
   input dispatch after the CPU is already parked at their resume PC.
 - Receiver/window teardown clears active send stacks for terminated synchronous
   sends.
+- Missing coredll exports for `GetDeviceInformationByDeviceHandle` and
+  `GetDeviceInformationByFileHandle` are closed; they now return CE-style
+  device information for live device handles and covered failure cases.

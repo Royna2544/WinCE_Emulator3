@@ -45,6 +45,9 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
 - Re-check live device traces after the app opens `COM7:`; current splash-phase
   samples still show only repeated `UID1:` IOCTLs, so GPS/sensor data is not yet
   in the active path.
+- Re-run the live startup after the device-information ordinal fix and confirm
+  whether guest device probing now reaches `COM7:` earlier or still remains
+  blocked behind the splash/readiness path.
 
 ## Cleanup Queue
 
