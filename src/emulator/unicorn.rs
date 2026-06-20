@@ -4344,6 +4344,50 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn process_launch_for_image_from_trace(
+        kernel: &CeKernel,
+        module_path: &str,
+        module_host_path: &std::path::Path,
+    ) -> Option<crate::ce::kernel::PendingProcessLaunch> {
+        let host_path = module_host_path.to_string_lossy();
+        let host_path = (!host_path.is_empty()).then_some(host_path.as_ref());
+        let guest_path = (!module_path.is_empty()).then_some(module_path);
+        let image_name = guest_path
+            .or(host_path)
+            .and_then(process_trace_basename)
+            .filter(|name| !name.is_empty())?;
+
+        kernel.recent_process_ops().iter().rev().find_map(|record| {
+            let process_handle = record.process_handle?;
+            if kernel.process_exit_code(process_handle)? != crate::ce::kernel::STILL_ACTIVE {
+                return None;
+            }
+            let matches_image = record.path.as_deref().is_some_and(|path| {
+                host_path.is_some_and(|host_path| path.eq_ignore_ascii_case(host_path))
+                    || process_trace_basename(path)
+                        .is_some_and(|name| name.eq_ignore_ascii_case(image_name))
+            }) || record.application.as_deref().is_some_and(|application| {
+                guest_path.is_some_and(|guest_path| application.eq_ignore_ascii_case(guest_path))
+                    || process_trace_basename(application)
+                        .is_some_and(|name| name.eq_ignore_ascii_case(image_name))
+            });
+            if !matches_image {
+                return None;
+            }
+            Some(crate::ce::kernel::PendingProcessLaunch {
+                application: record.application.clone(),
+                command_line: record.command_line.clone(),
+                current_directory: None,
+                show_cmd: None,
+                process_handle,
+                thread_handle: record.thread_handle?,
+                process_id: record.process_id?,
+                thread_id: record.thread_id?,
+            })
+        })
+    }
+
+    #[cfg(feature = "unicorn")]
     fn parked_process_thread_exit_code(process: &ParkedProcess, kernel: &CeKernel) -> Option<u32> {
         if process.cpu.blocked_modal_message_box.is_some() {
             return None;
@@ -5023,8 +5067,9 @@ impl UnicornMips {
             .and_then(|module| module.guest_path.clone())
             .filter(|path| !path.is_empty())
             .unwrap_or(process_module_path);
-        let module_host_path = process_module_host_path
-            .or_else(|| loaded_image.and_then(|module| module.host_path.clone()))
+        let module_host_path = loaded_image
+            .and_then(|module| module.host_path.clone())
+            .or(process_module_host_path)
             .unwrap_or_default();
         let mut process_state = kernel.current_process_state();
         let preserve_kernel_process_state =
@@ -5037,35 +5082,49 @@ impl UnicornMips {
                     && snapshot.trap_ordinal
                         == Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
             });
+        let mut image_launch = None;
         if !preserve_kernel_process_state {
-            let owned_threads = self.tracked_thread_ids();
-            let windows = kernel.gwe.windows_snapshot();
-            let mut inferred_process_ids = Vec::new();
-            for window in &windows {
-                if window.destroyed
-                    || window.process_id == 0
-                    || !owned_threads.contains(&window.thread_id)
+            image_launch =
+                Self::process_launch_for_image_from_trace(kernel, &module_path, &module_host_path);
+            if let Some(launch) = image_launch.as_ref() {
+                if launch.process_id != process_state.process_id {
+                    process_state = crate::ce::kernel::CurrentProcessState {
+                        process_id: launch.process_id,
+                        exit_code: crate::ce::kernel::STILL_ACTIVE,
+                        signaled: false,
+                    };
+                }
+            } else {
+                let owned_threads = self.tracked_thread_ids();
+                let windows = kernel.gwe.windows_snapshot();
+                let mut inferred_process_ids = Vec::new();
+                for window in &windows {
+                    if window.destroyed
+                        || window.process_id == 0
+                        || !owned_threads.contains(&window.thread_id)
+                    {
+                        continue;
+                    }
+                    if !inferred_process_ids.contains(&window.process_id) {
+                        inferred_process_ids.push(window.process_id);
+                    }
+                }
+                if let Some(process_id) = inferred_process_ids
+                    .first()
+                    .copied()
+                    .filter(|_| inferred_process_ids.len() == 1)
+                    .filter(|process_id| *process_id != process_state.process_id)
                 {
-                    continue;
+                    process_state = crate::ce::kernel::CurrentProcessState {
+                        process_id,
+                        exit_code: crate::ce::kernel::STILL_ACTIVE,
+                        signaled: false,
+                    };
                 }
-                if !inferred_process_ids.contains(&window.process_id) {
-                    inferred_process_ids.push(window.process_id);
-                }
-            }
-            if let Some(process_id) = inferred_process_ids
-                .first()
-                .copied()
-                .filter(|_| inferred_process_ids.len() == 1)
-                .filter(|process_id| *process_id != process_state.process_id)
-            {
-                process_state = crate::ce::kernel::CurrentProcessState {
-                    process_id,
-                    exit_code: crate::ce::kernel::STILL_ACTIVE,
-                    signaled: false,
-                };
             }
         }
-        let active_launch = Self::process_launch_from_trace(kernel, process_state.process_id);
+        let active_launch = image_launch
+            .or_else(|| Self::process_launch_from_trace(kernel, process_state.process_id));
         ParkedProcess {
             application: Some(module_path.clone()),
             process_handle: active_launch.as_ref().map(|launch| launch.process_handle),
@@ -28201,6 +28260,53 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn park_current_process_reconciles_stale_kernel_state_from_loaded_child_image() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            Some("iNavi|SDMMC Disk\\mapdata".to_owned()),
+        );
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0010_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+
+        let mut cpu = UnicornMips::new()?;
+        cpu.set_initial_thread_id(launch.thread_id);
+        cpu.current_thread_id = launch.thread_id;
+        cpu.entry_image_base = Some(0x0040_0000);
+        cpu.loaded_modules.push(LoadedPeModuleInfo {
+            name: "happyway_win.exe".to_owned(),
+            base: 0x0040_0000,
+            guest_path: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            host_path: Some(std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+            )),
+            ..Default::default()
+        });
+
+        let parked = cpu.park_current_process(&kernel);
+
+        assert_eq!(parked.process_state.process_id, launch.process_id);
+        assert_eq!(parked.process_handle, Some(launch.process_handle));
+        assert_eq!(parked.thread_handle, Some(launch.thread_handle));
+        assert_eq!(parked.module_path, "\\SDMMC Disk\\INavi\\happyway_win.exe");
+        assert_eq!(
+            parked.module_host_path,
+            std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe")
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn prune_active_process_removes_parked_duplicate_thread() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -42408,6 +42514,10 @@ fn cstring_wide_preview<D>(
 
 fn format_trace_string(value: &str) -> String {
     format!("{value:?}")
+}
+
+fn process_trace_basename(path: &str) -> Option<&str> {
+    path.rsplit(['\\', '/']).find(|part| !part.is_empty())
 }
 
 fn format_optional_hwnd(hwnd: Option<u32>) -> String {
