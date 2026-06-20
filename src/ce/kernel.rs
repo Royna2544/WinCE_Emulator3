@@ -20,6 +20,7 @@ use crate::{
             WM_WINDOWPOSCHANGED, WindowPos,
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
+        nled::NledSystem,
         object::{
             CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject, FileChangeNotificationObject,
             FileChangeRecord, FileObject, FindFileObject, HandleTable, KernelObject,
@@ -207,6 +208,7 @@ pub struct CeKernel {
     pub shell: ShellSystem,
     pub com: ComSystem,
     pub memory: MemorySystem,
+    pub nled: NledSystem,
     pub remote_server: Option<RemoteServer>,
     process_module_base: u32,
     process_module_path: String,
@@ -974,6 +976,7 @@ impl CeKernel {
             shell: ShellSystem::default(),
             com: ComSystem::default(),
             memory: MemorySystem::default(),
+            nled: NledSystem::default(),
             remote_server: None,
             process_module_base: 0,
             process_module_path: "\\FakeCE\\process.exe".to_owned(),

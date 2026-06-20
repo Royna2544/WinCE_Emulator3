@@ -14,6 +14,7 @@ pub mod kernel;
 #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
 pub mod linux_x11_desktop;
 pub mod memory;
+pub mod nled;
 pub mod object;
 pub mod ole;
 pub mod registry;

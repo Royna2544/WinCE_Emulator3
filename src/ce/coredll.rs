@@ -29,6 +29,7 @@ use crate::{
             MessageQueueOptions, MessageQueueReadStatus, MessageQueueWriteStatus,
         },
         memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
+        nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
             CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
             ThreadSuspendResult,
@@ -7080,16 +7081,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_NLED_GET_DEVICE_INFO => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
-        ORD_NLED_SET_DEVICE => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_NLED_GET_DEVICE_INFO => Some(CoredllValue::Bool(nled_get_device_info_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_NLED_SET_DEVICE => Some(CoredllValue::Bool(nled_set_device_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SET_PROP => {
             // SetProp(hwnd, atom_or_string, hData)
             let hwnd = raw_arg(args, 0);
@@ -53719,6 +53716,106 @@ fn set_abort_proc_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, abort_pro
 
     kernel.threads.set_last_error(thread_id, 0);
     1
+}
+
+fn nled_get_device_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let info_id = raw_arg(args, 0);
+    let output_ptr = raw_arg(args, 1);
+    let ok = match info_id {
+        NledSystem::COUNT_INFO_ID => memory
+            .write_u32(output_ptr, kernel.nled.led_count())
+            .is_ok(),
+        NledSystem::SUPPORTS_INFO_ID => memory
+            .read_u32(output_ptr)
+            .ok()
+            .and_then(|led_num| kernel.nled.supports_info(led_num))
+            .is_some_and(|info| write_nled_supports_info(memory, output_ptr, info)),
+        NledSystem::SETTINGS_INFO_ID => memory
+            .read_u32(output_ptr)
+            .ok()
+            .and_then(|led_num| kernel.nled.settings_info(led_num))
+            .is_some_and(|info| write_nled_settings_info(memory, output_ptr, info)),
+        _ => false,
+    };
+
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_PARAMETER });
+    ok
+}
+
+fn nled_set_device_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let info_id = raw_arg(args, 0);
+    let input_ptr = raw_arg(args, 1);
+    let ok = info_id == NledSystem::SETTINGS_INFO_ID
+        && read_nled_settings_info(memory, input_ptr)
+            .is_some_and(|info| kernel.nled.set_device(info));
+
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_PARAMETER });
+    ok
+}
+
+fn write_nled_supports_info<M: CoredllGuestMemory>(
+    memory: &mut M,
+    ptr: u32,
+    info: NledSupportsInfo,
+) -> bool {
+    [
+        memory.write_u32(ptr, info.led_num),
+        memory.write_u32(ptr.wrapping_add(4), info.cycle_adjust as u32),
+        memory.write_u32(ptr.wrapping_add(8), u32::from(info.adjust_total_cycle_time)),
+        memory.write_u32(ptr.wrapping_add(12), u32::from(info.adjust_on_time)),
+        memory.write_u32(ptr.wrapping_add(16), u32::from(info.adjust_off_time)),
+        memory.write_u32(ptr.wrapping_add(20), u32::from(info.meta_cycle_on)),
+        memory.write_u32(ptr.wrapping_add(24), u32::from(info.meta_cycle_off)),
+    ]
+    .into_iter()
+    .all(|result| result.is_ok())
+}
+
+fn write_nled_settings_info<M: CoredllGuestMemory>(
+    memory: &mut M,
+    ptr: u32,
+    info: NledSettingsInfo,
+) -> bool {
+    [
+        memory.write_u32(ptr, info.led_num),
+        memory.write_u32(ptr.wrapping_add(4), info.off_on_blink as u32),
+        memory.write_u32(ptr.wrapping_add(8), info.total_cycle_time as u32),
+        memory.write_u32(ptr.wrapping_add(12), info.on_time as u32),
+        memory.write_u32(ptr.wrapping_add(16), info.off_time as u32),
+        memory.write_u32(ptr.wrapping_add(20), info.meta_cycle_on as u32),
+        memory.write_u32(ptr.wrapping_add(24), info.meta_cycle_off as u32),
+    ]
+    .into_iter()
+    .all(|result| result.is_ok())
+}
+
+fn read_nled_settings_info<M: CoredllGuestMemory>(
+    memory: &M,
+    ptr: u32,
+) -> Option<NledSettingsInfo> {
+    Some(NledSettingsInfo {
+        led_num: memory.read_u32(ptr).ok()?,
+        off_on_blink: memory.read_u32(ptr.wrapping_add(4)).ok()? as i32,
+        total_cycle_time: memory.read_u32(ptr.wrapping_add(8)).ok()? as i32,
+        on_time: memory.read_u32(ptr.wrapping_add(12)).ok()? as i32,
+        off_time: memory.read_u32(ptr.wrapping_add(16)).ok()? as i32,
+        meta_cycle_on: memory.read_u32(ptr.wrapping_add(20)).ok()? as i32,
+        meta_cycle_off: memory.read_u32(ptr.wrapping_add(24)).ok()? as i32,
+    })
 }
 
 fn normalize_rect(rect: Rect) -> Rect {

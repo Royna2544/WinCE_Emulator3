@@ -28,6 +28,16 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\nled.h`,
+  `C:\WINCE600\PLATFORM\DEVICEEMULATOR\SRC\DRIVERS\NLEDDRVR\snled.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\NLEDDRVR\MDD\nleddrvr.cpp`, and
+  `C:\WINCE600\PRIVATE\TEST\BASEOS\DRIVERS\LED\BVT\NLEDTEST\tests.cpp`:
+  raw `NLedGetDeviceInfo`/`NLedSetDevice` now model the CE Device Emulator's
+  two notification devices instead of returning unsupported or unconditional
+  success. Coverage verifies count/supports/settings queries, invalid IDs,
+  null/unmapped buffers, invalid LED numbers, `ERROR_INVALID_PARAMETER`
+  reporting, and validated settings round-trips with CE-style total cycle
+  recomputation.
 - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\doc.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\MGDI\INC\dc.hpp`, and
   `C:\WINCE600\PUBLIC\DIRECTX\SDK\SAMPLES\DXMISC\DXVIEW\dxprint.c`:

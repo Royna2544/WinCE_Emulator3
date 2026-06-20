@@ -44,24 +44,24 @@ use wince_emulation_v3::{
             ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_CURSOR_W, ORD_LOAD_IMAGE_W,
             ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
             ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE, ORD_PEEK_MESSAGE_W,
-            ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER,
-            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE, ORD_REGISTER_CLIPBOARD_FORMAT_W,
-            ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
-            ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD, ORD_SELECT_OBJECT,
-            ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS,
-            ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS,
-            ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
-            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
-            ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
-            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
-            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
-            ORD_SLEEP_TILL_TICK, ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS,
-            ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
-            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
-            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
-            ORD_WRITE_MSG_QUEUE,
+            ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE, ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W,
+            ORD_OPEN_MSG_QUEUE, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM,
+            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE,
+            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX,
+            ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD,
+            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
+            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
+            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
+            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
+            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
+            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
+            ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS,
+            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
+            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
+            ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_MSG_QUEUE,
         },
         devices::{
             CommDcb, DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind,
@@ -103,6 +103,222 @@ use wince_emulation_v3::{
 
 mod support;
 use support::{TestGuestMemory, unique_test_root};
+
+#[test]
+fn coredll_raw_nled_device_emulator_get_set_round_trips() -> Result<()> {
+    const NLED_COUNT_INFO_ID: u32 = 0;
+    const NLED_SUPPORTS_INFO_ID: u32 = 1;
+    const NLED_SETTINGS_INFO_ID: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let info_ptr = 0x2100;
+    memory.map_words(info_ptr, 7);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_GET_DEVICE_INFO,
+            [0xfeed, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_GET_DEVICE_INFO,
+            [NLED_SUPPORTS_INFO_ID, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_GET_DEVICE_INFO,
+            [NLED_COUNT_INFO_ID, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info_ptr)?, 2);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_word(info_ptr, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_GET_DEVICE_INFO,
+            [NLED_SUPPORTS_INFO_ID, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info_ptr)?, 0);
+    assert_eq!(memory.read_u32(info_ptr + 4)?, 100);
+    assert_eq!(memory.read_u32(info_ptr + 8)?, 0);
+    assert_eq!(memory.read_u32(info_ptr + 12)?, 1);
+    assert_eq!(memory.read_u32(info_ptr + 16)?, 1);
+    assert_eq!(memory.read_u32(info_ptr + 20)?, 0);
+    assert_eq!(memory.read_u32(info_ptr + 24)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_word(info_ptr, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_GET_DEVICE_INFO,
+            [NLED_SUPPORTS_INFO_ID, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info_ptr)?, 1);
+    assert_eq!(memory.read_u32(info_ptr + 4)?, 0xffff_ffff);
+    for offset in [8, 12, 16, 20, 24] {
+        assert_eq!(memory.read_u32(info_ptr + offset)?, 0);
+    }
+
+    memory.write_word(info_ptr, 2);
+    for info_id in [NLED_SUPPORTS_INFO_ID, NLED_SETTINGS_INFO_ID] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_NLED_GET_DEVICE_INFO,
+                [info_id, info_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
+    }
+
+    memory.write_word(info_ptr, 0);
+    memory.write_word(info_ptr + 4, 2);
+    memory.write_word(info_ptr + 8, 0);
+    memory.write_word(info_ptr + 12, 300);
+    memory.write_word(info_ptr + 16, 700);
+    memory.write_word(info_ptr + 20, 0);
+    memory.write_word(info_ptr + 24, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_SET_DEVICE,
+            [NLED_SETTINGS_INFO_ID, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_word(info_ptr, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_GET_DEVICE_INFO,
+            [NLED_SETTINGS_INFO_ID, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info_ptr)?, 0);
+    assert_eq!(memory.read_u32(info_ptr + 4)?, 2);
+    assert_eq!(memory.read_u32(info_ptr + 8)?, 1000);
+    assert_eq!(memory.read_u32(info_ptr + 12)?, 300);
+    assert_eq!(memory.read_u32(info_ptr + 16)?, 700);
+    assert_eq!(memory.read_u32(info_ptr + 20)?, 0);
+    assert_eq!(memory.read_u32(info_ptr + 24)?, 0);
+
+    memory.write_word(info_ptr, 0);
+    memory.write_word(info_ptr + 4, 1);
+    memory.write_word(info_ptr + 12, 0xffff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_SET_DEVICE,
+            [NLED_SETTINGS_INFO_ID, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NLED_SET_DEVICE,
+            [NLED_SUPPORTS_INFO_ID, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
 
 #[test]
 fn coredll_raw_enum_device_interfaces_exposes_advertised_interfaces() -> Result<()> {
