@@ -956,7 +956,8 @@ fn rotate_idle_active_to_visible_parked(
     desktop: &mut DesktopRuntime,
 ) -> bool {
     if !cpu.active_process_has_receiver_work(kernel)
-        && cpu.rotate_to_visible_window_parked_process(kernel)
+        && (cpu.rotate_to_visible_window_parked_process(kernel)
+            || cpu.rotate_to_next_parked_process(kernel))
     {
         publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
         return true;

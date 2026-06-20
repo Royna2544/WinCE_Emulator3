@@ -10,6 +10,7 @@
       "type": "serial",
       "backend": "win32_com",
       "host": "COM21",
+      "remote_gps": true,
       "enabled": true,
       "note": "Drivers\\BuiltIn\\VSP, VSP.dll, real GPS NMEA output confirmed, 9600 8N1; host COM21 is the GPS Sensor"
     },
@@ -17,7 +18,6 @@
       "guest": "COM7:",
       "type": "serial",
       "backend": "stub",
-      "remote_gps": true,
       "enabled": true,
       "note": "Drivers\\BuiltIn\\Serial7 compatibility stub"
     },
