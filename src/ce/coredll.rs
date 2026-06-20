@@ -28402,8 +28402,14 @@ fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let Some(cb_size) = read_guest_u32(kernel, memory, thread_id, data_ptr) else {
+    let Some(data_cb_size) = read_guest_u32(kernel, memory, thread_id, data_ptr) else {
         return false;
+    };
+    let trap_cb_size = raw_arg(args, 2);
+    let cb_size = if trap_cb_size != 0 {
+        data_cb_size.min(trap_cb_size)
+    } else {
+        data_cb_size
     };
     if cb_size < NOTIFYICONDATA_FIXED_SIZE_W {
         kernel

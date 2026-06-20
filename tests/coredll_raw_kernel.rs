@@ -20530,6 +20530,80 @@ fn shell_notify_icon_add_respects_member_flags() -> Result<()> {
 }
 
 #[test]
+fn shell_notify_icon_uses_trap_size_to_bound_optional_state() -> Result<()> {
+    const NIM_ADD: u32 = 0;
+    const NIM_MODIFY: u32 = 1;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const NIF_STATE: u32 = 0x0000_0008;
+    const CE_NID_SIZE: u32 = 152;
+    const EXTENDED_NID_SIZE: u32 = 160;
+    const NID_TIP_OFFSET: u32 = 24;
+    const NID_STATE_OFFSET: u32 = 152;
+    const NID_STATE_MASK_OFFSET: u32 = 156;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHELL_NOTIFY_TRAP_SIZE", "", None, 0, 0, 0);
+    let data = 0x2_a800;
+    memory.map_words(data, EXTENDED_NID_SIZE / 4);
+    memory.map_halfwords(data + NID_TIP_OFFSET, 64);
+    memory.write_word(data, EXTENDED_NID_SIZE);
+    memory.write_word(data + 4, hwnd);
+    memory.write_word(data + 8, 13);
+    memory.write_word(data + 12, NIF_TIP | NIF_STATE);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "CE-sized trap");
+    memory.write_word(data + NID_STATE_OFFSET, 0xffff_ffff);
+    memory.write_word(data + NID_STATE_MASK_OFFSET, 0xffff_ffff);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data, CE_NID_SIZE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let icon = kernel.shell.notify_icon(hwnd, 13).expect("notify icon");
+    assert_eq!(icon.tip, "CE-sized trap");
+    assert_eq!(
+        icon.state, 0,
+        "CE shell trap size should prevent reading optional state bytes"
+    );
+
+    memory.write_word(data + 12, NIF_STATE);
+    memory.write_word(data + NID_STATE_OFFSET, 0x2);
+    memory.write_word(data + NID_STATE_MASK_OFFSET, 0x2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_MODIFY, data, CE_NID_SIZE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let icon = kernel.shell.notify_icon(hwnd, 13).expect("notify icon");
+    assert_eq!(
+        icon.state, 0,
+        "CE-sized modify should leave extended state untouched"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn shell_notify_icon_requires_ce_fixed_notifyicondata_size() -> Result<()> {
     const NIM_ADD: u32 = 0;
     const NIF_TIP: u32 = 0x0000_0004;

@@ -616,6 +616,14 @@ notes when it is still needed for implementation.
   RT_GROUP_ICON entries by choosing 32x32 and 16x16 resources instead of
   blindly extracting directory entries 0 and 1, while preserving CE's partial
   missing-resource behavior.
+- `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mshellap.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`, and
+  `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\TASKMAN\minserver.cpp`: raw
+  `Shell_NotifyIcon` now respects CE's shell-service marshal size when present,
+  capping optional fields beyond the 152-byte `NOTIFYICONDATAW` contract so
+  stale extended state bytes are ignored for CE-sized trap calls. Coverage
+  verifies add and modify calls with an extended caller buffer but a CE-sized
+  service frame.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
   raw `ImageList_GetImageInfo` now separates invalid image-list handles from
   invalid image indices/null output buffers and leaves the caller's
