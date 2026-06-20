@@ -6,7 +6,8 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
 
 - Trace the current iNavi splash/map transition generically: identify the CE
   wait, event, message, window state, or readiness condition that should hide,
-  destroy, or demote the owned splash popup above hidden map children.
+  destroy, or demote the splash/window stack after remote input is delivered
+  and stale visible-message callouts are cleared.
 - Disassemble/sample the current hot guest PCs around `0x0030f948`,
   `0x00339da8`, and `0x0034432c` against the real `iNavi.exe` to separate
   normal resource lookup from a repeated readiness wait.

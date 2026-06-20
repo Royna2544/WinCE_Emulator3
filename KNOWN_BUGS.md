@@ -6,9 +6,10 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 
 - iNavi route-flow completion remains open beyond process startup, shell
   readiness, real splash rendering, remote input delivery, and initial hidden
-  map child-window creation. The owned splash popup still remains above the map
-  children, so the missing behavior is likely a CE wait/event/message/window
-  transition or app readiness signal.
+  map child-window creation. The latest live sample has no pending WndProc
+  returns and remote touch routes to the main iNavi window stack, but the real
+  splash artwork still remains visible, so the missing behavior is likely a CE
+  wait/event/message/window transition or app readiness signal.
 - Scheduler/message semantics are not complete for every reentrant wait,
   cancellation, nested send, abort-if-hung, modal-loop, and cross-thread
   result-delivery combination.
@@ -44,6 +45,9 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
   (`happyway_win.exe+0x7b56c`) inside traffic/shared-memory initialization; the
   remaining delay is not explained by unreadable MessageBox UI, remote input
   routing, or sensor queuing.
+- The stale `happyway_win` escaped visible-message callout no longer remains
+  in `pending-wndproc`; keep watching for fresh send-stack or wait-state leaks
+  before treating the splash transition as purely app readiness.
 
 ## Build And Validation Risks
 
@@ -66,4 +70,6 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 - Stale parked `GetMessage` waiters no longer force short host idle-poll slices
   while active guest CPU work is runnable.
 - Remote GPS input drains into the open `COM7:` serial handle in the current
-  live path, and remote touch reaches the real splash popup.
+  live path, and remote touch reaches the real iNavi window stack.
+- Stale escaped visible-message WndProc callouts no longer block later visible
+  input dispatch after the CPU is already parked at their resume PC.

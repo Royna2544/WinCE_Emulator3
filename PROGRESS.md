@@ -55,13 +55,19 @@ references for historical reconstruction.
   active guest context is runnable.
 - Current live runs reach real iNavi splash/resource state, hidden map child
   windows, open `COM7:`, and remote GPS bytes drain into the serial queue.
-- Remote taps are delivered to the real owned splash popup (`0x00020008`).
-  The remaining visible blocker is the guest-side transition that should hide,
-  destroy, or demote that popup above the map children.
-- Current 2026-06-20 live samples show the splash phase can still be reached
-  before `COM7:` opens; touch/key input is consumed by the owned splash, while
-  the app continues resource/window setup (`resmapi_800x480.bin` memory-backed
-  opens and hidden `afxwnd42u` child creation).
+- Remote taps are accepted by the live server and now route through the main
+  iNavi splash/window stack after stale visible-message cleanup.
+- Escaped visible-message WndProc callouts are now retired before the
+  visible-dispatch gate decides whether pending callbacks block new input. The
+  live `happyway_win` stale `OrphanedVisibleMessage` case now clears, leaving
+  `pending wndproc returns: 0`.
+- Current live taps route to the main iNavi splash/window stack with accepted
+  remote key/touch posts; the framebuffer still shows the real iNavi splash
+  artwork, so the remaining issue is after message dispatch has resumed.
+- Current 2026-06-21 live samples show the splash phase persists after
+  touch/key input is accepted and routed; the app continues resource/window
+  setup (`resmapi_800x480.bin` memory-backed opens and hidden `afxwnd42u` child
+  creation).
 - Elevated `cargo flamegraph` startup samples still stop in the real
   `happyway_win.exe+0x7b56c` traffic/shared-memory fill loop; the live-pump
   visible-window readiness check no longer clones the full GWE window list on
