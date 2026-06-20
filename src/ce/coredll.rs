@@ -23571,6 +23571,7 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
             | IOCTL_DISK_GET_STORAGEID
+            | IOCTL_DISK_FLUSH_CACHE
     );
     if !handled {
         return None;
@@ -23636,6 +23637,7 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             output_capacity,
             returned_ptr,
         ),
+        IOCTL_DISK_FLUSH_CACHE => disk_flush_cache_raw(kernel, memory, thread_id, returned_ptr),
         _ => unreachable!(),
     })
 }
@@ -23738,6 +23740,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
             | IOCTL_DISK_GET_STORAGEID
+            | IOCTL_DISK_FLUSH_CACHE
     );
     if !handled {
         return None;
@@ -23803,8 +23806,22 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             output_capacity,
             returned_ptr,
         ),
+        IOCTL_DISK_FLUSH_CACHE => disk_flush_cache_raw(kernel, memory, thread_id, returned_ptr),
         _ => unreachable!(),
     })
+}
+
+fn disk_flush_cache_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    returned_ptr: u32,
+) -> bool {
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn partition_disk_info_raw<M: CoredllGuestMemory>(

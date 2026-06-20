@@ -130,9 +130,10 @@ notes when it is still needed for implementation.
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: partition-handle
   `DeviceIoControl` now exposes CE-shaped cached disk metadata for mounted
   host-backed partitions. Coverage verifies `IOCTL_DISK_GETINFO`,
-  `IOCTL_DISK_DEVICE_INFO`, and `IOCTL_DISK_GETNAME` through an opened
-  partition handle, including byte counts, profile/device flags, mounted
-  volume names, and insufficient-buffer rejection for disk names.
+  `IOCTL_DISK_DEVICE_INFO`, `IOCTL_DISK_GETNAME`, and
+  `IOCTL_DISK_FLUSH_CACHE` through an opened partition handle, including byte
+  counts, profile/device flags, mounted volume names, zero-byte flush success,
+  and insufficient-buffer rejection for disk names.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`,
@@ -141,9 +142,9 @@ notes when it is still needed for implementation.
   `DeviceIoControl` now exposes the cached disk paths CE uses before
   partition mounting. Coverage verifies `IOCTL_DISK_GETINFO` with shared
   in/out `DISK_INFO`, cached `IOCTL_DISK_DEVICE_INFO`, store
-  `IOCTL_DISK_GETNAME`/`DISK_IOCTL_GETNAME`, byte counts, mounted
-  profile/device flags, and invalid cached-device-info/name no-touch
-  behavior.
+  `IOCTL_DISK_GETNAME`/`DISK_IOCTL_GETNAME`, `IOCTL_DISK_FLUSH_CACHE`, byte
+  counts, mounted profile/device flags, zero-byte flush success, and invalid
+  cached-device-info/name no-touch behavior.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: store and partition
