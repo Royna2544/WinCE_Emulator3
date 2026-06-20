@@ -22,6 +22,17 @@ See `PLAN.MD`, `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md` for the current
 roadmap and durable project memory. Source evidence is indexed in
 `SOURCE_REFERENCES.md`.
 
+## Active Frontiers
+
+- CE-backed GDI parity: bitmap creation, DIB color tables, alpha-preserving
+  blits, compatible bitmap behavior, printer abort callbacks, and font
+  enumeration validation.
+- Message and windowing parity: hotkeys, modal loops, cross-thread sends,
+  scheduler waits, and the runtime transition from splash/resource loading to
+  map interaction.
+- Storage and device parity: mounted file behavior, FSDMGR surfaces, serial GPS
+  input, and sensor/device notification timing.
+
 ## Basic Commands
 
 Run the base bootstrap:
