@@ -149,6 +149,16 @@ notes when it is still needed for implementation.
   storage-identification path. Coverage verifies the CE-layout
   `STORAGE_IDENTIFICATION` size/flags, byte counts, and invalid short-output
   rejection before any caller-buffer writes.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: raw StoreMgr management
+  ordinals now validate store and partition handles/names instead of being
+  inert exports. Coverage verifies safe host-backed semantics: mount and
+  dismount of the already-mounted synthetic partition are no-op successes,
+  store/partition layout mutations fail with `ERROR_GEN_FAILURE`, empty
+  partition names fail with `ERROR_BAD_ARGUMENTS`, and missing partition
+  deletion follows `ERROR_FILE_NOT_FOUND`.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now

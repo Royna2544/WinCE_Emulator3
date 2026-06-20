@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 110] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 121] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13861,6 +13861,14 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 110] = &[
         ordinal: ORD_OPEN_STORE,
     },
     CoredllOrdinalDef {
+        name: "DismountStore",
+        ordinal: ORD_DISMOUNT_STORE,
+    },
+    CoredllOrdinalDef {
+        name: "FormatStore",
+        ordinal: ORD_FORMAT_STORE,
+    },
+    CoredllOrdinalDef {
         name: "FindFirstStore",
         ordinal: ORD_FIND_FIRST_STORE,
     },
@@ -13877,8 +13885,36 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 110] = &[
         ordinal: ORD_GET_STORE_INFO,
     },
     CoredllOrdinalDef {
+        name: "CreatePartition",
+        ordinal: ORD_CREATE_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "CreatePartitionEx",
+        ordinal: ORD_CREATE_PARTITION_EX,
+    },
+    CoredllOrdinalDef {
+        name: "DeletePartition",
+        ordinal: ORD_DELETE_PARTITION,
+    },
+    CoredllOrdinalDef {
         name: "OpenPartition",
         ordinal: ORD_OPEN_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "MountPartition",
+        ordinal: ORD_MOUNT_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "DismountPartition",
+        ordinal: ORD_DISMOUNT_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "RenamePartition",
+        ordinal: ORD_RENAME_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "SetPartitionAttributes",
+        ordinal: ORD_SET_PARTITION_ATTRIBUTES,
     },
     CoredllOrdinalDef {
         name: "FindFirstPartition",
@@ -13895,6 +13931,14 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 110] = &[
     CoredllOrdinalDef {
         name: "GetPartitionInfo",
         ordinal: ORD_GET_PARTITION_INFO,
+    },
+    CoredllOrdinalDef {
+        name: "FormatPartition",
+        ordinal: ORD_FORMAT_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "FormatPartitionEx",
+        ordinal: ORD_FORMAT_PARTITION_EX,
     },
     CoredllOrdinalDef {
         name: "RegistryGetDword",

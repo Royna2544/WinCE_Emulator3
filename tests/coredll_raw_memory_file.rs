@@ -15,23 +15,25 @@ use wince_emulation_v3::{
             ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION, ORD_CEIL, ORD_CHAR_LOWER_BUFF_W,
             ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK,
             ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS, ORD_COSH, ORD_CREATE_DIRECTORY_W,
-            ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W, ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE,
-            ORD_DELETE_FILE_W, ORD_DEREGISTER_AFS, ORD_DEREGISTER_AFSNAME, ORD_DEVICE_IO_CONTROL,
-            ORD_DPA_CLONE, ORD_DPA_CREATE, ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK,
-            ORD_DPA_ENUM_CALLBACK, ORD_DPA_GET_PTR, ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD,
-            ORD_DPCMP, ORD_DPDIV, ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL,
-            ORD_DSA_CLONE, ORD_DSA_CREATE, ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK,
-            ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM,
-            ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION,
-            ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH,
-            ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
-            ORD_FIND_CLOSE_PARTITION, ORD_FIND_CLOSE_STORE, ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
-            ORD_FIND_FIRST_FILE_W, ORD_FIND_FIRST_PARTITION, ORD_FIND_FIRST_STORE,
-            ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FIND_NEXT_PARTITION,
-            ORD_FIND_NEXT_STORE, ORD_FLOOR, ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE,
-            ORD_FLUSH_VIEW_OF_FILE, ORD_FLUSH_VIEW_OF_FILE_MAYBE, ORD_FMOD, ORD_FMODF, ORD_FOPEN,
-            ORD_FPADD, ORD_FPCMP, ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP, ORD_FPTOLI,
-            ORD_FPTOUL, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES,
+            ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W, ORD_CREATE_PARTITION,
+            ORD_CREATE_PARTITION_EX, ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W,
+            ORD_DELETE_PARTITION, ORD_DEREGISTER_AFS, ORD_DEREGISTER_AFSNAME,
+            ORD_DEVICE_IO_CONTROL, ORD_DISMOUNT_PARTITION, ORD_DISMOUNT_STORE, ORD_DPA_CLONE,
+            ORD_DPA_CREATE, ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK, ORD_DPA_ENUM_CALLBACK,
+            ORD_DPA_GET_PTR, ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV,
+            ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE,
+            ORD_DSA_CREATE, ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK, ORD_DSA_ENUM_CALLBACK,
+            ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE,
+            ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL,
+            ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
+            ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_CLOSE_PARTITION, ORD_FIND_CLOSE_STORE,
+            ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W, ORD_FIND_FIRST_PARTITION,
+            ORD_FIND_FIRST_STORE, ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W,
+            ORD_FIND_NEXT_PARTITION, ORD_FIND_NEXT_STORE, ORD_FLOOR, ORD_FLUSH_FILE_BUFFERS,
+            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE, ORD_FLUSH_VIEW_OF_FILE_MAYBE,
+            ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FORMAT_PARTITION, ORD_FORMAT_PARTITION_EX,
+            ORD_FORMAT_STORE, ORD_FPADD, ORD_FPCMP, ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP,
+            ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES,
             ORD_GET_COMM_MODEM_STATUS, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W,
             ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE,
             ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W, ORD_GET_PARTITION_INFO,
@@ -44,23 +46,24 @@ use wince_emulation_v3::{
             ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS,
             ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
             ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX, ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC,
-            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W,
-            ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES, ORD_OPEN_PARTITION,
-            ORD_OPEN_STORE, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
-            ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY,
-            ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND, ORD_READ_FILE,
-            ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W,
-            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W,
-            ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W,
-            ORD_REG_SET_VALUE_EX_W, ORD_REGISTER_AFSEX, ORD_REGISTER_AFSNAME,
-            ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING,
-            ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD,
-            ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC,
-            ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE,
-            ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W,
-            ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK,
-            ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W,
-            ORD_SET_FILE_TIME, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH,
+            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET,
+            ORD_MOUNT_PARTITION, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED,
+            ORD_NES, ORD_OPEN_PARTITION, ORD_OPEN_STORE, ORD_OPERATOR_DELETE,
+            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW,
+            ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND,
+            ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
+            ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W,
+            ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W,
+            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_REGISTER_AFSEX,
+            ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD,
+            ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING,
+            ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
+            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC,
+            ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
+            ORD_REMOVE_DIRECTORY_W, ORD_RENAME_PARTITION, ORD_SECURITY_GEN_COOKIE,
+            ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W,
+            ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME,
+            ORD_SET_PARTITION_ATTRIBUTES, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH,
             ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY,
             ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK,
             ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN, ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER,
@@ -3813,7 +3816,9 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE: u32 = 1 << 30;
     const STORAGE_DEVICE_FLAG_READWRITE: u32 = 1 << 0;
     const STORAGE_DEVICE_FLAG_READONLY: u32 = 1 << 1;
+    const ERROR_GEN_FAILURE: u32 = 31;
     const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    const ERROR_BAD_ARGUMENTS: u32 = 160;
     const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
 
     let table = CoredllExportTable::default();
@@ -4182,6 +4187,119 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_face);
     assert_eq!(memory.read_bytes(storage_id_ptr, 16), vec![0xa5; 16]);
 
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FORMAT_STORE,
+            [store_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISMOUNT_STORE,
+            [store_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+
+    memory.write_wide_z(name_ptr, "NewPart");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PARTITION,
+            [store_handle, name_ptr, 0x04, 0, 16, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PARTITION_EX,
+            [store_handle, name_ptr, 0x04, 0, 16, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+
+    memory.write_wide_z(name_ptr, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PARTITION,
+            [store_handle, name_ptr, 0x04, 0, 16, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_BAD_ARGUMENTS
+    );
+
+    memory.write_wide_z(name_ptr, "MissingPartition");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_PARTITION,
+            [store_handle, name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    memory.write_wide_z(name_ptr, "SDMMC Disk");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_PARTITION,
+            [store_handle, name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+
     memory.write_wide_z(name_ptr, "SDMMC Disk");
     let partition_handle = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -4212,6 +4330,128 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         }
     ));
     assert_sd_partition(&memory);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MOUNT_PARTITION,
+            [partition_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISMOUNT_PARTITION,
+            [partition_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    memory.write_bytes(partition_info_ptr, &[0x6d; PARTITION_INFO_SIZE as usize]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PARTITION_INFO,
+            [partition_handle, partition_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_sd_partition(&memory);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_PARTITION_ATTRIBUTES,
+            [partition_handle, PARTITION_ATTRIBUTE_MOUNTED],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+
+    memory.write_wide_z(name_ptr, "Renamed");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RENAME_PARTITION,
+            [partition_handle, name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+    memory.write_wide_z(name_ptr, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RENAME_PARTITION,
+            [partition_handle, name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_BAD_ARGUMENTS
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FORMAT_PARTITION,
+            [partition_handle, 0x04, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FORMAT_PARTITION_EX,
+            [partition_handle, 0x04, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_GEN_FAILURE);
 
     memory.write_bytes(volume_info_ptr, &[0x7b; CE_VOLUME_INFO_SIZE as usize]);
     memory.write_word(bytes_returned_ptr, 0xfeed_beef);

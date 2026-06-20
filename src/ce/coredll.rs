@@ -200,6 +200,7 @@ const BLOCK_STATUS_READONLY: u32 = 0x04;
 const BLOCK_STATUS_RESERVED: u32 = 0x08;
 const BLOCK_STATUS_XIP: u32 = 0x10;
 const ERROR_GEN_FAILURE: u32 = 31;
+const ERROR_BAD_ARGUMENTS: u32 = 160;
 const ERROR_DEVICE_REMOVED: u32 = 1617;
 const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
 const CE_VOLUME_INFO_LEVEL_STANDARD: u32 = 0;
@@ -2118,9 +2119,36 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_STORE_INFO => Some(CoredllValue::Bool(get_store_info_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_DISMOUNT_STORE => Some(CoredllValue::Bool(store_layout_operation_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_FORMAT_STORE => Some(CoredllValue::Bool(store_layout_operation_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_CREATE_PARTITION | ORD_CREATE_PARTITION_EX => Some(CoredllValue::Bool(
+            create_partition_raw(kernel, memory, thread_id, args),
+        )),
+        ORD_DELETE_PARTITION => Some(CoredllValue::Bool(delete_partition_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_OPEN_PARTITION => Some(CoredllValue::Handle(open_partition_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_MOUNT_PARTITION => Some(CoredllValue::Bool(mount_partition_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_DISMOUNT_PARTITION => Some(CoredllValue::Bool(dismount_partition_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_RENAME_PARTITION => Some(CoredllValue::Bool(rename_partition_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SET_PARTITION_ATTRIBUTES => Some(CoredllValue::Bool(set_partition_attributes_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_FORMAT_PARTITION | ORD_FORMAT_PARTITION_EX => Some(CoredllValue::Bool(
+            format_partition_raw(kernel, thread_id, args),
+        )),
         ORD_FIND_FIRST_PARTITION => Some(CoredllValue::Handle(find_first_partition_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -10429,6 +10457,188 @@ fn get_store_info_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn store_guest_root_for_handle(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    handle: u32,
+) -> Option<String> {
+    match kernel.handles.get(handle) {
+        Ok(KernelObject::Store(store)) => Some(store.guest_root.clone()),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            None
+        }
+    }
+}
+
+fn validate_store_handle(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> Option<String> {
+    let guest_root = store_guest_root_for_handle(kernel, thread_id, handle)?;
+    if kernel
+        .files
+        .store_manager_info_for_guest_root(&guest_root)
+        .is_none()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return None;
+    }
+    Some(guest_root)
+}
+
+fn partition_identity_for_handle(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    handle: u32,
+) -> Option<(String, String)> {
+    match kernel.handles.get(handle) {
+        Ok(KernelObject::Partition(partition)) => {
+            let store_guest_root = partition.store_guest_root.clone();
+            let partition_name = partition.partition_name.clone();
+            if kernel
+                .files
+                .partition_manager_info_for_store_and_name(&store_guest_root, &partition_name)
+                .is_some()
+            {
+                Some((store_guest_root, partition_name))
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+                None
+            }
+        }
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            None
+        }
+    }
+}
+
+fn read_partition_name_arg<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    name_ptr: u32,
+) -> Option<String> {
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_BAD_ARGUMENTS);
+        return None;
+    };
+    if name.is_empty() || name.encode_utf16().count() >= PARTITION_NAME_CHARS {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_BAD_ARGUMENTS);
+        return None;
+    }
+    Some(name)
+}
+
+fn store_layout_operation_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if validate_store_handle(kernel, thread_id, raw_arg(args, 0)).is_none() {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_GEN_FAILURE);
+    false
+}
+
+fn create_partition_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    if validate_store_handle(kernel, thread_id, raw_arg(args, 0)).is_none() {
+        return false;
+    }
+    if read_partition_name_arg(kernel, memory, thread_id, raw_arg(args, 1)).is_none() {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_GEN_FAILURE);
+    false
+}
+
+fn delete_partition_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(store_guest_root) = validate_store_handle(kernel, thread_id, raw_arg(args, 0)) else {
+        return false;
+    };
+    let Some(partition_name) = read_partition_name_arg(kernel, memory, thread_id, raw_arg(args, 1))
+    else {
+        return false;
+    };
+    if kernel
+        .files
+        .partition_manager_info_for_store_and_name(&store_guest_root, &partition_name)
+        .is_none()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_GEN_FAILURE);
+    false
+}
+
+fn mount_partition_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if partition_identity_for_handle(kernel, thread_id, raw_arg(args, 0)).is_none() {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn dismount_partition_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if partition_identity_for_handle(kernel, thread_id, raw_arg(args, 0)).is_none() {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn rename_partition_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    if partition_identity_for_handle(kernel, thread_id, raw_arg(args, 0)).is_none() {
+        return false;
+    }
+    if read_partition_name_arg(kernel, memory, thread_id, raw_arg(args, 1)).is_none() {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_GEN_FAILURE);
+    false
+}
+
+fn set_partition_attributes_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if partition_identity_for_handle(kernel, thread_id, raw_arg(args, 0)).is_none() {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_GEN_FAILURE);
+    false
+}
+
+fn format_partition_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if partition_identity_for_handle(kernel, thread_id, raw_arg(args, 0)).is_none() {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_GEN_FAILURE);
+    false
 }
 
 fn open_partition_raw<M: CoredllGuestMemory>(
