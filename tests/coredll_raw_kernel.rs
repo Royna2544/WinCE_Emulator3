@@ -3809,16 +3809,32 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
     const THSNAP_SIZE: u32 = 60;
     const PROCESSENTRY32_SIZE: u32 = 564;
+    const MODULEENTRY32_SIZE: u32 = 1076;
     const THREADENTRY32_SIZE: u32 = 36;
     const PROCESSENTRY32_EXE_OFFSET: u32 = 36;
     const INVALID_TOOLHELP_SNAPSHOT: u32 = 0xffff_ffff;
     const TH32CS_SNAPHEAPLIST: u32 = 0x0000_0001;
     const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+    const TH32CS_SNAPMODULE: u32 = 0x0000_0008;
     const TH32HEAPLIST_SIZE: u32 = 24;
     const HEAPENTRY32_SIZE: u32 = 36;
     const HF32_DEFAULT: u32 = 1;
     const LF32_FIXED: u32 = 1;
 
+    let toolhelp_module_base = 0x6200_0000;
+    kernel.register_loaded_module_with_metadata(
+        "toolhelp_mod.dll",
+        toolhelp_module_base,
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            guest_path: Some(r"\Windows\toolhelp_mod.dll".to_owned()),
+            image_size: 0x12_3000,
+            ref_count: 3,
+            dynamic: true,
+            ..LoadedModuleMetadata::default()
+        },
+    );
     let heap_alloc_a = kernel
         .memory
         .heap_alloc(PROCESS_HEAP_HANDLE, 0, 32)
@@ -3883,6 +3899,62 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         read_guest_wide_z(&memory, launch_entry + PROCESSENTRY32_EXE_OFFSET, 260),
         "raw-child.exe"
     );
+    let module_snapshot = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_THCREATE_SNAPSHOT,
+        [TH32CS_SNAPMODULE, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("expected THCreateSnapshot module handle, got {other:?}"),
+    };
+    assert_ne!(module_snapshot, 0);
+    assert_ne!(module_snapshot, INVALID_TOOLHELP_SNAPSHOT);
+    assert_eq!(
+        read_guest_le_u32(&memory, module_snapshot + 4),
+        THSNAP_SIZE + MODULEENTRY32_SIZE
+    );
+    assert_eq!(read_guest_le_u32(&memory, module_snapshot + 16), 0);
+    assert_eq!(read_guest_le_u32(&memory, module_snapshot + 20), 1);
+    assert_eq!(read_guest_le_u32(&memory, module_snapshot + 24), 0);
+    assert_eq!(
+        read_guest_le_u32(&memory, module_snapshot + 28),
+        TH32CS_SNAPMODULE
+    );
+    let module_entry = module_snapshot + THSNAP_SIZE;
+    assert_eq!(read_guest_le_u32(&memory, module_entry), MODULEENTRY32_SIZE);
+    assert_eq!(
+        read_guest_le_u32(&memory, module_entry + 4),
+        toolhelp_module_base
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, module_entry + 8),
+        kernel.current_process_id()
+    );
+    assert_eq!(read_guest_le_u32(&memory, module_entry + 12), 3);
+    assert_eq!(read_guest_le_u32(&memory, module_entry + 16), 3);
+    assert_eq!(
+        read_guest_le_u32(&memory, module_entry + 20),
+        toolhelp_module_base
+    );
+    assert_eq!(read_guest_le_u32(&memory, module_entry + 24), 0x12_3000);
+    assert_eq!(
+        read_guest_le_u32(&memory, module_entry + 28),
+        toolhelp_module_base
+    );
+    assert_eq!(
+        read_guest_wide_z(&memory, module_entry + 32, 260),
+        "toolhelp_mod.dll"
+    );
+    assert_eq!(
+        read_guest_wide_z(&memory, module_entry + 552, 260),
+        r"\Windows\toolhelp_mod.dll"
+    );
+    assert_eq!(read_guest_le_u32(&memory, module_entry + 1072), 0);
     let thread_snapshot = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -3943,6 +4015,58 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         read_guest_le_u32(&memory, launch_thread_entry + 32),
         launch.process_id
     );
+    let module_snapshot = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_THCREATE_SNAPSHOT,
+        [TH32CS_SNAPMODULE, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("expected THCreateSnapshot module handle, got {other:?}"),
+    };
+    assert_ne!(module_snapshot, 0);
+    assert_ne!(module_snapshot, INVALID_TOOLHELP_SNAPSHOT);
+    let module_count = read_guest_le_u32(&memory, module_snapshot + 20);
+    assert!(module_count >= 1);
+    assert_eq!(read_guest_le_u32(&memory, module_snapshot + 16), 0);
+    assert_eq!(read_guest_le_u32(&memory, module_snapshot + 24), 0);
+    assert_eq!(
+        read_guest_le_u32(&memory, module_snapshot + 28),
+        TH32CS_SNAPMODULE
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, module_snapshot + 4),
+        THSNAP_SIZE + module_count * MODULEENTRY32_SIZE
+    );
+    let module_entry = (0..module_count)
+        .map(|index| module_snapshot + THSNAP_SIZE + index * MODULEENTRY32_SIZE)
+        .find(|entry| read_guest_le_u32(&memory, *entry + 20) == toolhelp_module_base)
+        .expect("registered module entry");
+    assert_eq!(read_guest_le_u32(&memory, module_entry), MODULEENTRY32_SIZE);
+    assert_eq!(
+        read_guest_le_u32(&memory, module_entry + 4),
+        toolhelp_module_base
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, module_entry + 8),
+        kernel.current_process_id()
+    );
+    assert_eq!(read_guest_le_u32(&memory, module_entry + 12), 3);
+    assert_eq!(read_guest_le_u32(&memory, module_entry + 16), 3);
+    assert_eq!(read_guest_le_u32(&memory, module_entry + 24), 0x12_3000);
+    assert_eq!(
+        read_guest_wide_z(&memory, module_entry + 32, 260),
+        "toolhelp_mod.dll"
+    );
+    assert_eq!(
+        read_guest_wide_z(&memory, module_entry + 552, 260),
+        r"\Windows\toolhelp_mod.dll"
+    );
+    assert_eq!(read_guest_le_u32(&memory, module_entry + 1072), 0);
     let heap_snapshot_bytes = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,

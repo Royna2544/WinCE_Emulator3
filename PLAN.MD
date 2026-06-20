@@ -51,6 +51,12 @@ notes when it is still needed for implementation.
   snapshots now append CE-layout `THREADENTRY32` records after the process
   slice. Coverage verifies thread IDs, owner process IDs, current-process IDs,
   sizes, and current/launched thread coverage.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\toolhelp.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: `TH32CS_SNAPMODULE`
+  snapshots now append CE-layout `MODULEENTRY32` records from live loaded
+  modules. Coverage verifies module IDs, owner process IDs, base/size fields,
+  refcounts, names, guest paths, and flags.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`
@@ -58,6 +64,13 @@ notes when it is still needed for implementation.
   of returning only process rows. Coverage verifies process rows are still
   included for thread snapshots, current and launched child thread IDs,
   owner/current process IDs, and thread-entry sizing.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`
+  now appends CE-layout `MODULEENTRY32` rows for `TH32CS_SNAPMODULE`.
+  Coverage verifies module-count/header placement, module IDs/handles,
+  process IDs, ref counts, image base/size, short module names, full guest
+  paths, and flags.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,

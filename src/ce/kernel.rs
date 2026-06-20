@@ -696,6 +696,18 @@ pub struct ToolhelpThreadSnapshot {
     pub current_process_id: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolhelpModuleSnapshot {
+    pub module_id: u32,
+    pub process_id: u32,
+    pub ref_count: u32,
+    pub base: u32,
+    pub size: u32,
+    pub flags: u32,
+    pub name: String,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CurrentProcessState {
     pub process_id: u32,
@@ -2295,6 +2307,29 @@ impl CeKernel {
             flags,
             current_process_id: owner_process_id,
         }
+    }
+
+    pub fn toolhelp_module_snapshots(&self, process_id: u32) -> Vec<ToolhelpModuleSnapshot> {
+        self.loaded_modules
+            .values()
+            .filter(|module| !module.unload_pending)
+            .map(|module| {
+                let path = module
+                    .guest_path
+                    .clone()
+                    .unwrap_or_else(|| module.name.clone());
+                ToolhelpModuleSnapshot {
+                    module_id: module.base,
+                    process_id,
+                    ref_count: module.ref_count,
+                    base: module.base,
+                    size: module.image_size,
+                    flags: 0,
+                    name: toolhelp_process_basename(&module.name),
+                    path,
+                }
+            })
+            .collect()
     }
 
     pub fn current_process_state(&self) -> CurrentProcessState {

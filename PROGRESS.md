@@ -34,6 +34,9 @@ references for historical reconstruction.
 - Toolhelp thread snapshots now expose current and launched thread entries,
   owner process IDs, priorities, and state flags through raw `THCreateSnapshot`
   memory blocks.
+- Toolhelp module snapshots now expose live loaded-module entries, image bases,
+  sizes, refcounts, names, and guest paths through raw `THCreateSnapshot`
+  memory blocks.
 - Toolhelp heap snapshots now append live process heap lists and fixed heap
   allocation entries through raw `GetHeapSnapshot` memory blocks.
 
@@ -63,8 +66,8 @@ references for historical reconstruction.
 - Focused raw kernel ordinal validation covers duplicated process handles,
   shared process exit state, and process memory read/write copies.
 - Focused raw kernel ordinal validation covers `THCreateSnapshot` success and
-  invalid requested-process failure, thread-entry serialization, and
-  `GetHeapSnapshot` heap-list and entry serialization.
+  invalid requested-process failure, thread-entry serialization, module-entry
+  serialization, and `GetHeapSnapshot` heap-list and entry serialization.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.

@@ -27,7 +27,7 @@ use crate::{
         kernel::{
             CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
             MessageQueueOptions, MessageQueueReadStatus, MessageQueueWriteStatus,
-            ToolhelpProcessSnapshot, ToolhelpThreadSnapshot,
+            ToolhelpModuleSnapshot, ToolhelpProcessSnapshot, ToolhelpThreadSnapshot,
         },
         keybd::{
             KBDI_AUTOREPEAT_INFO_ID, KBDI_AUTOREPEAT_SELECTIONS_INFO_ID, KBDI_KEYBOARD_STATUS_ID,
@@ -57022,6 +57022,7 @@ fn write_process_memory_raw<M: CoredllGuestMemory>(
 
 const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
 const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+const TH32CS_SNAPMODULE: u32 = 0x0000_0008;
 const THSNAP_SIZE: usize = 60;
 const THSNAP_RESERVE: u32 = 0x0040_0000;
 const PROCESSENTRY32_SIZE: usize = 564;
@@ -57061,6 +57062,7 @@ fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
     }
 
     let include_processes = flags & (TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD) != 0;
+    let include_modules = flags & TH32CS_SNAPMODULE != 0;
     let include_threads = flags & TH32CS_SNAPTHREAD != 0;
     let process_count = if include_processes {
         process_snapshots.len()
@@ -57072,9 +57074,17 @@ fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
     } else {
         Vec::new()
     };
+    let module_snapshots = if include_modules {
+        kernel
+            .toolhelp_module_snapshots(requested_process_id_for_snapshot(kernel, requested_process))
+    } else {
+        Vec::new()
+    };
+    let module_count = module_snapshots.len();
     let thread_count = thread_snapshots.len();
     let snapshot_size = THSNAP_SIZE
         + process_count.saturating_mul(PROCESSENTRY32_SIZE)
+        + module_count.saturating_mul(MODULEENTRY32_SIZE)
         + thread_count.saturating_mul(THREADENTRY32_SIZE);
     let Some(snapshot_size_u32) = u32::try_from(snapshot_size).ok() else {
         kernel
@@ -57100,6 +57110,7 @@ fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
     put_le_u32(&mut bytes, 8, allocation_size);
     put_le_u32(&mut bytes, 12, THSNAP_RESERVE.max(allocation_size));
     put_le_u32(&mut bytes, 16, process_count as u32);
+    put_le_u32(&mut bytes, 20, module_count as u32);
     put_le_u32(&mut bytes, 24, thread_count as u32);
     put_le_u32(&mut bytes, 28, flags);
     if include_processes {
@@ -57112,12 +57123,30 @@ fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
         }
     }
     if include_threads {
-        let thread_base = THSNAP_SIZE + process_count * PROCESSENTRY32_SIZE;
+        let thread_base =
+            THSNAP_SIZE + process_count * PROCESSENTRY32_SIZE + module_count * MODULEENTRY32_SIZE;
+        let module_base = THSNAP_SIZE + process_count * PROCESSENTRY32_SIZE;
+        for (index, module) in module_snapshots.iter().enumerate() {
+            write_module_entry32(
+                &mut bytes[module_base + index * MODULEENTRY32_SIZE
+                    ..module_base + (index + 1) * MODULEENTRY32_SIZE],
+                module,
+            );
+        }
         for (index, thread) in thread_snapshots.iter().enumerate() {
             write_thread_entry32(
                 &mut bytes[thread_base + index * THREADENTRY32_SIZE
                     ..thread_base + (index + 1) * THREADENTRY32_SIZE],
                 thread,
+            );
+        }
+    } else if include_modules {
+        let module_base = THSNAP_SIZE + process_count * PROCESSENTRY32_SIZE;
+        for (index, module) in module_snapshots.iter().enumerate() {
+            write_module_entry32(
+                &mut bytes[module_base + index * MODULEENTRY32_SIZE
+                    ..module_base + (index + 1) * MODULEENTRY32_SIZE],
+                module,
             );
         }
     }
@@ -57140,11 +57169,22 @@ fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
         thread_id,
         flags = format_args!("0x{flags:08x}"),
         process_count,
+        module_count,
         thread_count,
         snapshot = format_args!("0x{base:08x}"),
         "THCreateSnapshot"
     );
     base
+}
+
+fn requested_process_id_for_snapshot(kernel: &CeKernel, requested_process: u32) -> u32 {
+    if requested_process == 0 {
+        kernel.current_process_id()
+    } else {
+        kernel
+            .process_id_for_handle(requested_process)
+            .unwrap_or(requested_process)
+    }
 }
 
 fn get_heap_snapshot_raw<M: CoredllGuestMemory>(
@@ -57335,6 +57375,20 @@ fn write_process_entry32(entry: &mut [u8], process: &ToolhelpProcessSnapshot) {
         &process.name,
     );
     put_le_u32(entry, 556, process.memory_base);
+}
+
+fn write_module_entry32(entry: &mut [u8], module: &ToolhelpModuleSnapshot) {
+    put_le_u32(entry, 0, MODULEENTRY32_SIZE as u32);
+    put_le_u32(entry, 4, module.module_id);
+    put_le_u32(entry, 8, module.process_id);
+    put_le_u32(entry, 12, module.ref_count);
+    put_le_u32(entry, 16, module.ref_count);
+    put_le_u32(entry, 20, module.base);
+    put_le_u32(entry, 24, module.size);
+    put_le_u32(entry, 28, module.base);
+    put_wide_z(entry, 32, MAX_PATH_WCHARS, &module.name);
+    put_wide_z(entry, 552, MAX_PATH_WCHARS, &module.path);
+    put_le_u32(entry, 1072, module.flags);
 }
 
 fn write_thread_entry32(entry: &mut [u8], thread: &ToolhelpThreadSnapshot) {
