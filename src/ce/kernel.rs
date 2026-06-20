@@ -288,6 +288,7 @@ pub struct CeKernel {
     next_afs_mount_index: u32,
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
     next_fsdmgr_volume_lock: u32,
+    file_system_notification_callback: Option<u32>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
     system_power_state_name: Option<String>,
     system_power_state_flags: u32,
@@ -1125,6 +1126,7 @@ impl CeKernel {
             next_afs_mount_index: FIRST_USER_AFS_INDEX,
             fsdmgr_volume_locks: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
+            file_system_notification_callback: None,
             modal_dialog_results: BTreeMap::new(),
             system_power_state_name: None,
             system_power_state_flags: 0x0001_0000,
@@ -1150,6 +1152,14 @@ impl CeKernel {
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
         self.runtime_loader_stats
+    }
+
+    pub fn register_file_system_notification_callback(&mut self, callback: u32) {
+        self.file_system_notification_callback = (callback != 0).then_some(callback);
+    }
+
+    pub fn file_system_notification_callback(&self) -> Option<u32> {
+        self.file_system_notification_callback
     }
 
     pub fn set_system_power_state(&mut self, name: Option<String>, flags: u32) {

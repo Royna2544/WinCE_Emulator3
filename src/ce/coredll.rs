@@ -3944,12 +3944,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION => Some(CoredllValue::Bool(
+            ce_register_file_system_notification_raw(kernel, thread_id, args),
+        )),
         ORD_GET_SYSTEM_MEMORY_DIVISION => Some(CoredllValue::Bool(get_system_memory_division_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -10209,6 +10206,16 @@ fn fs_io_control_copy_external_raw<M: CoredllGuestMemory>(
         .threads
         .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
     false
+}
+
+fn ce_register_file_system_notification_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    kernel.register_file_system_notification_callback(raw_arg(args, 0));
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn write_ce_volume_info<M: CoredllGuestMemory>(

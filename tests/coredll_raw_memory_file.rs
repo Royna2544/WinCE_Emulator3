@@ -12,8 +12,9 @@ use wince_emulation_v3::{
             ORD_AFS_REMOVE_DIRECTORY_W, ORD_AFS_SET_FILE_ATTRIBUTES_W, ORD_AFS_SET_FILE_SECURITY_W,
             ORD_AFS_UNMOUNT, ORD_ASIN, ORD_ATAN, ORD_ATAN2, ORD_ATOF, ORD_ATOI,
             ORD_CE_FS_IO_CONTROL_W, ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_VOLUME_INFO_W,
-            ORD_CEIL, ORD_CHAR_LOWER_BUFF_W, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W,
-            ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS,
+            ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION, ORD_CEIL, ORD_CHAR_LOWER_BUFF_W,
+            ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK,
+            ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS,
             ORD_COSH, ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W,
             ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W, ORD_DEREGISTER_AFS,
             ORD_DEREGISTER_AFSNAME, ORD_DEVICE_IO_CONTROL, ORD_DPA_CLONE, ORD_DPA_CREATE,
@@ -5263,6 +5264,69 @@ fn coredll_raw_copy_file_w_copies_between_ce_paths() -> Result<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_ce_register_file_system_notification_stores_callback() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    assert_eq!(kernel.file_system_notification_callback(), None);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION,
+            [0x8000_1234],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(
+        kernel.file_system_notification_callback(),
+        Some(0x8000_1234)
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION,
+            [0x8000_5678],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.file_system_notification_callback(),
+        Some(0x8000_5678)
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.file_system_notification_callback(), None);
     Ok(())
 }
 

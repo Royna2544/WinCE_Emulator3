@@ -86,6 +86,13 @@ notes when it is still needed for implementation.
   falling through to generic device dispatch. Coverage verifies mounted-file
   volume names, byte counts, last error, and invalid parameter no-touch
   behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdmain.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\extfile.h`: raw
+  `CeRegisterFileSystemNotification` now follows CE's storage-manager wrapper
+  by accepting and retaining the shell file-change callback pointer instead of
+  returning unsupported. Coverage verifies callback registration, replacement,
+  clearing by zero, and successful last-error behavior.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now
