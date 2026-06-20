@@ -5,6 +5,8 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
+            ORD_BATTERY_DRVR_GET_LEVELS, ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION,
+            ORD_BATTERY_GET_LIFE_TIME_INFO, ORD_BATTERY_NOTIFY_OF_TIME_CHANGE,
             ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
             ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY,
             ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
@@ -25,23 +27,23 @@ use wince_emulation_v3::{
             ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
-            ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
-            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
-            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
-            ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
-            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
-            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
-            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
-            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
-            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE,
-            ORD_IMAGE_LIST_GET_IMAGE_COUNT, ORD_IMAGE_LIST_GET_IMAGE_INFO,
-            ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE, ORD_IMAGE_LIST_REMOVE,
-            ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
-            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_ICON_SIZE,
-            ORD_IMAGE_LIST_SET_IMAGE_COUNT, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
-            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_POWER_STATUS_EX,
+            ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
+            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
+            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD,
+            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
+            ORD_IMAGE_LIST_COPY_DITHER_IMAGE, ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY,
+            ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE,
+            ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX,
+            ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG,
+            ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
+            ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
+            ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_IMAGE_LIST_SET_BK_COLOR, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            ORD_IMAGE_LIST_SET_ICON_SIZE, ORD_IMAGE_LIST_SET_IMAGE_COUNT,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
             ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
             ORD_LOAD_CURSOR_W, ORD_LOAD_IMAGE_W, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W,
@@ -108,6 +110,194 @@ use wince_emulation_v3::{
 
 mod support;
 use support::{TestGuestMemory, unique_test_root};
+
+#[test]
+fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
+    const STATUS_EX_SIZE: u32 = 24;
+    const STATUS_EX2_SIZE: u32 = 56;
+    const AC_LINE_ONLINE: u8 = 0x01;
+    const BATTERY_FLAG_NO_BATTERY: u8 = 0x80;
+    const BATTERY_PERCENTAGE_UNKNOWN: u8 = 0xff;
+    const BATTERY_CHEMISTRY_UNKNOWN: u8 = 0xff;
+    const BATTERY_LIFE_UNKNOWN: u32 = 0xffff_ffff;
+
+    fn le_u32(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ])
+    }
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let status_ex = 0x3000_1000;
+    let status_ex2 = 0x3000_1100;
+    let last_change = 0x3000_1200;
+    let cpu_usage = 0x3000_1240;
+    let previous_cpu_usage = 0x3000_1244;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_POWER_STATUS_EX,
+            [0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_POWER_STATUS_EX,
+            [status_ex, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let status = memory.read_bytes(status_ex, STATUS_EX_SIZE as usize);
+    assert_eq!(status[0], AC_LINE_ONLINE);
+    assert_eq!(status[1], BATTERY_FLAG_NO_BATTERY);
+    assert_eq!(status[2], BATTERY_PERCENTAGE_UNKNOWN);
+    assert_eq!(status[3], 0);
+    assert_eq!(le_u32(&status, 4), BATTERY_LIFE_UNKNOWN);
+    assert_eq!(le_u32(&status, 8), BATTERY_LIFE_UNKNOWN);
+    assert_eq!(status[12], 0);
+    assert_eq!(status[13], BATTERY_FLAG_NO_BATTERY);
+    assert_eq!(status[14], BATTERY_PERCENTAGE_UNKNOWN);
+    assert_eq!(status[15], 0);
+    assert_eq!(le_u32(&status, 16), BATTERY_LIFE_UNKNOWN);
+    assert_eq!(le_u32(&status, 20), BATTERY_LIFE_UNKNOWN);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_POWER_STATUS_EX2,
+            [0, STATUS_EX2_SIZE, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_POWER_STATUS_EX2,
+            [status_ex2, 32, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(32),
+            ..
+        }
+    ));
+    let partial = memory.read_bytes(status_ex2, 32);
+    assert_eq!(partial[0], AC_LINE_ONLINE);
+    assert_eq!(partial[1], BATTERY_FLAG_NO_BATTERY);
+    assert_eq!(le_u32(&partial, 24), 0);
+    assert_eq!(le_u32(&partial, 28), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_POWER_STATUS_EX2,
+            [status_ex2, 64, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(STATUS_EX2_SIZE),
+            ..
+        }
+    ));
+    let full = memory.read_bytes(status_ex2, STATUS_EX2_SIZE as usize);
+    assert_eq!(full[52], BATTERY_CHEMISTRY_UNKNOWN);
+
+    match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_BATTERY_DRVR_GET_LEVELS,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        } => {}
+        other => panic!("unexpected BatteryDrvrGetLevels result: {other:?}"),
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BATTERY_GET_LIFE_TIME_INFO,
+            [last_change, cpu_usage, previous_cpu_usage],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!((1..=9999).contains(&memory.read_u16(last_change)?));
+    assert!((1..=12).contains(&memory.read_u16(last_change + 2)?));
+    assert_eq!(memory.read_u32(cpu_usage)?, 0);
+    assert_eq!(memory.read_u32(previous_cpu_usage)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BATTERY_NOTIFY_OF_TIME_CHANGE,
+            [1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
 
 #[test]
 fn coredll_raw_registry_change_notifications_are_waitable_handles() -> Result<()> {

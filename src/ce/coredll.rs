@@ -4642,24 +4642,20 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_GET_SYSTEM_POWER_STATUS_EX | ORD_GET_SYSTEM_POWER_STATUS_EX2 => {
-            // GetSystemPowerStatusEx[2](pstatus, fUpdate) — battery status.
-            // Report AC power, full battery (plugged in, no battery concern).
-            let pstatus = raw_arg(args, 0);
-            kernel.threads.set_last_error(thread_id, 0);
-            if pstatus != 0 {
-                // SYSTEM_POWER_STATUS_EX: ACLineStatus(1)+BatteryFlag(1)+BatteryLifePercent(1)+
-                //   Reserved1(1)+BatteryLifeTime(4)+BatteryFullLifeTime(4)+Reserved2(1)+
-                //   BackupBatteryFlag(1)+BackupBatteryLifePercent(1)+Reserved3(1)+
-                //   BackupBatteryLifeTime(4)+BackupBatteryFullLifeTime(4) = 24 bytes
-                let _ = memory.write_u8(pstatus, 1); // ACLineStatus = AC_LINE_ONLINE
-                let _ = memory.write_u8(pstatus + 1, 0); // BatteryFlag = none
-                let _ = memory.write_u8(pstatus + 2, 255); // BatteryLifePercent = unknown
-                let _ = memory.write_u8(pstatus + 3, 0); // Reserved
-                let _ = memory.write_u32(pstatus + 4, 0xffff_ffff); // BatteryLifeTime = unknown
-                let _ = memory.write_u32(pstatus + 8, 0xffff_ffff); // BatteryFullLifeTime = unknown
-            }
-            Some(CoredllValue::Bool(true))
+        ORD_GET_SYSTEM_POWER_STATUS_EX => Some(CoredllValue::Bool(get_system_power_status_ex_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_SYSTEM_POWER_STATUS_EX2 => {
+            Some(CoredllValue::U32(get_system_power_status_ex2_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+            )))
         }
         ORD_GET_SYSTEM_POWER_STATE => {
             // GetSystemPowerState(pszState, pdwStateFlags) — returns current power state name.
@@ -4684,14 +4680,20 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_BATTERY_GET_LIFE_TIME_INFO
-        | ORD_BATTERY_NOTIFY_OF_TIME_CHANGE
-        | ORD_BATTERY_DRVR_GET_LEVELS
-        | ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION => {
-            // Battery driver APIs; not supported.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        ORD_BATTERY_GET_LIFE_TIME_INFO => {
+            battery_get_life_time_info_raw(kernel, memory, thread_id, args);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_BATTERY_NOTIFY_OF_TIME_CHANGE => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_BATTERY_DRVR_GET_LEVELS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION => {
+            kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(false))
         }
         ORD_WNET_ADD_CONNECTION3_W
@@ -20387,6 +20389,150 @@ fn write_current_system_time<M: CoredllGuestMemory>(
             system_time_ptr.wrapping_add(14),
             fields.milliseconds,
         );
+    if ok {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+}
+
+fn get_system_power_status_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    status_ptr: u32,
+) -> bool {
+    get_system_power_status_ex2_raw(
+        kernel,
+        memory,
+        thread_id,
+        status_ptr,
+        CE_SYSTEM_POWER_STATUS_EX_SIZE as u32,
+    ) == CE_SYSTEM_POWER_STATUS_EX_SIZE as u32
+}
+
+const CE_SYSTEM_POWER_STATUS_EX_SIZE: usize = 24;
+const CE_SYSTEM_POWER_STATUS_EX2_SIZE: usize = 56;
+
+fn get_system_power_status_ex2_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    status_ptr: u32,
+    status_len: u32,
+) -> u32 {
+    if status_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let copy_len = (status_len as usize).min(CE_SYSTEM_POWER_STATUS_EX2_SIZE);
+    let status = ce_system_power_status_ex2_bytes();
+    for (offset, byte) in status.iter().copied().take(copy_len).enumerate() {
+        if !write_guest_u8(
+            kernel,
+            memory,
+            thread_id,
+            status_ptr.wrapping_add(offset as u32),
+            byte,
+        ) {
+            return 0;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    copy_len as u32
+}
+
+fn ce_system_power_status_ex2_bytes() -> [u8; CE_SYSTEM_POWER_STATUS_EX2_SIZE] {
+    const AC_LINE_ONLINE: u8 = 0x01;
+    const BATTERY_FLAG_NO_BATTERY: u8 = 0x80;
+    const BATTERY_PERCENTAGE_UNKNOWN: u8 = 0xff;
+    const BATTERY_LIFE_UNKNOWN: u32 = 0xffff_ffff;
+    const BATTERY_CHEMISTRY_UNKNOWN: u8 = 0xff;
+
+    let mut status = [0; CE_SYSTEM_POWER_STATUS_EX2_SIZE];
+    status[0] = AC_LINE_ONLINE;
+    status[1] = BATTERY_FLAG_NO_BATTERY;
+    status[2] = BATTERY_PERCENTAGE_UNKNOWN;
+    status[4..8].copy_from_slice(&BATTERY_LIFE_UNKNOWN.to_le_bytes());
+    status[8..12].copy_from_slice(&BATTERY_LIFE_UNKNOWN.to_le_bytes());
+    status[13] = BATTERY_FLAG_NO_BATTERY;
+    status[14] = BATTERY_PERCENTAGE_UNKNOWN;
+    status[16..20].copy_from_slice(&BATTERY_LIFE_UNKNOWN.to_le_bytes());
+    status[20..24].copy_from_slice(&BATTERY_LIFE_UNKNOWN.to_le_bytes());
+    status[52] = BATTERY_CHEMISTRY_UNKNOWN;
+    status
+}
+
+fn battery_get_life_time_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) {
+    let last_change_ptr = raw_arg(args, 0);
+    let cpu_usage_ptr = raw_arg(args, 1);
+    let previous_cpu_usage_ptr = raw_arg(args, 2);
+    let fields = system_time_fields_from_ticks(current_filetime_ticks(kernel));
+    let mut ok = true;
+
+    if last_change_ptr != 0 {
+        ok &= write_guest_u16(kernel, memory, thread_id, last_change_ptr, fields.year)
+            && write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                last_change_ptr.wrapping_add(2),
+                fields.month,
+            )
+            && write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                last_change_ptr.wrapping_add(4),
+                fields.day_of_week,
+            )
+            && write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                last_change_ptr.wrapping_add(6),
+                fields.day,
+            )
+            && write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                last_change_ptr.wrapping_add(8),
+                fields.hour,
+            )
+            && write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                last_change_ptr.wrapping_add(10),
+                fields.minute,
+            )
+            && write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                last_change_ptr.wrapping_add(12),
+                fields.second,
+            )
+            && write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                last_change_ptr.wrapping_add(14),
+                fields.milliseconds,
+            );
+    }
+    if cpu_usage_ptr != 0 {
+        ok &= write_guest_u32(kernel, memory, thread_id, cpu_usage_ptr, 0);
+    }
+    if previous_cpu_usage_ptr != 0 {
+        ok &= write_guest_u32(kernel, memory, thread_id, previous_cpu_usage_ptr, 0);
+    }
     if ok {
         kernel.threads.set_last_error(thread_id, 0);
     }
@@ -58274,6 +58420,10 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     // Power management
     "GetSystemPowerStatusEx",
     "GetSystemPowerStatusEx2",
+    "BatteryGetLifeTimeInfo",
+    "BatteryNotifyOfTimeChange",
+    "BatteryDrvrGetLevels",
+    "BatteryDrvrSupportsChangeNotification",
     // Language/locale utilities
     "GetSystemDefaultUILanguage",
     "GetUserDefaultUILanguage",

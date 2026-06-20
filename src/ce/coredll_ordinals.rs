@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 93] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 97] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13887,6 +13887,22 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 93] = &[
     CoredllOrdinalDef {
         name: "CeFindCloseRegChange",
         ordinal: ORD_CE_FIND_CLOSE_REG_CHANGE,
+    },
+    CoredllOrdinalDef {
+        name: "BatteryGetLifeTimeInfo",
+        ordinal: ORD_BATTERY_GET_LIFE_TIME_INFO,
+    },
+    CoredllOrdinalDef {
+        name: "BatteryNotifyOfTimeChange",
+        ordinal: ORD_BATTERY_NOTIFY_OF_TIME_CHANGE,
+    },
+    CoredllOrdinalDef {
+        name: "BatteryDrvrGetLevels",
+        ordinal: ORD_BATTERY_DRVR_GET_LEVELS,
+    },
+    CoredllOrdinalDef {
+        name: "BatteryDrvrSupportsChangeNotification",
+        ordinal: ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION,
     },
     CoredllOrdinalDef {
         name: "WaitForAPIReady",

@@ -28,6 +28,17 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battery.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battimpl.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\BATTDRVR\MDD\battapi.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\BATTDRVR\PDD\sbattif.c`:
+  raw `GetSystemPowerStatusEx`/`GetSystemPowerStatusEx2` now fill CE-layout
+  power-status structures with bounded `Ex2` byte-copy semantics, and the
+  battery driver helper ordinals no longer report unsupported. Coverage
+  verifies null status rejection, old/new struct offsets, `Ex2` return length,
+  no-battery AC-powered metadata, level/change-notification helpers, lifetime
+  info outputs, and time-change notification no-op behavior.
 - `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwinuser.h` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\SHELL\shell.c`: raw
   `GetForegroundInfo` now fills CE's foreground snapshot instead of reporting
