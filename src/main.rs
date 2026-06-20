@@ -2457,15 +2457,19 @@ fn live_kernel_message_boxes_text(kernel: &CeKernel) -> String {
     }
     let _ = writeln!(out, "  message boxes:");
     for (index, record) in records.iter().enumerate() {
+        let dialog_live = kernel.gwe.is_window(record.dialog_hwnd);
+        let dialog_visible = dialog_live && kernel.gwe.is_window_visible(record.dialog_hwnd);
         let _ = writeln!(
             out,
-            "    {index}: tid={} owner=0x{:08x} dialog=0x{:08x} style=0x{:08x} result={} rendered={} active={} caller_pc={} trap_pc={} caller_module={:?} caption={:?} text={:?}",
+            "    {index}: tid={} owner=0x{:08x} dialog=0x{:08x} style=0x{:08x} result={} rendered={} live={} visible={} was_active={} caller_pc={} trap_pc={} caller_module={:?} caption={:?} text={:?}",
             record.thread_id,
             record.owner_hwnd,
             record.dialog_hwnd,
             record.style,
             record.result,
             record.rendered,
+            dialog_live,
+            dialog_visible,
             record.dialog_was_active,
             record
                 .caller_pc
