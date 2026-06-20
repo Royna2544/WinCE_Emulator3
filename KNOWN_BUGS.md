@@ -37,6 +37,9 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
   receive buffer, but the exact guest `ReadFile`/`WaitCommEvent` cadence,
   parsed-position consumption, and SMB380/G-sensor command contract still need
   real evidence.
+- In the latest splash-phase sample, `COM7:` is not opened yet and the only
+  device activity is repeated `UID1:` IOCTLs, so sensor data cannot currently
+  unblock the visible splash/map transition.
 
 ## Build And Validation Risks
 

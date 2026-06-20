@@ -7,6 +7,9 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
 - Trace the current iNavi splash/map transition generically: identify the CE
   wait, event, message, window state, or readiness condition that should hide,
   destroy, or demote the owned splash popup above hidden map children.
+- Disassemble/sample the current hot guest PCs around `0x0030f948`,
+  `0x00339da8`, and `0x0034432c` against the real `iNavi.exe` to separate
+  normal resource lookup from a repeated readiness wait.
 - Extend `SendMessageTimeout` and message-wait coverage for broader reentrant
   waits, nested sends, timeout cleanup, `ReplyMessage`, abort-if-hung behavior,
   and live modal-loop interaction.
@@ -38,6 +41,9 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
   unwinding when guest diagnostics require deeper stack fidelity.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or
   real caller traces before adding accelerometer command behavior.
+- Re-check live device traces after the app opens `COM7:`; current splash-phase
+  samples still show only repeated `UID1:` IOCTLs, so GPS/sensor data is not yet
+  in the active path.
 
 ## Cleanup Queue
 

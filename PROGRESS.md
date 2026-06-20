@@ -58,6 +58,13 @@ references for historical reconstruction.
 - Remote taps are delivered to the real owned splash popup (`0x00020008`).
   The remaining visible blocker is the guest-side transition that should hide,
   destroy, or demote that popup above the map children.
+- Current 2026-06-20 live samples show the splash phase can still be reached
+  before `COM7:` opens; touch/key input is consumed by the owned splash, while
+  the app continues resource/window setup (`resmapi_800x480.bin` memory-backed
+  opens and hidden `afxwnd42u` child creation).
+- `MultiByteToWideChar`/`WideCharToMultiByte` now skip host Windows conversion
+  calls for zero-flag ASCII input under Korean ACP/UTF-8, preserving explicit
+  length and null-terminated return counts.
 
 ## Recent Validation
 
@@ -73,6 +80,8 @@ references for historical reconstruction.
 - Focused raw kernel ordinal validation covers `THCreateSnapshot` success and
   invalid requested-process failure, thread-entry serialization, module-entry
   serialization, and `GetHeapSnapshot` heap-list and entry serialization.
+- Focused raw kernel conversion validation covers Korean ACP conversion plus
+  ASCII ACP fast-path sizing and explicit-length no-NUL behavior.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.
