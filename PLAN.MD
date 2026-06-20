@@ -84,6 +84,11 @@ notes when it is still needed for implementation.
   validation plus `DoGetProcAddressA` lookup path for registered modules,
   including ordinal lookup and `ERROR_INVALID_PARAMETER` on missing modules,
   missing exports, invalid names, or invalid process handles.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\loader.cpp`: raw
+  `GetProcName` now mirrors CE's `g_pszProgName` return path by exposing the
+  current process module path as a cached guest wide string. Coverage verifies
+  non-null return, stable repeated calls, last-error success, and cache
+  invalidation when the process module path changes.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract

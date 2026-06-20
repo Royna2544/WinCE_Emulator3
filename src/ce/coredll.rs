@@ -2719,10 +2719,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Handle(handle))
         }
         ORD_GET_PROC_NAME => {
-            // GetProcName(pProc) — return name of module containing pProc as a string pointer.
-            // Not trivially accessible without static string storage; return NULL.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Handle(0))
+            // CE stores g_pszProgName during process initialization and returns it verbatim.
+            let ptr = get_proc_name_raw(kernel, memory, thread_id);
+            Some(CoredllValue::Handle(ptr))
         }
         ORD_GET_MODULE_INFORMATION => {
             // GetModuleInformation(hProcess, hModule, lpmodinfo, cb) — MODULEINFO struct.
@@ -22813,6 +22812,36 @@ fn get_command_line_w_raw<M: CoredllGuestMemory>(
         }
     }
     kernel.set_command_line_guest_ptr(ptr);
+    kernel.threads.set_last_error(thread_id, 0);
+    ptr
+}
+
+fn get_proc_name_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+) -> u32 {
+    let existing = kernel.process_name_guest_ptr();
+    if existing != 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return existing;
+    }
+    let units: Vec<u16> = kernel
+        .process_module_path()
+        .encode_utf16()
+        .chain(std::iter::once(0u16))
+        .collect();
+    let byte_count = (units.len() * 2) as u32;
+    let Some(ptr) = kernel.memory.local_alloc(0, byte_count) else {
+        kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
+        return 0;
+    };
+    for (i, &unit) in units.iter().enumerate() {
+        if !write_guest_u16(kernel, memory, thread_id, ptr + i as u32 * 2, unit) {
+            return 0;
+        }
+    }
+    kernel.set_process_name_guest_ptr(ptr);
     kernel.threads.set_last_error(thread_id, 0);
     ptr
 }
