@@ -26,8 +26,8 @@ use wince_emulation_v3::{
             ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS,
             ORD_GET_DEVICE_POWER, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
             ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT,
-            ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
-            ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION,
@@ -7111,23 +7111,31 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
     let module_name_ptr = 0x1_8000;
     let proc_w_ptr = 0x1_8040;
     let proc_a_ptr = 0x1_8080;
+    let module_path_ptr = 0x1_80c0;
     let module_base = 0x6200_0000;
     let proc_by_name = 0x6200_1234;
     let proc_by_ordinal = 0x6200_5678;
+    let module_path = r"\Windows\commctrl.dll";
 
     let mut exports_by_name = std::collections::BTreeMap::new();
     exports_by_name.insert("InitCommonControlsEx".to_owned(), proc_by_name);
     let mut exports_by_ordinal = std::collections::BTreeMap::new();
     exports_by_ordinal.insert(17, proc_by_ordinal);
-    kernel.register_loaded_module(
+    kernel.register_loaded_module_with_metadata(
         "commctrl.dll",
         module_base,
         exports_by_name,
         exports_by_ordinal,
+        LoadedModuleMetadata {
+            guest_path: Some(module_path.to_owned()),
+            image_size: 0x10000,
+            ..LoadedModuleMetadata::default()
+        },
     );
     memory.write_wide_z(module_name_ptr, "commctrl.dll");
     memory.write_wide_z(proc_w_ptr, "InitCommonControlsEx");
     memory.write_bytes(proc_a_ptr, b"InitCommonControlsEx\0");
+    memory.map_halfwords(module_path_ptr, 64);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -7142,6 +7150,38 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
             ..
         } if handle == module_base
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MODULE_FILE_NAME_W,
+            [module_base, module_path_ptr, 64],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(copied),
+            ..
+        } if copied == module_path.encode_utf16().count() as u32
+    ));
+    assert_eq!(memory.read_wide_z(module_path_ptr, 64), module_path);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MODULE_FILE_NAME_W,
+            [0xDEAD_0000, module_path_ptr, 64],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

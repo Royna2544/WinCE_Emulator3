@@ -22740,16 +22740,25 @@ fn get_module_file_name_w_raw<M: CoredllGuestMemory>(
     buffer: u32,
     max_chars: u32,
 ) -> u32 {
-    if buffer == 0 || max_chars == 0 || (module != 0 && module != kernel.process_module_base()) {
+    if buffer == 0 || max_chars == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let units = kernel
-        .process_module_path()
-        .encode_utf16()
-        .collect::<Vec<_>>();
+    let path = if module == 0 || module == kernel.process_module_base() {
+        kernel.process_module_path().to_owned()
+    } else if module == COREDLL_MODULE_HANDLE {
+        r"\Windows\coredll.dll".to_owned()
+    } else if let Some(loaded) = kernel.loaded_module_by_handle(module) {
+        loaded.guest_path.unwrap_or(loaded.name)
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let units = path.encode_utf16().collect::<Vec<_>>();
     let copied = units.len().min(max_chars.saturating_sub(1) as usize);
     for (index, unit) in units.iter().copied().take(copied).enumerate() {
         if !write_guest_u16(
@@ -22771,6 +22780,7 @@ fn get_module_file_name_w_raw<M: CoredllGuestMemory>(
     ) {
         return 0;
     }
+    kernel.threads.set_last_error(thread_id, 0);
     copied as u32
 }
 

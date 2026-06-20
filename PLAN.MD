@@ -74,6 +74,11 @@ notes when it is still needed for implementation.
   `LOAD_LIBRARY_AS_DATAFILE` records both datafile and no-resolve state so
   `GetProcAddress` rejects the handle, while a later normal load still clears
   a prior pure `DONT_RESOLVE_DLL_REFERENCES` request.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`: raw
+  `GetModuleFileNameW` now accepts registered DLL module handles as well as
+  the process module handle, returning the module guest path and preserving
+  CE's `ERROR_INVALID_PARAMETER` failure for bad handles or empty buffers.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract
