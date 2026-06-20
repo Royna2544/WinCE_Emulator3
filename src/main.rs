@@ -933,6 +933,19 @@ fn run_cpu_loop(
                     publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                     continue;
                 }
+                if should_rotate_idle_saved_remote_active(
+                    args.remote_server.is_some(),
+                    cpu.has_saved_context(),
+                    cpu.has_running_guest_thread(),
+                    cpu.active_process_has_visible_queued_receiver_work(kernel),
+                    cpu.active_process_has_visible_windows(kernel),
+                    cpu.has_runnable_parked_process(kernel),
+                ) && cpu.rotate_to_next_parked_process(kernel)
+                {
+                    reported_blocked_message_wait = false;
+                    publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                    continue;
+                }
                 reported_blocked_message_wait = false;
                 continue;
             }
