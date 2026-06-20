@@ -3476,6 +3476,96 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, CE_VOLUME_INFO_SIZE);
     assert_sdmmc_volume_info(&memory);
 
+    memory.write_wide_z(find_pattern_ptr, "\\SDMMC Disk\\mapinfo.bin");
+    let sdmmc_file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [find_pattern_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not open mounted file: {other:?}"),
+    };
+    memory.write_bytes(volume_info_ptr, &[0x7b; CE_VOLUME_INFO_SIZE as usize]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                sdmmc_file,
+                FSCTL_GET_VOLUME_INFO,
+                info_level_ptr,
+                4,
+                volume_info_ptr,
+                CE_VOLUME_INFO_SIZE,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, CE_VOLUME_INFO_SIZE);
+    assert_sdmmc_volume_info(&memory);
+
+    memory.write_bytes(volume_info_ptr, &[0x7c; CE_VOLUME_INFO_SIZE as usize]);
+    memory.write_word(bytes_returned_ptr, 0x1234_abcd);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                sdmmc_file,
+                FSCTL_GET_VOLUME_INFO,
+                info_level_ptr,
+                0,
+                volume_info_ptr,
+                CE_VOLUME_INFO_SIZE,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0x1234_abcd);
+    assert_eq!(
+        memory.read_bytes(volume_info_ptr, CE_VOLUME_INFO_SIZE as usize),
+        vec![0x7c; CE_VOLUME_INFO_SIZE as usize]
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [sdmmc_file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    memory.write_wide_z(find_pattern_ptr, "\\SDMMC Disk");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

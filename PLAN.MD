@@ -78,6 +78,14 @@ notes when it is still needed for implementation.
   `DeviceIoControl(FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR)` now follows CE
   FSDMGR's external-call rejection path, returning `ERROR_ACCESS_DENIED`
   before generic device dispatch and leaving caller byte counts untouched.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`: file-handle
+  `DeviceIoControl(FSCTL_GET_VOLUME_INFO)` now follows CE FSDMGR validation
+  and returns the mounted or object-store `CE_VOLUME_INFO` record instead of
+  falling through to generic device dispatch. Coverage verifies mounted-file
+  volume names, byte counts, last error, and invalid parameter no-touch
+  behavior.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now

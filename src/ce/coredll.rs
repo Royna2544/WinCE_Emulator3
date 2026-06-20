@@ -22636,6 +22636,31 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
             overlapped_ptr,
         );
     }
+    if ioctl_code == FSCTL_GET_VOLUME_INFO {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_get_volume_info_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    handle,
+                    input_ptr,
+                    input_len,
+                    output_ptr,
+                    output_capacity,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
     if ioctl_code == FSCTL_SET_FILE_CACHE {
         match kernel.is_file_handle(handle) {
             Ok(true) => {
@@ -22732,6 +22757,46 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
         },
     );
     result.success
+}
+
+fn file_handle_get_volume_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    input_ptr: u32,
+    input_len: u32,
+    output_ptr: u32,
+    output_capacity: u32,
+    returned_ptr: u32,
+) -> bool {
+    if input_ptr == 0
+        || input_len != 4
+        || output_ptr == 0
+        || output_capacity != CE_VOLUME_INFO_SIZE
+        || memory.read_u32(input_ptr).ok() != Some(CE_VOLUME_INFO_LEVEL_STANDARD)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let Some(path) = kernel.path_for_handle(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    let info = kernel.files.volume_info_for_path(Some(&path));
+    if !write_ce_volume_info(kernel, memory, thread_id, output_ptr, &info)
+        || !write_optional_count(kernel, memory, thread_id, returned_ptr, CE_VOLUME_INFO_SIZE)
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn file_handle_scatter_gather_raw<M: CoredllGuestMemory>(
