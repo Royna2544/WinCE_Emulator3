@@ -6559,6 +6559,19 @@ impl UnicornMips {
         )));
         let self_suspended_guest_threads_hook = Rc::clone(&self_suspended_guest_threads);
         let running_guest_thread = Rc::new(RefCell::new(self.running_guest_thread));
+        if recover_running_guest_thread_for_saved_context(
+            kernel,
+            restoring_saved_context,
+            active_thread_id,
+            &mut running_guest_thread.borrow_mut(),
+        ) {
+            tracing::debug!(
+                target: "ce.scheduler",
+                thread_id = active_thread_id,
+                running_thread = ?*running_guest_thread.borrow(),
+                "recovered running guest thread for saved context"
+            );
+        }
         let running_guest_thread_hook = Rc::clone(&running_guest_thread);
         let guest_thread_stack_slots = Rc::new(RefCell::new(std::mem::take(
             &mut self.guest_thread_stack_slots,
@@ -18812,6 +18825,24 @@ fn guest_thread_handle_for_running_context(
                 .then_some(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE)
         })
         .unwrap_or(0)
+}
+
+#[cfg(feature = "unicorn")]
+fn recover_running_guest_thread_for_saved_context(
+    kernel: &CeKernel,
+    restoring_saved_context: bool,
+    thread_id: u32,
+    running_thread: &mut Option<(u32, u32)>,
+) -> bool {
+    if !restoring_saved_context || running_thread.is_some() {
+        return false;
+    }
+    let thread_handle = guest_thread_handle_for_running_context(kernel, None, thread_id);
+    if thread_handle == 0 {
+        return false;
+    }
+    *running_thread = Some((thread_id, thread_handle));
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -46792,6 +46823,47 @@ mod unicorn_tests {
         assert_eq!(saved.regs.regs[16], 0x4455_6677);
         assert_eq!(saved.regs.regs[29], 0x7ffd_f578);
         assert_eq!(saved.regs.regs[31], return_pc);
+
+        Ok(())
+    }
+
+    #[test]
+    fn saved_context_recovers_child_running_thread_handle() -> crate::Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let (thread_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let mut running_thread = None;
+
+        assert!(super::recover_running_guest_thread_for_saved_context(
+            &kernel,
+            true,
+            thread_id,
+            &mut running_thread,
+        ));
+        assert_eq!(running_thread, Some((thread_id, thread_handle)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn saved_context_recovers_main_running_thread_pseudo_handle() -> crate::Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let kernel = CeKernel::boot(config);
+        let mut running_thread = None;
+
+        assert!(super::recover_running_guest_thread_for_saved_context(
+            &kernel,
+            true,
+            super::MAIN_GUEST_THREAD_ID,
+            &mut running_thread,
+        ));
+        assert_eq!(
+            running_thread,
+            Some((
+                super::MAIN_GUEST_THREAD_ID,
+                crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
+            ))
+        );
 
         Ok(())
     }
