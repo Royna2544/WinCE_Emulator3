@@ -1713,7 +1713,11 @@ impl UnicornMips {
             return true;
         }
         let wndproc = self
-            .receiver_process_wndproc(original_wndproc)
+            .receiver_process_wndproc_for_process(
+                original_wndproc,
+                window.process_id,
+                kernel.current_process_id(),
+            )
             .unwrap_or(original_wndproc);
 
         let return_sp = saved.regs.regs[29];
@@ -1914,14 +1918,11 @@ impl UnicornMips {
             let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
             return false;
         }
-        let wndproc = if window.process_id == kernel.current_process_id() {
-            Some(
-                self.mapped_guest_wndproc(original_wndproc)
-                    .unwrap_or(original_wndproc),
-            )
-        } else {
-            self.receiver_process_wndproc(original_wndproc)
-        };
+        let wndproc = self.receiver_process_wndproc_for_process(
+            original_wndproc,
+            window.process_id,
+            kernel.current_process_id(),
+        );
         let Some(wndproc) = wndproc else {
             kernel.record_window_lifecycle_trace(
                 "skip_unmapped_wndproc",
@@ -3136,6 +3137,16 @@ impl UnicornMips {
             }
             return Some(wndproc);
         }
+        if let Some(offset) =
+            Self::loaded_module_callback_offset_for_shared_callback(&self.loaded_modules, wndproc)
+        {
+            if let Some(process_slot_wndproc) =
+                Self::mapped_process_slot_dll_callback_for_offset(&self.mapped_blobs, offset)
+            {
+                return Some(process_slot_wndproc);
+            }
+            return Some(wndproc);
+        }
         if wndproc < CE_USER_KERNEL_SPLIT {
             let slot_offset = wndproc & CE_PROCESS_SLOT_MASK;
             if let Some(dll_wndproc) =
@@ -3154,6 +3165,20 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn loaded_module_callback_offset_for_shared_callback(
+        loaded_modules: &[LoadedPeModuleInfo],
+        callback: u32,
+    ) -> Option<u32> {
+        let module = loaded_modules.iter().find(|module| {
+            module.base >= CE_PROCESS_SLOT_SIZE
+                && callback >= module.base
+                && callback.wrapping_sub(module.base) < module.image_size
+        })?;
+        let offset = callback.checked_sub(module.base)?;
+        (offset != 0).then_some(offset)
+    }
+
+    #[cfg(feature = "unicorn")]
     fn receiver_process_wndproc(&self, wndproc: u32) -> Option<u32> {
         if !is_guest_wndproc(wndproc) {
             return None;
@@ -3162,6 +3187,37 @@ impl UnicornMips {
             return Some(wndproc);
         }
         self.mapped_guest_wndproc(wndproc)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn receiver_process_wndproc_for_process(
+        &self,
+        wndproc: u32,
+        process_id: u32,
+        current_process_id: u32,
+    ) -> Option<u32> {
+        let local = self.receiver_process_wndproc(wndproc);
+        if local.is_some_and(|mapped| mapped != wndproc) {
+            return local;
+        }
+        if is_ce_high_process_slot_callback(wndproc) {
+            return Some(wndproc);
+        }
+        if let Some(parked) = self
+            .parked_child_processes
+            .iter()
+            .find(|process| process.process_state.process_id == process_id)
+        {
+            let parked_mapped = parked.cpu.receiver_process_wndproc(wndproc);
+            if parked_mapped.is_some_and(|mapped| mapped != wndproc) || local.is_none() {
+                return parked_mapped;
+            }
+        }
+        if process_id == current_process_id {
+            local.or(Some(wndproc))
+        } else {
+            local
+        }
     }
 
     #[cfg(feature = "unicorn")]
@@ -3205,6 +3261,14 @@ impl UnicornMips {
                 && callback.wrapping_sub(blob.base) < blob.bytes.len() as u32
         })?;
         let offset = callback.checked_sub(shared_blob.base)?;
+        Self::mapped_process_slot_dll_callback_for_offset(mapped_blobs, offset)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn mapped_process_slot_dll_callback_for_offset(
+        mapped_blobs: &[MappedBlob],
+        offset: u32,
+    ) -> Option<u32> {
         if offset == 0 {
             return None;
         }
@@ -3223,6 +3287,7 @@ impl UnicornMips {
     fn mapped_dll_blob_is_process_slot_view(blob: &MappedBlob) -> bool {
         blob.name.starts_with("dll:")
             && (blob.base < CE_PROCESS_SLOT_SIZE
+                || (blob.base < CE_SHARED_HEAP_BASE && (blob.base & CE_PROCESS_SLOT_MASK) == 0)
                 || mapped_blob_pe_preferred_image_base(blob)
                     .is_some_and(|base| base < CE_PROCESS_SLOT_SIZE))
     }
@@ -44001,6 +44066,49 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn mapped_guest_wndproc_maps_shared_callback_to_section_aligned_process_slot_dll() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4015_0000,
+            bytes: vec![0; 0x7f000],
+        });
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:relocated-low-preferred.dll".to_owned(),
+            base: 0x6000_0000,
+            bytes: vec![0; 0x8b000],
+        });
+
+        assert_eq!(
+            emulator.mapped_guest_wndproc(0x4019_f0f4),
+            Some(0x6004_f0f4)
+        );
+    }
+
+    #[test]
+    fn mapped_guest_wndproc_maps_loaded_module_callback_to_process_slot_dll_rva() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        emulator
+            .loaded_modules
+            .push(crate::emulator::types::LoadedPeModuleInfo {
+                name: "commctrl.dll".to_owned(),
+                base: 0x4015_0000,
+                image_size: 0x7f000,
+                ..Default::default()
+            });
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:relocated-low-preferred.dll".to_owned(),
+            base: 0x6000_0000,
+            bytes: fake_pe_blob(0x8b000, 0x0010_0000),
+        });
+
+        assert_eq!(
+            emulator.mapped_guest_wndproc(0x4019_f0f4),
+            Some(0x6004_f0f4)
+        );
+    }
+
+    #[test]
     fn set_window_long_wndproc_maps_ce_slot_callback_through_caller_module() {
         let mut args = [
             0x0002_0000,
@@ -44142,6 +44250,55 @@ mod unicorn_tests {
         assert_eq!(
             emulator.receiver_process_wndproc(0x7004_f0f4),
             Some(0x7004_f0f4)
+        );
+    }
+
+    #[test]
+    fn receiver_process_wndproc_uses_parked_receiver_module_view() {
+        let mut parent = super::UnicornMips::new().unwrap();
+        parent
+            .loaded_modules
+            .push(crate::emulator::types::LoadedPeModuleInfo {
+                name: "commctrl.dll".to_owned(),
+                base: 0x4015_0000,
+                image_size: 0x7f000,
+                ..Default::default()
+            });
+        parent.mapped_blobs.push(super::MappedBlob {
+            name: "dll:relocated-low-preferred.dll".to_owned(),
+            base: 0x6000_0000,
+            bytes: fake_pe_blob(0x8b000, 0x0010_0000),
+        });
+
+        let parked_parent = super::ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: 1,
+            cpu: Box::new(parent),
+            blocked_send_id: None,
+            module_base: 0x0001_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        };
+
+        let mut child = super::UnicornMips::new().unwrap();
+        child.parked_child_processes.push_back(parked_parent);
+
+        assert_eq!(
+            child.receiver_process_wndproc_for_process(0x4019_f0f4, 1, 67),
+            Some(0x6004_f0f4)
+        );
+        assert_eq!(
+            child.receiver_process_wndproc_for_process(0x4019_f0f4, 1, 1),
+            Some(0x6004_f0f4)
         );
     }
 
