@@ -44,9 +44,9 @@ use crate::{
             ThreadSuspendResult,
         },
         registry::{
-            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HKEY_LOCAL_MACHINE, HKey, REG_BINARY,
-            REG_DWORD, REG_SZ, RegOpenResult, RegQueryValueResult, RegistryData, RegistryType,
-            RegistryValue,
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, HKey,
+            REG_BINARY, REG_DWORD, REG_SZ, RegOpenResult, RegQueryValueResult, RegistryData,
+            RegistryType, RegistryValue,
         },
         resource::{
             AcceleratorEntry, FontObject, IconObject, ImageListDraw, MenuItem,
@@ -54858,18 +54858,24 @@ fn activate_configured_device_entry(
     let handle = kernel.handles.insert(KernelObject::Device(session));
     let active_path = format!(r"hklm\{}", entry.active_key);
     kernel.registry.create_key(&active_path);
-    kernel
-        .registry
-        .set_value(&active_path, "Key", RegistryValue::string(&entry.driver_key));
-    kernel
-        .registry
-        .set_value(&active_path, "Name", RegistryValue::string(&entry.guest_name));
+    kernel.registry.set_value(
+        &active_path,
+        "Key",
+        RegistryValue::string(entry.driver_key.clone()),
+    );
+    kernel.registry.set_value(
+        &active_path,
+        "Name",
+        RegistryValue::string(entry.guest_name.clone()),
+    );
     kernel
         .registry
         .set_value(&active_path, "Hnd", RegistryValue::dword(handle));
-    kernel
-        .registry
-        .set_value(&active_path, "ClientInfo", RegistryValue::dword(client_info));
+    kernel.registry.set_value(
+        &active_path,
+        "ClientInfo",
+        RegistryValue::dword(client_info),
+    );
     kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
     handle
 }
@@ -54879,9 +54885,14 @@ fn device_key_entry_for_guest_name(
     guest_name: &str,
 ) -> Option<crate::ce::devices::DeviceKeyEntry> {
     let normalized = normalize_device_name_for_registry_match(guest_name);
-    kernel.devices.device_key_entries().into_iter().find(|entry| {
-        normalize_device_name_for_registry_match(&entry.guest_name).eq_ignore_ascii_case(&normalized)
-    })
+    kernel
+        .devices
+        .device_key_entries()
+        .into_iter()
+        .find(|entry| {
+            normalize_device_name_for_registry_match(&entry.guest_name)
+                .eq_ignore_ascii_case(&normalized)
+        })
 }
 
 fn normalize_device_name_for_registry_match(name: &str) -> String {
@@ -54961,9 +54972,9 @@ fn apply_activate_device_regini_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return false;
         };
-        let Some(value) =
-            read_activate_device_regini_value_raw(kernel, memory, thread_id, data_ptr, data_len, data_type)
-        else {
+        let Some(value) = read_activate_device_regini_value_raw(
+            kernel, memory, thread_id, data_ptr, data_len, data_type,
+        ) else {
             return false;
         };
         kernel.registry.set_value(&key_path, &value_name, value);

@@ -183,6 +183,17 @@ notes when it is still needed for implementation.
   `Drivers\BuiltIn\NAME` registry keys when needed. Coverage verifies returned
   driver-key handles, null active-key pointers, missing active keys, and active
   keys missing the `Key` value.
+- `C:\WINCE600\PUBLIC\COMMON\DDK\INC\devload.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwinbase.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\windev.h`: raw `ActivateDevice`,
+  `ActivateDeviceEx`, `RegisterDevice`, `DeactivateDevice`, and
+  `DeregisterDevice` now open and close configured emulator devices through
+  CE-style device handles instead of reporting unsupported or unconditional
+  success. Activation seeds `Drivers\Active\N` with `Key`, `Name`, `Hnd`, and
+  `ClientInfo`, `ActivateDeviceEx` applies bounded `REGINI` entries to the
+  driver key, and coverage verifies invalid parameters, missing devices,
+  configured handle paths, active registry metadata, and closed-handle
+  rejection.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battery.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battimpl.h`,

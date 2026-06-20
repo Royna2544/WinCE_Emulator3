@@ -5,25 +5,26 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_BATTERY_DRVR_GET_LEVELS, ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION,
-            ORD_BATTERY_GET_LIFE_TIME_INFO, ORD_BATTERY_NOTIFY_OF_TIME_CHANGE,
-            ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
-            ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_THREAD_PRIORITY, ORD_CE_GET_THREAD_QUANTUM,
-            ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM, ORD_CLEAR_COMM_ERROR,
-            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
+            ORD_ACTIVATE_DEVICE, ORD_ACTIVATE_DEVICE_EX, ORD_BATTERY_DRVR_GET_LEVELS,
+            ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION, ORD_BATTERY_GET_LIFE_TIME_INFO,
+            ORD_BATTERY_NOTIFY_OF_TIME_CHANGE, ORD_CE_FIND_CLOSE_REG_CHANGE,
+            ORD_CE_FIND_FIRST_REG_CHANGE, ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_THREAD_PRIORITY,
+            ORD_CE_GET_THREAD_QUANTUM, ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM,
+            ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
             ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
             ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE,
-            ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON,
-            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
-            ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
-            ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
-            ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
-            ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
-            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
-            ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES,
-            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS,
-            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
+            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
+            ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DISABLE_THREAD_LIBRARY_CALLS,
+            ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX, ORD_EMPTY_CLIPBOARD,
+            ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS, ORD_ENUM_DEVICE_INTERFACES,
+            ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALL_STACK_SNAPSHOT,
+            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
+            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
+            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
+            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
             ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
             ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
             ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
@@ -57,20 +58,21 @@ use wince_emulation_v3::{
             ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM,
             ORD_QUERY_INSTRUCTION_SET, ORD_QUERY_PERFORMANCE_COUNTER,
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE, ORD_READ_PROCESS_MEMORY,
-            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESOURCE_CREATE_LIST,
-            ORD_RESOURCE_DESTROY_LIST, ORD_RESOURCE_MARK_AS_SHAREABLE, ORD_RESOURCE_RELEASE,
-            ORD_RESOURCE_REQUEST, ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT,
-            ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS,
-            ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS,
-            ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
-            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
-            ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
-            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
-            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
-            ORD_SLEEP_TILL_TICK, ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS,
-            ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
-            ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_DEVICE, ORD_REGISTER_TASK_BAR,
+            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS,
+            ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_DESTROY_LIST, ORD_RESOURCE_MARK_AS_SHAREABLE,
+            ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST, ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD,
+            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
+            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
+            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
+            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
+            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
+            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
+            ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS,
+            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
+            ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
             ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
             ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
             ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
@@ -957,6 +959,216 @@ fn coredll_raw_get_device_keys_reports_active_and_driver_registry_paths() -> Res
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_FILE_NOT_FOUND
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_device_activation_opens_configured_devices_and_active_registry() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.devices = DeviceConfigFile {
+        version: 1,
+        defaults: DeviceDefaults::default(),
+        devices: vec![DeviceConfig {
+            guest: "COM7:".to_owned(),
+            kind: DeviceKind::Serial,
+            backend: DeviceBackend::Stub,
+            host: None,
+            remote_gps: false,
+            enabled: true,
+            note: None,
+        }],
+    };
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let driver_key_ptr = 0x3120_0000;
+    let missing_key_ptr = 0x3120_0200;
+    let type_ptr = 0x3120_0400;
+    let regini_ptr = 0x3120_0800;
+    let value_name_ptr = 0x3120_0900;
+    let value_data_ptr = 0x3120_0a00;
+    memory.map_halfwords(driver_key_ptr, 64);
+    memory.map_halfwords(missing_key_ptr, 64);
+    memory.map_halfwords(type_ptr, 16);
+    memory.map_words(regini_ptr, 4);
+    memory.map_halfwords(value_name_ptr, 16);
+    memory.map_words(value_data_ptr, 1);
+    memory.write_wide_z(driver_key_ptr, r"Drivers\BuiltIn\COM7");
+    memory.write_wide_z(missing_key_ptr, r"Drivers\BuiltIn\COM8");
+    memory.write_wide_z(type_ptr, "COM");
+    memory.write_wide_z(value_name_ptr, "Order");
+    memory.write_word(value_data_ptr, 42);
+    memory.write_word(regini_ptr, value_name_ptr);
+    memory.write_word(regini_ptr + 4, value_data_ptr);
+    memory.write_word(regini_ptr + 8, 4);
+    memory.write_word(regini_ptr + 12, 4);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ACTIVATE_DEVICE,
+            [0, 0x1234],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ACTIVATE_DEVICE,
+            [missing_key_ptr, 0x1234],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(device),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_ACTIVATE_DEVICE,
+        [driver_key_ptr, 0x1234],
+    )
+    else {
+        panic!("ActivateDevice did not return a handle");
+    };
+    assert_ne!(device, 0);
+    assert_eq!(kernel.path_for_handle(device).as_deref(), Some("COM7:"));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(
+        kernel
+            .registry
+            .query_value(r"hklm\Drivers\Active\1", "Hnd")?
+            .as_dword(),
+        Some(device)
+    );
+    assert_eq!(
+        kernel
+            .registry
+            .query_value(r"hklm\Drivers\Active\1", "ClientInfo")?
+            .as_dword(),
+        Some(0x1234)
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEACTIVATE_DEVICE,
+            [device],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(kernel.path_for_handle(device).is_none());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEACTIVATE_DEVICE,
+            [device],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(ex_device),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_ACTIVATE_DEVICE_EX,
+        [driver_key_ptr, regini_ptr, 1, 0xfeed],
+    )
+    else {
+        panic!("ActivateDeviceEx did not return a handle");
+    };
+    assert_ne!(ex_device, 0);
+    assert_eq!(
+        kernel
+            .registry
+            .query_value(r"hklm\Drivers\BuiltIn\COM7", "Order")?
+            .as_dword(),
+        Some(42)
+    );
+    assert_eq!(
+        kernel
+            .registry
+            .query_value(r"hklm\Drivers\Active\1", "ClientInfo")?
+            .as_dword(),
+        Some(0xfeed)
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEREGISTER_DEVICE,
+            [ex_device],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(registered),
+        ..
+    } = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REGISTER_DEVICE,
+        [type_ptr, 7, 0, 0x77],
+    )
+    else {
+        panic!("RegisterDevice did not return a handle");
+    };
+    assert_ne!(registered, 0);
+    assert_eq!(kernel.path_for_handle(registered).as_deref(), Some("COM7:"));
+    assert_eq!(
+        kernel
+            .registry
+            .query_value(r"hklm\Drivers\Active\1", "ClientInfo")?
+            .as_dword(),
+        Some(0x77)
     );
 
     Ok(())
