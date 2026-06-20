@@ -1875,8 +1875,7 @@ impl UnicornMips {
         });
         let message_target = visible_message_thread_id.or_else(|| {
             candidate_threads.into_iter().find(|thread_id| {
-                *thread_id != active_thread_id
-                    && !self.thread_has_blocked_scheduler_context(*thread_id)
+                !self.thread_has_blocked_scheduler_context(*thread_id)
                     && Self::thread_has_receiver_work(*thread_id, kernel)
             })
         });
@@ -2244,6 +2243,12 @@ impl UnicornMips {
         if live_pump
             && !self.active_process_has_resumable_context()
             && self.rotate_to_any_runnable_parked_process(kernel)
+        {
+            return;
+        }
+        if live_pump
+            && !self.active_process_has_visible_windows(kernel)
+            && self.rotate_to_visible_window_parked_process(kernel)
         {
             return;
         }
@@ -2865,6 +2870,22 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    pub fn rotate_to_visible_window_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        let Some(index) = self.parked_child_processes.iter().position(|process| {
+            !self.parked_process_matches_current_active(process, kernel)
+                && Self::parked_process_can_run(process, kernel)
+                && Self::parked_process_has_visible_windows(process, kernel)
+        }) else {
+            return false;
+        };
+        let Some(parked) = self.parked_child_processes.remove(index) else {
+            return false;
+        };
+        self.switch_to_parked_process(kernel, parked, true, None);
+        true
+    }
+
+    #[cfg(feature = "unicorn")]
     pub fn rotate_to_receiver_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
         self.rotate_to_receiver_parked_process_with_framebuffer(kernel, None)
     }
@@ -2965,6 +2986,11 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn parked_process_has_visible_windows(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        Self::process_has_visible_windows(kernel, parked.process_state.process_id)
+    }
+
+    #[cfg(feature = "unicorn")]
     fn parked_process_has_receiver_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
         parked
             .cpu
@@ -2974,6 +3000,11 @@ impl UnicornMips {
                 !parked.cpu.thread_has_blocked_scheduler_context(thread_id)
                     && Self::thread_has_receiver_work(thread_id, kernel)
             })
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn active_process_has_visible_windows(&self, kernel: &CeKernel) -> bool {
+        Self::process_has_visible_windows(kernel, kernel.current_process_id())
     }
 
     #[cfg(feature = "unicorn")]
@@ -4115,6 +4146,8 @@ impl UnicornMips {
 
     fn pop_next_runnable_parked_process(&mut self, kernel: &CeKernel) -> Option<ParkedProcess> {
         let active_process_id = kernel.current_process_state().process_id;
+        let active_has_visible_windows =
+            Self::process_has_visible_windows(kernel, active_process_id);
         let mut active_thread_ids = self.tracked_thread_ids();
         let current_thread_id = self.current_thread_id();
         if current_thread_id != 0 && !active_thread_ids.contains(&current_thread_id) {
@@ -4135,6 +4168,29 @@ impl UnicornMips {
                 return Some(parked);
             }
             self.parked_child_processes.push_back(parked);
+        }
+        if !active_has_visible_windows {
+            let count = self.parked_child_processes.len();
+            for _ in 0..count {
+                let parked = self.parked_child_processes.pop_front()?;
+                if Self::parked_process_matches_active(
+                    &parked,
+                    active_process_id,
+                    &active_thread_ids,
+                ) || parked.thread_id == current_thread_id
+                {
+                    if Self::active_matching_parked_process_should_remain(&parked) {
+                        self.parked_child_processes.push_back(parked);
+                    }
+                    continue;
+                }
+                if Self::parked_process_can_run(&parked, kernel)
+                    && Self::parked_process_has_visible_windows(&parked, kernel)
+                {
+                    return Some(parked);
+                }
+                self.parked_child_processes.push_back(parked);
+            }
         }
         let count = self.parked_child_processes.len();
         for _ in 0..count {
@@ -5332,7 +5388,7 @@ impl UnicornMips {
             let _ = Self::complete_orphaned_send_wait_in_parked_processes(&mut parked, kernel);
         }
         let parked_child_processes_hook = Rc::clone(&parked_child_processes);
-        let parked_child_processes_live_pump_hook = Rc::clone(&parked_child_processes);
+        let parked_child_processes_timeslice_hook = Rc::clone(&parked_child_processes);
         let pending_wndproc_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_wndproc_returns,
         )));
@@ -6305,6 +6361,22 @@ impl UnicornMips {
                 {
                     scheduler_timeslice_pending_hook.set(true);
                 }
+                if live_pump && !scheduler_timeslice_pending_hook.get() {
+                    let active_process_id = kernel_ref.current_process_id();
+                    if !Self::process_has_visible_windows(kernel_ref, active_process_id)
+                        && parked_child_processes_timeslice_hook
+                            .borrow()
+                            .iter()
+                            .any(|process| {
+                                process.process_state.process_id != active_process_id
+                                    && process.thread_id != active_thread_id
+                                    && Self::parked_process_can_run(process, kernel_ref)
+                                    && Self::parked_process_has_visible_windows(process, kernel_ref)
+                            })
+                    {
+                        scheduler_timeslice_pending_hook.set(true);
+                    }
+                }
             }
             let pc = address as u32;
             let previous_pc = scheduler_timeslice_last_pc_hook.replace(Some(pc));
@@ -6482,6 +6554,42 @@ impl UnicornMips {
                 true,
             ) {
                 return;
+            }
+            if Self::thread_has_receiver_work(active_thread_id, unsafe { &*kernel_ptr }) {
+                if uc
+                    .reg_write(RegisterMIPS::PC, u64::from(context_pc))
+                    .is_err()
+                {
+                    let _ = uc.emu_stop();
+                    return;
+                }
+                let _ = uc.emu_stop();
+                return;
+            }
+            if live_pump {
+                let kernel_ref = unsafe { &*kernel_ptr };
+                let active_process_id = kernel_ref.current_process_id();
+                if !Self::process_has_visible_windows(kernel_ref, active_process_id)
+                    && parked_child_processes_timeslice_hook
+                        .borrow()
+                        .iter()
+                        .any(|process| {
+                            process.process_state.process_id != active_process_id
+                                && process.thread_id != active_thread_id
+                                && Self::parked_process_can_run(process, kernel_ref)
+                                && Self::parked_process_has_visible_windows(process, kernel_ref)
+                        })
+                {
+                    if uc
+                        .reg_write(RegisterMIPS::PC, u64::from(context_pc))
+                        .is_err()
+                    {
+                        let _ = uc.emu_stop();
+                        return;
+                    }
+                    let _ = uc.emu_stop();
+                    return;
+                }
             }
             if try_timeslice_to_pending_guest_thread_creator(
                 unsafe { &*kernel_ptr },
@@ -7755,6 +7863,20 @@ impl UnicornMips {
                         &pending_wndproc_returns_hook,
                         &parked_child_processes_hook,
                         &cross_process_send_yield_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_set_window_pos_callout(
+                        unsafe { &mut *kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        unsafe { &*trampoline_jumps_ptr },
+                        &pending_wndproc_returns_hook,
                     )
                 }) {
                     return;
@@ -24935,6 +25057,62 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn active_hidden_message_can_reenter_saved_guest_context() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let active_pc = 0x0033_9c54;
+        let return_sp = 0x7ffd_f0a0;
+        let wndproc = 0x6004_f0f4;
+        let msg = crate::ce::gwe::WM_WINDOWPOSCHANGED;
+
+        scheduler.current_thread_id = active_thread_id;
+        let mut active_regs = super::MipsGuestContext::zero();
+        active_regs.regs[29] = return_sp;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: active_pc,
+            regs: active_regs.clone(),
+        });
+
+        let hwnd =
+            kernel.create_window_ex_w(active_thread_id, "hidden_receiver", "", None, 0, 0, 0);
+        assert_eq!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC)
+        );
+        assert!(kernel.post_message_w(hwnd, msg, 0, 0x31ab_cdef));
+        assert!(
+            kernel
+                .peek_ready_visible_message_w_filtered(active_thread_id, None, 0, 0)
+                .is_none()
+        );
+
+        assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
+        assert_eq!(scheduler.current_thread_id(), active_thread_id);
+        assert!(
+            !kernel
+                .gwe
+                .has_message_filtered(active_thread_id, Some(hwnd), msg, msg)
+        );
+        let saved = scheduler.saved_context.as_ref().unwrap();
+        assert_eq!(saved.pc, wndproc);
+        assert_eq!(saved.regs.regs[4], hwnd);
+        assert_eq!(saved.regs.regs[5], msg);
+        assert_eq!(saved.regs.regs[7], 0x31ab_cdef);
+        assert_eq!(saved.regs.regs[25], wndproc);
+
+        let pending = scheduler.pending_wndproc_returns.last().unwrap();
+        assert_eq!(pending.source, "OrphanedVisibleMessage");
+        let resume = pending.resume_import.as_ref().unwrap();
+        assert_eq!(resume.thread_id, active_thread_id);
+        assert_eq!(resume.import_pc, active_pc);
+        assert_eq!(resume.regs, active_regs);
+    }
+
+    #[test]
     fn cross_thread_message_callout_drains_hidden_window_message_when_no_visible_target() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -27876,6 +28054,134 @@ mod guest_thread_stack_tests {
         assert_eq!(
             kernel.process_current_directory(),
             Some("\\SDMMC Disk\\INavi")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn rotate_to_parked_process_prefers_visible_window_owner_from_hidden_active() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+
+        let active_hidden_thread = 3;
+        scheduler.set_initial_thread_id(active_hidden_thread);
+        scheduler.current_thread_id = active_hidden_thread;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0040_3000,
+            regs: MipsGuestContext::zero(),
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\happyway_win.exe",
+        ));
+        let active_hidden = kernel.create_window_ex_w_with_rect(
+            active_hidden_thread,
+            "hidden_helper",
+            "",
+            None,
+            0,
+            0,
+            0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 64, 64),
+        );
+        while kernel.gwe.get_message(active_hidden_thread).is_some() {}
+        assert!(
+            !kernel
+                .gwe
+                .windows_snapshot()
+                .into_iter()
+                .any(|window| window.hwnd == active_hidden && window.visible)
+        );
+
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0010_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\iNavi.exe",
+        ));
+        let visible_hwnd = kernel.create_window_ex_w_with_rect(
+            1,
+            "visible_owner",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert!(kernel.gwe.validate_window(visible_hwnd));
+        while kernel.gwe.get_message(1).is_some() {}
+        assert!(UnicornMips::process_has_visible_windows(&kernel, 1));
+        assert!(!UnicornMips::thread_has_visible_receiver_work(1, &kernel));
+
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0040_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\happyway_win.exe",
+        ));
+        assert!(!scheduler.active_process_has_visible_windows(&kernel));
+
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\DeviceParser.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 66,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: 2,
+            cpu: Box::new(resumable_cpu(2, 0x0040_1000)?),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\DeviceParser.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\DeviceParser.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: 1,
+            cpu: Box::new(resumable_cpu(1, 0x0010_2000)?),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\iNavi.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        assert!(scheduler.rotate_to_next_parked_process(&mut kernel));
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(scheduler.current_thread_id, 1);
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 66)
         );
 
         Ok(())
@@ -33973,6 +34279,124 @@ fn should_receiver_context_send_message_wndproc(
     active_thread_id != target_thread_id
         && active_process_id == target_process_id
         && is_guest_wndproc(wndproc)
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_set_window_pos_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    active_thread_id: u32,
+    trampoline_jumps: &[MipsTrampolineJump],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_POS)
+    {
+        return false;
+    }
+
+    let hwnd = args.first().copied().unwrap_or(0);
+    let Some(window) = kernel.gwe.window(hwnd).filter(|window| !window.destroyed) else {
+        return false;
+    };
+    let wndproc = window.wndproc;
+    let target_thread_id = window.thread_id;
+    let target_process_id = window.process_id;
+    let class_name = window.class_name.clone();
+    let active_process_id = kernel.current_process_id();
+    if !should_direct_call_send_message_wndproc(
+        active_thread_id,
+        active_process_id,
+        target_thread_id,
+        target_process_id,
+        wndproc,
+    ) {
+        return false;
+    }
+
+    let flags = args.get(6).copied().unwrap_or(0);
+    if flags & (crate::ce::gwe::SWP_SHOWWINDOW | crate::ce::gwe::SWP_HIDEWINDOW) != 0 {
+        return false;
+    }
+
+    let hwnd_insert_after = args.get(1).copied().unwrap_or(0);
+    let x = args.get(2).copied().unwrap_or(0) as i32;
+    let y = args.get(3).copied().unwrap_or(0) as i32;
+    let cx = args.get(4).copied().unwrap_or(0) as i32;
+    let cy = args.get(5).copied().unwrap_or(0) as i32;
+    let raw_return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let return_pc = import_callout_return_pc(raw_return_pc, trampoline_jumps);
+    let moved = kernel.set_window_pos(hwnd, Some(hwnd_insert_after), x, y, cx, cy, flags);
+    let message = kernel.take_ready_message_w_filtered(
+        active_thread_id,
+        Some(hwnd),
+        crate::ce::gwe::WM_WINDOWPOSCHANGED,
+        crate::ce::gwe::WM_WINDOWPOSCHANGED,
+    );
+
+    let Some(message) = message else {
+        kernel.threads.set_last_error(active_thread_id, 0);
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(u32::from(moved))),
+            uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+        ];
+        return writes.into_iter().all(|write| write.is_ok());
+    };
+
+    let caller_regs = capture_mips_gprs(uc);
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source: "SetWindowPos/WM_WINDOWPOSCHANGED",
+        hwnd: message.hwnd,
+        msg: message.msg,
+        wparam: message.wparam,
+        lparam: message.lparam,
+        wndproc,
+        return_pc,
+        return_sp: wndproc_return_sp(uc),
+        caller_regs: Some(caller_regs),
+        class_name: Some(class_name.clone()),
+        api_result: Some(u32::from(moved)),
+        dialog_result_hwnd: None,
+        finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
+        send_restore: None,
+        continuation: None,
+        resume_import: None,
+        clear_focus_after_return: None,
+    });
+    if write_wndproc_call_registers(
+        uc,
+        message.hwnd,
+        message.msg,
+        message.wparam,
+        message.lparam,
+        wndproc,
+        WNDPROC_RETURN_STUB_ADDR,
+    ) {
+        tracing::debug!(
+            target: "ce.gwe",
+            hwnd = format_args!("0x{hwnd:08x}"),
+            msg = format_args!("0x{:08x}", message.msg),
+            lparam = format_args!("0x{:08x}", message.lparam),
+            class = class_name.as_str(),
+            wndproc = format_args!("0x{wndproc:08x}"),
+            return_pc = format_args!("0x{return_pc:08x}"),
+            "SetWindowPos guest wndproc callout"
+        );
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -44776,6 +45200,82 @@ mod unicorn_tests {
             return_pc
         );
         assert_eq!(super::import_callout_return_pc(return_pc, &[]), return_pc);
+    }
+
+    #[test]
+    fn set_window_pos_callout_sends_windowposchanged_synchronously() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let thread_id = 1;
+        let wndproc = 0x0001_3570;
+        let return_pc = 0x0040_1000;
+        let hwnd = kernel.create_window_ex_w(thread_id, "SET_WINDOW_POS", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0x7777_0001).unwrap();
+
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        assert!(super::try_enter_set_window_pos_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_POS),
+            &[hwnd, 0, 3, 4, 64, 32, crate::ce::gwe::SWP_NOZORDER],
+            thread_id,
+            &[],
+            &pending,
+        ));
+
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, hwnd);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::A1).unwrap() as u32,
+            crate::ce::gwe::WM_WINDOWPOSCHANGED
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, wndproc);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            super::WNDPROC_RETURN_STUB_ADDR
+        );
+        assert!(!kernel.gwe.has_message_filtered(
+            thread_id,
+            Some(hwnd),
+            crate::ce::gwe::WM_WINDOWPOSCHANGED,
+            crate::ce::gwe::WM_WINDOWPOSCHANGED,
+        ));
+        let pending = pending.borrow();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].source, "SetWindowPos/WM_WINDOWPOSCHANGED");
+        assert_eq!(pending[0].api_result, Some(1));
+        assert_eq!(pending[0].return_pc, return_pc);
+        assert_eq!(
+            pending[0].caller_regs.as_ref().unwrap().regs[16],
+            0x7777_0001
+        );
+    }
+
+    #[test]
+    fn set_window_pos_callout_leaves_show_hide_on_framebuffer_path() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let thread_id = 1;
+        let hwnd = kernel.create_window_ex_w(thread_id, "SET_WINDOW_POS_SHOW", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, 0x0001_3570);
+        let pending = Rc::new(RefCell::new(Vec::new()));
+
+        assert!(!super::try_enter_set_window_pos_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_POS),
+            &[hwnd, 0, 0, 0, 64, 32, crate::ce::gwe::SWP_SHOWWINDOW],
+            thread_id,
+            &[],
+            &pending,
+        ));
+        assert!(pending.borrow().is_empty());
     }
 
     #[test]

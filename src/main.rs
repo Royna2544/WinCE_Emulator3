@@ -511,6 +511,7 @@ fn run_cpu_loop(
         if args.remote_server.is_some()
             && remote_drained.handled == 0
             && desktop_queued == 0
+            && !cpu.active_process_has_visible_windows(kernel)
             && should_rotate_idle_runnable_parked_process(
                 cpu.active_process_has_visible_receiver_work(kernel),
                 cpu.has_runnable_parked_process(kernel),
@@ -837,6 +838,15 @@ fn run_cpu_loop(
             continue;
         }
         if cpu.prepare_active_sent_message_callout(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
+        if live_pump_slice
+            && !cpu.active_process_has_visible_windows(kernel)
+            && !cpu.active_process_has_receiver_work(kernel)
+            && cpu.rotate_to_visible_window_parked_process(kernel)
+        {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
