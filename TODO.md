@@ -1,172 +1,56 @@
 # TODO
 
-Regenerated on 2026-06-11 from current source and test coverage.
+Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
-- Add PE icon extraction edge tests for remaining PE resource variants and non-PE fallback paths; 1bpp indexed palette extraction/rendering, 24bpp `BI_RGB` stride-padded extraction/rendering, 24bpp extracted AND-mask transparency during `DrawIconEx(DI_NORMAL)`, 16bpp `BI_BITFIELDS`/RGB555 `RT_ICON` extraction/rendering, `DestroyIcon` cleanup of PE-extracted owned color/mask backing, raw `KernExtractIcons` exact integer `RT_GROUP_ICON` lookup, no-output failure behavior, independent large/small partial extraction when one selected `RT_ICON` is missing, non-PE index-zero single-slot fallback preservation, and raw `GetFileVersionInfoSizeW`/`GetFileVersionInfoW` integer version-resource extraction are now covered.
-- Extend raw `GetIconInfo` coverage beyond the now-covered stock cursor/icon `fIcon` split, tracked bitmap-backed `ICONINFO` hotspot/mask/color writeback, caller-owned bitmap deletion lifetime after `CreateIconIndirect`, bitmap-backed `ImageList_GetIcon` consumer bridge, and source-image-list-destroy lifetime for returned icon bitmaps, especially live guest paths that consume returned mask/color handles.
-- Expand `DrawIconEx`, `ImageList_DrawEx`, and `ImageList_DrawIndirect` tests for remaining mask formats, palette variants, additional overlay rendering variants, stretched draws, framebuffer output, and additional cleanup/error lifetimes; the CE all-white overlay-mask zero-bounds, non-rectangular overlay-mask, same-slot `ImageList_SetOverlayImage` bounds-preservation, distinct CE large/small `SHGetFileInfo` system image-list handles, CE `SHGetFileInfo` icon-only `iIcon` writes plus untouched unrequested fields, system image-list pseudo-icon selected-DIB body/overlay rendering, bitmap-backed `DrawIconEx(..., 0, 0, DI_NORMAL)` native-size selected-DIB drawing, unmasked `ImageList_GetIcon` all-white mask initialization, source-image-list-destroy lifetime for returned `ImageList_GetIcon` bitmaps, `ImageList_SetIconSize` changed zero/negative dimension branch, hidden-after-`ImageList_BeginDrag` drag-state behavior, raw `ImageList_AddMasked(CLR_DEFAULT)` and raw `ImageList_LoadImage(CLR_DEFAULT)` upper-left sampling, raw bitmap-backed `AddMasked` mono-mask creation/rendering, and CE `StretchBlt_I`-style DISPPERF rows for explicit `ImageList_Draw*` `ILD_MASK`/`ILD_IMAGE` draw passes are now covered, raw `BitBlt`/`MaskBlt` now cover CE negative destination extent mirroring for source-copy selected-DIB draws including `MaskBlt`'s null-mask shortcut, raw `StretchBlt` now covers selected-DIB signed destination/source extent mirroring, raw `CreateDIBPatternBrushPt` now builds private bitmap-backed pattern brushes from packed DIB data, raw direct-DIB `StretchDIBits`/`SetDIBitsToDevice` now render into selected memory DIBs with CE bad-HDC/ROP4 validation, CE `WritableBitmapTest(EStretchDIBits/ESetDIBitsToDevice)` read-only selected-bitmap rejection, `SetDIBitsToDevice` null-DIB-payload validation ordering, bottom-up source scanline handling, indexed 2 bpp `DIB_RGB_COLORS` source tables, and `DIB_PAL_COLORS` palette-index source tables, raw `MaskBlt` also covers masked selected-DIB/framebuffer signed-destination draws, and raw `AlphaBlend` now covers negative selected-DIB/framebuffer destination clipping, CE `BLT_ALPHASRCNEG` source-alpha/source-constant inversion, CE `BLT_ALPHADESTNEG` 32bpp destination-alpha inversion, and CE `g_stcPPAlpha` selected 32bpp per-pixel-alpha table rows.
-- Implement and test remaining `SendMessageTimeout`/message-wait semantics beyond the now-covered below-threshold/hung abort-if-hung split, `SMTO_ABORTIFHUNG`-only below-threshold queueing, combined `SMTO_BLOCK | SMTO_ABORTIFHUNG` hung abort, same-thread abort-if-hung non-abort, early/nested `ReplyMessage`, active-outer-timeout nested-send paths, Unicorn parked `SendMessageTimeout` timeout re-entry/scheduler-resume cleanup plus direct/scheduler result-ready replay, raw and Unicorn `MsgWaitForMultipleObjectsEx` message-wake indexing after multiple unsignaled handles, unreadable handle-array `WAIT_FAILED`/`ERROR_INVALID_PARAMETER` diagnostics, and invalid CE handle-array shape rejection for oversized counts/null arrays, especially broader reentrant waits and live multi-wait interactions.
-- Extend remaining popup/menu placement coverage beyond the covered top-level screen clamp, `TPMPARAMS.rcExclude` below-placement/right-side fallback/left-side fallback/all-candidates-intersect fallback cases, and cascade child-menu left/bottom screen clamping, especially live nested modal routing and unusual cancellation combinations.
-- Verify `Shell_NotifyIcon` and `SHNotification*` in an integrated Unicorn run, including Explorer/taskbar `IShellNotificationCallback` dispatch through a real guest COM object lifecycle, broader remove/update race behavior, and runtime invalid-handle behavior beyond the raw failed `Shell_NotifyIcon` no-taskbar-post paths, stale-taskbar update success, live modify/delete taskbar-copy paths, raw `SHNN_SHOW` window-only, GUID-value OLE `CoCreateInstance` import writeback, local callback-acquisition queue, unregistered callback-CLSID sink fallback, overlong taskbar-title clearing, and mapped vtable callout paths.
-- Extend `MessageBoxW` live modal coverage beyond raw default/queued input, modal pump dispatch, owner focus/activation restoration after teardown, the covered `MB_TOPMOST` transient `WS_EX_TOPMOST` style, and the shared GWE topmost z-order group, especially timeout edges and broader live user-driven dispatch.
-- Extend file-change notification/storage coverage beyond the now-trapped `fsdmgr.dll` `FSINT_*`/`FSEXT_*` notification import surface, direct `FSDMGR_AdvertiseInterface @2` advertisement publication/removal, FSDMGR cache imports (`FSDMGR_CacheIoControl @3`, `FSDMGR_CachedRead @4`, `FSDMGR_CachedWrite @5`, `FSDMGR_CreateCache @6`, `FSDMGR_DeleteCache @9`, `FSDMGR_FlushCache @14`, `FSDMGR_InvalidateCache @24`, `FSDMGR_ResizeCache @30`, `FSDMGR_SyncCache @32`), direct sparse-sector `FSDMGR_DiskIoControl @12`, `FSDMGR_ReadDisk @25`, `FSDMGR_ReadDiskEx @26`, `FSDMGR_WriteDisk @35`, and `FSDMGR_WriteDiskEx @36` support, basic disk metadata/status IOCTLs, `GET_SECTOR_ADDR` validation/no-XIP unsupported behavior, `GETPMTIMINGS` zero timing snapshots, secure-wipe sector clearing and set-secure-wipe-flag validation/no-op behavior, copy-external-start `DISK_COPY_EXTERNAL` payload validation/unsupported no-touch behavior, `FSDMGR_CreateFileHandle @7`, `FSDMGR_CreateSearchHandle @8`, `FSDMGR_DeregisterVolume @10`, `FSDMGR_GetVolumeHandle @21`, `FSDMGR_GetVolumeName @22`, `FSDMGR_RegisterVolume @27`, `FSDMGR_GetMountFlags @37`, `STOREMGR_FsIoControlW @44`, `FSDMGR_AsyncEnterVolume @80`, `FSDMGR_AsyncExitVolume @81`, `FSDMGR_ParseSecurityDescriptor @82`, FSDMGR first-change import owner regression, internal `FSINT_*` notification-handle owner/reset/info/close split, public direct `CloseHandle` owner rejection, direct AFS `hProc` owner close/duplicate rejection, raw AFS volume-handle owner/unmount/close signaling, volume-handle/FSDMGR-import `FSCTL_GET_VOLUME_INFO` metadata, FSDMGR mount name suffixing/AFS flag metadata, FSDMGR disk-pointer-to-HVOL mapping, FSD context-pointer handle shims, CE null-cache fallback ID/status behavior, direct async volume enter/exit one-shot lock-token lifetime validation, direct security-attribute descriptor parsing, coredll/AFS `GetFileSecurityW`/`SetFileSecurityW` no-security-manager mounted-path routing, and exact-size `DELETE_SECTOR_INFO` validation plus sparse-sector clearing into physical block-driver backing, broader external cache DLL/filter behavior, real CE mounted-volume availability/powerdown/thread-wait reference behavior, broader file-security ACL storage/enforcement, remaining hardware-flash/callable FMD interface thunks/hardware-backed FLS discovery and specialized disk IOCTLs, real external-copy accelerator behavior, and real mounted-FSD `FsIoControl` hook forwarding beyond the host-backed unsupported stub.
-- Storage now also covers successful no-op `IOCTL_DISK_FLUSH_CACHE` through `FSDMGR_DiskIoControl`; remaining disk work should stay focused on physical block-driver backing, external cache/filter behavior, remaining hardware-flash/callable FMD interface thunks/hardware-backed FLS discovery and specialized IOCTLs, real external copy acceleration, and mounted-FSD forwarding.
-- Storage now also covers CE `fmd.h` `IOCTL_FMD_SET_XIPMODE`, `IOCTL_FMD_GET_XIPMODE`, `IOCTL_FMD_LOCK_BLOCKS`, `IOCTL_FMD_UNLOCK_BLOCKS`, `IOCTL_FMD_GET_INTERFACE`, `IOCTL_FMD_SET_SECTORSIZE`, `IOCTL_FMD_RAW_WRITE_BLOCKS`, `IOCTL_FMD_READ_RESERVED`, `IOCTL_FMD_WRITE_RESERVED`, `IOCTL_FMD_GET_RESERVED_TABLE`, `IOCTL_FMD_SET_REGION_TABLE`, `IOCTL_FMD_GET_RAW_BLOCK_SIZE`, and `IOCTL_FMD_GET_INFO` through `FSDMGR_DiskIoControl` for synthetic XIP mode state, block-lock state, a 56-byte `FMDInterface` ABI skeleton with null callback slots, sector-size state, total-block-bounded raw block writes into sparse disk backing, CE `ReservedReq` validation plus named synthetic reserved-region read/write persistence and `ReservedEntry` table output, `FlashRegion` table validation/storage, block-size, and deterministic `FMDInfo` metadata with stored region and reserved-entry counts. Remaining FMD work is real hardware flash interface behavior, hardware-backed FLS discovery/forwarding, and callable FMD callback thunks.
-- Storage now also covers direct CE `FSDMGR_GetDiskInfo @16` and `FSDMGR_GetDiskName @17` imports through the same synthetic disk metadata/name contract used by the disk IOCTL path.
-- Storage now also covers CE zero-sector direct `FSDMGR_ReadDisk @25`/`FSDMGR_WriteDisk @35` calls without touching null caller buffers after validating the synthetic disk token; remaining direct disk work is physical block-driver forwarding rather than the sparse synthetic path.
-- Storage now also covers direct CE `fsdmgr.dll` path imports `FSEXT_CreateDirectoryW @54`, `FSINT_CreateDirectoryW @55`, `FS_RemoveDirectoryW @56`, `FS_GetFileAttributesW @57`, `FS_SetFileAttributesW @58`, `FS_DeleteFileW @59`, `FS_MoveFileW @60`, `FS_DeleteAndRenameFileW @61`, `FS_GetDiskFreeSpaceExW @62`, `FSEXT_FindFirstFileW @63`, `FSINT_FindFirstFileW @64`, `FSEXT_CreateFileW @65`, `FSINT_CreateFileW @66`, `FS_IsSystemFileW @67`, `FSINT_GetFileSecurityW @76`, `FSEXT_GetFileSecurityW @77`, `FSINT_SetFileSecurityW @78`, and `FSEXT_SetFileSecurityW @79` through mounted guest paths; remaining file-security work is broader ACL persistence/enforcement.
-- Storage now also covers the CE `IOCTL_DISK_GETINFO` alias from `diskio.h` in addition to legacy `DISK_IOCTL_GETINFO`, including the output-buffer `DISK_INFO` call shape.
-- Storage now also covers `IOCTL_DISK_SETINFO`/`DISK_IOCTL_SETINFO` validation and synthetic `DISK_INFO` persistence through subsequent GETINFO calls; remaining SETINFO work is real physical block-driver forwarding.
-- Storage now also covers synchronous file-handle `DeviceIoControl(IOCTL_FILE_READ_SCATTER/IOCTL_FILE_WRITE_GATHER)` for page-multiple `FILE_SEGMENT_ELEMENT` arrays through the host-backed current file position and CE reserved offset arrays, and accepts ignored non-null `OVERLAPPED*` pointers like cachefilt; remaining scatter/gather work is real lower-FSD/filter forwarding parity.
-- Storage now also covers direct CE `IOCTL_DISK_FORMAT_VOLUME` and `IOCTL_DISK_SCAN_VOLUME` through `FSDMGR_DiskIoControl`; synthetic format-volume clears sparse sectors and scan-volume is a no-op, while real FATFS utility execution remains queued.
-- Storage now also names direct CE standby, obsolete delete-cluster, and disk-level CD-ROM controls through `FSDMGR_DiskIoControl` and covers the current synthetic unsupported/no-touch behavior; real behavior needs backing block/CD drivers.
-- Storage now also covers direct CE `FSDMGR_DeviceHandleToHDSK @11` as the source-backed identity cast plus `FSDMGR_FormatVolume @15`/`FSDMGR_ScanVolume @31` `Util` registry probing: absent utility metadata returns `ERROR_FILE_NOT_FOUND`, while configured-but-unloaded utility DLLs return the current `ERROR_MOD_NOT_FOUND` execution boundary; remaining format/scan work is real utility DLL load/export execution from disk registry metadata.
-- Storage now also covers direct CE `FSDMGR_AdvertiseInterface @2` through the shared coredll `AdvertiseInterface` path, including GUID/name validation, empty-name-to-root mapping for the FSDMGR wrapper, add/remove advertisement storage, configured block-device `IClass` publication/removal for `\StoreMgr\<device>`, explicit `GUID=name`, `%d`, `%l`, and configured `%b` bus names with owner-scoped duplicate lifetime, coredll `EnumDeviceInterfaces @1874` enumeration of the tracked advertisement table with CE GUID/name/size/error behavior, CE message queues (`CreateMsgQueue`/`OpenMsgQueue`/`ReadMsgQueue`/`WriteMsgQueue`/`GetMsgQueueInfo`/`CloseMsgQueue`) with CE access-direction, reader/writer wait readiness, full-queue timeout, oversized-write, truncated-read, `MSGQUEUE_ALLOW_BROKEN` pipe-disconnect behavior, `MSGQUEUE_MSGALERT` priority/single-slot behavior, and Unicorn blocking `ReadMsgQueue`/`WriteMsgQueue` timeout parking, and coredll `RequestDeviceNotifications @1504`/`StopDeviceNotifications @1505` typed subscription handles with `DEVDETAIL` attach/detach delivery; remaining interface work is real device-manager `fsdev_t` handles.
-- Unicorn now parks blocking `ReadMsgQueue`/`WriteMsgQueue` imports on message-queue readiness and replays the original coredll import on wake or timeout. Continue live validation that device-notification consumers drain startup events in CE order, and keep true per-device `fsdev_t` scoping as the remaining message-queue/interface gap.
-- Storage now also covers direct CE `FSDMGR_GetRegistryFlag @18`,
-  `FSDMGR_GetRegistryString @19`, and `FSDMGR_GetRegistryValue @20` imports
-  with missing-registry output clearing plus configured logical-disk
-  root/subkey lookup for mounted profiles; remaining registry-adjacent work is
-  executing configured utility DLL exports and loading/forwarding cache/filter
-  DLL behavior from mounted storage metadata.
-- Storage now also covers direct CE `FSDMGR_AsyncEnterVolume @80` and `FSDMGR_AsyncExitVolume @81` imports for registered HVOLs with distinct one-shot lock-token output, mismatched/duplicate/stale exit rejection, output-copy cleanup, and invalid-parameter/removed-device failures; remaining async-volume work is CE mounted-volume availability, powerdown, and thread-exit wait reference behavior.
-- Storage now also covers direct CE `FSDMGR_ParseSecurityDescriptor @82` for null security attributes, kernel-mode descriptor pointer validation, private `SECDESHDR.cbSize` reporting, and coredll/AFS `GetFileSecurityW`/`SetFileSecurityW` no-security-manager path routing; remaining file-security work is broader ACL storage/enforcement.
-- Storage now also exposes CE `LockFileEx @1968`/`UnlockFileEx @1969` through the raw coredll export table and direct `fsdmgr.dll` lock-manager imports `FSDMGR_EmptyLockContainer @13`, `FSDMGR_InstallFileLock @23`, `FSDMGR_RemoveFileLock @28`, `FSDMGR_RemoveFileLockEx @29`, `FSDMGR_TestFileLock @33`, and `FSDMGR_TestFileLockEx @34`. The covered path validates readable 20-byte `OVERLAPPED*` pointers plus real file-handle inputs like the CE FSDMGR wrapper path, enforces host-backed byte-range shared/exclusive conflict state, exact owner/range unlock, owner-wide unlock, current-position/explicit-offset test checks, and close-handle cleanup. Remaining file-lock work is CE-style acquire/release callback forwarding, blocking wait queues for non-immediate conflicts, and lower-FSD/filter forwarding.
-- Continue narrowing `CeGetFileNotificationInfo` reset/error propagation beyond the covered prefix drains, no-more-items, undersized buffers, pending no-fit output-count write order, fitted-record count-pointer fault drain, partial caller-buffer fault copied-prefix drain, no-pending null-returned pointer order, all-zero no-data reset, null-buffer guarded writes, and trailing-NUL record sizing.
-- Extend GDI/text/IME coverage beyond the now-covered CE NULL-HIMC open/conversion/composition status resolution, CE IMM composition/candidate/status window form and point round-trips, CE `ImmGet/SetCompositionFontW` `LOGFONTW` state, CE SIP panel registration/preference/location/input-attribute state, CE `ImmGetDefaultIMEWnd`/`DefaultImeWndGet` focused-window and caller-HWND proxy behavior, CE `ImmIsUIMessageW` forwarding for the `WM_IME_*` UI message family, CE `ImmGetHotKey` no-registered-hotkey output clearing, CE `ImmGetGuideLineW` no-guideline query/string-clearing behavior and HIMCC-backed `GUIDELINE` level/index/string/private payload reads, CE `ImmLockIMC`/`ImmUnlockIMC` and `ImmLockIMCC` `INPUTCONTEXT`, `COMPOSITIONSTRING`, and `CANDIDATEINFO` lock buffers plus lock-count/size queries, CE `ImmUnlockIMC` readback for resized `COMPOSITIONSTRING`/`CANDIDATEINFO` IMCC payload mutations, CE `ImmGetCandidateListCountW`/`ImmGetCandidateListW` `CANDIDATELIST` payload/state, CE `ImmNotifyIME` candidate selection/page, composition-font, and status-window notification messages, TESTIME/`imm.h`-backed `ImmGetProperty` capability values plus TESTIME resource-backed `ImmGetIMEFileNameW`/`ImmGetDescriptionW` strings for IME HKLs, TESTIME zero-result `ImmGetConversionListW`, TESTIME `ImmEscapeW(IME_ESC_QUERY_SUPPORT)` self-query behavior, CE keyboard-layout loaded-list/`KLF_ACTIVATE`/`HKL_NEXT`/`HKL_PREV` transitions, CE `MapVirtualKeyW` scan-code mode behavior for LR modifier/common VK conversion and invalid mode errors, TESTIME `dic.c` single-letter candidate generation for synthetic IME HKLs, TESTIME `regword.c` fake-word style/register/unregister state plus registered-word candidate inclusion and `ImmEnumRegisterWordW` callback enumeration, TESTIME `testime.reg` sample dictionary seeding for the active registry-value candidate path, TESTIME `ImmGenerateMessage` `hMsgBuf` queue flushing, CE `GetCharABCWidthsI` glyph-index/count ABI, CE nonzero-escapement `GetCharABCWidths`/`GetCharABCWidthsI` rejection, CE 16px Tahoma `GetCharABCWidths*` `fontdata.h` ABC table, default Tahoma `TEXTMETRICW` metadata bytes, plain 20px CE `NTFontMetrics` rows for Tahoma/Courier New/Symbol/Times New Roman/Wingdings/Verdana, CE `font.cpp::passOddSize` known-font realized `tmHeight` rows for `lfHeight` 0 and -24, plain 16px CE `NTExtentResults` width rows for Tahoma/Courier New/Times New Roman/Wingdings/Verdana/Arial raster, CE `GetDeviceCaps` bad-HDC/null-primary-HDC/invalid-index plus `DRIVERVERSION`, unlimited brush/pen/marker/font counts, rectangular `CLIPCAPS`, square-pixel `ASPECT*`, `SIZEPALETTE`, and `NUMRESERVED` behavior, CE `pal.cpp` palette entry invalid parameter/handle edges, `GetNearestColor` invalid-HDC behavior, non-paletted system-palette query behavior, stock default-palette selection plus readable stock default-palette `GetObjectW`/`GetPaletteEntries`/nearest-index behavior, CE `pal.cpp` 256-entry user-palette create/set/get/nearest-index flow, `GetCurrentObject(OBJ_PAL)` selected/default-palette and invalid-HDC/type behavior, `GetObjectType` CE `OBJ_DC`/`OBJ_MEMDC`/`OBJ_PAL` constants and invalid-handle behavior, `GetStockObject(-1)` invalid-parameter behavior, `SelectObject` invalid-HDC/null-object/bad-object behavior, `SetTextCharacterExtra` positive and negative advance math in `GetTextExtentExPointW`, `DrawTextW`, and `ExtTextOutW`, CE `WritableBitmapTest(EDrawTextW/EExtTextOut)` read-only selected-bitmap rejection, CE Arial raster `SetTextCharacterExtra` rejection, selected-font `DeleteObject` lifetime preservation, zeroed and nonzero `LOGFONTW` `CreateFontIndirectW`/`GetObjectW` round-trip behavior, and `ExtTextOutW` DC clip-region clipping, especially rendered guideline/candidate UI callbacks, broader font-size/style selection/fallback, glyph fidelity outside the fixture ranges, complex clipping, broader palette/device-color behavior, and additional font lifetime edges.
-- Continue remaining GDI object parity beyond the now-covered CE `SelectObject` simple-region `SIMPLEREGION` return/status clipping, CE `SelectClipRgn` simple and complex copy/lifetime behavior plus complex `GetClipBox` status reporting, CE `clip.cpp` invalid-HDC/null-output validation for `IntersectClipRect`/`ExcludeClipRect`/`GetClipBox`, implicit-HDC-surface clipping for `IntersectClipRect`/`ExcludeClipRect`, CE `OffsetRgn` null/simple/complex status reporting, CE `EqualRgn` null-vs-wrong-handle error splitting, CE `PtInRegion`/`RectInRegion` invalid-region/null-rect error splitting, CE `GetRgnBox`/`CombineRgn` parameter-error edges, CE `GetRegionData` size/payload/error coverage, and CE null-region canonical bounds for create/set-region APIs, especially broader cross-DC region selection edge cases.
-- Keep `GradientFill` work scoped to CE-backed rectangle gradients: bad-HDC/null-pointer/count/mesh-index validation, `GRADIENT_FILL_TRIANGLE` rejection, and rectangle-only `SHADEBLENDCAPS` are covered; broader non-rectangular gradient behavior should wait for concrete CE source evidence.
-- Continue polygon/polyline drawing parity beyond the now-covered CE `passNull2Draw`/`SimplePolyTest` HDC, null-point, count validation, selected-DIB `SetViewportOrgEx` origin translation, selected-DIB `SimpleClipRgnTest0` clip-region containment, and CE `ShapeColorTest(EPolygon)` two-point `R2_XORPEN` stroke edges, especially broader stress-shape clipping/fill-mode/pathological point-list behavior from `draw.cpp`.
-- Continue shape-drawing parity beyond the now-covered CE `Rectangle`/`Ellipse`/`RoundRect` invalid-HDC edges, CE origin/ext API coverage for `SetWindowOrgEx`/`GetWindowOrgEx`/`OffsetViewportOrgEx`/`GetViewportOrgEx`/`Get*ExtEx`, selected-DIB viewport/window-origin translation for `LineTo`/`Polyline`/`Polygon` plus `Rectangle`/`Ellipse`/`RoundRect`, and selected-DIB `Rectangle`/`RoundRect` `R2_XORPEN` outline behavior from CE `ShapeColorTest`, especially CE stress-shape clipping and writable-bitmap cases from `draw.cpp`.
-- Continue miscellaneous draw-API parity beyond the now-covered CE `passNull2Draw` validation edges for `RectVisible`, `FillRect`, `DrawFocusRect`, `DrawEdge`, `MoveToEx`, `LineTo`, `GetPixel`, `SetPixel`, `GetROP2`, `SetROP2`, `GetDIBColorTable`, `SetDIBColorTable`, `SetBitmapBits`, `PatBlt`, and `TransparentImage`, plus CE `SetBitmapBits` pointerless `CreateBitmap(..., NULL)` backing writes and read-only loaded-bitmap rejection, CE `BitBlt`, `PatBlt`, `StretchBlt`, `MaskBlt`, `TransparentImage`, `GradientFill`, `AlphaBlend`, `StretchDIBits`, `SetDIBitsToDevice`, `DrawTextW`, `ExtTextOut`, `FillRect`, `InvertRect`, `SetPixel`, `LineTo`, `Polyline`, `Polygon`, `Rectangle`, `Ellipse`, `RoundRect`, `DrawFocusRect`, and `DrawEdge` read-only selected-bitmap rejection, CE `DrawFocusRectTest` framebuffer XOR toggling, CE `DrawEdgeTest1` invalid edge-type rejection, CE `DrawEdgeTest2/3` `BF_MIDDLE` button-face center fill and `BF_FLAT` white-center preservation with real `GetPixel` reads, CE public partial-edge `BF_ADJUST` rectangle shrinking, CE tab/trackbar-style `BF_DIAGONAL_END*` bounded visible diagonal rendering, CE `PatBltBadRopTest` source-dependent ROP3 rejection, source-free PatBlt pattern/destination ROP3 rendering, CE `TryShapes`/`PatBltSimple` zero and negative PatBlt extent behavior, the same-framebuffer black/white color-key `TransparentBlt` rendering cases, CE `TransparentBltErrorTest` near-miss color-key rejection, CE `ClipBitBlt(ETransparentImage)` selected-DIB/framebuffer all-edge destination clipping coverage, CE `TransparentBltBitmapTest` direct bitmap-handle source routing, the selected-DIB two-point `Polygon` `R2_XORPEN` path from CE `ShapeColorTest`, and selected-DIB `Rectangle`/`RoundRect` `R2_XORPEN` outline behavior, especially deeper clip-region visibility, brush realization, broader draw-edge iteration flag rendering, viewport/current-position, additional ROP2 drawing interactions, DIB palette mutation, broader SetBitmapBits depth/format copy cases, remaining PatBlt raster-operation edges, remaining writable loaded-bitmap rejection across other draw APIs, and remaining TransparentBlt rendering/error cases from `draw.cpp`.
-- CE `draw.cpp::TransparentBltTransparencyTest` is now covered across the raw `CreateBitmap(..., NULL)` bit-depth matrix: selecting the pointerless bitmap into a compatible memory DC allocates owned backing, and `FillRect`/`SetPixel` output is visible to a later `TransparentImage` color-key copy for 1/2/4/8/16/24/32 bpp sources. CE `draw.cpp::TransparentImagePalTest(ETransparentImage)` duplicate color-table RGB behavior is covered for a 4 bpp selected-DIB source using the CE-accepted all-realized-RGB-transparent branch, CE `draw.cpp::TransparentBltErrorTest` near-miss keys are covered for same-framebuffer HDC copies, and CE `draw.cpp::ClipBitBlt(ETransparentImage)` selected-DIB/framebuffer all-edge destination clipping coverage is in place. Remaining work is the broader `TransparentBlt` clipping/error matrix.
-- Continue remaining stock-object parity beyond the now-covered CE stock `DeleteObject` no-op success/liveness behavior and public `BORDERX_PEN`/`BORDERY_PEN` handle/type/select/delete coverage, especially any deeper driver-specific border-pen drawing style or stock palette selection edges outside the GDIAPI fixture list.
-- Continue DIB/bitmap object parity beyond the now-covered CE `CreateDIBSection` `GetObjectW` DIBSECTION-sized metadata path, BITMAP-sized fallback, 12-byte `BITMAPCOREHEADER`/RGBTRIPLE color-table creation, file-mapping section-backed bits with `dshSection`/`dsOffset` reporting, file-backed mapping initial-byte seeding and `FlushViewOfFile` write-through, shared-view synchronization, `DeleteObject` dirty-bit writeback/sibling-view synchronization, closed mapping-handle view lifetime, null-`ppvBits` creation, 24bpp `BI_BITFIELDS`-as-BGR behavior, direct-DIB `BI_RLE8`/`BI_RLE4` decoding for `StretchDIBits`/`SetDIBitsToDevice`, direct-DIB and DIB-section unsupported bit-depth rejection, bad nonzero HDC rejection, null-HDC plus non-indexed/high-bpp `DIB_PAL_COLORS` rejection, and oversized indexed RGB `biClrUsed` rejection, especially remaining DIB compression variants plus remaining section-backed orientation/file-backed edge cases.
-- Extend `ExtEscape` beyond the now-covered CE `QUERYESCSUPPORT` display-driver query surface for get/set gamma, get/set rotation, `CONTRASTCOMMAND`, `GETRAWFRAMEBUFFER`, and `DISPPERF_EXTESC_*`, direct CE GPE get/set gamma payloads, direct CE VGAFLAT/SMI3DR get/set screen-rotation payloads, DeviceEmulator `SETBACKLIGHT`/`GETBACKLIGHT`, `CONTRASTCOMMAND`, `GETRAWFRAMEBUFFER` metadata payloads plus guest-readable `pFramePointer` bytes, invalid query-buffer validation, invalid-HDC validation, full CE GDIAPI privileged-display-escape `ERROR_INVALID_ACCESS` list, and CE-sized `DISPPERF_EXTESC_*` payload contract with nonzero raw `BitBlt`/`StretchBlt`/`PatBlt`/non-copy `MaskBlt`/`TransparentImage`/explicit `ImageList_Draw*` `ILD_MASK` and `ILD_IMAGE`/direct-DIB `StretchDIBits` and `SetDIBitsToDevice`/`AlphaBlend` GPE timing rows plus CE `ROP_LINE` timing rows for raw `LineTo`/`Polyline` by implementing video-protection and broader DISPPERF instrumentation coverage outside those raw draw paths.
-- Keep TESTIME dictionary/private-profile work focused beyond the now-covered single-letter table, registered-word inclusion/enumeration, registry-value reads, sample `testime.reg` seed reconciliation, and `MAXCANDSTRNUM` oversized candidate rejection.
-- Keep TESTIME private-profile parity moving beyond the now-covered uppercase-section visibility guard for registered-word candidate lookup and Unicorn `ImmEnumRegisterWordW` enumeration.
-- Audit runtime loader behavior outside Unicorn so raw tests and runtime mapping behavior stay intentionally aligned.
-- Keep `StringCompress`/`StringDecompress` honest around the now-covered CE
-  `compr2.c` all-zero, shorter raw even/odd stream, and emulator-owned opaque
-  shrinkable-stream packet paths; byte-for-byte private `CECompress`/
-  `CEDecompress` engine parity remains open if the missing engine body is found.
-- Continue iNavi route-flow work from the current process/window/shell readiness point into destination search and map interaction.
-- Continue the post-thread-exit-cleanup iNavi live run from the current state:
-  the active CPU no longer wedges at `THREAD_EXIT_STUB_ADDR`, and the later
-  stale active-thread blocked-wait state is cleared at host wall-clock slice
-  stops. The app-owned splash popup `0x00020008` remains visible above the
-  already-created map child windows. Trace the real hide/destroy/z-order
-  transition and the readiness condition that should trigger it, keeping the
-  investigation generic rather than naming iNavi-specific behavior in emulator
-  policy. In parallel, trace thread 16's unsignaled manual event pair
-  (`WaitForMultipleObjects` return site `0x009537f4`) and why remote GPS bytes
-  drain into `COM7:` without a guest serial-read waiter.
-- Continue the iNavi splash dismissal investigation after the large read-only
-  backing fix: startup disk I/O is no longer the dominant blocker in the fast
-  live run, and only the main `GetMessage` waiter remains. The owned splash
-  popup `0x00020008` still stays topmost and receives touch messages, so the
-  next step is to trace the real hide/destroy/state-transition trigger rather
-  than adding synthetic dialog or path-specific behavior.
-- Continue the iNavi UI crawl after the detached `drive97` release recheck:
-  the remote server now owns its listener in shared server state and startup
-  self-probes `/api/v1/status` before printing the URL, closing the false
-  published-listener case reproduced by `drive96`. `drive97` verified
-  `/api/v1/status`, `/api/v1/frame.jpg`, and a top-right tap through the active
-  iNavi window's target-thread wake path, and captured the real iNavi SE splash
-  art. The remaining UI crawl work is the post-splash map transition.
-- Continue isolating the fast-start startup split. Without fast-start, a bounded
-  iNavi CPU run exits via the CE current-process pseudo-handle (`0x42`) with
-  code `3` at `mfcce400.dll+0xd674`; with `WINCE_EMU_FAST_START=1` it stays in
-  startup. `WINCE_EMU_FAST_START_LIVE=1` now allows testing that behavior in
-  live-pump mode. The host idle message-poll throttle has been narrowed so
-  stale parked `GetMessage` waiters no longer force 100 ms slices while active
-  guest CPU context is still runnable; current live runs reach `COM7:` and
-  map/search DB work quickly under the normal remote host launch. Continue from
-  the rendered-map transition and non-fast-start exit split.
-- Continue the remote-driven iNavi startup investigation from the current
-  resource/map-loading state: the Happyway `MessageBoxW` is dismissed through
-  the real button, stale unowned modal waits no longer rotate the active
-  process, visible-work handoff returns scheduling to iNavi after Happyway
-  handles the modal button, cross-thread visible-message handoff now requires a
-  mapped guest WNDPROC before consuming the message, direct-send WNDPROC cleanup
-  now preserves live callouts until the saved PC reaches their return PC, and
-  orphaned WNDPROC return stubs can recover from the last valid return record;
-  escaped cross-thread visible-message WNDPROC callouts now restore their saved
-  import-thread register context when the guest reaches their saved return PC.
-  Post-dialog taps reach iNavi, and the app
-  opens/reads mapdata, resource, font, and config files.
-  Determine why the animated splash does not transition to the map UI from the
-  latest post-import-thunk state: traced live-pump runs now pass the early
-  `COREDLL.dll@1047` import-thunk wall stop, clear/recover Happyway WNDPROC
-  state, and reach `iNavi.exe+0x329da8` with later resource/file activity while
-  modal/winsock waits remain in the scheduler. The startup flamegraph after the
-  trampoline index fix reaches the same `iNavi.exe+0x329cxx` resource/map-loading
-  region with several MB of file reads. The residual linear trampoline-origin
-  helper was removed in `4559d704`, and the later mapped-code index borrow
-  removed the per-slice `MappedBlob` byte-vector clone band. The follow-up
-  Windows-sudo flamegraph shows the remaining sampled emulator overhead in
-  Unicorn TCG translation/execution and per-instruction code hook callbacks. The
-  latest live process reaches map-layer `.mdc` reads plus `soap.bin`, creates
-  then hides many map child windows, and leaves the owned splash popup visible
-  with no observed hide/demote trace.
-  Determine whether a pending custom transition message, hidden-window state, or
-  owner-popup/z-order edge is preventing the normal map reveal. Timer sampling
-  while the splash is visible showed `count=0`, so the next diagnostic step is
-  to follow the app-side splash owner object around `iNavi.exe+0x4d7a0` and the
-  `0x48e998` show-window wrapper call sites, looking for the missing hide,
-  destroy, or z-order demotion path. After `467ae36d`, the prior
-  `THREAD_EXIT_STUB_ADDR` active-thread wedge is fixed; continue from the
-  current live state where touch dispatch is consumed by `0x00020008`, resource
-  decoding is still advancing, and serial GPS bytes queue until the guest reads
-  `COM7:`. After the bounded writable memory-backing change, the previous
-  read/write search-DB host-read churn is no longer the active bottleneck:
-  repeated live drive posts left `host_file_read_bytes` flat at about 2.0 MiB
-  while memory-backed opens continued rising. The host idle-slice guard now also
-  removes the later false 100 ms slice throttle from stale parked message
-  waiters. The current UI block is still the owned `afx:10000:3:0:b5000:0`
-  splash popup (`0x00020008`) staying visible above the created map child
-  windows and consuming touch.
-- Continue the Happyway hidden-child scheduling investigation: modal dismissal
-  and framebuffer restoration are fixed, and the active-process self-park
-  duplicate is filtered, but `happyway_win.exe` can still remain parked with
-  stale modal/close state while iNavi continues splash/resource loading.
-- Continue sensor-consumption tracing after the config-driven remote GPS target
-  and serial modem-status fixes: the live iNavi run now opens `COM7:` as the
-  remote GPS target and opens `MFS1:`/`SMB1:` for motion sensors, but repeated
-  location posts now drain into the matching open serial RX queue immediately
-  instead of remaining in the remote queue. Capture the concrete
-  `ReadFile`/`WaitCommEvent` cadence and confirm whether map/UI code consumes
-  parsed GPS position after startup. In the latest
-  trace-mode splash/resource-loading run no serial or sensor handles opened at
-  all, so queued NMEA alone is not evidence that REST injection failed.
-- Continue from the no-hook blocked-thread reentry fix: the old
-  `pc=0x00001054` crash no longer reproduces in the latest live run, real
-  splash artwork renders, REST taps are consumed by `0x00020008`, and remote
-  location input drains into open `COM7:`. Next, trace why the main process
-  remains in kernel waits on events `0x000010b8`, `0x000010b0`, and
-  `0x0000103c` while hidden map/search child windows exist. Keep this generic:
-  identify the real CE wait/event or message transition that should hide,
-  destroy, or demote the owned splash popup rather than adding app-specific
-  policy.
-- Decode the SMB380/G-sensor initialization contract from actual dump code or a
-  real caller trace before adding accelerometer commands; do not use the
-  unverified `0xb100...` family as SMB380 evidence.
+- Trace the current iNavi splash/map transition generically: identify the CE
+  wait, event, message, window state, or readiness condition that should hide,
+  destroy, or demote the owned splash popup above hidden map children.
+- Extend `SendMessageTimeout` and message-wait coverage for broader reentrant
+  waits, nested sends, timeout cleanup, `ReplyMessage`, abort-if-hung behavior,
+  and live modal-loop interaction.
+- Validate `Shell_NotifyIcon` and `SHNotification*` in integrated runtime runs,
+  including taskbar-visible state, callback dispatch through real guest COM
+  object lifetimes, stale handles, and remove/update races.
+- Keep mounted-storage work focused on physical block-driver forwarding,
+  cache/filter DLL behavior, FMD callbacks, utility DLL exports, mounted-volume
+  availability, file-security ACL persistence, and lower-FSD forwarding.
+- Continue GDI/text/IME parity where CE source or raw tests justify it:
+  palette/device-color behavior, alpha/mask variants, clipping, font fallback,
+  IME UI callbacks, caret timing, and remaining DIB/bitmap lifetime edges.
+
+## Next
+
+- Add raw/non-Unicorn loader fixture variants for loader paths where Unicorn
+  runtime coverage is currently stronger.
+- Expand PE icon/resource tests for uncommon formats, malformed resource tables,
+  callback-selected `KernExtractIcons`, non-PE fallback edges, and cleanup
+  lifetimes.
+- Continue file-change notification reset/error propagation and mounted rename
+  edge coverage where current behavior is still only partially proven.
+- Prove device-notification consumer ordering and wake cadence in live startup
+  scenarios.
+- Decode the SMB380/G-sensor initialization contract from actual dump code or
+  real caller traces before adding accelerometer command behavior.
 
 ## Cleanup Queue
 
-- Keep registry fixtures and launch docs on `registry.reg`; any explicit
-  legacy JSON parser regression should create a temporary JSON fixture instead
-  of restoring the removed `regs.json`.
-- Decide whether no-feature `cargo test` is a supported build profile. If yes, audit feature-gated Unicorn references and add it to validation.
-- Keep `SOURCE_REFERENCES.md` tied to actual source behavior when implementing new slices.
-- Avoid reintroducing long historical progress logs into roadmap files; use these files for current state only.
+- Keep `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md` short and current.
+- Do not reintroduce historical ledgers into roadmap files.
+- Keep `SOURCE_REFERENCES.md` as a compact index of active source evidence, not
+  a running implementation diary.
+- Keep registry fixtures and launch docs on `registry.reg`; temporary JSON
+  parser regressions should use temporary fixtures only.
+- Decide whether no-feature `cargo test` is a supported validation profile. If
+  yes, audit feature-gated Unicorn references and add it to the validation
+  queue.
 
 ## Validation Queue
 
-- For shell and GDI work: run `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel`.
-- For GWE/message work: run `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe`.
-- For file/storage work: run `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`.
-- For shared scheduler/resource work: run `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems`.
-- Before handing off a larger slice: run `cargo check --features unicorn,trace,win32-desktop` and `git diff --check`.
+- Shell/resource/GDI: `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel`
+- GWE/message/menu/modal: `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+- File/storage: `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file`
+- Shared scheduler/runtime: `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems`
+- Larger handoff: `cargo check --features unicorn,trace,win32-desktop` and
+  `git diff --check`
