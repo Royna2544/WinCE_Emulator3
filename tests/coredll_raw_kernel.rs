@@ -52,20 +52,21 @@ use wince_emulation_v3::{
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
             ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE, ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W,
             ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS,
-            ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
-            ORD_READ_MSG_QUEUE, ORD_READ_PROCESS_MEMORY, ORD_REGISTER_CLIPBOARD_FORMAT_W,
-            ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
-            ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD, ORD_SELECT_OBJECT,
-            ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS,
-            ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS,
-            ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
-            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
-            ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
-            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
-            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
-            ORD_SLEEP_TILL_TICK, ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS,
-            ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
-            ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_PURGE_COMM, ORD_QUERY_INSTRUCTION_SET, ORD_QUERY_PERFORMANCE_COUNTER,
+            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE, ORD_READ_PROCESS_MEMORY,
+            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX,
+            ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD,
+            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
+            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
+            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
+            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
+            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
+            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
+            ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS,
+            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
+            ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
             ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
             ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
             ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
@@ -6197,6 +6198,101 @@ fn coredll_raw_load_kernel_library_applies_ce_flags_and_keeps_exports_visible() 
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_query_instruction_set_reports_ce_mipsii_compatibility() -> Result<()> {
+    const PROCESSOR_QUERY_INSTRUCTION: u32 = 0;
+    const PROCESSOR_ARM_V4_INSTRUCTION: u32 = 0x0501_0000;
+    const PROCESSOR_ARM_V4I_INSTRUCTION: u32 = 0x0502_0000;
+    const PROCESSOR_ARM_V4TFP_INSTRUCTION: u32 = 0x0503_0001;
+    const PROCESSOR_MIPS_MIPS16_INSTRUCTION: u32 = 0x0101_0000;
+    const PROCESSOR_MIPS_MIPSII_INSTRUCTION: u32 = 0x0102_0000;
+    const PROCESSOR_MIPS_MIPSIIFP_INSTRUCTION: u32 = 0x0102_0001;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 44;
+    let out_ptr = 0x1_9400;
+    memory.map_words(out_ptr, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_QUERY_INSTRUCTION_SET,
+            [PROCESSOR_QUERY_INSTRUCTION, out_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(out_ptr)?, PROCESSOR_MIPS_MIPSII_INSTRUCTION);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_QUERY_INSTRUCTION_SET,
+            [PROCESSOR_MIPS_MIPSII_INSTRUCTION, out_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(out_ptr)?, PROCESSOR_MIPS_MIPSII_INSTRUCTION);
+
+    for unsupported in [
+        PROCESSOR_ARM_V4_INSTRUCTION,
+        PROCESSOR_ARM_V4I_INSTRUCTION,
+        PROCESSOR_ARM_V4TFP_INSTRUCTION,
+        PROCESSOR_MIPS_MIPS16_INSTRUCTION,
+        PROCESSOR_MIPS_MIPSIIFP_INSTRUCTION,
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_QUERY_INSTRUCTION_SET,
+                [unsupported, out_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+        assert_eq!(memory.read_u32(out_ptr)?, PROCESSOR_MIPS_MIPSII_INSTRUCTION);
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_QUERY_INSTRUCTION_SET,
+            [PROCESSOR_QUERY_INSTRUCTION, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
             ..
         }
     ));

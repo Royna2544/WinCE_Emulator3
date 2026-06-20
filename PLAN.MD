@@ -74,6 +74,13 @@ notes when it is still needed for implementation.
   instead of returning unconditional false. Coverage verifies system-mounted
   files, non-system mounted files, missing paths, and null path rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now
+  writes the CE MIPSII instruction-set code and applies CE's compatibility
+  checks instead of returning a placeholder zero. Coverage verifies
+  query-current, exact MIPSII matches, incompatible ARM/MIPS requests, and
+  invalid output pointer failure.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`
   now appends CE-layout `THREADENTRY32` rows for `TH32CS_SNAPTHREAD` instead

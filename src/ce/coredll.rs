@@ -4385,11 +4385,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_LOAD_KERNEL_LIBRARY => Some(CoredllValue::Handle(load_kernel_library_raw(
             kernel, memory, thread_id, args[0],
         ))),
-        // QueryInstructionSet — return PROCESSOR_FEATURE bits; report ARMv4T (0)
-        ORD_QUERY_INSTRUCTION_SET => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_QUERY_INSTRUCTION_SET => Some(CoredllValue::Bool(query_instruction_set_raw(
+            kernel, memory, thread_id, args[0], args[1],
+        ))),
         // IsSystemFile
         ORD_IS_SYSTEM_FILE => Some(CoredllValue::Bool(fs_is_system_file_w_raw(
             kernel, memory, thread_id, args[0],
@@ -21593,6 +21591,56 @@ const MF_NO_THREAD_CALLS: u32 = 0x0000_0400;
 const LLIB_NO_PAGING: u32 = 0x0001;
 const LOAD_KERNEL_LIBRARY_FLAGS: u32 =
     LOAD_LIBRARY_IN_KERNEL | MF_NO_THREAD_CALLS | (LLIB_NO_PAGING << 16);
+const PROCESSOR_ARCHITECTURE_MIPS: u32 = 1;
+const PROCESSOR_ARCHITECTURE_ARM: u32 = 5;
+const PROCESSOR_ARM_V4_CORE: u32 = 1;
+const PROCESSOR_ARM_V4I_CORE: u32 = 2;
+const PROCESSOR_ARM_V4T_CORE: u32 = 3;
+const PROCESSOR_MIPS16_CORE: u32 = 1;
+const PROCESSOR_MIPSII_CORE: u32 = 2;
+const PROCESSOR_FEATURE_NOFP: u32 = 0;
+const PROCESSOR_FEATURE_FP: u32 = 1;
+const PROCESSOR_QUERY_INSTRUCTION: u32 = processor_instruction_code(0, 0, 0);
+const PROCESSOR_MIPS_MIPS16_INSTRUCTION: u32 = processor_instruction_code(
+    PROCESSOR_ARCHITECTURE_MIPS,
+    PROCESSOR_MIPS16_CORE,
+    PROCESSOR_FEATURE_NOFP,
+);
+const PROCESSOR_MIPS_MIPSII_INSTRUCTION: u32 = processor_instruction_code(
+    PROCESSOR_ARCHITECTURE_MIPS,
+    PROCESSOR_MIPSII_CORE,
+    PROCESSOR_FEATURE_NOFP,
+);
+const PROCESSOR_ARM_V4_INSTRUCTION: u32 = processor_instruction_code(
+    PROCESSOR_ARCHITECTURE_ARM,
+    PROCESSOR_ARM_V4_CORE,
+    PROCESSOR_FEATURE_NOFP,
+);
+const PROCESSOR_ARM_V4I_INSTRUCTION: u32 = processor_instruction_code(
+    PROCESSOR_ARCHITECTURE_ARM,
+    PROCESSOR_ARM_V4I_CORE,
+    PROCESSOR_FEATURE_NOFP,
+);
+const PROCESSOR_ARM_V4IFP_INSTRUCTION: u32 = processor_instruction_code(
+    PROCESSOR_ARCHITECTURE_ARM,
+    PROCESSOR_ARM_V4I_CORE,
+    PROCESSOR_FEATURE_FP,
+);
+const PROCESSOR_ARM_V4T_INSTRUCTION: u32 = processor_instruction_code(
+    PROCESSOR_ARCHITECTURE_ARM,
+    PROCESSOR_ARM_V4T_CORE,
+    PROCESSOR_FEATURE_NOFP,
+);
+const PROCESSOR_ARM_V4TFP_INSTRUCTION: u32 = processor_instruction_code(
+    PROCESSOR_ARCHITECTURE_ARM,
+    PROCESSOR_ARM_V4T_CORE,
+    PROCESSOR_FEATURE_FP,
+);
+const CE_INSTRUCTION_SET: u32 = PROCESSOR_MIPS_MIPSII_INSTRUCTION;
+
+const fn processor_instruction_code(arch: u32, core: u32, feature: u32) -> u32 {
+    (arch << 24) | (core << 16) | feature
+}
 
 fn get_module_handle_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -21676,6 +21724,48 @@ fn load_kernel_library_raw<M: CoredllGuestMemory>(
         .threads
         .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
     0
+}
+
+fn query_instruction_set_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    instruction_set: u32,
+    os_instruction_set_ptr: u32,
+) -> bool {
+    let mut supported = true;
+    if instruction_set != CE_INSTRUCTION_SET {
+        supported = match instruction_set {
+            PROCESSOR_QUERY_INSTRUCTION => true,
+            PROCESSOR_MIPS_MIPSII_INSTRUCTION => {
+                CE_INSTRUCTION_SET == PROCESSOR_MIPS_MIPS16_INSTRUCTION
+            }
+            PROCESSOR_ARM_V4IFP_INSTRUCTION | PROCESSOR_ARM_V4TFP_INSTRUCTION => {
+                CE_INSTRUCTION_SET == PROCESSOR_ARM_V4IFP_INSTRUCTION
+            }
+            PROCESSOR_ARM_V4T_INSTRUCTION
+            | PROCESSOR_ARM_V4I_INSTRUCTION
+            | PROCESSOR_ARM_V4_INSTRUCTION => {
+                CE_INSTRUCTION_SET == PROCESSOR_ARM_V4I_INSTRUCTION
+                    || CE_INSTRUCTION_SET == PROCESSOR_ARM_V4IFP_INSTRUCTION
+            }
+            other => {
+                ((CE_INSTRUCTION_SET >> 24) != PROCESSOR_ARCHITECTURE_MIPS)
+                    && ((other | PROCESSOR_FEATURE_FP) == CE_INSTRUCTION_SET)
+            }
+        };
+    }
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        os_instruction_set_ptr,
+        CE_INSTRUCTION_SET,
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    supported
 }
 
 fn load_library_ex_w_raw<M: CoredllGuestMemory>(
