@@ -57782,6 +57782,11 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_FLAGS_LOCAL);
         return 0;
     }
+    if hwnd == crate::ce::gwe::HWND_BROADCAST {
+        return send_message_timeout_broadcast_raw(
+            kernel, thread_id, msg, wparam, lparam, flags, timeout_ms,
+        );
+    }
     let Some(target_thread) = kernel
         .gwe
         .window(hwnd)
@@ -57842,6 +57847,86 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     result
+}
+
+fn send_message_timeout_broadcast_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    msg: u32,
+    wparam: u32,
+    lparam: u32,
+    flags: u32,
+    timeout_ms: u32,
+) -> u32 {
+    const CE_HUNG_THRESHOLD_MS: u32 = 5000;
+    let targets: Vec<(u32, u32)> = kernel
+        .gwe
+        .z_order_snapshot()
+        .into_iter()
+        .filter(|candidate| *candidate != crate::ce::gwe::DESKTOP_HWND)
+        .filter_map(|candidate| {
+            kernel
+                .gwe
+                .window(candidate)
+                .filter(|window| !window.destroyed && window.parent.is_none())
+                .map(|window| (candidate, window.thread_id))
+        })
+        .collect();
+
+    let mut delivered = false;
+    let mut timed_out = false;
+    for (target_hwnd, target_thread) in targets {
+        if target_thread == thread_id {
+            delivered |= kernel
+                .send_message_w(target_hwnd, msg, wparam, lparam)
+                .is_some();
+            continue;
+        }
+        if flags & SMTO_ABORTIFHUNG != 0
+            && kernel.gwe.is_thread_hung(
+                target_thread,
+                kernel.timers.tick_count(),
+                CE_HUNG_THRESHOLD_MS,
+            )
+        {
+            timed_out = true;
+            continue;
+        }
+        if let Some(send_id) = kernel.begin_cross_thread_send_message_w(
+            thread_id,
+            target_hwnd,
+            msg,
+            wparam,
+            lparam,
+            Some(timeout_ms),
+        ) {
+            kernel.gwe.set_sent_message_timeout_flags(send_id, flags);
+            if timeout_ms == 0 {
+                let expired = kernel.expire_timed_out_send_messages();
+                if expired.contains(&send_id) {
+                    let _ = kernel.take_completed_send_message_result(send_id);
+                    timed_out = true;
+                    continue;
+                }
+            }
+            delivered = true;
+        }
+    }
+
+    if delivered {
+        kernel.threads.set_last_error(thread_id, 0);
+        1
+    } else if timed_out {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
+        0
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        0
+    }
 }
 
 #[derive(Debug, Clone)]

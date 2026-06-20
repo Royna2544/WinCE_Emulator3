@@ -624,6 +624,16 @@ notes when it is still needed for implementation.
   stale extended state bytes are ignored for CE-sized trap calls. Coverage
   verifies add and modify calls with an extended caller buffer but a CE-sized
   service frame.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\WTL\INCLUDE\atlapp.h`, and CE broadcast
+  callers such as `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\CTLPNL\INTL2\intl.c`:
+  raw `SendMessageTimeout(HWND_BROADCAST, ...)` now targets live top-level
+  windows instead of failing as an invalid HWND. Same-thread targets dispatch
+  synchronously, cross-thread targets queue timeout sends in CE Z-order,
+  child/destroyed windows are skipped, and broadcast calls leave caller result
+  storage untouched because no single window result exists. Coverage verifies
+  top-level filtering, Z-order queueing, timeout metadata, and untouched
+  result storage.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
   raw `ImageList_GetImageInfo` now separates invalid image-list handles from
   invalid image indices/null output buffers and leaves the caller's

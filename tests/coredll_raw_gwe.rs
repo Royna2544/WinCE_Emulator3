@@ -30061,6 +30061,133 @@ fn coredll_raw_send_message_timeout_abortifhung_only_queues_below_hung_threshold
 }
 
 #[test]
+fn coredll_raw_send_message_timeout_broadcast_targets_top_level_windows() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let caller_thread = 74;
+    let receiver_thread = 75;
+    let other_thread = 76;
+    let result_ptr = 0xb30c;
+    let msg_ptr = 0xb310;
+    memory.map_words(result_ptr, 1);
+    memory.map_words(msg_ptr, 7);
+    memory.write_u32(result_ptr, 0xfeed_cafe)?;
+
+    let same_thread_hwnd =
+        kernel.create_window_ex_w(caller_thread, "SMTO_BROADCAST_SAME", "", None, 0, 0, 0);
+    let back_hwnd =
+        kernel.create_window_ex_w(receiver_thread, "SMTO_BROADCAST_BACK", "", None, 0, 0, 0);
+    let front_hwnd =
+        kernel.create_window_ex_w(receiver_thread, "SMTO_BROADCAST_FRONT", "", None, 0, 0, 0);
+    let child_hwnd = kernel.create_window_ex_w(
+        receiver_thread,
+        "SMTO_BROADCAST_CHILD",
+        "",
+        Some(front_hwnd),
+        11,
+        0,
+        0,
+    );
+    let destroyed_hwnd =
+        kernel.create_window_ex_w(other_thread, "SMTO_BROADCAST_DESTROYED", "", None, 0, 0, 0);
+    assert!(kernel.destroy_window(destroyed_hwnd));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            caller_thread,
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [
+                HWND_BROADCAST,
+                WM_ERASEBKGND,
+                0x74,
+                0x75,
+                0,
+                500,
+                result_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(caller_thread), 0);
+    assert_eq!(
+        memory.read_u32(result_ptr)?,
+        0xfeed_cafe,
+        "broadcast SendMessageTimeout has no single result to write"
+    );
+    assert!(
+        kernel
+            .gwe
+            .sent_message_ids_for_windows(&[same_thread_hwnd])
+            .is_empty()
+    );
+    assert!(
+        kernel
+            .gwe
+            .sent_message_ids_for_windows(&[child_hwnd])
+            .is_empty()
+    );
+    assert!(
+        kernel
+            .gwe
+            .sent_message_ids_for_windows(&[destroyed_hwnd])
+            .is_empty()
+    );
+
+    let first = kernel
+        .gwe
+        .sent_message(1)
+        .expect("front broadcast send should queue first");
+    assert_eq!(first.sender_thread_id, Some(caller_thread));
+    assert_eq!(first.receiver_thread_id, receiver_thread);
+    assert_eq!(first.message.hwnd, front_hwnd);
+    assert_eq!(first.message.msg, WM_ERASEBKGND);
+    assert_ne!(first.flags & SMF_TIMEOUT, 0);
+    assert_eq!(first.timeout_ms, Some(500));
+    assert_eq!(first.result_ptr, None);
+
+    let second = kernel
+        .gwe
+        .sent_message(2)
+        .expect("back broadcast send should queue second");
+    assert_eq!(second.message.hwnd, back_hwnd);
+    assert_eq!(second.receiver_thread_id, receiver_thread);
+    assert_ne!(second.flags & SMF_TIMEOUT, 0);
+    assert_eq!(second.result_ptr, None);
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        front_hwnd,
+        WM_ERASEBKGND,
+        0x74,
+        0x75,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        back_hwnd,
+        WM_ERASEBKGND,
+        0x74,
+        0x75,
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
