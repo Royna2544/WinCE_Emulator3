@@ -37,7 +37,7 @@ use wince_emulation_v3::{
             ORD_GET_CURRENT_POSITION_EX, ORD_GET_CURSOR, ORD_GET_CURSOR_POS, ORD_GET_DC,
             ORD_GET_DESKTOP_WINDOW, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS,
             ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT,
-            ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS, ORD_GET_FOREGROUND_INFO,
+            ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS, ORD_GET_FONT_DATA, ORD_GET_FOREGROUND_INFO,
             ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE, ORD_GET_FOREGROUND_KEYBOARD_TARGET,
             ORD_GET_FOREGROUND_WINDOW, ORD_GET_ICON_INFO, ORD_GET_KEY_STATE,
             ORD_GET_KEYBOARD_LAYOUT, ORD_GET_KEYBOARD_LAYOUT_LIST, ORD_GET_KEYBOARD_LAYOUT_NAME_W,
@@ -53815,6 +53815,73 @@ fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
     assert!(
         memory.read_u32(rect_ptr + 12)? > 10,
         "DT_CALCRECT should expand rc.bottom like CE text.cpp::passNull2DrawText"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_get_font_data_validates_hdc_before_stub_fallback() -> Result<()> {
+    const GDI_ERROR: u32 = 0xffff_ffff;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 142_u32;
+
+    for hdc in [0, 0x1234_5678] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_FONT_DATA,
+                [hdc, 0, 0, 0, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(GDI_ERROR),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
+    }
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CREATE_COMPATIBLE_DC failed: {other:?}"),
+    };
+
+    kernel.threads.set_last_error(thread_id, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FONT_DATA,
+            [dc, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(GDI_ERROR),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
     );
 
     Ok(())

@@ -941,6 +941,10 @@ notes when it is still needed for implementation.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph
      metrics, palette/device-color behavior, alpha/mask variants, DIB lifetime
      edges, clipping, and read-only bitmap rejection where CE evidence exists.
+   - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and the CE GDI invalid-HDC
+     patterns in `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\text.cpp`/`draw.cpp`:
+     raw `GetFontData` now validates null/bad HDCs before falling back to the
+     emulator's unsupported font-binary path for valid DCs.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the

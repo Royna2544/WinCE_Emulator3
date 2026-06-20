@@ -6552,9 +6552,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_FONT_DATA => {
             // GetFontData(hdc, dwTable, dwOffset, pvBuffer, cbData) — returns font binary data.
             // No real font file access in emulator; return GDI_ERROR.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            kernel.threads.set_last_error(
+                thread_id,
+                if is_valid_hdc(kernel, raw_arg(args, 0)) {
+                    ERROR_NOT_SUPPORTED
+                } else {
+                    ERROR_INVALID_HANDLE
+                },
+            );
             Some(CoredllValue::U32(0xffff_ffff)) // GDI_ERROR
         }
         ORD_GET_OUTLINE_TEXT_METRICS_W => {
@@ -24862,16 +24867,14 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             output_capacity,
             returned_ptr,
         ),
-        IOCTL_DISK_COPY_EXTERNAL_START => {
-            partition_disk_copy_external_raw(
-                kernel,
-                memory,
-                thread_id,
-                input_ptr,
-                input_len,
-                returned_ptr,
-            )
-        }
+        IOCTL_DISK_COPY_EXTERNAL_START => partition_disk_copy_external_raw(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr,
+            input_len,
+            returned_ptr,
+        ),
         IOCTL_DISK_COPY_EXTERNAL_COMPLETE => {
             disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
         }
