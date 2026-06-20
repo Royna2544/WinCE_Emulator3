@@ -9,9 +9,10 @@ use wince_emulation_v3::{
             ORD_AFS_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_AFS_FIND_FIRST_FILE_W,
             ORD_AFS_FS_IO_CONTROL_W, ORD_AFS_GET_DISK_FREE_SPACE, ORD_AFS_GET_FILE_ATTRIBUTES_W,
             ORD_AFS_GET_FILE_SECURITY_W, ORD_AFS_MOVE_FILE_W, ORD_AFS_PRESTO_CHANGO_FILE_NAME,
-            ORD_AFS_REMOVE_DIRECTORY_W, ORD_AFS_SET_FILE_ATTRIBUTES_W, ORD_AFS_SET_FILE_SECURITY_W,
-            ORD_AFS_UNMOUNT, ORD_ASIN, ORD_ATAN, ORD_ATAN2, ORD_ATOF, ORD_ATOI,
-            ORD_CE_FS_IO_CONTROL_W, ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_VOLUME_INFO_W,
+            ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION, ORD_AFS_REMOVE_DIRECTORY_W,
+            ORD_AFS_SET_FILE_ATTRIBUTES_W, ORD_AFS_SET_FILE_SECURITY_W, ORD_AFS_UNMOUNT, ORD_ASIN,
+            ORD_ATAN, ORD_ATAN2, ORD_ATOF, ORD_ATOI, ORD_CE_FS_IO_CONTROL_W,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_VOLUME_INFO_W,
             ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION, ORD_CEIL, ORD_CHAR_LOWER_BUFF_W,
             ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK,
             ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS, ORD_COSH, ORD_CREATE_DIRECTORY_W,
@@ -12260,6 +12261,144 @@ fn coredll_raw_root_change_notification_sees_mount_add_remove() -> Result<()> {
             ..
         }
     ));
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_afs_register_file_system_function_tracks_volume_callback() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let owner_process = kernel.current_process_id();
+    let root = unique_test_root("afs_register_file_system_function");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    kernel.files.mount_guest_root(r"\SDMMC Disk", &root);
+    let volume = kernel.create_volume_handle_for_guest_root(r"\SDMMC Disk")?;
+    let mut memory = TestGuestMemory::default();
+    let owner_thread = 11;
+    let foreign_thread = 22;
+
+    assert_eq!(kernel.afs_file_system_function(volume), None);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            owner_thread,
+            ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION,
+            [volume, 0x1234_5678],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(owner_thread), ERROR_SUCCESS);
+    assert_eq!(kernel.afs_file_system_function(volume), Some(0x1234_5678));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            owner_thread,
+            ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION,
+            [volume, 0x8765_4321],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.afs_file_system_function(volume),
+        Some(0x8765_4321),
+        "CE forwards replacement registrations to the mounted FSD"
+    );
+
+    kernel.set_current_process_id(owner_process + 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            foreign_thread,
+            ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION,
+            [volume, 0xfeed_cafe],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(foreign_thread),
+        ERROR_ACCESS_DENIED
+    );
+    assert_eq!(kernel.afs_file_system_function(volume), Some(0x8765_4321));
+
+    kernel.set_current_process_id(owner_process);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            owner_thread,
+            ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION,
+            [volume, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.afs_file_system_function(volume), None);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            owner_thread,
+            ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION,
+            [0xffff_1234, 0x1234],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(owner_thread),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            owner_thread,
+            ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION,
+            [volume, 0x1111_2222],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.afs_file_system_function(volume), Some(0x1111_2222));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            owner_thread,
+            ORD_CLOSE_HANDLE,
+            [volume],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.afs_file_system_function(volume), None);
+
     let _ = fs::remove_dir_all(root);
     Ok(())
 }

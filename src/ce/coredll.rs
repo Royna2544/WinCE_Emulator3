@@ -3430,11 +3430,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION => {
-            // AFS_RegisterFileSystemFunction(pfnFunction) — register AFS callback. No-op.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION => Some(CoredllValue::Bool(
+            afs_register_file_system_function_raw(kernel, thread_id, args),
+        )),
         ORD_GET_FILE_SECURITY_W => Some(CoredllValue::Bool(get_file_security_w_raw(
             kernel,
             memory,
@@ -17261,6 +17259,16 @@ fn afs_unmount_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
             false
         }
     }
+}
+
+fn afs_register_file_system_function_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let status = kernel.register_afs_file_system_function(raw_arg(args, 0), raw_arg(args, 1));
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
 }
 
 fn register_afs_name_raw<M: CoredllGuestMemory>(

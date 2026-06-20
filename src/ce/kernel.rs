@@ -288,6 +288,7 @@ pub struct CeKernel {
     afs_mount_slots: BTreeMap<u32, AfsMountSlot>,
     next_afs_mount_index: u32,
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
+    afs_file_system_functions: BTreeMap<u32, u32>,
     next_fsdmgr_volume_lock: u32,
     file_system_notification_callback: Option<u32>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -1127,6 +1128,7 @@ impl CeKernel {
             afs_mount_slots: BTreeMap::new(),
             next_afs_mount_index: FIRST_USER_AFS_INDEX,
             fsdmgr_volume_locks: BTreeMap::new(),
+            afs_file_system_functions: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             file_system_notification_callback: None,
             modal_dialog_results: BTreeMap::new(),
@@ -3121,6 +3123,7 @@ impl CeKernel {
     fn drop_fsdmgr_volume_locks_for_handle(&mut self, volume_handle: u32) {
         self.fsdmgr_volume_locks
             .retain(|_, volume_lock| volume_lock.volume_handle != volume_handle);
+        self.afs_file_system_functions.remove(&volume_handle);
     }
 
     fn drop_fsdmgr_volume_locks_for_guest_root(&mut self, guest_root: &str) {
@@ -3138,6 +3141,29 @@ impl CeKernel {
             .collect();
         self.fsdmgr_volume_locks
             .retain(|_, volume_lock| !volume_handles.contains(&volume_lock.volume_handle));
+        for volume_handle in volume_handles {
+            self.afs_file_system_functions.remove(&volume_handle);
+        }
+    }
+
+    pub fn register_afs_file_system_function(&mut self, volume_handle: u32, callback: u32) -> u32 {
+        match self.volume_root_for_handle(volume_handle) {
+            Ok(_) => {
+                if callback == 0 {
+                    self.afs_file_system_functions.remove(&volume_handle);
+                } else {
+                    self.afs_file_system_functions
+                        .insert(volume_handle, callback);
+                }
+                ERROR_SUCCESS
+            }
+            Err(Error::AccessDenied(_)) => ERROR_ACCESS_DENIED,
+            Err(_) => ERROR_INVALID_HANDLE,
+        }
+    }
+
+    pub fn afs_file_system_function(&self, volume_handle: u32) -> Option<u32> {
+        self.afs_file_system_functions.get(&volume_handle).copied()
     }
 
     pub fn fsdmgr_create_cache(&mut self, disk_ptr: u32, block_size: u32) -> Option<u32> {

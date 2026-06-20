@@ -127,6 +127,13 @@ notes when it is still needed for implementation.
   by accepting and retaining the shell file-change callback pointer instead of
   returning unsupported. Coverage verifies callback registration, replacement,
   clearing by zero, and successful last-error behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mextfile.h`: raw
+  `AFS_RegisterFileSystemFunction` now validates mounted volume handles and
+  retains the registered `SHELLFILECHANGEFUNC_t` callback for host-backed
+  volumes instead of discarding it as a no-op. Coverage verifies registration,
+  replacement, clearing by zero, invalid-handle failure, cross-process access
+  denial, and cleanup when the volume handle closes.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: raw StoreMgr
