@@ -22174,7 +22174,7 @@ fn coredll_raw_add_font_resource_uses_guest_file_mounts() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 9;
-    let root = std::env::temp_dir().join(format!("wince_add_font_resource_{}", std::process::id()));
+    let root = unique_test_root("font_resource_add");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("create temporary mounted font directory");
     fs::write(root.join("font.ttf"), b"fake-font").expect("write temporary mounted font");
@@ -22182,8 +22182,10 @@ fn coredll_raw_add_font_resource_uses_guest_file_mounts() -> Result<()> {
 
     let font_path_ptr = 0x1_0000;
     let missing_path_ptr = 0x1_0100;
+    let empty_path_ptr = 0x1_0200;
     memory.write_wide_z(font_path_ptr, "\\SDMMC Disk\\font.ttf");
     memory.write_wide_z(missing_path_ptr, "\\SDMMC Disk\\missing.ttf");
+    memory.write_wide_z(empty_path_ptr, "");
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -22215,6 +22217,40 @@ fn coredll_raw_add_font_resource_uses_guest_file_mounts() -> Result<()> {
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_FILE_NOT_FOUND
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ADD_FONT_RESOURCE_W,
+            [empty_path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ADD_FONT_RESOURCE_W,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
     );
 
     let _ = fs::remove_dir_all(&root);

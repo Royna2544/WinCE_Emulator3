@@ -187,5 +187,7 @@ fn is_test_heap_address(addr: u32) -> bool {
 }
 
 pub fn unique_test_root(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("wince_emulation_v3_{name}_{}", std::process::id()))
+    PathBuf::from("target")
+        .join("codex-test-tmp")
+        .join(format!("{name}_{}", std::process::id()))
 }
