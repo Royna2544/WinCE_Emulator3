@@ -24862,7 +24862,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             output_capacity,
             returned_ptr,
         ),
-        IOCTL_DISK_COPY_EXTERNAL_START | IOCTL_DISK_COPY_EXTERNAL_COMPLETE => {
+        IOCTL_DISK_COPY_EXTERNAL_START => {
             partition_disk_copy_external_raw(
                 kernel,
                 memory,
@@ -24871,6 +24871,9 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
                 input_len,
                 returned_ptr,
             )
+        }
+        IOCTL_DISK_COPY_EXTERNAL_COMPLETE => {
+            disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
         }
         IOCTL_DISK_DELETE_SECTORS => disk_delete_sectors_raw(
             kernel,

@@ -3819,6 +3819,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
     const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
     const IOCTL_DISK_COPY_EXTERNAL_START: u32 = 0x0007_1c58;
+    const IOCTL_DISK_COPY_EXTERNAL_COMPLETE: u32 = 0x0007_1c5c;
     const IOCTL_DISK_GETPMTIMINGS: u32 = 0x0007_1c60;
     const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
     const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
@@ -5232,6 +5233,35 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         ERROR_INVALID_PARAMETER
     );
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_babe);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_DISK_COPY_EXTERNAL_COMPLETE,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
     memory.write_word(bytes_returned_ptr, 0xfeed_babe);
     assert!(matches!(

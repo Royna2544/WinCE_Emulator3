@@ -931,7 +931,9 @@ notes when it is still needed for implementation.
     timing queries; partition handles add format no-ops, secure-wipe status
     controls, `IOCTL_DISK_GET_SECTOR_ADDR` validation, and
     `IOCTL_DISK_COPY_EXTERNAL_START` packet validation before reporting the
-    unsupported lower block-driver operation. Coverage verifies success
+    unsupported lower block-driver operation; `IOCTL_DISK_COPY_EXTERNAL_COMPLETE`
+    follows CE `DOSPART` fallthrough behavior and forwards to the lower driver
+    without requiring a start-packet layout. Coverage verifies success
     byte-counts, CE `PowerTimings` sizing, invalid packet rejection, preserved
     sector-list inputs, and lower-driver `ERROR_NOT_SUPPORTED` forwarding.
 
