@@ -19364,6 +19364,14 @@ mod wait_scheduler_tests {
         crate::winsock::locked_reset_for_tests()
     }
 
+    fn map_test_wndproc_module(scheduler: &mut super::UnicornMips, wndproc: u32) {
+        scheduler.mapped_blobs.push(super::MappedBlob {
+            name: "dll:test-wndproc.dll".to_owned(),
+            base: wndproc & 0xfff0_0000,
+            bytes: vec![0; 0x100000],
+        });
+    }
+
     fn blocked_wait(start: u32, timeout: u32) -> BlockedWaitThread {
         BlockedWaitThread {
             wait_id: 1,
@@ -25564,6 +25572,7 @@ mod wait_scheduler_tests {
         let return_sp = 0x7ffd_f0a0;
         let wndproc = 0x6004_f0f4;
         let msg = crate::ce::gwe::WM_LBUTTONDOWN;
+        map_test_wndproc_module(&mut scheduler, wndproc);
 
         scheduler.current_thread_id = active_thread_id;
         let mut active_regs = super::MipsGuestContext::zero();
@@ -25630,6 +25639,7 @@ mod wait_scheduler_tests {
         let return_sp = 0x7ffd_f0a0;
         let wndproc = 0x6004_f0f4;
         let msg = crate::ce::gwe::WM_WINDOWPOSCHANGED;
+        map_test_wndproc_module(&mut scheduler, wndproc);
 
         scheduler.current_thread_id = active_thread_id;
         let mut active_regs = super::MipsGuestContext::zero();
@@ -25689,6 +25699,7 @@ mod wait_scheduler_tests {
         let return_sp = 0x7ffd_f578;
         let wndproc = 0x6004_f0f4;
         let msg = crate::ce::gwe::WM_USER + 0x44;
+        map_test_wndproc_module(&mut scheduler, wndproc);
 
         scheduler.set_initial_thread_id(receiver_thread_id);
         scheduler.current_thread_id = active_thread_id;
@@ -27621,6 +27632,14 @@ mod guest_thread_stack_tests {
         fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
             self.write_bytes(addr, &value.to_le_bytes())
         }
+    }
+
+    fn map_test_wndproc_module(scheduler: &mut UnicornMips, wndproc: u32) {
+        scheduler.mapped_blobs.push(MappedBlob {
+            name: "dll:test-wndproc.dll".to_owned(),
+            base: wndproc & 0xfff0_0000,
+            bytes: vec![0; 0x100000],
+        });
     }
 
     fn resumable_cpu(thread_id: u32, pc: u32) -> Result<UnicornMips> {
@@ -31107,6 +31126,7 @@ mod guest_thread_stack_tests {
             signaled: false,
         });
         let wndproc = 0x6004_f0f4;
+        map_test_wndproc_module(&mut scheduler, wndproc);
         let hwnd =
             kernel.create_window_ex_w(1, "visible_ui", "", None, 0, crate::ce::gwe::WS_VISIBLE, 0);
         kernel
@@ -31123,7 +31143,7 @@ mod guest_thread_stack_tests {
         assert!(scheduler.prepare_active_orphaned_visible_message_callout(&mut kernel));
         assert_eq!(
             scheduler.saved_context.as_ref().map(|saved| saved.pc),
-            Some(0x0004_f0f4)
+            Some(wndproc)
         );
 
         Ok(())
@@ -31175,6 +31195,7 @@ mod guest_thread_stack_tests {
         let mut scheduler = UnicornMips::new()?;
         let thread_id = 1;
         let visible_wndproc = 0x6004_f0f4;
+        map_test_wndproc_module(&mut scheduler, visible_wndproc);
         scheduler.set_initial_thread_id(thread_id);
         scheduler.current_thread_id = thread_id;
         let mut regs = MipsGuestContext::zero();
@@ -31250,6 +31271,7 @@ mod guest_thread_stack_tests {
         let mut scheduler = UnicornMips::new()?;
         let thread_id = 1;
         let hidden_wndproc = 0x6004_f0f4;
+        map_test_wndproc_module(&mut scheduler, hidden_wndproc);
         scheduler.set_initial_thread_id(thread_id);
         scheduler.current_thread_id = thread_id;
         let mut regs = MipsGuestContext::zero();
@@ -31303,6 +31325,7 @@ mod guest_thread_stack_tests {
         let mut scheduler = UnicornMips::new()?;
         let thread_id = 1;
         let visible_wndproc = 0x6004_f0f4;
+        map_test_wndproc_module(&mut scheduler, visible_wndproc);
         scheduler.set_initial_thread_id(thread_id);
         scheduler.current_thread_id = thread_id;
         let mut regs = MipsGuestContext::zero();
