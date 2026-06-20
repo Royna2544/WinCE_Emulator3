@@ -997,12 +997,13 @@ notes when it is still needed for implementation.
   `KernelLibIoControl` now follows the CE user-mode `KMOD_CORE` front door for
   the low-risk scalar controls instead of failing every call. The emulator
   validates DWORD output sizes, preserves the `GETUSRCOREDLL` return-value
-  quirk, exposes CE's four-DWORD `PHYSMEMINFO` PFN range packet, denies
-  cache/mapfile controls with `ERROR_ACCESS_DENIED`, and keeps complex kernel
-  heap/page-directory controls behind source-backed validation before
+  quirk, exposes CE's four-DWORD `PHYSMEMINFO` PFN range packet, returns a
+  CE-layout `NKPagePoolState` packet with disabled synthetic loader/file pools,
+  denies cache/mapfile controls with `ERROR_ACCESS_DENIED`, and keeps complex
+  kernel heap/page-directory controls behind source-backed validation before
   unsupported fallbacks. Coverage verifies the scalar output, invalid packet,
-  handle-return, physical-memory layout, denial, and page-directory validation
-  paths.
+  handle-return, physical-memory layout, page-pool version gating and layout,
+  denial, and page-directory validation paths.
 
 ## Active Roadmap
 

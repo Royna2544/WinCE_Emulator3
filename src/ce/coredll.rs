@@ -26539,12 +26539,11 @@ fn kernel_lib_io_control_raw<M: CoredllGuestMemory>(
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-            } else {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+                return CoredllValue::Bool(false);
             }
-            CoredllValue::Bool(false)
+            CoredllValue::Bool(write_klib_page_pool_state(
+                kernel, memory, thread_id, out_ptr,
+            ))
         }
         IOCTL_KLIB_MAPPD => {
             if in_size != 4 || out_size != 520 || in_ptr == 0 || out_ptr == 0 {
@@ -26604,6 +26603,35 @@ fn write_klib_phys_mem_info<M: CoredllGuestMemory>(
             out_ptr.wrapping_add((index as u32) * 4),
             value,
         ) {
+            return false;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
+}
+
+fn write_klib_page_pool_state<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    out_ptr: u32,
+) -> bool {
+    let Ok(version) = memory.read_u16(out_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if version != 1 {
+        return false;
+    }
+    if !write_guest_u16(kernel, memory, thread_id, out_ptr, 1)
+        || !write_guest_u16(kernel, memory, thread_id, out_ptr.wrapping_add(2), 0)
+    {
+        return false;
+    }
+    for offset in (4..KLIB_NK_PAGE_POOL_STATE_SIZE).step_by(4) {
+        if !write_guest_u32(kernel, memory, thread_id, out_ptr.wrapping_add(offset), 0) {
             return false;
         }
     }

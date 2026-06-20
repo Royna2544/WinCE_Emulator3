@@ -27811,8 +27811,10 @@ fn coredll_raw_kernel_lib_io_control_follows_core_validation() -> Result<()> {
     const IOCTL_KLIB_GETCOMPRESSIONINFO: u32 = 3;
     const IOCTL_KLIB_GETUSRCOREDLL: u32 = 23;
     const IOCTL_KLIB_GETPHYSMEMINFO: u32 = 27;
+    const IOCTL_KLIB_GET_POOL_STATE: u32 = 28;
     const IOCTL_KLIB_MAPPD: u32 = 24;
     const IOCTL_KLIB_CACHE_REGISTER: u32 = 33;
+    const NK_PAGE_POOL_STATE_SIZE: u32 = 92;
     const COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
 
     let table = CoredllExportTable::default();
@@ -27822,7 +27824,8 @@ fn coredll_raw_kernel_lib_io_control_follows_core_validation() -> Result<()> {
     let thread_id = 19;
     let out = 0x1600;
     let returned = 0x1700;
-    memory.map_words(out, 4);
+    memory.map_words(out, 32);
+    memory.map_halfwords(out, 2);
     memory.map_words(returned, 1);
 
     assert!(matches!(
@@ -27848,6 +27851,79 @@ fn coredll_raw_kernel_lib_io_control_follows_core_validation() -> Result<()> {
     ));
     assert_eq!(memory.read_u32(out)?, 0);
     assert_eq!(memory.read_u32(returned)?, 4);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_halfword(out, 0);
+    memory.write_word(returned, 0xaced_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [
+                KMOD_CORE,
+                IOCTL_KLIB_GET_POOL_STATE,
+                0,
+                0,
+                out,
+                NK_PAGE_POOL_STATE_SIZE,
+                returned
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_SUCCESS,
+        "CE PagePoolGetState returns false for unsupported Version values without setting last error"
+    );
+    assert_eq!(memory.read_u32(returned)?, 0xaced_face);
+
+    memory.write_halfword(out, 1);
+    memory.write_halfword(out + 2, 0xcccc);
+    for offset in (4..NK_PAGE_POOL_STATE_SIZE).step_by(4) {
+        memory.write_word(out + offset, 0xcccc_cccc);
+    }
+    memory.write_word(returned, 0xaced_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [
+                KMOD_CORE,
+                IOCTL_KLIB_GET_POOL_STATE,
+                0,
+                0,
+                out,
+                NK_PAGE_POOL_STATE_SIZE,
+                returned
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u16(out)?, 1);
+    assert_eq!(memory.read_u16(out + 2)?, 0);
+    for offset in (4..NK_PAGE_POOL_STATE_SIZE).step_by(4) {
+        assert_eq!(
+            memory.read_u32(out + offset)?,
+            0,
+            "NKPagePoolState offset {offset} should be zero for disabled synthetic pools"
+        );
+    }
+    assert_eq!(
+        memory.read_u32(returned)?,
+        0xaced_face,
+        "KernelLibIoControl PagePoolGetState does not report bytes returned"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
 
     assert!(matches!(
@@ -27909,6 +27985,7 @@ fn coredll_raw_kernel_lib_io_control_follows_core_validation() -> Result<()> {
         ERROR_INVALID_PARAMETER
     );
 
+    memory.write_word(returned, 4);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
