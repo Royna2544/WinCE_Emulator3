@@ -52,13 +52,13 @@ use wince_emulation_v3::{
             ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
             ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE, ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W,
-            ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS,
-            ORD_PURGE_COMM, ORD_QUERY_INSTRUCTION_SET, ORD_QUERY_PERFORMANCE_COUNTER,
-            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE, ORD_READ_PROCESS_MEMORY,
-            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS, ORD_RESUME_THREAD,
-            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
-            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_OPEN_MSG_QUEUE, ORD_OPEN_PROCESS, ORD_PAGE_OUT_MODULE, ORD_PEEK_MESSAGE_W,
+            ORD_PROCESS_DETACH_ALL_DLLS, ORD_PURGE_COMM, ORD_QUERY_INSTRUCTION_SET,
+            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE,
+            ORD_READ_PROCESS_MEMORY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR,
+            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS,
+            ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
+            ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
             ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
             ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
             ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
@@ -6359,6 +6359,175 @@ fn coredll_raw_query_instruction_set_reports_ce_mipsii_compatibility() -> Result
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_page_out_module_validates_ce_process_module_edges() -> Result<()> {
+    const PAGE_OUT_PROCESS_ONLY: u32 = 0;
+    const PAGE_OUT_DLL_USED_ONLY_BY_THISPROC: u32 = 1;
+    const PAGE_OUT_ALL_DEPENDENT_DLL: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 77;
+    let module_base = 0x6600_0000;
+
+    kernel.register_loaded_module_with_metadata(
+        "pageable.dll",
+        module_base,
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            ref_count: 2,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    let launch = kernel.queue_process_launch(Some("pageout-child.exe".to_owned()), None);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAGE_OUT_MODULE,
+            [
+                CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                module_base,
+                PAGE_OUT_PROCESS_ONLY,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(kernel.is_loaded_module_handle(module_base));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAGE_OUT_MODULE,
+            [module_base, PAGE_OUT_PROCESS_ONLY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAGE_OUT_MODULE,
+            [launch.process_handle, 0, PAGE_OUT_ALL_DEPENDENT_DLL],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAGE_OUT_MODULE,
+            [
+                launch.process_handle,
+                module_base,
+                PAGE_OUT_DLL_USED_ONLY_BY_THISPROC,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAGE_OUT_MODULE,
+            [0xdead_beef, module_base, 0x99],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAGE_OUT_MODULE,
+            [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0, PAGE_OUT_PROCESS_ONLY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAGE_OUT_MODULE,
+            [launch.process_handle, 0x1234_0000, PAGE_OUT_PROCESS_ONLY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAGE_OUT_MODULE,
+            [0x1234_0000, PAGE_OUT_PROCESS_ONLY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
     );
 
     Ok(())

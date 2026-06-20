@@ -127,6 +127,9 @@ const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
 const FILE_SCATTER_GATHER_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_RAM_BYTES: u64 = 64 * 1024 * 1024;
+const PAGE_OUT_PROCESS_ONLY: u32 = 0;
+const PAGE_OUT_DLL_USED_ONLY_BY_THISPROC: u32 = 1;
+const PAGE_OUT_ALL_DEPENDENT_DLL: u32 = 2;
 const FILE_SEGMENT_ELEMENT_SIZE: u32 = 8;
 const DISK_IOCTL_GETINFO: u32 = 1;
 const DISK_IOCTL_SETINFO: u32 = 5;
@@ -4419,12 +4422,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(false))
         }
         // PageOutModule
-        ORD_PAGE_OUT_MODULE => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_PAGE_OUT_MODULE => Some(CoredllValue::Bool(page_out_module_raw(
+            kernel, thread_id, args,
+        ))),
         // CeZeroPointer — return null if arg is zero page pointer
         ORD_CE_ZERO_POINTER => {
             let ptr = raw_arg(args, 0);
@@ -9725,6 +9725,63 @@ fn get_system_memory_division_raw<M: CoredllGuestMemory>(
     {
         return false;
     }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn page_out_module_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let (process_handle, module_handle, flags) = if args.len() >= 3 {
+        (raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2))
+    } else {
+        let target = raw_arg(args, 0);
+        let flags = raw_arg(args, 1);
+        if target != 0 && kernel.process_id_for_handle(target).is_some() {
+            (target, 0, flags)
+        } else {
+            (
+                crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                target,
+                flags,
+            )
+        }
+    };
+
+    if flags != PAGE_OUT_PROCESS_ONLY
+        && flags != PAGE_OUT_DLL_USED_ONLY_BY_THISPROC
+        && flags != PAGE_OUT_ALL_DEPENDENT_DLL
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    if module_handle != 0 {
+        if !kernel.is_loaded_module_handle(module_handle) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
+        if kernel.process_id_for_handle(process_handle).is_none() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+
+    if crate::ce::kernel::CeKernel::is_current_process_pseudo_handle(process_handle)
+        || kernel.process_id_for_handle(process_handle).is_none()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+
     kernel.threads.set_last_error(thread_id, 0);
     true
 }

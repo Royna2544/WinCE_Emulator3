@@ -87,6 +87,15 @@ notes when it is still needed for implementation.
   page-size outputs instead of reporting unsupported. Coverage verifies the
   object-store page count against `GetStoreInformation`, the emulator RAM/page
   constants, null output rejection, and unmapped output failure.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`: raw `PageOutModule` now
+  follows CE's flag and process/module handle validation instead of reporting
+  unsupported. The emulator treats valid page-out requests as a no-op because
+  it has no discardable committed code pages yet; coverage verifies valid
+  module/process requests, public two-argument module calls, invalid flags,
+  current-process rejection, and invalid module/process handles.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`
