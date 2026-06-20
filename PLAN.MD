@@ -121,6 +121,13 @@ notes when it is still needed for implementation.
   `TerminateProcess(GetCurrentProcess(), code)` now marks the current process
   exited instead of resuming the thunk as a diagnostic-only success, matching
   CE's active-process `PROCTerminate` path and the `ExitProcess` macro.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: raw `CreateThread` now
+  mirrors CE's `NKCreateThread` parameter gate by rejecting null start
+  addresses, negative stack sizes, and flags other than `CREATE_SUSPENDED` and
+  `STACK_SIZE_PARAM_IS_A_RESERVATION` before allocating a thread object.
+  Coverage verifies invalid calls leave the caller thread-id slot untouched and
+  do not consume the next CE thread ID.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract

@@ -92,6 +92,8 @@ const CTYPE_BLANK: u32 = 0x0040;
 const CTYPE_HEX: u32 = 0x0080;
 const CTYPE_ALPHA: u32 = 0x0100;
 const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+const CREATE_SUSPENDED: u32 = 0x0000_0004;
+const STACK_SIZE_PARAM_IS_A_RESERVATION: u32 = 0x0001_0000;
 const POWER_NAME: u32 = 0x0000_0001;
 const POWER_FORCE: u32 = 0x0000_1000;
 const POWER_STATE_ON: u32 = 0x0001_0000;
@@ -26902,15 +26904,20 @@ fn create_thread_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    let stack_size = raw_arg(args, 1);
     let start_address = raw_arg(args, 2);
-    if start_address == 0 {
+    let create_flags = raw_arg(args, 4);
+    if start_address == 0
+        || stack_size & 0x8000_0000 != 0
+        || create_flags & !(CREATE_SUSPENDED | STACK_SIZE_PARAM_IS_A_RESERVATION) != 0
+    {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let parameter = raw_arg(args, 3);
-    let suspended = raw_arg(args, 4) & 0x0000_0004 != 0;
+    let suspended = create_flags & CREATE_SUSPENDED != 0;
     let thread_id_ptr = raw_arg(args, 5);
     let (handle, created_thread_id) =
         kernel.create_guest_thread(start_address, parameter, suspended);
@@ -64010,8 +64017,10 @@ mod tests {
             0,
             0,
         );
-        kernel.gwe.record_thread_dispatched(receiver_thread, 0);
         kernel.timers.sleep_ms(4999);
+        kernel
+            .gwe
+            .record_thread_dispatched(receiver_thread, kernel.timers.tick_count() - 4999);
 
         let prepared = send_message_timeout_block_prepare(
             &mut kernel,
@@ -64060,8 +64069,10 @@ mod tests {
             0,
             0,
         );
-        kernel.gwe.record_thread_dispatched(receiver_thread, 0);
         kernel.timers.sleep_ms(5001);
+        kernel
+            .gwe
+            .record_thread_dispatched(receiver_thread, kernel.timers.tick_count() - 5001);
 
         let prepared = send_message_timeout_block_prepare(
             &mut kernel,

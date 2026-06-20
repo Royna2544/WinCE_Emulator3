@@ -4352,8 +4352,133 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         ERROR_INVALID_PARAMETER
     );
 
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    const STACK_SIZE_PARAM_IS_A_RESERVATION: u32 = 0x0001_0000;
+
     let thread_id_ptr = 0x5000;
     memory.map_words(thread_id_ptr, 1);
+    memory.write_word(thread_id_ptr, 0xdead_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_THREAD,
+            [0, 0, 0, 0xabcd_0000, 0, thread_id_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(thread_id_ptr)?, 0xdead_beef);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_THREAD,
+            [0, 0, 0x1234_5678, 0xabcd_0000, 0x0000_0008, thread_id_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(thread_id_ptr)?, 0xdead_beef);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_THREAD,
+            [0, 0x8000_0000, 0x1234_5678, 0xabcd_0000, 0, thread_id_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(thread_id_ptr)?, 0xdead_beef);
+
+    let reservation_thread = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_THREAD,
+        [
+            0,
+            0x2000,
+            0x1234_5678,
+            0xabcd_0000,
+            CREATE_SUSPENDED | STACK_SIZE_PARAM_IS_A_RESERVATION,
+            thread_id_ptr,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateThread reservation flag path failed: {other:?}"),
+    };
+    assert_ne!(reservation_thread, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(memory.read_u32(thread_id_ptr)?, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RESUME_THREAD,
+            [reservation_thread],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(kernel.close_handle(reservation_thread)?);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_THREAD,
+            [
+                0,
+                0,
+                0x1234_5678,
+                0xabcd_0000,
+                CREATE_SUSPENDED | 0x8000_0000,
+                thread_id_ptr
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(thread_id_ptr)?, 2);
+
     let worker_thread = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -4368,7 +4493,7 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         other => panic!("CreateThread did not return a raw thread handle: {other:?}"),
     };
     assert_ne!(worker_thread, 0);
-    assert_eq!(memory.read_u32(thread_id_ptr)?, 2);
+    assert_eq!(memory.read_u32(thread_id_ptr)?, 3);
     let exit_code_ptr = 0x5040;
     memory.map_words(exit_code_ptr, 1);
     assert!(matches!(
@@ -4380,7 +4505,7 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             [worker_thread],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(2),
+            value: CoredllValue::U32(3),
             ..
         }
     ));
