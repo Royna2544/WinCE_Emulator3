@@ -846,7 +846,9 @@ notes when it is still needed for implementation.
   wait/message transition instead of handing control back to the parked parent
   too early. Return-stub handoffs now also preserve active processes that still
   own visible windows or receiver work, so child image launches cannot strand
-  the parent route UI while rotating into the parked child process.
+  the parent route UI while rotating into the parked child process. Remote live
+  pump idling now only sleeps when there is no saved guest context to resume,
+  keeping remote route UI progress moving between host wall-clock slices.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
   `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble
