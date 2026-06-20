@@ -34257,12 +34257,9 @@ fn select_pe_icon_group_entry(
 ) -> Option<PeIconGroupEntry> {
     entries.iter().copied().max_by_key(|entry| {
         let exact_size = entry.width == target && entry.height == target;
-        let size_score = if exact_size {
-            10_000
-        } else {
-            entry.width.max(entry.height)
-        };
-        size_score * 1_000 + entry.bit_count
+        let size = entry.width.max(entry.height);
+        let distance = (size - target).abs();
+        (exact_size, -distance, size >= target, entry.bit_count, size)
     })
 }
 

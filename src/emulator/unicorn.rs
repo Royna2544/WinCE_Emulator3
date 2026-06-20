@@ -3123,7 +3123,13 @@ impl UnicornMips {
             return Some(wndproc);
         }
         if wndproc < CE_USER_KERNEL_SPLIT {
-            let slot_zero_wndproc = wndproc & CE_PROCESS_SLOT_MASK;
+            let slot_offset = wndproc & CE_PROCESS_SLOT_MASK;
+            if let Some(dll_wndproc) =
+                Self::mapped_dll_alias_callback(&self.mapped_blobs, slot_offset)
+            {
+                return Some(dll_wndproc);
+            }
+            let slot_zero_wndproc = slot_offset;
             if slot_zero_wndproc != 0
                 && mapped_blob_module_for_pc(&self.mapped_blobs, slot_zero_wndproc).is_some()
             {
@@ -3131,6 +3137,21 @@ impl UnicornMips {
             }
         }
         None
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn mapped_dll_alias_callback(mapped_blobs: &[MappedBlob], slot_offset: u32) -> Option<u32> {
+        if slot_offset == 0 {
+            return None;
+        }
+        mapped_blobs.iter().find_map(|blob| {
+            if !blob.name.starts_with("dll:") {
+                return None;
+            }
+            let candidate = blob.base.checked_add(slot_offset)?;
+            let offset = candidate.checked_sub(blob.base)?;
+            (offset < blob.bytes.len() as u32).then_some(candidate)
+        })
     }
 
     #[cfg(feature = "unicorn")]
@@ -43603,6 +43624,26 @@ mod unicorn_tests {
         assert_eq!(
             emulator.mapped_guest_wndproc(0x6004_f134),
             Some(0x0004_f134)
+        );
+    }
+
+    #[test]
+    fn mapped_guest_wndproc_prefers_dll_alias_over_slot_zero_image() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "image:main.exe".to_owned(),
+            base: 0x0004_f000,
+            bytes: vec![0; 0x3000],
+        });
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:mfcce400.dll".to_owned(),
+            base: 0x0010_0000,
+            bytes: vec![0; 0x60000],
+        });
+
+        assert_eq!(
+            emulator.mapped_guest_wndproc(0x6004_f134),
+            Some(0x0014_f134)
         );
     }
 

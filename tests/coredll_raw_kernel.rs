@@ -12501,19 +12501,34 @@ fn coredll_raw_load_image_w_selects_requested_icon_resource_size_like_ce() -> Re
 
     let icon_16 = icon_dib_32bpp(16, 16, 0x30);
     let icon_32 = icon_dib_32bpp(32, 32, 0x80);
+    let icon_24 = icon_dib_32bpp(24, 24, 0x50);
+    let icon_48 = icon_dib_32bpp(48, 48, 0xa0);
     let group = rt_group_icon_resource(&[
         (16, 16, 32, icon_16.len() as u32, 101),
         (32, 32, 32, icon_32.len() as u32, 102),
     ]);
+    let nearest_group = rt_group_icon_resource(&[
+        (24, 24, 32, icon_24.len() as u32, 103),
+        (48, 48, 32, icon_48.len() as u32, 104),
+    ]);
     let group_ptr = 0x2_0000;
     let icon_16_ptr = 0x2_1000;
     let icon_32_ptr = 0x2_3000;
+    let nearest_group_ptr = 0x2_5000;
+    let icon_24_ptr = 0x2_6000;
+    let icon_48_ptr = 0x2_9000;
     memory.map_bytes(group_ptr, group.len() as u32);
     memory.map_bytes(icon_16_ptr, icon_16.len() as u32);
     memory.map_bytes(icon_32_ptr, icon_32.len() as u32);
+    memory.map_bytes(nearest_group_ptr, nearest_group.len() as u32);
+    memory.map_bytes(icon_24_ptr, icon_24.len() as u32);
+    memory.map_bytes(icon_48_ptr, icon_48.len() as u32);
     memory.write_bytes(group_ptr, &group);
     memory.write_bytes(icon_16_ptr, &icon_16);
     memory.write_bytes(icon_32_ptr, &icon_32);
+    memory.write_bytes(nearest_group_ptr, &nearest_group);
+    memory.write_bytes(icon_24_ptr, &icon_24);
+    memory.write_bytes(icon_48_ptr, &icon_48);
     let group_handle = kernel.resources.register(
         module,
         ResourceId::Integer(77),
@@ -12534,6 +12549,27 @@ fn coredll_raw_load_image_w_selects_requested_icon_resource_size_like_ce() -> Re
         ResourceId::Integer(RT_ICON as u16),
         icon_32_ptr,
         icon_32.len() as u32,
+    );
+    kernel.resources.register(
+        module,
+        ResourceId::Integer(79),
+        ResourceId::Integer(RT_GROUP_ICON as u16),
+        nearest_group_ptr,
+        nearest_group.len() as u32,
+    );
+    kernel.resources.register(
+        module,
+        ResourceId::Integer(103),
+        ResourceId::Integer(RT_ICON as u16),
+        icon_24_ptr,
+        icon_24.len() as u32,
+    );
+    kernel.resources.register(
+        module,
+        ResourceId::Integer(104),
+        ResourceId::Integer(RT_ICON as u16),
+        icon_48_ptr,
+        icon_48.len() as u32,
     );
 
     let small_icon = match table.dispatch_raw_ordinal_with_memory(
@@ -12583,6 +12619,36 @@ fn coredll_raw_load_image_w_selects_requested_icon_resource_size_like_ce() -> Re
         .and_then(|icon| kernel.resources.bitmap(icon.color_bitmap))
         .expect("32x32 LoadImageW icon should be bitmap-backed");
     assert_eq!((large_bitmap.width, large_bitmap.height), (32, 32));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let nearest_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [module, 79, IMAGE_ICON, 16, 16, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(icon),
+            ..
+        } => icon,
+        other => {
+            panic!(
+                "LoadImageW(16x16 IMAGE_ICON without exact match) returned unexpected result: {other:?}"
+            )
+        }
+    };
+    assert_ne!(nearest_icon, 0);
+    let nearest_bitmap = kernel
+        .resources
+        .icon(nearest_icon)
+        .and_then(|icon| kernel.resources.bitmap(icon.color_bitmap))
+        .expect("nearest LoadImageW icon should be bitmap-backed");
+    assert_eq!(
+        (nearest_bitmap.width, nearest_bitmap.height),
+        (24, 24),
+        "CE shell callers request 16x16 icons; fallback should choose the nearest group entry instead of the largest"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     let missing_group = rt_group_icon_resource(&[(16, 16, 32, icon_16.len() as u32, 999)]);

@@ -687,6 +687,13 @@ notes when it is still needed for implementation.
   with the same source cursor succeed as CE no-ops, even when the hotspot
   arguments differ. Coverage verifies the helper state and raw ordinal path
   keep the existing merged drag image instead of replacing it.
+- `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\TASKBAR\taskbar.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\WTL\INCLUDE\atlframe.h`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp`: raw
+  `LoadImageW(IMAGE_ICON)` group-resource selection now keeps exact matches
+  first but falls back to the nearest available RT_ICON size instead of the
+  largest entry, preserving CE shell 16x16 icon requests when a group only
+  contains intermediate and large images.
 - Runtime live-pump/iNavi route frontier: when the active process is parked
   in a hidden `GetMessage` wait and a visible parked process has a ready wait
   unblock, `rotate_after_run_slice_handoff` now resumes the ready parked
