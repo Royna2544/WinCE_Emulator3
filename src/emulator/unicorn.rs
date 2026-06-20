@@ -3200,6 +3200,11 @@ impl UnicornMips {
         if local.is_some_and(|mapped| mapped != wndproc) {
             return local;
         }
+        if local == Some(wndproc)
+            && Self::mapped_process_slot_dll_contains_callback(&self.mapped_blobs, wndproc)
+        {
+            return local;
+        }
         if is_ce_high_process_slot_callback(wndproc) {
             return Some(wndproc);
         }
@@ -3216,7 +3221,7 @@ impl UnicornMips {
         if process_id == current_process_id {
             local.or(Some(wndproc))
         } else {
-            local
+            None
         }
     }
 
@@ -3284,9 +3289,23 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn mapped_process_slot_dll_contains_callback(
+        mapped_blobs: &[MappedBlob],
+        callback: u32,
+    ) -> bool {
+        mapped_blobs.iter().any(|blob| {
+            if !Self::mapped_dll_blob_is_process_slot_view(blob) {
+                return false;
+            }
+            callback >= blob.base && callback.wrapping_sub(blob.base) < blob.bytes.len() as u32
+        })
+    }
+
+    #[cfg(feature = "unicorn")]
     fn mapped_dll_blob_is_process_slot_view(blob: &MappedBlob) -> bool {
         blob.name.starts_with("dll:")
             && (blob.base < CE_PROCESS_SLOT_SIZE
+                || (blob.base >= CE_HIGH_PROCESS_SLOT_DLL_BASE && blob.base < CE_SHARED_HEAP_BASE)
                 || (blob.base < CE_SHARED_HEAP_BASE && (blob.base & CE_PROCESS_SLOT_MASK) == 0)
                 || mapped_blob_pe_preferred_image_base(blob)
                     .is_some_and(|base| base < CE_PROCESS_SLOT_SIZE))
@@ -24971,8 +24990,8 @@ mod wait_scheduler_tests {
 
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
-            base: 0x6004_0000,
-            bytes: vec![0; 0x20_000],
+            base: 0x6000_0000,
+            bytes: vec![0; 0x80_000],
         });
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\INAVI\INavi\TpSysAuth.dll".to_owned(),
@@ -25375,8 +25394,8 @@ mod wait_scheduler_tests {
 
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
-            base: 0x6004_0000,
-            bytes: vec![0; 0x20_000],
+            base: 0x6000_0000,
+            bytes: vec![0; 0x80_000],
         });
 
         assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
@@ -25486,8 +25505,8 @@ mod wait_scheduler_tests {
         });
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
-            base: 0x6004_0000,
-            bytes: vec![0; 0x20_000],
+            base: 0x6000_0000,
+            bytes: vec![0; 0x80_000],
         });
 
         assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
@@ -34929,6 +34948,8 @@ const CE_PROCESS_SLOT_MASK: u32 = CE_PROCESS_SLOT_SIZE - 1;
 #[cfg(feature = "unicorn")]
 const CE_SHARED_HEAP_BASE: u32 = 0x7000_0000;
 #[cfg(feature = "unicorn")]
+const CE_HIGH_PROCESS_SLOT_DLL_BASE: u32 = 0x6000_0000;
+#[cfg(feature = "unicorn")]
 const CE_USER_KERNEL_SPLIT: u32 = 0x8000_0000;
 
 #[cfg(feature = "unicorn")]
@@ -44299,6 +44320,25 @@ mod unicorn_tests {
         assert_eq!(
             child.receiver_process_wndproc_for_process(0x4019_f0f4, 1, 1),
             Some(0x6004_f0f4)
+        );
+    }
+
+    #[test]
+    fn receiver_process_wndproc_does_not_use_local_shared_identity_for_other_process() {
+        let mut child = super::UnicornMips::new().unwrap();
+        child.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4015_0000,
+            bytes: vec![0; 0x7f000],
+        });
+
+        assert_eq!(
+            child.receiver_process_wndproc_for_process(0x4019_f0f4, 1, 67),
+            None
+        );
+        assert_eq!(
+            child.receiver_process_wndproc_for_process(0x4019_f0f4, 67, 67),
+            Some(0x4019_f0f4)
         );
     }
 
