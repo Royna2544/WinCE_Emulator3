@@ -5624,8 +5624,17 @@ impl UnicornMips {
             unicorn_const::{Arch, HookType, Mode},
         };
 
+        let active_has_visible_queued_receiver =
+            self.active_process_has_visible_queued_receiver_work(kernel);
+        if limits.live_pump
+            && !active_has_visible_queued_receiver
+            && !self.active_process_has_visible_windows(kernel)
+            && self.rotate_to_visible_window_parked_process(kernel)
+        {
+            return Ok(());
+        }
         if self.running_guest_thread.is_none()
-            && !self.active_process_has_visible_queued_receiver_work(kernel)
+            && !active_has_visible_queued_receiver
             && self.has_runnable_parked_process(kernel)
             && self.rotate_to_next_parked_process(kernel)
         {
