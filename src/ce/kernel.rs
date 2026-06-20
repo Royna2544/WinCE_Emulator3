@@ -79,6 +79,7 @@ const DISK_IOCTL_INITIALIZED: u32 = 4;
 const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
 const ERROR_BUSY: u32 = 170;
 const RREXF_REQUEST_EXCLUSIVE: u32 = 0x0001;
+pub const CE_DEFAULT_THREAD_QUANTUM_MS: u32 = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePumpResult {
@@ -295,6 +296,7 @@ pub struct CeKernel {
     font_families: Vec<CeFontFamily>,
     fsdmgr_caches: Vec<Option<FsdmgrCacheEntry>>,
     iorm_resource_domains: BTreeMap<u32, IormResourceDomain>,
+    thread_quantums: BTreeMap<u32, u32>,
     display_gamma_value: u32,
     display_rotation: u32,
     display_lcdcon3_high_nibble: u8,
@@ -1124,6 +1126,7 @@ impl CeKernel {
             font_families: ce_system_font_families(),
             fsdmgr_caches: Vec::new(),
             iorm_resource_domains: BTreeMap::new(),
+            thread_quantums: BTreeMap::new(),
             display_gamma_value: 2330,
             display_rotation: 0,
             display_lcdcon3_high_nibble: 0,
@@ -5866,6 +5869,29 @@ impl CeKernel {
             return Some(current_thread_id);
         }
         self.handles.thread_id(handle)
+    }
+
+    pub fn thread_quantum_for_handle(&self, handle: u32, current_thread_id: u32) -> Option<u32> {
+        let thread_id = self.guest_thread_id_for_handle(handle, current_thread_id)?;
+        Some(
+            self.thread_quantums
+                .get(&thread_id)
+                .copied()
+                .unwrap_or(CE_DEFAULT_THREAD_QUANTUM_MS),
+        )
+    }
+
+    pub fn set_thread_quantum_for_handle(
+        &mut self,
+        handle: u32,
+        current_thread_id: u32,
+        quantum: u32,
+    ) -> bool {
+        let Some(thread_id) = self.guest_thread_id_for_handle(handle, current_thread_id) else {
+            return false;
+        };
+        self.thread_quantums.insert(thread_id, quantum);
+        true
     }
 
     pub fn guest_thread_exit_code(&self, handle: u32) -> Option<u32> {

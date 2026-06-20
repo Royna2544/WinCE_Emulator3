@@ -2342,10 +2342,19 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             }
         }
         ORD_CE_GET_THREAD_QUANTUM => {
-            // CeGetThreadQuantum(hThread) — return thread time quantum in ms.
-            // Return the CE default quantum of 100ms.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(100))
+            let handle = raw_arg(args, 0);
+            match kernel.thread_quantum_for_handle(handle, thread_id) {
+                Some(quantum) => {
+                    kernel.threads.set_last_error(thread_id, 0);
+                    Some(CoredllValue::U32(quantum))
+                }
+                None => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    Some(CoredllValue::U32(u32::MAX))
+                }
+            }
         }
         ORD_CE_GET_PROCESS_TRUST => {
             // CeGetProcessTrust(hProcess) — return process trust level.
@@ -4087,8 +4096,19 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_CE_SET_THREAD_QUANTUM => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
+            let handle = raw_arg(args, 0);
+            let quantum = raw_arg(args, 1);
+            if quantum & 0x8000_0000 != 0
+                || !kernel.set_thread_quantum_for_handle(handle, thread_id, quantum)
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                Some(CoredllValue::Bool(false))
+            } else {
+                kernel.threads.set_last_error(thread_id, 0);
+                Some(CoredllValue::Bool(true))
+            }
         }
         ORD_CE_GET_CURRENT_TRUST | ORD_CE_GET_CALLER_TRUST => {
             // Return OEM trust level (2) — highest trust in CE security model.

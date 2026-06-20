@@ -114,6 +114,15 @@ notes when it is still needed for implementation.
   request conflicts, exclusive claims, unsupported flag rejection, release
   refcounting, out-of-range failures, busy destroy rejection, missing-domain
   destroy behavior, and IORM supplemental export-table resolution.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kcalls.c`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`: raw
+  `CeGetThreadQuantum`/`CeSetThreadQuantum` now validate thread handles and
+  track per-thread quantum values instead of returning an unconditional
+  default/success. Coverage verifies the CE default quantum, pseudo-current
+  and real thread handles, set/get round-trips, high-bit quantum rejection,
+  invalid get returning `MAXDWORD`, and invalid set failure.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`
