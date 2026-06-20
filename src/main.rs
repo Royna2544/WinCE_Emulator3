@@ -950,6 +950,18 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
+        if should_rotate_idle_saved_remote_active(
+            args.remote_server.is_some(),
+            cpu.has_saved_context(),
+            cpu.active_process_has_receiver_work(kernel),
+            cpu.active_process_has_visible_windows(kernel),
+            cpu.has_runnable_parked_process(kernel),
+        ) && cpu.rotate_to_next_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if should_sleep_remote_idle(args.remote_server.is_some(), cpu.has_saved_context()) {
             std::thread::sleep(Duration::from_millis(16));
             continue;
@@ -1299,6 +1311,20 @@ fn should_rotate_idle_nonrunning_runnable_parked_process(
 ) -> bool {
     !active_has_running_guest_thread
         && !active_has_visible_queued_receiver_work
+        && has_runnable_parked_process
+}
+
+fn should_rotate_idle_saved_remote_active(
+    remote_server: bool,
+    has_saved_context: bool,
+    active_has_receiver_work: bool,
+    active_has_visible_windows: bool,
+    has_runnable_parked_process: bool,
+) -> bool {
+    remote_server
+        && has_saved_context
+        && !active_has_receiver_work
+        && !active_has_visible_windows
         && has_runnable_parked_process
 }
 
@@ -4133,6 +4159,28 @@ mod tests {
         assert!(should_sleep_remote_idle(true, false));
         assert!(!should_sleep_remote_idle(true, true));
         assert!(!should_sleep_remote_idle(false, false));
+    }
+
+    #[test]
+    fn idle_saved_remote_hidden_active_rotates_to_runnable_parked_process() {
+        assert!(should_rotate_idle_saved_remote_active(
+            true, true, false, false, true
+        ));
+        assert!(!should_rotate_idle_saved_remote_active(
+            false, true, false, false, true
+        ));
+        assert!(!should_rotate_idle_saved_remote_active(
+            true, false, false, false, true
+        ));
+        assert!(!should_rotate_idle_saved_remote_active(
+            true, true, true, false, true
+        ));
+        assert!(!should_rotate_idle_saved_remote_active(
+            true, true, false, true, true
+        ));
+        assert!(!should_rotate_idle_saved_remote_active(
+            true, true, false, false, false
+        ));
     }
 
     #[test]
