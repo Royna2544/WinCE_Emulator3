@@ -713,6 +713,14 @@ notes when it is still needed for implementation.
   has a hidden active process and a runnable visible parked process, allowing
   route UI work to progress even before the current PC reaches a normal safe
   scheduling boundary.
+- `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
+  and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
+  `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble
+  icon ownership for emulator-managed icons by storing a copied HICON instead
+  of the caller-owned handle, replacing updates with a fresh copy, and
+  destroying the prior copied icon on update/remove. Coverage verifies add,
+  query, non-null update, null-icon update, duplicate iconic add, and remove
+  lifecycle behavior against copied handles.
 
 ## Active Roadmap
 

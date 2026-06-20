@@ -20901,6 +20901,18 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
         0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x44, 0x33, 0x22, 0x11, 0xaa, 0xbb, 0xcc,
         0xdd,
     ];
+    let initial_icon_mask = kernel.resources.create_bitmap(16, 16, 1, 1, 0);
+    let initial_icon_color = kernel.resources.create_bitmap(16, 16, 1, 16, 0);
+    let initial_icon = kernel
+        .resources
+        .create_icon(true, 0, 0, initial_icon_mask, initial_icon_color)
+        .expect("initial icon");
+    let updated_icon_mask = kernel.resources.create_bitmap(16, 16, 1, 1, 0);
+    let updated_icon_color = kernel.resources.create_bitmap(16, 16, 1, 16, 0);
+    let updated_icon = kernel
+        .resources
+        .create_icon(true, 0, 0, updated_icon_mask, updated_icon_color)
+        .expect("updated icon");
     kernel.com.register_class_guid(clsid, 0x000c_0f00);
     memory.map_words(data, SHNOTIFICATIONDATA_SIZE / 4);
     memory.map_bytes(title, 64);
@@ -20915,7 +20927,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     memory.write_word(data + 4, 301);
     memory.write_word(data + 8, SHNP_INFORM);
     memory.write_word(data + 12, 0);
-    memory.write_word(data + 16, 0x000b_9001);
+    memory.write_word(data + 16, initial_icon);
     memory.write_word(data + 20, SHNUM_TITLE | SHNUM_HTML);
     memory.write_bytes(data + 24, &clsid);
     memory.write_word(data + 40, hwnd);
@@ -20973,6 +20985,12 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(record.html, "<b>Drive now</b>");
     assert_eq!(record.duration_cs, 5);
     assert_eq!(record.callback_ptr, 0);
+    let initial_icon_copy = record.icon;
+    assert_ne!(
+        initial_icon_copy, initial_icon,
+        "CE TaskbarBubble stores a CopyIcon result, not the caller-owned HICON"
+    );
+    assert!(kernel.resources.icon(initial_icon_copy).is_some());
     assert_eq!(
         kernel
             .shell
@@ -21262,7 +21280,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(memory.read_u32(out + 4)?, 301);
     assert_eq!(memory.read_u32(out + 8)?, SHNP_INFORM);
     assert_eq!(memory.read_u32(out + 12)?, 5);
-    assert_eq!(memory.read_u32(out + 16)?, 0x000b_9001);
+    assert_eq!(memory.read_u32(out + 16)?, initial_icon_copy);
     assert_eq!(memory.read_u32(out + 40)?, hwnd);
     assert_eq!(memory.read_u32(out + 52)?, 0xCAFE_BABE);
     assert_eq!(memory.read_wide_z(out_title, 32), "Route alert");
@@ -21333,11 +21351,11 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     ));
     let record = kernel.shell.notification(clsid, 301).expect("notification");
     assert_eq!(record.title, "Ignored sink");
-    assert_eq!(record.icon, 0x000b_9001);
+    assert_eq!(record.icon, initial_icon_copy);
 
     memory.write_word(data + 8, SHNP_ICONIC);
     memory.write_word(data + 12, 3);
-    memory.write_word(data + 16, 0x000b_9002);
+    memory.write_word(data + 16, updated_icon);
     memory.write_word(data + 20, 0x24);
     memory.write_word(data + 52, 0xDEAD_C0DE);
     memory.write_wide_z(title, "Route changed");
@@ -21364,7 +21382,13 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     let record = kernel.shell.notification(clsid, 301).expect("notification");
     assert_eq!(record.priority, SHNP_ICONIC);
     assert_eq!(record.duration_cs, 3);
-    assert_eq!(record.icon, 0x000b_9002);
+    let updated_icon_copy = record.icon;
+    assert_ne!(
+        updated_icon_copy, updated_icon,
+        "CE SHNotificationUpdate copies replacement icons before storing them"
+    );
+    assert_ne!(updated_icon_copy, initial_icon_copy);
+    assert!(kernel.resources.icon(updated_icon_copy).is_some());
     assert_eq!(record.flags, SHNUM_TITLE | SHNUM_HTML);
     assert_eq!(record.hwnd_sink, hwnd);
     assert_eq!(record.lparam, 0xCAFE_BABE);
@@ -21390,7 +21414,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             .destroyed_notify_icons()
             .copied()
             .collect::<Vec<_>>(),
-        vec![0x000b_9001]
+        vec![initial_icon_copy]
     );
 
     memory.write_word(data + 16, 0);
@@ -21408,14 +21432,14 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
         }
     ));
     let record = kernel.shell.notification(clsid, 301).expect("notification");
-    assert_eq!(record.icon, 0x000b_9002);
+    assert_eq!(record.icon, updated_icon_copy);
     assert_eq!(
         kernel
             .shell
             .destroyed_notify_icons()
             .copied()
             .collect::<Vec<_>>(),
-        vec![0x000b_9001]
+        vec![initial_icon_copy]
     );
 
     memory.write_word(data + 12, 0);
@@ -21437,7 +21461,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(record.expires_at_ms, Some(record.added_at_ms));
 
     memory.write_word(data + 12, 9);
-    memory.write_word(data + 16, 0x000b_9003);
+    memory.write_word(data + 16, updated_icon);
     memory.write_word(data + 20, SHNUM_TITLE | SHNUM_HTML);
     memory.write_wide_z(title, "Duplicate iconic");
     memory.write_wide_z(html, "<p>Duplicate</p>");
@@ -21457,7 +21481,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     let record = kernel.shell.notification(clsid, 301).expect("notification");
     assert_eq!(record.priority, SHNP_ICONIC);
     assert_eq!(record.duration_cs, 0);
-    assert_eq!(record.icon, 0x000b_9002);
+    assert_eq!(record.icon, updated_icon_copy);
     assert_eq!(record.title, "Route changed");
     assert_eq!(record.html, "<i>Later</i>");
     assert_eq!(
@@ -21466,7 +21490,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             .destroyed_notify_icons()
             .copied()
             .collect::<Vec<_>>(),
-        vec![0x000b_9001],
+        vec![initial_icon_copy],
         "duplicate iconic add should not replace or destroy the existing CE tray icon"
     );
 
@@ -21539,7 +21563,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             .destroyed_notify_icons()
             .copied()
             .collect::<Vec<_>>(),
-        vec![0x000b_9001, 0x000b_9002]
+        vec![initial_icon_copy, updated_icon_copy]
     );
     assert_eq!(
         kernel

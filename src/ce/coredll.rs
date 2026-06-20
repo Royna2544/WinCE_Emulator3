@@ -29329,11 +29329,11 @@ fn read_notify_icon_tip_w<M: CoredllGuestMemory>(
 
 fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(data) = read_shell_notification_data(
+    let Some(mut data) = read_shell_notification_data(
         kernel,
         memory,
         thread_id,
@@ -29346,6 +29346,7 @@ fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
     if !kernel.gwe.is_window(data.hwnd_sink) {
         return ERROR_INVALID_PARAMETER;
     }
+    data.icon = copy_shell_notification_icon(kernel, memory, thread_id, data.icon);
     let title_present = raw_arg(args, 2) != 0;
     let html_present = raw_arg(args, 3) != 0;
     notification_result_to_error(kernel.shell.add_notification_with_content_presence(
@@ -29358,11 +29359,11 @@ fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
 
 fn sh_notification_update_i_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(data) = read_shell_notification_data(
+    let Some(mut data) = read_shell_notification_data(
         kernel,
         memory,
         thread_id,
@@ -29372,6 +29373,9 @@ fn sh_notification_update_i_raw<M: CoredllGuestMemory>(
     ) else {
         return ERROR_INVALID_PARAMETER;
     };
+    if raw_arg(args, 0) & crate::ce::shell::SHNUM_ICON != 0 {
+        data.icon = copy_shell_notification_icon(kernel, memory, thread_id, data.icon);
+    }
     notification_result_to_error(kernel.shell.update_notification(
         raw_arg(args, 0),
         data,
@@ -33794,6 +33798,53 @@ fn clone_bitmap_for_icon<M: CoredllGuestMemory>(
         clone_bitmap.alpha_mask = source.alpha_mask;
     }
     Some((clone, true))
+}
+
+fn copy_shell_notification_icon<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    icon: u32,
+) -> u32 {
+    if icon == 0 {
+        return 0;
+    }
+    let Some(source) = kernel.resources.icon(icon).cloned() else {
+        return icon;
+    };
+    let Some((mask_bitmap, owns_mask_bitmap)) =
+        clone_bitmap_for_icon(kernel, memory, thread_id, source.mask_bitmap)
+    else {
+        return 0;
+    };
+    let Some((color_bitmap, owns_color_bitmap)) =
+        clone_bitmap_for_icon(kernel, memory, thread_id, source.color_bitmap)
+    else {
+        if owns_mask_bitmap {
+            delete_owned_bitmap(kernel, mask_bitmap);
+        }
+        return 0;
+    };
+    match kernel.resources.create_icon_with_bitmap_ownership(
+        source.is_icon,
+        source.x_hotspot,
+        source.y_hotspot,
+        mask_bitmap,
+        color_bitmap,
+        owns_mask_bitmap,
+        owns_color_bitmap,
+    ) {
+        Some(copy) => copy,
+        None => {
+            if owns_mask_bitmap {
+                delete_owned_bitmap(kernel, mask_bitmap);
+            }
+            if owns_color_bitmap {
+                delete_owned_bitmap(kernel, color_bitmap);
+            }
+            0
+        }
+    }
 }
 
 fn kern_extract_icons_raw<M: CoredllGuestMemory>(

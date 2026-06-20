@@ -7093,6 +7093,62 @@ fn coredll_raw_select_object_returns_restorable_dc_defaults() -> Result<()> {
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(kernel.resources.gdi_object_kind(0x0000_0201), "bitmap");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CURRENT_OBJECT,
+            [mem_dc, 7],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x0000_0201),
+            ..
+        }
+    ));
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_BITMAP,
+        [2, 2, 1, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateBitmap did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x0000_0201),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, 0x0000_0201],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == bitmap
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     for stock_handle in [
         white_brush,

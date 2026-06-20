@@ -16,7 +16,7 @@ const DC_BRUSH: u32 = 18;
 const DC_PEN: u32 = 19;
 const BORDERX_PEN: u32 = 32;
 const BORDERY_PEN: u32 = 33;
-const DEFAULT_BITMAP_HANDLE: u32 = STOCK_OBJECT_BASE | 0x80;
+const DEFAULT_BITMAP_HANDLE: u32 = 0x0000_0201;
 
 pub fn stock_object_handle(index: u32) -> Option<u32> {
     let valid = matches!(
