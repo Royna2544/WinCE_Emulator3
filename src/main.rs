@@ -4222,12 +4222,8 @@ mod tests {
 
     #[test]
     fn live_pump_priority_parked_rotation_waits_for_visible_queue_to_drain() {
-        assert!(should_rotate_live_pump_priority_parked_process(
-            false, true
-        ));
-        assert!(!should_rotate_live_pump_priority_parked_process(
-            true, true
-        ));
+        assert!(should_rotate_live_pump_priority_parked_process(false, true));
+        assert!(!should_rotate_live_pump_priority_parked_process(true, true));
         assert!(!should_rotate_live_pump_priority_parked_process(
             false, false
         ));
