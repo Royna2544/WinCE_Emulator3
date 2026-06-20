@@ -956,6 +956,9 @@ notes when it is still needed for implementation.
   raw `ImageList_LoadImage` now treats the `LoadImageW` bitmap as CE does:
   copying it into image-list-owned storage, building masks from that stored
   copy, and releasing the temporary loaded bitmap on success and failure paths.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
+  raw `ImageList_GetIconSize` now preserves CE validation ordering by
+  resolving the image-list handle before rejecting null output pointers.
 
 ## Active Roadmap
 

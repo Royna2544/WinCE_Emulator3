@@ -17624,6 +17624,24 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_IMAGE_LIST_GET_ICON_SIZE,
+            [0x0bad_f00d, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE,
+        "CE ImageList_GetIconSize validates the image-list handle before output pointers"
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_IMAGE_LIST_SET_ICON_SIZE,
             [image_list, 24, 20],
         ),

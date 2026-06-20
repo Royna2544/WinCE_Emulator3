@@ -36664,12 +36664,6 @@ fn image_list_get_icon_size_raw<M: CoredllGuestMemory>(
     let handle = raw_arg(args, 0);
     let cx_ptr = raw_arg(args, 1);
     let cy_ptr = raw_arg(args, 2);
-    if cx_ptr == 0 || cy_ptr == 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
     let size = if let Some(size) = shell_system_image_list_size(handle) {
         Some(size)
     } else {
@@ -36684,6 +36678,12 @@ fn image_list_get_icon_size_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
+    if cx_ptr == 0 || cy_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
     if !write_guest_i32(kernel, memory, thread_id, cx_ptr, cx)
         || !write_guest_i32(kernel, memory, thread_id, cy_ptr, cy)
     {
