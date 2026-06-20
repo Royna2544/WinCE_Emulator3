@@ -4789,6 +4789,23 @@ impl UnicornMips {
             next_cpu.current_thread_id = thread_id;
             incoming_thread_ids = next_cpu.tracked_thread_ids();
         }
+        if next_cpu.running_guest_thread.is_none()
+            && next_cpu.current_thread_id == thread_id
+            && next_cpu
+                .saved_context
+                .as_ref()
+                .is_some_and(Self::saved_cpu_context_is_resumable)
+            && let Some(thread_handle) = thread_handle
+        {
+            next_cpu.running_guest_thread = Some((thread_id, thread_handle));
+            tracing::debug!(
+                target: "ce.scheduler",
+                process_id = process_state.process_id,
+                thread_id,
+                thread_handle = format_args!("0x{thread_handle:08x}"),
+                "restored parked process running thread on activation"
+            );
+        }
         let outgoing_process_id = kernel.current_process_id();
         let requeue_outgoing = requeue_current
             && (outgoing_process_id != process_state.process_id
@@ -30807,6 +30824,72 @@ mod guest_thread_stack_tests {
         assert_eq!(kernel.current_process_id(), 1);
         assert_eq!(scheduler.current_thread_id, 1);
         assert_eq!(scheduler.parked_child_processes.len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parked_child_activation_restores_running_thread_handle() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(1);
+        scheduler.current_thread_id = 1;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0010_2000,
+            regs: MipsGuestContext::zero(),
+        });
+        scheduler.running_guest_thread = Some((1, 0x41));
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0010_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+
+        let child_thread = 3;
+        let child_thread_handle = 0x358;
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(child_thread);
+        child_cpu.current_thread_id = child_thread;
+        child_cpu.saved_context = Some(SavedCpuContext {
+            pc: 0x0040_2000,
+            regs: MipsGuestContext::zero(),
+        });
+        child_cpu.running_guest_thread = None;
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            process_handle: Some(0x354),
+            thread_handle: Some(child_thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 67,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: child_thread,
+            cpu: Box::new(child_cpu),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\Inavi\happyway_win.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        assert!(scheduler.rotate_to_parked_process_id(&mut kernel, 67));
+
+        assert_eq!(kernel.current_process_id(), 67);
+        assert_eq!(scheduler.current_thread_id, child_thread);
+        assert_eq!(
+            scheduler.running_guest_thread,
+            Some((child_thread, child_thread_handle))
+        );
 
         Ok(())
     }
