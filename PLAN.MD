@@ -171,6 +171,13 @@ notes when it is still needed for implementation.
   resources loaded by `LoadCursorW`/`LoadImageW(IMAGE_CURSOR)` now resolve
   RT_GROUP_CURSOR entries into real cursor objects with RT_CURSOR bitmaps and
   `GetIconInfo` hotspot metadata instead of returning the group resource handle.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp`,
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\iconcache.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\NOTIFY\notifext.cxx`: raw
+  `KernExtractIcons` now mirrors CE's callback-selected large/small
+  RT_GROUP_ICON entries by choosing 32x32 and 16x16 resources instead of
+  blindly extracting directory entries 0 and 1, while preserving CE's partial
+  missing-resource behavior.
 
 ## Active Roadmap
 

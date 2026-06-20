@@ -8047,20 +8047,20 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
     );
     assert_eq!(
         i32::from_le_bytes(large_header[4..8].try_into().unwrap()),
-        16
+        32
     );
     assert_eq!(
         u32::from_le_bytes(large_header[8..12].try_into().unwrap()),
-        32,
+        64,
         "RT_ICON payload stores XOR and AND mask heights stacked"
     );
     assert_eq!(
         i32::from_le_bytes(small_header[4..8].try_into().unwrap()),
-        32
+        16
     );
     assert_eq!(
         u32::from_le_bytes(small_header[8..12].try_into().unwrap()),
-        64
+        32
     );
 
     assert!(matches!(
@@ -8137,20 +8137,18 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
             [path_ptr, 1, 0, small_out, 0],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(1),
+            value: CoredllValue::U32(0),
             ..
         }
     ));
-    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    let small_only_ptr = memory.read_u32(small_out)?;
-    assert_ne!(
-        small_only_ptr, 0xfeed_face,
-        "small-only KernExtractIcons should not require entry 0's missing RT_ICON"
-    );
-    let small_only_header = memory.read_bytes(small_only_ptr, 16);
     assert_eq!(
-        i32::from_le_bytes(small_only_header[4..8].try_into().unwrap()),
-        32
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND
+    );
+    assert_eq!(
+        memory.read_u32(small_out)?,
+        0,
+        "small-only KernExtractIcons should fail when CE's selected small RT_ICON is missing"
     );
 
     memory.write_u32(large_out, 0xdead_beef)?;
@@ -8173,12 +8171,16 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
         ERROR_RESOURCE_NAME_NOT_FOUND,
         "CE leaves the resource error visible when one requested icon fails"
     );
-    assert_eq!(
+    assert_ne!(
         memory.read_u32(large_out)?,
-        0,
-        "CE assigns NULL to the failed requested large icon pointer"
+        0xdead_beef,
+        "large output should still extract CE's selected 32x32 RT_ICON"
     );
-    assert_ne!(memory.read_u32(small_out)?, 0xfeed_face);
+    assert_eq!(
+        memory.read_u32(small_out)?,
+        0,
+        "CE assigns NULL to the failed requested small icon pointer"
+    );
 
     memory.write_wide_z(path_ptr, r"\Docs\missing-second-kern-icon.exe");
     memory.write_u32(large_out, 0xdead_beef)?;
@@ -8191,19 +8193,43 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
             [path_ptr, 1, large_out, 0, 0],
         ),
         CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND
+    );
+    assert_eq!(
+        memory.read_u32(large_out)?,
+        0,
+        "large-only KernExtractIcons should fail when CE's selected large RT_ICON is missing"
+    );
+
+    memory.write_u32(small_out, 0xfeed_face)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [path_ptr, 1, 0, small_out, 0],
+        ),
+        CoredllDispatch::Returned {
             value: CoredllValue::U32(1),
             ..
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    let large_only_ptr = memory.read_u32(large_out)?;
+    let small_only_ptr = memory.read_u32(small_out)?;
     assert_ne!(
-        large_only_ptr, 0xdead_beef,
-        "large-only KernExtractIcons should not require entry 1's missing RT_ICON"
+        small_only_ptr, 0xfeed_face,
+        "small-only KernExtractIcons should not require CE's selected large RT_ICON"
     );
-    let large_only_header = memory.read_bytes(large_only_ptr, 16);
+    let small_only_header = memory.read_bytes(small_only_ptr, 16);
     assert_eq!(
-        i32::from_le_bytes(large_only_header[4..8].try_into().unwrap()),
+        i32::from_le_bytes(small_only_header[4..8].try_into().unwrap()),
         16
     );
 
