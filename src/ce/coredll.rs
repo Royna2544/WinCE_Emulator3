@@ -58926,8 +58926,8 @@ fn write_device_information_by_handle_raw<M: CoredllGuestMemory>(
         return false;
     }
 
-    let guest_name = match kernel.handles.get(handle) {
-        Ok(KernelObject::Device(device)) => device.guest_name.clone(),
+    let (guest_name, bus_name) = match kernel.handles.get(handle) {
+        Ok(KernelObject::Device(device)) => (device.guest_name.clone(), device.bus_name.clone()),
         Ok(_) | Err(_) => {
             kernel.threads.set_last_error(
                 thread_id,
@@ -58946,6 +58946,9 @@ fn write_device_information_by_handle_raw<M: CoredllGuestMemory>(
         .map(|entry| entry.driver_key.as_str())
         .unwrap_or("");
     let device_name = format!(r"$device\{}", guest_name.trim_end_matches(':'));
+    let bus_name = bus_name
+        .map(|bus_name| format!(r"$bus\{bus_name}"))
+        .unwrap_or_default();
 
     if !write_guest_u32(
         kernel,
@@ -58991,7 +58994,7 @@ fn write_device_information_by_handle_raw<M: CoredllGuestMemory>(
         memory,
         thread_id,
         info_ptr.wrapping_add(BUS_NAME_OFFSET),
-        "",
+        &bus_name,
         DEVMGR_DEVICE_MAX_PATH_CHARS,
     ) {
         return false;
@@ -59188,14 +59191,16 @@ fn device_info_buffer_has_valid_size<M: CoredllGuestMemory>(
 fn matching_device_handles(kernel: &mut CeKernel, criteria: &DeviceSearchCriteria) -> Vec<u32> {
     let mut matches = Vec::new();
     for guest_name in kernel.devices.enabled_names() {
-        if !device_matches_search(guest_name.as_str(), criteria) {
+        let bus_name = device_bus_name_for_guest_name(kernel, &guest_name);
+        if !device_matches_search(guest_name.as_str(), bus_name.as_deref(), criteria) {
             continue;
         }
         if let Some(handle) = open_device_handle_by_guest_name(kernel, &guest_name) {
             matches.push(handle);
             continue;
         }
-        if let Ok(session) = kernel.devices.open(&guest_name) {
+        if let Ok(mut session) = kernel.devices.open(&guest_name) {
+            session.bus_name = bus_name;
             matches.push(kernel.handles.insert(KernelObject::Device(session)));
         }
     }
@@ -59214,7 +59219,11 @@ fn open_device_handle_by_guest_name(kernel: &CeKernel, guest_name: &str) -> Opti
     })
 }
 
-fn device_matches_search(guest_name: &str, criteria: &DeviceSearchCriteria) -> bool {
+fn device_matches_search(
+    guest_name: &str,
+    bus_name: Option<&str>,
+    criteria: &DeviceSearchCriteria,
+) -> bool {
     let device_name = guest_name.trim_end_matches(':');
     match criteria {
         DeviceSearchCriteria::LegacyName(pattern) => {
@@ -59224,9 +59233,28 @@ fn device_matches_search(guest_name: &str, criteria: &DeviceSearchCriteria) -> b
             let pattern = pattern.strip_prefix(r"$device\").unwrap_or(pattern);
             device_search_wildcard_match(pattern, device_name)
         }
-        DeviceSearchCriteria::BusName(pattern) => pattern.is_empty(),
+        DeviceSearchCriteria::BusName(pattern) => {
+            let pattern = pattern.strip_prefix(r"$bus\").unwrap_or(pattern);
+            match bus_name {
+                Some(bus_name) => device_search_wildcard_match(pattern, bus_name),
+                None => pattern.is_empty(),
+            }
+        }
         DeviceSearchCriteria::Guid(_guid) => false,
         DeviceSearchCriteria::Parent(parent) => *parent == 0,
+    }
+}
+
+fn device_bus_name_for_guest_name(kernel: &CeKernel, guest_name: &str) -> Option<String> {
+    let entry = device_key_entry_for_guest_name(kernel, guest_name)?;
+    device_bus_name_for_device_key_entry(kernel, &entry)
+}
+
+fn device_bus_name_without_namespace(name: &str) -> String {
+    if name.len() >= 5 && name[..5].eq_ignore_ascii_case(r"$bus\") {
+        name[5..].to_owned()
+    } else {
+        name.to_owned()
     }
 }
 
@@ -59546,7 +59574,7 @@ fn activate_configured_device_entry(
     entry: &crate::ce::devices::DeviceKeyEntry,
     client_info: u32,
 ) -> u32 {
-    let session = match kernel.devices.open(&entry.guest_name) {
+    let mut session = match kernel.devices.open(&entry.guest_name) {
         Ok(session) => session,
         Err(_) => {
             kernel
@@ -59555,6 +59583,7 @@ fn activate_configured_device_entry(
             return 0;
         }
     };
+    session.bus_name = device_bus_name_for_device_key_entry(kernel, entry);
     let handle = kernel.handles.insert(KernelObject::Device(session));
     let active_path = format!(r"hklm\{}", entry.active_key);
     kernel.registry.create_key(&active_path);
@@ -59593,6 +59622,20 @@ fn device_key_entry_for_guest_name(
             normalize_device_name_for_registry_match(&entry.guest_name)
                 .eq_ignore_ascii_case(&normalized)
         })
+}
+
+fn device_bus_name_for_device_key_entry(
+    kernel: &CeKernel,
+    entry: &crate::ce::devices::DeviceKeyEntry,
+) -> Option<String> {
+    kernel
+        .registry
+        .query_value(&format!(r"hklm\{}", entry.driver_key), "BusName")
+        .ok()
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(device_bus_name_without_namespace)
 }
 
 fn normalize_device_name_for_registry_match(name: &str) -> String {

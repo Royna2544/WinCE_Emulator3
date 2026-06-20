@@ -104,6 +104,9 @@ references for historical reconstruction.
   ordinals and enumerate live activated device handles with CE-style device
   search handles, including legacy-name, device-name, bus-name, parent, no
   match, and stale-handle behavior.
+- Activated configured devices now capture registry `BusName`, expose it in
+  CE `DEVMGR_DEVICE_INFORMATION` as `$bus\...`, and use that activation-time
+  value for `DeviceSearchByBusName` wildcard matching.
 
 ## Recent Validation
 
@@ -127,6 +130,8 @@ references for historical reconstruction.
   handle failures.
 - Focused raw coredll/kernel validation covers `FindFirstDevice`/`FindNextDevice`
   device search output and cleanup semantics.
+- Focused raw coredll/kernel validation covers activation-time `BusName`
+  capture, `$bus\...` device-info output, and bus-name wildcard search.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.

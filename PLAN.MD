@@ -917,10 +917,16 @@ notes when it is still needed for implementation.
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: raw `FindFirstDevice` and
   `FindNextDevice` now enumerate live activated device handles through CE-style
   device-search handles instead of falling through as missing exports. Coverage
-  verifies legacy-name, `$device` name, empty bus-name, parent, and GUID search
-  paths, CE `DEVMGR_DEVICE_INFORMATION` output, normal `FindClose`, invalid
-  parameters, no-match `ERROR_NO_MORE_FILES`, and stale-handle skipping after
-  device deactivation.
+  verifies legacy-name, `$device` name, parent, and GUID search paths, CE
+  `DEVMGR_DEVICE_INFORMATION` output, normal `FindClose`, invalid parameters,
+  no-match `ERROR_NO_MORE_FILES`, and stale-handle skipping after device
+  deactivation.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devload.c` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devfsd.c`: activated
+  configured devices now capture registry `BusName` into the device session,
+  report it as `$bus\...` in CE `DEVMGR_DEVICE_INFORMATION`, and match
+  `DeviceSearchByBusName` with CE wildcard semantics instead of accepting only
+  an empty bus-name search.
 
 ## Active Roadmap
 

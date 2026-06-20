@@ -1806,12 +1806,17 @@ fn coredll_raw_find_device_enumerates_live_ce_device_info() -> Result<()> {
     memory.write_wide_z(uid_key_ptr, r"Drivers\BuiltIn\UID1");
     memory.write_wide_z(legacy_pattern_ptr, "COM*");
     memory.write_wide_z(device_pattern_ptr, r"$device\UID1");
-    memory.write_wide_z(bus_pattern_ptr, "");
+    memory.write_wide_z(bus_pattern_ptr, "SDHC*");
     memory.write_wide_z(missing_pattern_ptr, "DSK*");
     memory.write_bytes(guid_ptr, &[0x55; 16]);
     map_device_info(&mut memory, info_ptr);
     map_device_info(&mut memory, next_info_ptr);
 
+    kernel.registry.set_value(
+        r"hklm\Drivers\BuiltIn\COM7",
+        "BusName",
+        RegistryValue::string("SDHC7"),
+    );
     let com_handle = activate(&table, &mut kernel, &mut memory, thread_id, com_key_ptr);
     let uid_handle = activate(&table, &mut kernel, &mut memory, thread_id, uid_key_ptr);
 
@@ -1958,6 +1963,7 @@ fn coredll_raw_find_device_enumerates_live_ce_device_info() -> Result<()> {
     };
     assert_ne!(bus_find, INVALID_HANDLE_VALUE);
     assert_eq!(memory.read_u32(info_ptr + 4)?, com_handle);
+    assert_eq!(memory.read_wide_z(info_ptr + 1064, 260), r"$bus\SDHC7");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
