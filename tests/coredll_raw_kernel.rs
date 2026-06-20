@@ -57,14 +57,15 @@ use wince_emulation_v3::{
             ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_READ_MSG_QUEUE,
             ORD_READ_PROCESS_MEMORY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR,
             ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_REQUEST_DEVICE_NOTIFICATIONS,
-            ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST,
-            ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
-            ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR,
-            ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I,
-            ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
-            ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I,
-            ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH,
-            ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_DESTROY_LIST, ORD_RESOURCE_MARK_AS_SHAREABLE,
+            ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST, ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD,
+            ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
+            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
+            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
+            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
+            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
+            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
             ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS,
             ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
@@ -1627,6 +1628,109 @@ fn coredll_raw_iorm_resource_manager_tracks_ce_ranges_and_exclusive_claims() -> 
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
+    );
+
+    macro_rules! expect_iorm_bool {
+        ($ordinal:expr, [$($arg:expr),* $(,)?], $expected:expr, $last_error:expr) => {{
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    $ordinal,
+                    [$($arg),*],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(value),
+                    ..
+                } if value == $expected
+            ));
+            assert_eq!(kernel.threads.get_last_error(thread_id), $last_error);
+        }};
+    }
+
+    expect_iorm_bool!(ORD_RESOURCE_DESTROY_LIST, [RESMGR_IRQ], false, ERROR_BUSY);
+    expect_iorm_bool!(
+        ORD_RESOURCE_RELEASE,
+        [RESMGR_IRQ, 6, 1],
+        true,
+        ERROR_SUCCESS
+    );
+    expect_iorm_bool!(
+        ORD_RESOURCE_MARK_AS_SHAREABLE,
+        [RESMGR_IRQ, 5, 1, 1],
+        true,
+        ERROR_SUCCESS
+    );
+    expect_iorm_bool!(
+        ORD_RESOURCE_REQUEST,
+        [RESMGR_IRQ, 5, 1],
+        true,
+        ERROR_SUCCESS
+    );
+    expect_iorm_bool!(
+        ORD_RESOURCE_REQUEST,
+        [RESMGR_IRQ, 5, 1],
+        true,
+        ERROR_SUCCESS
+    );
+    expect_iorm_bool!(
+        ORD_RESOURCE_REQUEST_EX,
+        [RESMGR_IRQ, 5, 1, RREXF_REQUEST_EXCLUSIVE],
+        false,
+        ERROR_BUSY
+    );
+    expect_iorm_bool!(
+        ORD_RESOURCE_MARK_AS_SHAREABLE,
+        [RESMGR_IRQ, 5, 1, 0],
+        false,
+        ERROR_INVALID_PARAMETER
+    );
+    for _ in 0..2 {
+        expect_iorm_bool!(
+            ORD_RESOURCE_RELEASE,
+            [RESMGR_IRQ, 5, 1],
+            true,
+            ERROR_SUCCESS
+        );
+    }
+    expect_iorm_bool!(
+        ORD_RESOURCE_MARK_AS_SHAREABLE,
+        [RESMGR_IRQ, 5, 1, 0],
+        true,
+        ERROR_SUCCESS
+    );
+    expect_iorm_bool!(
+        ORD_RESOURCE_REQUEST,
+        [RESMGR_IRQ, 5, 1],
+        true,
+        ERROR_SUCCESS
+    );
+    expect_iorm_bool!(ORD_RESOURCE_REQUEST, [RESMGR_IRQ, 5, 1], false, ERROR_BUSY);
+    expect_iorm_bool!(
+        ORD_RESOURCE_RELEASE,
+        [RESMGR_IRQ, 5, 1],
+        true,
+        ERROR_SUCCESS
+    );
+    expect_iorm_bool!(
+        ORD_RESOURCE_MARK_AS_SHAREABLE,
+        [0x30, 5, 1, 1],
+        false,
+        ERROR_INVALID_PARAMETER
+    );
+    expect_iorm_bool!(ORD_RESOURCE_DESTROY_LIST, [RESMGR_IRQ], true, ERROR_SUCCESS);
+    expect_iorm_bool!(
+        ORD_RESOURCE_DESTROY_LIST,
+        [RESMGR_IRQ],
+        false,
+        ERROR_FILE_NOT_FOUND
+    );
+    expect_iorm_bool!(
+        ORD_RESOURCE_REQUEST,
+        [RESMGR_IRQ, 5, 1],
+        false,
+        ERROR_FILE_NOT_FOUND
     );
 
     Ok(())

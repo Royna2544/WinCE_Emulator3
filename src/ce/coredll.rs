@@ -4366,6 +4366,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 kernel, thread_id, status,
             )))
         }
+        ORD_RESOURCE_DESTROY_LIST => {
+            let status = kernel.resource_destroy_list(raw_arg(args, 0));
+            Some(CoredllValue::Bool(iorm_status_raw(
+                kernel, thread_id, status,
+            )))
+        }
         ORD_RESOURCE_REQUEST => {
             let status =
                 kernel.resource_request_ex(raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2), 0);
@@ -4387,6 +4393,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_RESOURCE_RELEASE => {
             let status =
                 kernel.resource_release(raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2));
+            Some(CoredllValue::Bool(iorm_status_raw(
+                kernel, thread_id, status,
+            )))
+        }
+        ORD_RESOURCE_MARK_AS_SHAREABLE => {
+            let status = kernel.resource_mark_as_shareable(
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+                raw_arg(args, 3) != 0,
+            );
             Some(CoredllValue::Bool(iorm_status_raw(
                 kernel, thread_id, status,
             )))

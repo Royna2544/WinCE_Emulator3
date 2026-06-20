@@ -125,6 +125,7 @@ struct IormResourceDomain {
     minimum: u32,
     count: u32,
     valid: BTreeSet<u32>,
+    shareable: BTreeSet<u32>,
     use_counts: BTreeMap<u32, u16>,
     exclusive: BTreeSet<u32>,
 }
@@ -1156,6 +1157,21 @@ impl CeKernel {
         ERROR_SUCCESS
     }
 
+    pub fn resource_destroy_list(&mut self, resource_id: u32) -> u32 {
+        let Some(domain) = self.iorm_resource_domains.get(&resource_id) else {
+            return ERROR_FILE_NOT_FOUND;
+        };
+        if domain
+            .valid
+            .iter()
+            .any(|item| domain.use_counts.get(item).copied().unwrap_or(0) != 0)
+        {
+            return ERROR_BUSY;
+        }
+        self.iorm_resource_domains.remove(&resource_id);
+        ERROR_SUCCESS
+    }
+
     pub fn resource_release(&mut self, resource_id: u32, id: u32, len: u32) -> u32 {
         let Some(domain) = self.iorm_resource_domains.get_mut(&resource_id) else {
             return ERROR_FILE_NOT_FOUND;
@@ -1184,6 +1200,36 @@ impl CeKernel {
         ERROR_SUCCESS
     }
 
+    pub fn resource_mark_as_shareable(
+        &mut self,
+        resource_id: u32,
+        id: u32,
+        len: u32,
+        shareable: bool,
+    ) -> u32 {
+        let Some(domain) = self.iorm_resource_domains.get_mut(&resource_id) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        let Some(range) = iorm_domain_range(domain, id, len) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        for item in range.clone() {
+            if !domain.valid.contains(&item)
+                || domain.use_counts.get(&item).copied().unwrap_or(0) != 0
+            {
+                return ERROR_INVALID_PARAMETER;
+            }
+        }
+        for item in range {
+            if shareable {
+                domain.shareable.insert(item);
+            } else {
+                domain.shareable.remove(&item);
+            }
+        }
+        ERROR_SUCCESS
+    }
+
     pub fn resource_request_ex(&mut self, resource_id: u32, id: u32, len: u32, flags: u32) -> u32 {
         if flags & !RREXF_REQUEST_EXCLUSIVE != 0 {
             return ERROR_INVALID_PARAMETER;
@@ -1200,7 +1246,11 @@ impl CeKernel {
                 return ERROR_INVALID_PARAMETER;
             }
             let use_count = domain.use_counts.get(&item).copied().unwrap_or(0);
-            if use_count != 0 {
+            if use_count != 0
+                && (!domain.shareable.contains(&item)
+                    || exclusive
+                    || domain.exclusive.contains(&item))
+            {
                 return ERROR_BUSY;
             }
         }

@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 98] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 100] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13835,6 +13835,14 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 98] = &[
     CoredllOrdinalDef {
         name: "ResourceRequestEx",
         ordinal: ORD_RESOURCE_REQUEST_EX,
+    },
+    CoredllOrdinalDef {
+        name: "ResourceMarkAsShareable",
+        ordinal: ORD_RESOURCE_MARK_AS_SHAREABLE,
+    },
+    CoredllOrdinalDef {
+        name: "ResourceDestroyList",
+        ordinal: ORD_RESOURCE_DESTROY_LIST,
     },
     CoredllOrdinalDef {
         name: "LockFileEx",

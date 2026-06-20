@@ -107,12 +107,13 @@ notes when it is still needed for implementation.
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwinbase.h`, and
   `C:\WINCE600\PUBLIC\COMMON\DDK\INC\resmgr.h`: raw
   `ResourceCreateList`/`ResourceRequest`/`ResourceRequestEx`/
-  `ResourceRelease` now track CE-style IORM resource domains instead of
-  reporting unsupported. Coverage verifies missing domains, duplicate and
-  invalid list creation, release-to-validate behavior, default-unshareable
+  `ResourceRelease`/`ResourceMarkAsShareable`/`ResourceDestroyList` now track
+  CE-style IORM resource domains instead of reporting unsupported. Coverage
+  verifies missing domains, duplicate and invalid list creation,
+  release-to-validate behavior, default-unshareable and explicit-shareable
   request conflicts, exclusive claims, unsupported flag rejection, release
-  refcounting, out-of-range failures, and `ResourceRequestEx` export-table
-  resolution.
+  refcounting, out-of-range failures, busy destroy rejection, missing-domain
+  destroy behavior, and IORM supplemental export-table resolution.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`
