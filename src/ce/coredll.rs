@@ -4885,6 +4885,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_GET_PROCESS_HEAP => Some(CoredllValue::Handle(kernel.memory.get_process_heap())),
+        ORD_CE_GET_MODULE_HEAP_INFO => Some(CoredllValue::U32(ce_get_module_heap_info_raw(
+            kernel, memory, thread_id,
+        ))),
         ORD_GET_MODULE_FILE_NAME_W => Some(CoredllValue::U32(get_module_file_name_w_raw(
             kernel,
             memory,
@@ -27058,6 +27061,72 @@ fn local_free_raw(kernel: &mut CeKernel, thread_id: u32, ptr: u32) -> u32 {
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         ptr
     }
+}
+
+fn ce_get_module_heap_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+) -> u32 {
+    const MODULE_HEAP_INFO_SIZE: u32 = 28 * 4;
+    const MODULE_HEAP_INFO_ALLOCATION_SIZE: u32 = MODULE_HEAP_INFO_SIZE + 4 + 24;
+
+    let mut info_ptr = kernel.module_heap_info_guest_ptr();
+    if info_ptr == 0 {
+        let Some(ptr) = kernel.memory.heap_alloc(
+            PROCESS_HEAP_HANDLE,
+            HEAP_ZERO_MEMORY,
+            MODULE_HEAP_INFO_ALLOCATION_SIZE,
+        ) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        };
+        info_ptr = ptr;
+        kernel.set_module_heap_info_guest_ptr(info_ptr);
+    }
+
+    if memory
+        .ensure_mapped(info_ptr, MODULE_HEAP_INFO_ALLOCATION_SIZE)
+        .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    let heap_list_ptr = info_ptr.wrapping_add(MODULE_HEAP_INFO_SIZE);
+    let critical_section_ptr = heap_list_ptr.wrapping_add(4);
+    let mut values = [0u32; (MODULE_HEAP_INFO_SIZE / 4) as usize];
+    values[0] = kernel.memory.get_process_heap();
+    values[1] = critical_section_ptr;
+    values[2] = heap_list_ptr;
+
+    for (index, value) in values.into_iter().enumerate() {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add((index as u32) * 4),
+            value,
+        ) {
+            return 0;
+        }
+    }
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        heap_list_ptr,
+        kernel.memory.get_process_heap(),
+    ) {
+        return 0;
+    }
+
+    kernel.threads.set_last_error(thread_id, 0);
+    info_ptr
 }
 
 fn heap_create_raw(

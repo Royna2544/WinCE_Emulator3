@@ -980,6 +980,14 @@ notes when it is still needed for implementation.
   thread handles, null/unmapped `CONTEXT` pointers, and MIPS context flags
   outside the NK `CONTEXT_FULL` mask. Coverage verifies both get and set
   validation ordering plus valid-packet fallback behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\LMEM\rheap.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\INC\dllheap.h`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\core_common.def`: raw
+  `CeGetModuleHeapInfo` now returns a stable CE-layout `MODULEHEAPINFO` guest
+  block instead of falling through unresolved, exposing the process heap,
+  heap-list pointer, heap-list critical-section pointer, and zeroed normal
+  non-sentinel override slots. Coverage verifies layout fields, the adjacent
+  heap-list head, and repeated-call pointer stability.
 
 ## Active Roadmap
 

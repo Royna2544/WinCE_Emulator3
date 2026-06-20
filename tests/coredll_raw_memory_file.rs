@@ -13,21 +13,22 @@ use wince_emulation_v3::{
             ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION, ORD_AFS_REMOVE_DIRECTORY_W,
             ORD_AFS_SET_FILE_ATTRIBUTES_W, ORD_AFS_SET_FILE_SECURITY_W, ORD_AFS_UNMOUNT, ORD_ASIN,
             ORD_ATAN, ORD_ATAN2, ORD_ATOF, ORD_ATOI, ORD_CE_FS_IO_CONTROL_W,
-            ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_VOLUME_INFO_W,
-            ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION, ORD_CEIL, ORD_CHAR_LOWER_BUFF_W,
-            ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK,
-            ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS, ORD_COSH, ORD_CREATE_DIRECTORY_W,
-            ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W, ORD_CREATE_PARTITION,
-            ORD_CREATE_PARTITION_EX, ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W,
-            ORD_DELETE_PARTITION, ORD_DEREGISTER_AFS, ORD_DEREGISTER_AFSNAME,
-            ORD_DEVICE_IO_CONTROL, ORD_DISMOUNT_PARTITION, ORD_DISMOUNT_STORE, ORD_DPA_CLONE,
-            ORD_DPA_CREATE, ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK, ORD_DPA_ENUM_CALLBACK,
-            ORD_DPA_GET_PTR, ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV,
-            ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE,
-            ORD_DSA_CREATE, ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK, ORD_DSA_ENUM_CALLBACK,
-            ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE,
-            ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL,
-            ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_MODULE_HEAP_INFO,
+            ORD_CE_GET_VOLUME_INFO_W, ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION, ORD_CEIL,
+            ORD_CHAR_LOWER_BUFF_W, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W,
+            ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS, ORD_COSH,
+            ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W,
+            ORD_CREATE_PARTITION, ORD_CREATE_PARTITION_EX, ORD_D_TO_ULL,
+            ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W, ORD_DELETE_PARTITION,
+            ORD_DEREGISTER_AFS, ORD_DEREGISTER_AFSNAME, ORD_DEVICE_IO_CONTROL,
+            ORD_DISMOUNT_PARTITION, ORD_DISMOUNT_STORE, ORD_DPA_CLONE, ORD_DPA_CREATE,
+            ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK, ORD_DPA_ENUM_CALLBACK, ORD_DPA_GET_PTR,
+            ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL,
+            ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE, ORD_DSA_CREATE,
+            ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK, ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR,
+            ORD_DSA_GROW, ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD,
+            ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE,
+            ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
             ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_CLOSE_PARTITION, ORD_FIND_CLOSE_STORE,
             ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W, ORD_FIND_FIRST_PARTITION,
             ORD_FIND_FIRST_STORE, ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W,
@@ -2293,6 +2294,44 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         } => heap,
         other => panic!("GetProcessHeap did not return a heap: {other:?}"),
     };
+
+    let module_heap_info = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE_GET_MODULE_HEAP_INFO,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ptr),
+            ..
+        } => ptr,
+        other => panic!("CeGetModuleHeapInfo did not return a pointer: {other:?}"),
+    };
+    assert_ne!(module_heap_info, 0);
+    assert_eq!(memory.read_u32(module_heap_info)?, process_heap);
+    let heap_list_ptr = memory.read_u32(module_heap_info + 8)?;
+    assert_ne!(heap_list_ptr, 0);
+    assert_eq!(memory.read_u32(heap_list_ptr)?, process_heap);
+    assert_ne!(memory.read_u32(module_heap_info + 4)?, 0);
+    assert_eq!(memory.read_u32(module_heap_info + 12)?, 0);
+    assert_eq!(memory.read_u32(module_heap_info + 16)?, 0);
+    assert_eq!(memory.read_u32(module_heap_info + 24)?, 0);
+
+    let module_heap_info_again = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE_GET_MODULE_HEAP_INFO,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ptr),
+            ..
+        } => ptr,
+        other => panic!("CeGetModuleHeapInfo repeat did not return a pointer: {other:?}"),
+    };
+    assert_eq!(module_heap_info_again, module_heap_info);
 
     let local = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,

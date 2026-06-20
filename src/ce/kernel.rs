@@ -253,6 +253,7 @@ pub struct CeKernel {
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
     process_name_guest_ptr: u32,
+    module_heap_info_guest_ptr: u32,
     process_command_line: String,
     command_line_guest_ptr: u32,
     process_current_directory: Option<String>,
@@ -1105,6 +1106,7 @@ impl CeKernel {
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
             process_name_guest_ptr: 0,
+            module_heap_info_guest_ptr: 0,
             process_command_line: String::new(),
             command_line_guest_ptr: 0,
             process_current_directory: None,
@@ -2530,6 +2532,14 @@ impl CeKernel {
 
     pub fn set_process_name_guest_ptr(&mut self, ptr: u32) {
         self.process_name_guest_ptr = ptr;
+    }
+
+    pub fn module_heap_info_guest_ptr(&self) -> u32 {
+        self.module_heap_info_guest_ptr
+    }
+
+    pub fn set_module_heap_info_guest_ptr(&mut self, ptr: u32) {
+        self.module_heap_info_guest_ptr = ptr;
     }
 
     pub fn set_process_module_host_path(&mut self, path: impl Into<PathBuf>) {
