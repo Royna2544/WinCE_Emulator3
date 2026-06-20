@@ -24816,7 +24816,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             returned_ptr,
         ),
         IOCTL_DISK_SECURE_WIPE | IOCTL_DISK_SET_SECURE_WIPE_FLAG => {
-            disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
+            partition_disk_secure_wipe_raw(kernel, memory, thread_id, returned_ptr, info.writable)
         }
         IOCTL_DISK_SET_STANDBY_TIMER
         | IOCTL_DISK_STANDBY_NOW
@@ -24973,6 +24973,25 @@ fn partition_disk_copy_external_raw<M: CoredllGuestMemory>(
         .threads
         .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
     false
+}
+
+fn partition_disk_secure_wipe_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    returned_ptr: u32,
+    writable: bool,
+) -> bool {
+    if !writable {
+        return disk_zero_byte_failure_raw(
+            kernel,
+            memory,
+            thread_id,
+            returned_ptr,
+            ERROR_ACCESS_DENIED,
+        );
+    }
+    disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
 }
 
 fn disk_delete_sectors_raw<M: CoredllGuestMemory>(

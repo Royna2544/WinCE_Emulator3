@@ -5304,11 +5304,14 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
             ],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(true),
+            value: CoredllValue::Bool(false),
             ..
         }
     ));
-    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
     memory.write_word(bytes_returned_ptr, 0xfeed_babe);
@@ -5330,11 +5333,14 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
             ],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(true),
+            value: CoredllValue::Bool(false),
             ..
         }
     ));
-    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
     memory.write_word(delete_sector_ptr, DELETE_SECTOR_INFO_SIZE);

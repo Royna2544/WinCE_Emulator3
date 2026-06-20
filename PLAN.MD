@@ -830,6 +830,12 @@ notes when it is still needed for implementation.
   and valid modules with missing resources, returning `ERROR_INVALID_HANDLE`
   only for bogus module handles and `ERROR_RESOURCE_NAME_NOT_FOUND` after a
   valid module/resource table search misses.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\DOSPART\part.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: mounted partition
+  `IOCTL_DISK_SECURE_WIPE`/`IOCTL_DISK_SET_SECURE_WIPE_FLAG` now follow the CE
+  partition-layer forwarding shape, accepting zero-byte caller input but
+  reporting the host-backed lower disk driver's unsupported status instead of
+  pretending the secure wipe completed.
 
 ## Active Roadmap
 
