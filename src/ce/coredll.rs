@@ -26826,7 +26826,7 @@ fn sh_notification_get_data_i_raw<M: CoredllGuestMemory>(
         }
     }
     if raw_arg(args, 7) != 0 {
-        let html_len = record.html.encode_utf16().count() as u32 + 1;
+        let html_len = shell_notification_html_len(&record);
         let capacity = if raw_arg(args, 9) != 0 {
             read_guest_u32(kernel, memory, thread_id, raw_arg(args, 9)).unwrap_or(0) as usize
         } else {
@@ -26859,12 +26859,19 @@ fn sh_notification_get_data_i_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             raw_arg(args, 9),
-            record.html.encode_utf16().count() as u32 + 1,
+            shell_notification_html_len(&record),
         )
     {
         return ERROR_INVALID_PARAMETER;
     }
     0
+}
+
+fn shell_notification_html_len(record: &crate::ce::shell::ShellNotificationRecord) -> u32 {
+    record
+        .html_available
+        .then(|| record.html.encode_utf16().count() as u32 + 1)
+        .unwrap_or(0)
 }
 
 fn read_shell_notification_data<M: CoredllGuestMemory>(

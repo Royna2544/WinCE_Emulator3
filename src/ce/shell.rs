@@ -747,6 +747,7 @@ pub struct ShellNotificationRecord {
     pub hwnd_sink: u32,
     pub title: String,
     pub html: String,
+    pub html_available: bool,
     pub lparam: u32,
     /// Guest IShellNotificationCallback* COM interface pointer (may be 0 if not provided).
     pub callback_ptr: u32,
@@ -767,6 +768,7 @@ impl ShellNotificationRecord {
             clsid: data.clsid,
             hwnd_sink: data.hwnd_sink,
             title: taskbar_label_text(data.title),
+            html_available: data.flags & SHNUM_HTML != 0,
             html: data.html,
             lparam: data.lparam,
             callback_ptr: data.callback_ptr,
@@ -787,6 +789,7 @@ impl ShellNotificationRecord {
         }
         if update_mask & SHNUM_HTML != 0 {
             self.html = data.html;
+            self.html_available = true;
         }
         if update_mask & SHNUM_TITLE != 0 {
             self.title = taskbar_label_text(data.title);

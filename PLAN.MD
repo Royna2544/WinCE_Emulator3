@@ -216,7 +216,8 @@ notes when it is still needed for implementation.
   `SHNUM_TITLE`/`SHNUM_HTML` taskbar-bubble flags instead of treating every
   marshalled pointer as captured bubble state. Coverage verifies pointer
   presence still satisfies the add wrapper contract while retained content is
-  flag-gated and an explicit `SHNUM_HTML` update can populate HTML later.
+  flag-gated, HTML length queries distinguish no captured HTML from captured
+  empty HTML, and an explicit `SHNUM_HTML` update can populate HTML later.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battery.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battimpl.h`,

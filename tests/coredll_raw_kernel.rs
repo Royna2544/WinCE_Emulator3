@@ -20742,6 +20742,7 @@ fn shnotification_i_add_captures_content_by_grf_flags_like_ce() -> Result<()> {
     let data = 0x3006_8000;
     let title = 0x3006_9000;
     let html = 0x3006_a000;
+    let html_len = 0x3006_b000;
     let clsid = [
         0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
         0x40,
@@ -20749,6 +20750,7 @@ fn shnotification_i_add_captures_content_by_grf_flags_like_ce() -> Result<()> {
     memory.map_words(data, SHNOTIFICATIONDATA_SIZE / 4);
     memory.map_bytes(title, 64);
     memory.map_bytes(html, 128);
+    memory.map_words(html_len, 1);
     memory.write_word(data, SHNOTIFICATIONDATA_SIZE);
     memory.write_word(data + 4, 904);
     memory.write_word(data + 8, SHNP_ICONIC);
@@ -20778,6 +20780,25 @@ fn shnotification_i_add_captures_content_by_grf_flags_like_ce() -> Result<()> {
         record.html, "",
         "CE TaskbarBubble only captures HTML on add when SHNUM_HTML is set"
     );
+    memory.write_word(html_len, 0xffff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_GET_DATA_I,
+            [data + 24, 16, 904, 0, 0, 0, 0, 0, 0, html_len],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(html_len)?,
+        0,
+        "CE reports no HTML allocation when SHNUM_HTML was not captured"
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -20795,6 +20816,55 @@ fn shnotification_i_add_captures_content_by_grf_flags_like_ce() -> Result<()> {
     let record = kernel.shell.notification(clsid, 904).expect("notification");
     assert_eq!(record.title, "Flagged title");
     assert_eq!(record.html, "<b>Pointer present</b>");
+    memory.write_word(html_len, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_GET_DATA_I,
+            [data + 24, 16, 904, 0, 0, 0, 0, 0, 0, html_len],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(html_len)?, 23);
+
+    memory.write_wide_z(html, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_UPDATE_I,
+            [SHNUM_HTML, data, SHNOTIFICATIONDATA_SIZE, title, html],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    memory.write_word(html_len, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_GET_DATA_I,
+            [data + 24, 16, 904, 0, 0, 0, 0, 0, 0, html_len],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(html_len)?,
+        1,
+        "CE distinguishes captured empty HTML from no HTML allocation"
+    );
 
     Ok(())
 }
