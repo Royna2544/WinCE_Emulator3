@@ -96,16 +96,16 @@ use wince_emulation_v3::{
             ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_REGISTER_SIPANEL,
             ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
             ORD_REMOVE_FONT_RESOURCE_W, ORD_REMOVE_MENU, ORD_RESTORE_DC, ORD_ROUND_RECT,
-            ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SELECT_CLIP_RGN, ORD_SELECT_OBJECT,
-            ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT,
-            ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW,
-            ORD_SET_ASSOCIATED_MENU, ORD_SET_BITMAP_BITS, ORD_SET_BK_COLOR, ORD_SET_BK_MODE,
-            ORD_SET_BRUSH_ORG_EX, ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME, ORD_SET_CARET_POS,
-            ORD_SET_CURSOR, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
-            ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
-            ORD_SET_KEYBOARD_TARGET, ORD_SET_LAYOUT, ORD_SET_LOCAL_TIME, ORD_SET_MENU,
-            ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_PIXEL,
-            ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_RECT_RGN, ORD_SET_ROP2,
+            ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SCROLL_DC, ORD_SELECT_CLIP_RGN,
+            ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
+            ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
+            ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BITMAP_BITS, ORD_SET_BK_COLOR,
+            ORD_SET_BK_MODE, ORD_SET_BRUSH_ORG_EX, ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME,
+            ORD_SET_CARET_POS, ORD_SET_CURSOR, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE,
+            ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
+            ORD_SET_FOREGROUND_WINDOW, ORD_SET_KEYBOARD_TARGET, ORD_SET_LAYOUT, ORD_SET_LOCAL_TIME,
+            ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT,
+            ORD_SET_PIXEL, ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_RECT_RGN, ORD_SET_ROP2,
             ORD_SET_STRETCH_BLT_MODE, ORD_SET_SYS_COLORS, ORD_SET_SYSTEM_TIME, ORD_SET_TEXT_ALIGN,
             ORD_SET_TEXT_CHARACTER_EXTRA, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
             ORD_SET_VIEWPORT_ORG_EX, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_ORG_EX,
@@ -58239,6 +58239,97 @@ fn coredll_raw_get_device_caps_returns_ce_display_capabilities() -> Result<()> {
             ERROR_INVALID_HANDLE
         );
     }
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_scroll_dc_matches_ce_bad_param_edges() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 5;
+    let update_ptr = 0x1_1000_u32;
+    memory.map_words(update_ptr, 4);
+
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0u32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("GetDC failed: {other:?}"),
+    };
+    assert_ne!(hdc, 0);
+
+    for bad_hdc in [0, 0x1234_5678] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SCROLL_DC,
+                [bad_hdc, 0, 0, 0, 0, 0, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_HANDLE
+        );
+    }
+
+    for (dx, dy) in [(1i32, 1i32), (-1, 1), (1, -1), (-1, -1)] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SCROLL_DC,
+                [hdc, dx as u32, dy as u32, 0, 0, 0, update_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER,
+            "ScrollDC diagonal dx={dx} dy={dy}"
+        );
+    }
+
+    for offset in [0, 4, 8, 12] {
+        memory.write_word(update_ptr + offset, 0xffff_ffff);
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SCROLL_DC,
+            [hdc, 2, 0, 0, 0, 0, update_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(update_ptr)?, 0);
+    assert_eq!(memory.read_u32(update_ptr + 4)?, 0);
+    assert_eq!(memory.read_u32(update_ptr + 8)?, 0);
+    assert_eq!(memory.read_u32(update_ptr + 12)?, 0);
 
     Ok(())
 }

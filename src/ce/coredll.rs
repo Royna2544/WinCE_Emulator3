@@ -5804,20 +5804,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             args,
         ) as u32)),
-        ORD_SCROLL_DC => {
-            // ScrollDC(hdc, dx, dy, lprcScroll, lprcClip, hrgnUpdate, lprcUpdate)
-            // Scroll DC contents. We don't have per-pixel scroll on window DCs; return TRUE.
-            // Write empty update rect if lprcUpdate is provided.
-            let update_ptr = raw_arg(args, 6);
-            if update_ptr != 0 {
-                let _ = memory.write_u32(update_ptr, 0);
-                let _ = memory.write_u32(update_ptr + 4, 0);
-                let _ = memory.write_u32(update_ptr + 8, 0);
-                let _ = memory.write_u32(update_ptr + 12, 0);
-            }
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_SCROLL_DC => Some(CoredllValue::Bool(scroll_dc_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_DC => Some(CoredllValue::Handle(get_dc_raw(kernel, raw_arg(args, 0)))),
         ORD_GET_WINDOW_DC => Some(CoredllValue::Handle(get_dc_raw(kernel, raw_arg(args, 0)))),
         ORD_GET_DCEX => {
@@ -40614,6 +40603,41 @@ fn set_scroll_range_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> 
             state.max = n_max;
             state.pos = state.pos.clamp(n_min, n_max);
         }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn scroll_dc_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    // ScrollDC(hdc, dx, dy, lprcScroll, lprcClip, hrgnUpdate, lprcUpdate)
+    let hdc = raw_arg(args, 0);
+    let dx = raw_i32_arg(args, 1);
+    let dy = raw_i32_arg(args, 2);
+    let update_ptr = raw_arg(args, 6);
+
+    if !is_valid_hdc(kernel, hdc) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if dx != 0 && dy != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    if update_ptr != 0 {
+        let _ = memory.write_u32(update_ptr, 0);
+        let _ = memory.write_u32(update_ptr + 4, 0);
+        let _ = memory.write_u32(update_ptr + 8, 0);
+        let _ = memory.write_u32(update_ptr + 12, 0);
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
