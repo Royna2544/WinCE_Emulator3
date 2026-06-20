@@ -134,7 +134,8 @@ notes when it is still needed for implementation.
   `IOCTL_DISK_INITIALIZED`/`DISK_IOCTL_INITIALIZED` plus
   `IOCTL_DISK_FLUSH_CACHE` through an opened partition handle, including byte
   counts, profile/device flags, mounted volume names, zero-byte status
-  successes, and insufficient-buffer rejection for disk names.
+  successes, lower disk-control `ERROR_NOT_SUPPORTED` forwarding, and
+  insufficient-buffer rejection for disk names.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`,
@@ -146,8 +147,8 @@ notes when it is still needed for implementation.
   `IOCTL_DISK_GETNAME`/`DISK_IOCTL_GETNAME`,
   `IOCTL_DISK_INITIALIZED`/`DISK_IOCTL_INITIALIZED`,
   `IOCTL_DISK_FLUSH_CACHE`, byte counts, mounted profile/device flags,
-  zero-byte status successes, and invalid cached-device-info/name no-touch
-  behavior.
+  zero-byte status successes, lower disk-control `ERROR_NOT_SUPPORTED`
+  forwarding, and invalid cached-device-info/name no-touch behavior.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: store and partition

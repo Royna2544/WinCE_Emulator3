@@ -23574,6 +23574,11 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | DISK_IOCTL_INITIALIZED
             | IOCTL_DISK_INITIALIZED
             | IOCTL_DISK_FLUSH_CACHE
+            | IOCTL_DISK_SET_STANDBY_TIMER
+            | IOCTL_DISK_STANDBY_NOW
+            | IOCTL_DISK_DELETE_CLUSTER
+            | IOCTL_DISK_READ_CDROM
+            | IOCTL_DISK_WRITE_CDROM
     );
     if !handled {
         return None;
@@ -23641,6 +23646,13 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         ),
         DISK_IOCTL_INITIALIZED | IOCTL_DISK_INITIALIZED | IOCTL_DISK_FLUSH_CACHE => {
             disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
+        }
+        IOCTL_DISK_SET_STANDBY_TIMER
+        | IOCTL_DISK_STANDBY_NOW
+        | IOCTL_DISK_DELETE_CLUSTER
+        | IOCTL_DISK_READ_CDROM
+        | IOCTL_DISK_WRITE_CDROM => {
+            disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
         }
         _ => unreachable!(),
     })
@@ -23747,6 +23759,11 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | DISK_IOCTL_INITIALIZED
             | IOCTL_DISK_INITIALIZED
             | IOCTL_DISK_FLUSH_CACHE
+            | IOCTL_DISK_SET_STANDBY_TIMER
+            | IOCTL_DISK_STANDBY_NOW
+            | IOCTL_DISK_DELETE_CLUSTER
+            | IOCTL_DISK_READ_CDROM
+            | IOCTL_DISK_WRITE_CDROM
     );
     if !handled {
         return None;
@@ -23815,6 +23832,13 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         DISK_IOCTL_INITIALIZED | IOCTL_DISK_INITIALIZED | IOCTL_DISK_FLUSH_CACHE => {
             disk_zero_byte_success_raw(kernel, memory, thread_id, returned_ptr)
         }
+        IOCTL_DISK_SET_STANDBY_TIMER
+        | IOCTL_DISK_STANDBY_NOW
+        | IOCTL_DISK_DELETE_CLUSTER
+        | IOCTL_DISK_READ_CDROM
+        | IOCTL_DISK_WRITE_CDROM => {
+            disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
+        }
         _ => unreachable!(),
     })
 }
@@ -23830,6 +23854,20 @@ fn disk_zero_byte_success_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn disk_zero_byte_failure_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    returned_ptr: u32,
+    error: u32,
+) -> bool {
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, error);
+    false
 }
 
 fn partition_disk_info_raw<M: CoredllGuestMemory>(
