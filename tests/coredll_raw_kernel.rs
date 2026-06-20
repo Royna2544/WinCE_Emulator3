@@ -21,13 +21,13 @@ use wince_emulation_v3::{
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
             ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
             ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
-            ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
-            ORD_GET_APIADDRESS, ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX,
-            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
-            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
-            ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC,
-            ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE, ORD_FILE_TIME_TO_SYSTEM_TIME,
+            ORD_FREE_LIBRARY, ORD_GET_APIADDRESS, ORD_GET_CALL_STACK_SNAPSHOT,
+            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
+            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
+            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
+            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
             ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
             ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
@@ -6704,6 +6704,120 @@ fn coredll_raw_get_file_version_info_reads_ce_version_resource() -> Result<()> {
     ));
     assert_eq!(memory.read_bytes(info_ptr, 4), [0xee, 0xee, 0xee, 0xee]);
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_DATA);
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_extract_resource_copies_pe_resource_to_heap() -> Result<()> {
+    const VS_FFI_SIGNATURE: u32 = 0xfeef_04bd;
+    const RT_VERSION: u32 = 16;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("extract_resource");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Docs")).unwrap();
+    let version_info = version_info_resource_data(VS_FFI_SIGNATURE);
+    fs::write(
+        root.join("Docs").join("versioned.exe"),
+        pe32_with_version_info_resource(VS_FFI_SIGNATURE),
+    )
+    .unwrap();
+    kernel.set_file_root(&root);
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 165;
+    let path_ptr = 0x2_4000;
+    let name_ptr = 0x2_4800;
+    let kind_ptr = 0x2_4900;
+    memory.map_halfwords(path_ptr, 64);
+    memory.map_halfwords(name_ptr, 16);
+    memory.map_halfwords(kind_ptr, 16);
+    memory.write_wide_z(path_ptr, r"\Docs\versioned.exe");
+
+    kernel.threads.set_last_error(thread_id, 0x1234);
+    let extracted = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_EXTRACT_RESOURCE,
+        [path_ptr, 1, RT_VERSION],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("ExtractResource did not return a pointer: {other:?}"),
+    };
+    assert_ne!(extracted, 0);
+    assert_eq!(
+        memory.read_bytes(extracted, version_info.len()),
+        version_info,
+        "ExtractResource copies the raw PE resource bytes into a fixed heap allocation"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        0x1234,
+        "CE ExtractResource does not clear last-error after a successful copy"
+    );
+
+    memory.write_wide_z(name_ptr, "#1");
+    memory.write_wide_z(kind_ptr, "#16");
+    let extracted_by_hash = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_EXTRACT_RESOURCE,
+        [path_ptr, name_ptr, kind_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("ExtractResource # lookup did not return a pointer: {other:?}"),
+    };
+    assert_ne!(extracted_by_hash, 0);
+    assert_ne!(extracted_by_hash, extracted);
+    assert_eq!(memory.read_bytes(extracted_by_hash, 44), version_info[..44]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_RESOURCE,
+            [path_ptr, 99, RT_VERSION],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_RESOURCE,
+            [0xdead_0000, 1, RT_VERSION],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     let _ = fs::remove_dir_all(root);
     Ok(())

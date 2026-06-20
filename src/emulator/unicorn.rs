@@ -8258,6 +8258,15 @@ impl UnicornMips {
                     .unwrap_or(raw_caller_pc);
                 let caller_module =
                     mapped_blob_module_for_pc(unsafe { &*mapped_blobs_ptr }, caller_pc);
+                if let Some(trap) = trap.as_ref() {
+                    normalize_set_window_long_wndproc_arg(
+                        unsafe { &*mapped_blobs_ptr },
+                        trap.module_kind,
+                        trap.ordinal,
+                        caller_module.as_deref(),
+                        &mut args,
+                    );
+                }
                 let stack_words = read_unicorn_stack_words(memory.uc, sp, 0x30);
                 let Some(import_return) = traps
                     .borrow()
@@ -12641,6 +12650,75 @@ fn mapped_blob_module_for_pc(mapped_blobs: &[MappedBlob], pc: u32) -> Option<Str
     mapped_blob_module_index_for_pc(mapped_blobs, pc)
         .and_then(|index| mapped_blobs.get(index))
         .map(|blob| compact_mapped_blob_name(&blob.name))
+}
+
+#[cfg(feature = "unicorn")]
+fn mapped_ce_slot_callback_for_caller_module(
+    mapped_blobs: &[MappedBlob],
+    caller_module: Option<&str>,
+    callback: u32,
+) -> Option<u32> {
+    if callback < CE_PROCESS_SLOT_SIZE || callback >= CE_SHARED_HEAP_BASE {
+        return None;
+    }
+    let caller_module = caller_module?;
+    let slot_offset = callback & CE_PROCESS_SLOT_MASK;
+    if slot_offset == 0 {
+        return None;
+    }
+    mapped_blobs.iter().find_map(|blob| {
+        let compact_name = compact_mapped_blob_name(&blob.name);
+        if compact_name != caller_module {
+            return None;
+        }
+        if blob.name.starts_with("image:")
+            && let Some(offset) = slot_offset.checked_sub(blob.base)
+            && offset < blob.bytes.len() as u32
+        {
+            return Some(slot_offset);
+        }
+        if blob.name.starts_with("dll:")
+            && let Some(candidate) = blob.base.checked_add(slot_offset)
+            && candidate
+                .checked_sub(blob.base)
+                .is_some_and(|offset| offset < blob.bytes.len() as u32)
+        {
+            return Some(candidate);
+        }
+        None
+    })
+}
+
+#[cfg(feature = "unicorn")]
+fn normalize_set_window_long_wndproc_arg(
+    mapped_blobs: &[MappedBlob],
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    caller_module: Option<&str>,
+    args: &mut [u32],
+) {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_LONG_W)
+        || args.get(1).copied().map(|index| index as i32) != Some(crate::ce::gwe::GWL_WNDPROC)
+    {
+        return;
+    }
+    let Some(value) = args.get(2).copied() else {
+        return;
+    };
+    let Some(mapped) =
+        mapped_ce_slot_callback_for_caller_module(mapped_blobs, caller_module, value)
+    else {
+        return;
+    };
+    tracing::debug!(
+        target: "ce.gwe",
+        callback = format_args!("0x{value:08x}"),
+        mapped = format_args!("0x{mapped:08x}"),
+        caller_module,
+        "mapped SetWindowLongW WNDPROC callback through caller module"
+    );
+    args[2] = mapped;
 }
 
 fn write_call_target_import(
@@ -43663,6 +43741,74 @@ mod unicorn_tests {
             emulator.mapped_guest_wndproc(0x6004_f134),
             Some(0x0014_f134)
         );
+    }
+
+    #[test]
+    fn set_window_long_wndproc_maps_ce_slot_callback_through_caller_module() {
+        let mut args = [
+            0x0002_0000,
+            crate::ce::gwe::GWL_WNDPROC as u32,
+            0x6004_f0f4,
+            0,
+            0,
+            0,
+        ];
+        let blobs = vec![
+            super::MappedBlob {
+                name: "dll:commctrl.dll".to_owned(),
+                base: 0x4015_0000,
+                bytes: vec![0; 0x7f000],
+            },
+            super::MappedBlob {
+                name: "dll:mfcce400.dll".to_owned(),
+                base: 0x0010_0000,
+                bytes: vec![0; 0x8b000],
+            },
+        ];
+
+        super::normalize_set_window_long_wndproc_arg(
+            &blobs,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_LONG_W),
+            Some("dll:mfcce400.dll"),
+            &mut args,
+        );
+
+        assert_eq!(args[2], 0x0014_f0f4);
+    }
+
+    #[test]
+    fn set_window_long_wndproc_maps_ce_slot_callback_to_commctrl_when_commctrl_called() {
+        let mut args = [
+            0x0002_0000,
+            crate::ce::gwe::GWL_WNDPROC as u32,
+            0x6004_f0f4,
+            0,
+            0,
+            0,
+        ];
+        let blobs = vec![
+            super::MappedBlob {
+                name: "dll:mfcce400.dll".to_owned(),
+                base: 0x0010_0000,
+                bytes: vec![0; 0x8b000],
+            },
+            super::MappedBlob {
+                name: "dll:commctrl.dll".to_owned(),
+                base: 0x4015_0000,
+                bytes: vec![0; 0x7f000],
+            },
+        ];
+
+        super::normalize_set_window_long_wndproc_arg(
+            &blobs,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_LONG_W),
+            Some("dll:commctrl.dll"),
+            &mut args,
+        );
+
+        assert_eq!(args[2], 0x4019_f0f4);
     }
 
     #[test]

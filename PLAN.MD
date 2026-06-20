@@ -251,6 +251,11 @@ notes when it is still needed for implementation.
   raw CE `wValLen` value. Coverage verifies root `VS_FIXEDFILEINFO` queries,
   nested `StringFileInfo` lookups, zeroed length outputs, and missing-path
   `ERROR_RESOURCE_NAME_NOT_FOUND` behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp`: raw
+  `ExtractResource` now follows CE's datafile-load/resource-copy path for PE
+  resources instead of returning unsupported, including `MAKEINTRESOURCE` and
+  `#123` string identifiers, fixed heap copies, success last-error
+  preservation, missing-resource failures, and invalid guest pointer rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`, and
@@ -729,6 +734,10 @@ notes when it is still needed for implementation.
   range are now preserved as receiver-process wndprocs instead of requiring a
   loaded-DLL alias, matching the `VM_SHARED_HEAP_BASE` through `VM_KMODE_BASE`
   range documented in `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c`.
+  `SetWindowLongW(GWL_WNDPROC)` import thunks now also normalize CE process-slot
+  callback values through the caller module before the raw coredll call, so
+  route UI subclass procedures land on the loaded MFC/commctrl guest code that
+  owns the slot offset.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
   `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble

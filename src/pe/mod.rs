@@ -184,6 +184,7 @@ pub struct PeResourceString {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeResourceData {
     pub kind: u32,
+    pub kind_string: Option<String>,
     pub name: u32,
     pub name_string: Option<String>,
     pub data_rva: u32,
@@ -366,9 +367,8 @@ impl PeImage {
         for type_entry in
             self.resource_directory_entries(directory.virtual_address, directory.virtual_address)?
         {
-            let Some(kind) = type_entry.id else {
-                continue;
-            };
+            let kind_string = type_entry.name.clone();
+            let kind = type_entry.id.unwrap_or(0);
             if !type_entry.is_directory {
                 continue;
             }
@@ -400,6 +400,7 @@ impl PeImage {
                         .ok_or_else(|| pe_error(&self.path, "resource data offset overflow"))?;
                     out.push(PeResourceData {
                         kind,
+                        kind_string: kind_string.clone(),
                         name,
                         name_string: name_string.clone(),
                         data_rva: self.read_u32_rva(entry_rva)?,

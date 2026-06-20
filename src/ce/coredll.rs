@@ -2850,12 +2850,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_VERIFY_APIHANDLE => Some(CoredllValue::Handle(verify_api_handle_raw(
             kernel, thread_id, args,
         ))),
-        ORD_EXTRACT_RESOURCE => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_EXTRACT_RESOURCE => Some(CoredllValue::Handle(extract_resource_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_ROM_FILE_INFO | ORD_GET_ROM_FILE_BYTES => {
             kernel
                 .threads
@@ -11293,6 +11290,92 @@ fn version_info_resource_bytes(
     let offset = pe.rva_to_file_offset(entry.data_rva).ok_or(())?;
     let end = offset.checked_add(entry.size as usize).ok_or(())?;
     bytes.get(offset..end).map(|slice| slice.to_vec()).ok_or(())
+}
+
+fn extract_resource_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let file_ptr = raw_arg(args, 0);
+    let name_ptr = raw_arg(args, 1);
+    let kind_ptr = raw_arg(args, 2);
+    let Some(path) = read_guest_wide_arg(memory, file_ptr).map(|path| path.replace('/', "\\"))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(name) = extract_resource_id_from_guest_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(kind) = extract_resource_id_from_guest_arg(memory, kind_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Ok(bytes) = pe_resource_bytes(kernel, &path, &name, &kind) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+        return 0;
+    };
+    copy_resource_bytes_to_guest_heap(kernel, memory, thread_id, &bytes).unwrap_or(0)
+}
+
+fn extract_resource_id_from_guest_arg<M: CoredllGuestMemory>(
+    memory: &M,
+    value: u32,
+) -> Option<ResourceId> {
+    if value <= u16::MAX as u32 {
+        return Some(ResourceId::Integer(value as u16));
+    }
+    read_guest_wide_arg(memory, value).map(|name| {
+        name.strip_prefix('#')
+            .and_then(|digits| digits.parse::<u16>().ok())
+            .map(ResourceId::Integer)
+            .unwrap_or(ResourceId::Name(name))
+    })
+}
+
+fn pe_resource_bytes(
+    kernel: &mut CeKernel,
+    path: &str,
+    name: &ResourceId,
+    kind: &ResourceId,
+) -> std::result::Result<Vec<u8>, ()> {
+    use crate::pe::PeImage;
+
+    let bytes = kernel.read_guest_file(path).map_err(|_| ())?;
+    let pe = PeImage::parse_bytes(path, &bytes).map_err(|_| ())?;
+    let resources = pe.resource_data_entries().map_err(|_| ())?;
+    let entry = resources
+        .iter()
+        .find(|resource| {
+            pe_resource_id_matches(resource.kind, resource.kind_string.as_deref(), kind)
+                && pe_resource_id_matches(resource.name, resource.name_string.as_deref(), name)
+        })
+        .ok_or(())?;
+    let offset = pe.rva_to_file_offset(entry.data_rva).ok_or(())?;
+    let end = offset.checked_add(entry.size as usize).ok_or(())?;
+    bytes.get(offset..end).map(|slice| slice.to_vec()).ok_or(())
+}
+
+fn pe_resource_id_matches(value: u32, value_name: Option<&str>, wanted: &ResourceId) -> bool {
+    match wanted {
+        ResourceId::Integer(0) => true,
+        ResourceId::Integer(id) => value_name.is_none() && value == u32::from(*id),
+        ResourceId::Name(name) => value_name
+            .map(|value_name| value_name.eq_ignore_ascii_case(name))
+            .unwrap_or(false),
+        ResourceId::NamePtr(_) => false,
+    }
 }
 
 fn valid_version_info_total_len(bytes: &[u8]) -> Option<u16> {
