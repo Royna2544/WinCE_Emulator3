@@ -666,7 +666,10 @@ notes when it is still needed for implementation.
   after rotation, and checks stale child-thread recovery for mapped MFC
   wndprocs. Host-wall-clock live-pump stops now also rotate to runnable parked
   processes even when no message waiter or priority wait is present, preventing
-  visible runnable work from being stranded behind the active process.
+  visible runnable work from being stranded behind the active process. Live
+  pump handoff also rotates from a visible active process with receiver work to
+  a hidden parked process that has CPU-runnable work but no visible windows or
+  queued receiver work, preserving progress for helper child processes.
 
 ## Active Roadmap
 

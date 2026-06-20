@@ -2270,6 +2270,12 @@ impl UnicornMips {
             && self.rotate_to_live_pump_runnable_parked_process(kernel)
         {
             return;
+        } else if live_pump
+            && active_has_visible_receiver
+            && !active_has_visible_queued_receiver
+            && self.rotate_to_live_pump_cpu_runnable_parked_process(kernel)
+        {
+            return;
         } else if self.has_active_blocked_state(kernel)
             && !active_has_visible_receiver
             && self.has_runnable_parked_process(kernel)
@@ -2967,6 +2973,21 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn rotate_to_live_pump_cpu_runnable_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        let Some(index) = self.parked_child_processes.iter().position(|process| {
+            !self.parked_process_matches_current_active(process, kernel)
+                && Self::parked_process_has_cpu_runnable_work(process, kernel)
+        }) else {
+            return false;
+        };
+        let Some(parked) = self.parked_child_processes.remove(index) else {
+            return false;
+        };
+        self.switch_to_parked_process(kernel, parked, true, None);
+        true
+    }
+
+    #[cfg(feature = "unicorn")]
     fn rotate_to_any_runnable_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
         let Some(index) = self.parked_child_processes.iter().position(|process| {
             !self.parked_process_matches_current_active(process, kernel)
@@ -2996,6 +3017,13 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn parked_process_has_visible_windows(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
         Self::process_has_visible_windows(kernel, parked.process_state.process_id)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn parked_process_has_cpu_runnable_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        Self::parked_process_can_run(parked, kernel)
+            && !Self::parked_process_has_visible_windows(parked, kernel)
+            && !Self::parked_process_has_receiver_work(parked, kernel)
     }
 
     #[cfg(feature = "unicorn")]
@@ -29706,6 +29734,91 @@ mod guest_thread_stack_tests {
         assert_eq!(kernel.current_process_id(), 1);
         assert_eq!(scheduler.current_thread_id, 1);
         assert_eq!(scheduler.parked_child_processes.len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn live_pump_rotates_visible_active_to_hidden_cpu_runnable_child() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(1);
+        scheduler.current_thread_id = 1;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0010_2000,
+            regs: MipsGuestContext::zero(),
+        });
+        scheduler.running_guest_thread = Some((1, 0x11));
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0010_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+        let active_hwnd =
+            kernel.create_window_ex_w(1, "active_ui", "", None, 0, crate::ce::gwe::WS_VISIBLE, 0);
+        assert!(
+            kernel
+                .gwe
+                .windows_snapshot()
+                .into_iter()
+                .any(|window| window.hwnd == active_hwnd && window.update_pending)
+        );
+
+        let child_thread = 3;
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(child_thread);
+        child_cpu.current_thread_id = child_thread;
+        child_cpu.saved_context = Some(SavedCpuContext {
+            pc: 0x0040_2000,
+            regs: MipsGuestContext::zero(),
+        });
+        let hidden_hwnd =
+            kernel.create_window_ex_w(child_thread, "hidden_helper", "", None, 0, 0, 0);
+        assert!(
+            !kernel
+                .gwe
+                .windows_snapshot()
+                .into_iter()
+                .any(|window| window.hwnd == hidden_hwnd && window.visible)
+        );
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 67,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: child_thread,
+            cpu: Box::new(child_cpu),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\Inavi\happyway_win.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
+        assert!(!scheduler.active_process_has_visible_queued_receiver_work(&kernel));
+        assert!(UnicornMips::parked_process_has_cpu_runnable_work(
+            scheduler.parked_child_processes.front().unwrap(),
+            &kernel
+        ));
+
+        scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
+
+        assert_eq!(kernel.current_process_id(), 67);
+        assert_eq!(scheduler.current_thread_id, child_thread);
 
         Ok(())
     }
