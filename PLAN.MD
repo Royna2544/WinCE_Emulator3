@@ -151,6 +151,11 @@ notes when it is still needed for implementation.
   `TestGetClipBox1` empty-clip behavior is now explicitly covered for raw
   clip DC state: an empty `IntersectClipRect` produces `NULLREGION`, and
   `GetClipBox` returns the CE zero rectangle.
+- `C:\WINCE600\PRIVATE\TEST\MULTIMEDIA\DIRECTX\DSHOW\PLAYBACK\LOGGERS\videoframerecognizer.cpp`
+  and `videoframeinstrumenter.cpp`: the DirectShow logger pattern
+  `LoadImage(NULL, file, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE)` is now covered
+  for raw `LoadImageW`; existing bitmap files return read-only HBITMAP objects
+  and missing paths report `ERROR_FILE_NOT_FOUND`.
 
 ## Active Roadmap
 

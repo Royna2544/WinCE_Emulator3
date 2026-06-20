@@ -37,8 +37,8 @@ use wince_emulation_v3::{
             ORD_HEAP_VALIDATE, ORD_HYPOT, ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE,
             ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR,
             ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP,
-            ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOCAL_ALLOC,
-            ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
+            ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W,
+            ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
             ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
             ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
             ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR,
@@ -16305,15 +16305,7 @@ fn coredll_raw_dsa_set_range_overwrites_item_range() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn coredll_raw_shload_dibitmap_loads_file_and_rejects_missing_path() -> Result<()> {
-    let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load_default()?;
-    let mut kernel = CeKernel::boot(config);
-    let root = unique_test_root("shload_dibitmap");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).unwrap();
-    // Write a minimal 1x1 24bpp BMP.
+fn minimal_1x1_24bpp_bmp() -> Vec<u8> {
     let mut bmp = Vec::new();
     bmp.extend_from_slice(b"BM");
     bmp.extend_from_slice(&58u32.to_le_bytes()); // file size
@@ -16331,6 +16323,18 @@ fn coredll_raw_shload_dibitmap_loads_file_and_rejects_missing_path() -> Result<(
     bmp.extend_from_slice(&0u32.to_le_bytes()); // colors used
     bmp.extend_from_slice(&0u32.to_le_bytes()); // colors important
     bmp.extend_from_slice(&[0x33, 0x66, 0x99, 0x00]); // pixel data + padding
+    bmp
+}
+
+#[test]
+fn coredll_raw_shload_dibitmap_loads_file_and_rejects_missing_path() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shload_dibitmap");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let bmp = minimal_1x1_24bpp_bmp();
     std::fs::write(root.join("bg.bmp"), &bmp).unwrap();
     kernel.set_file_root(&root);
     let mut memory = TestGuestMemory::default();
@@ -16375,6 +16379,78 @@ fn coredll_raw_shload_dibitmap_loads_file_and_rejects_missing_path() -> Result<(
             }
         ),
         "SHLoadDIBitmap with missing path must return 0"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_load_image_w_loads_bitmap_file_like_ce() -> Result<()> {
+    const IMAGE_BITMAP: u32 = 0;
+    const LR_LOADFROMFILE: u32 = 0x10;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("load_image_bitmap_file");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let bmp = minimal_1x1_24bpp_bmp();
+    std::fs::write(root.join("frame.bmp"), &bmp).unwrap();
+    kernel.set_file_root(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 201_u32;
+    let path_ptr = 0x1_0000_u32;
+    memory.map_halfwords(path_ptr, 64);
+
+    memory.write_wide_z(path_ptr, r"\frame.bmp");
+    let hbm = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, path_ptr, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("LoadImageW unexpected: {other:?}"),
+    };
+    assert_ne!(
+        hbm, 0,
+        "LoadImageW must return a valid HBITMAP for LR_LOADFROMFILE bitmap paths"
+    );
+    let bitmap = kernel
+        .resources
+        .bitmap(hbm)
+        .expect("LoadImageW returns a bitmap handle");
+    assert_eq!(bitmap.width, 1);
+    assert_eq!(bitmap.height, 1);
+    assert_eq!(bitmap.planes, 1);
+    assert_eq!(bitmap.bits_pixel, 24);
+    assert!(bitmap.bits_owned);
+    assert!(!bitmap.bits_writable);
+
+    memory.write_wide_z(path_ptr, r"\missing.bmp");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_LOAD_IMAGE_W,
+                [0, path_ptr, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ),
+        "LoadImageW with LR_LOADFROMFILE and a missing bitmap must return 0"
     );
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
