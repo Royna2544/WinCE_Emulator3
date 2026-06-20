@@ -28,6 +28,12 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwinuser.h` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\SHELL\shell.c`: raw
+  `GetForegroundInfo` now fills CE's foreground snapshot instead of reporting
+  unsupported. Coverage verifies null output rejection, empty foreground
+  state, active/focus/menu/keyboard-destination fields, IME/menu composition
+  placeholders, and keyboard-layout handle reporting.
 - `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\SERIAL\SER_CARD\ser_card.c`, and
