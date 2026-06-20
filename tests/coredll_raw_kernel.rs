@@ -54,9 +54,10 @@ use wince_emulation_v3::{
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_APIREADY, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE,
-            ORD_IS_EXITING, ORD_IS_PRIMARY_THREAD, ORD_IS_PROCESS_DYING, ORD_KERN_EXTRACT_ICONS,
-            ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_FSD, ORD_LOAD_FSDEX, ORD_LOAD_IMAGE_W,
+            ORD_IS_EXITING, ORD_IS_NAMED_EVENT_SIGNALED, ORD_IS_PRIMARY_THREAD,
+            ORD_IS_PROCESS_DYING, ORD_KERN_EXTRACT_ICONS, ORD_KERNEL_IO_CONTROL,
+            ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_CURSOR_W,
+            ORD_LOAD_DRIVER, ORD_LOAD_FSD, ORD_LOAD_FSDEX, ORD_LOAD_IMAGE_W,
             ORD_LOAD_KERNEL_LIBRARY, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
             ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
             ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NLED_GET_DEVICE_INFO, ORD_NLED_SET_DEVICE,
@@ -6928,6 +6929,9 @@ fn coredll_raw_extract_resource_copies_pe_resource_to_heap() -> Result<()> {
 
 #[test]
 fn coredll_raw_open_event_w_opens_existing_named_event_only() -> Result<()> {
+    const EVENT_RESET: u32 = 2;
+    const EVENT_SET: u32 = 3;
+
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
@@ -6956,6 +6960,22 @@ fn coredll_raw_open_event_w_opens_existing_named_event_only() -> Result<()> {
         ERROR_FILE_NOT_FOUND
     );
 
+    kernel.threads.set_last_error(thread_id, 0x1234);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_NAMED_EVENT_SIGNALED,
+            [event_name, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0x1234);
+
     let created = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -6970,6 +6990,118 @@ fn coredll_raw_open_event_w_opens_existing_named_event_only() -> Result<()> {
         other => panic!("CreateEventW did not return a handle: {other:?}"),
     };
     assert_ne!(created, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_NAMED_EVENT_SIGNALED,
+            [event_name, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EVENT_MODIFY,
+            [created, EVENT_SET],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    kernel.threads.set_last_error(thread_id, 0x5678);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_NAMED_EVENT_SIGNALED,
+            [event_name, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_NAMED_EVENT_SIGNALED,
+            [event_name, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0x5678);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EVENT_MODIFY,
+            [created, EVENT_RESET],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    kernel.threads.set_last_error(thread_id, 0x9abc);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_NAMED_EVENT_SIGNALED,
+            [event_name, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_NAMED_EVENT_SIGNALED,
+            [0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_NAMED_EVENT_SIGNALED,
+            [0xdead_0000, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0x9abc);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

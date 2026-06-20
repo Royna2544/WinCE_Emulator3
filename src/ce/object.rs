@@ -467,6 +467,15 @@ impl HandleTable {
             })
     }
 
+    pub fn named_event_signaled(&self, name: &str) -> Option<bool> {
+        self.objects.iter().find_map(|(_, object)| match object {
+            KernelObject::Event(event) if event.name.as_deref() == Some(name) => {
+                Some(event.signaled)
+            }
+            _ => None,
+        })
+    }
+
     pub fn create_mutex(&mut self, name: Option<String>, initial_owner: Option<u32>) -> u32 {
         self.create_mutex_with_status(name, initial_owner).0
     }

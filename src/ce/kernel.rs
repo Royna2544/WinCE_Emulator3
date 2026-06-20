@@ -6121,6 +6121,20 @@ impl CeKernel {
         handle
     }
 
+    pub fn is_named_event_signaled_w(&mut self, name: &str) -> bool {
+        let signaled = self.handles.named_event_signaled(name);
+        self.record_event_trace(EventTraceRecord {
+            op: "IsNamedEventSignaled",
+            handle: None,
+            name: Some(name.to_owned()),
+            manual_reset: None,
+            signaled,
+            result: Some(signaled.unwrap_or(false)),
+            detail: None,
+        });
+        signaled.unwrap_or(false)
+    }
+
     pub fn create_guest_thread(
         &mut self,
         start_address: u32,

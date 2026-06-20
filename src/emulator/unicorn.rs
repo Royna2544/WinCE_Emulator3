@@ -3120,6 +3120,14 @@ impl UnicornMips {
             return None;
         }
         if mapped_blob_module_for_pc(&self.mapped_blobs, wndproc).is_some() {
+            if let Some(process_slot_wndproc) =
+                Self::mapped_process_slot_dll_callback_for_shared_callback(
+                    &self.mapped_blobs,
+                    wndproc,
+                )
+            {
+                return Some(process_slot_wndproc);
+            }
             return Some(wndproc);
         }
         if wndproc < CE_USER_KERNEL_SPLIT {
@@ -3155,13 +3163,53 @@ impl UnicornMips {
         if slot_offset == 0 {
             return None;
         }
-        mapped_blobs.iter().find_map(|blob| {
+        let mut fallback = None;
+        let mut process_slot_candidate = None;
+        for blob in mapped_blobs {
             if !blob.name.starts_with("dll:") {
+                continue;
+            }
+            let Some(candidate) = blob.base.checked_add(slot_offset) else {
+                continue;
+            };
+            let Some(offset) = candidate.checked_sub(blob.base) else {
+                continue;
+            };
+            if offset >= blob.bytes.len() as u32 {
+                continue;
+            }
+            if blob.base < CE_PROCESS_SLOT_SIZE {
+                process_slot_candidate.get_or_insert(candidate);
+            } else {
+                fallback.get_or_insert(candidate);
+            }
+        }
+        process_slot_candidate.or(fallback)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn mapped_process_slot_dll_callback_for_shared_callback(
+        mapped_blobs: &[MappedBlob],
+        callback: u32,
+    ) -> Option<u32> {
+        let shared_blob = mapped_blobs.iter().find(|blob| {
+            blob.name.starts_with("dll:")
+                && blob.base >= CE_PROCESS_SLOT_SIZE
+                && callback >= blob.base
+                && callback.wrapping_sub(blob.base) < blob.bytes.len() as u32
+        })?;
+        let offset = callback.checked_sub(shared_blob.base)?;
+        if offset == 0 {
+            return None;
+        }
+        mapped_blobs.iter().find_map(|blob| {
+            if !blob.name.starts_with("dll:") || blob.base >= CE_PROCESS_SLOT_SIZE {
                 return None;
             }
-            let candidate = blob.base.checked_add(slot_offset)?;
-            let offset = candidate.checked_sub(blob.base)?;
-            (offset < blob.bytes.len() as u32).then_some(candidate)
+            if offset >= blob.bytes.len() as u32 {
+                return None;
+            }
+            blob.base.checked_add(offset)
         })
     }
 
@@ -43834,6 +43882,46 @@ mod unicorn_tests {
         assert_eq!(
             emulator.mapped_guest_wndproc(0x6004_f134),
             Some(0x0014_f134)
+        );
+    }
+
+    #[test]
+    fn mapped_guest_wndproc_prefers_process_slot_dll_alias_over_shared_dll_alias() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4015_0000,
+            bytes: vec![0; 0x7f000],
+        });
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:mfcce400.dll".to_owned(),
+            base: 0x0010_0000,
+            bytes: vec![0; 0x8b000],
+        });
+
+        assert_eq!(
+            emulator.mapped_guest_wndproc(0x6004_f0f4),
+            Some(0x0014_f0f4)
+        );
+    }
+
+    #[test]
+    fn mapped_guest_wndproc_prefers_process_slot_dll_rva_over_shared_dll_rva() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4015_0000,
+            bytes: vec![0; 0x7f000],
+        });
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:mfcce400.dll".to_owned(),
+            base: 0x0010_0000,
+            bytes: vec![0; 0x8b000],
+        });
+
+        assert_eq!(
+            emulator.mapped_guest_wndproc(0x4019_f0f4),
+            Some(0x0014_f0f4)
         );
     }
 

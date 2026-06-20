@@ -2336,6 +2336,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_OPEN_EVENT_W => Some(CoredllValue::Handle(open_event_w_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_IS_NAMED_EVENT_SIGNALED => Some(CoredllValue::Bool(is_named_event_signaled_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+        ))),
         ORD_SUSPEND_THREAD => Some(CoredllValue::U32(suspend_thread_raw(
             kernel,
             thread_id,
@@ -27172,6 +27177,20 @@ fn open_event_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
         0
     }
+}
+
+fn is_named_event_signaled_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    name_ptr: u32,
+) -> bool {
+    if name_ptr == 0 {
+        return false;
+    }
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        return false;
+    };
+    kernel.is_named_event_signaled_w(&name)
 }
 
 fn create_semaphore_w_raw<M: CoredllGuestMemory>(

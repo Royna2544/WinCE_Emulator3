@@ -75,6 +75,12 @@ notes when it is still needed for implementation.
   Coverage verifies the boot process, child-process primary thread identity
   after launch records are drained, and `IsProcessDying`/`IsExiting` reporting
   from the current process exit state.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\syncobj.h`: raw
+  `IsNamedEventSignaled` now opens the named event and returns its current
+  signaled state without consuming auto-reset events or changing last-error on
+  missing or invalid names. Coverage verifies missing events, set/reset state,
+  repeated peeks, null names, and invalid guest pointers.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kdriver.c` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\loader.h`: raw
   `LoadKernelLibrary` now resolves registered CE kernel libraries instead of
@@ -746,7 +752,9 @@ notes when it is still needed for implementation.
   owns the slot offset. `SetClassLongW(GCL_WNDPROC)` and `RegisterClassW`
   import thunks use the same caller-module mapping before class state is
   committed, covering window classes that install CE process-slot callbacks at
-  registration time.
+  registration time. When both process-slot and shared DLL aliases can satisfy
+  the same high-slot callback offset, mapped WNDPROC resolution now prefers the
+  process-slot DLL image so callbacks stay in the receiver process view.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
   `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble
