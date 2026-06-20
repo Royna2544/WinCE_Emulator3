@@ -5628,6 +5628,13 @@ impl UnicornMips {
             self.active_process_has_visible_queued_receiver_work(kernel);
         if limits.live_pump
             && !active_has_visible_queued_receiver
+            && self.has_ready_parked_wait_unblock(kernel)
+            && self.rotate_to_ready_parked_wait(kernel)
+        {
+            return Ok(());
+        }
+        if limits.live_pump
+            && !active_has_visible_queued_receiver
             && !self.active_process_has_visible_windows(kernel)
             && self.rotate_to_visible_window_parked_process(kernel)
         {
