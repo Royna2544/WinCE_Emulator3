@@ -3240,7 +3240,14 @@ impl UnicornMips {
             .find(|process| process.process_state.process_id == process_id)
         {
             let parked_mapped = parked.cpu.receiver_process_wndproc(wndproc);
-            if parked_mapped.is_some_and(|mapped| mapped != wndproc) || local.is_none() {
+            if parked_mapped.is_some_and(|mapped| mapped != wndproc)
+                || (parked_mapped == Some(wndproc)
+                    && Self::mapped_process_slot_dll_contains_callback(
+                        &parked.cpu.mapped_blobs,
+                        wndproc,
+                    ))
+                || (local.is_none() && parked_mapped.is_none())
+            {
                 return parked_mapped;
             }
         }
@@ -44379,6 +44386,38 @@ mod unicorn_tests {
 
         assert_eq!(
             loaded_child.receiver_process_wndproc_for_process(0x4019_f0f4, 67, 67),
+            None
+        );
+
+        let mut parked_parent_cpu = super::UnicornMips::new().unwrap();
+        parked_parent_cpu.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4015_0000,
+            bytes: vec![0; 0x7f000],
+        });
+        let parked_parent = super::ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: 1,
+            cpu: Box::new(parked_parent_cpu),
+            blocked_send_id: None,
+            module_base: 0x0001_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        };
+        let mut parked_child = super::UnicornMips::new().unwrap();
+        parked_child.parked_child_processes.push_back(parked_parent);
+
+        assert_eq!(
+            parked_child.receiver_process_wndproc_for_process(0x4019_f0f4, 1, 67),
             None
         );
     }
