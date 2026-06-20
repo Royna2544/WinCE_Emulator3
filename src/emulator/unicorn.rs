@@ -6722,6 +6722,11 @@ impl UnicornMips {
             if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL == 0 {
                 scheduler_timeslice_pending_hook.set(true);
             }
+            if live_pump
+                && host_wall_budget_has_expired(host_wall_clock_started, host_wall_clock_limit)
+            {
+                scheduler_timeslice_pending_hook.set(true);
+            }
             if !scheduler_timeslice_pending_hook.get() {
                 let active_thread_id = *current_thread_id_timeslice_hook.borrow();
                 let kernel_ref = unsafe { &*kernel_ptr };
@@ -15386,6 +15391,14 @@ fn host_wall_budget_is_live_pump_slice(
         return true;
     };
     remaining <= std::time::Duration::from_millis(100)
+}
+
+#[cfg(feature = "unicorn")]
+fn host_wall_budget_has_expired(
+    started: std::time::Instant,
+    limit: Option<std::time::Duration>,
+) -> bool {
+    limit.is_some_and(|limit| started.elapsed() >= limit)
 }
 
 #[cfg(feature = "unicorn")]
@@ -49124,6 +49137,15 @@ mod unicorn_tests {
             Some(std::time::Duration::from_secs(1))
         ));
         assert!(!super::host_wall_budget_is_live_pump_slice(started, None));
+        assert!(!super::host_wall_budget_has_expired(
+            started,
+            Some(std::time::Duration::from_secs(1))
+        ));
+        assert!(super::host_wall_budget_has_expired(
+            started - std::time::Duration::from_secs(2),
+            Some(std::time::Duration::from_secs(1))
+        ));
+        assert!(!super::host_wall_budget_has_expired(started, None));
         assert!(!super::timer_delay_can_sleep_in_host_hook(
             1,
             started,
