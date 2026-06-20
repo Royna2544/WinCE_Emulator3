@@ -147,6 +147,10 @@ notes when it is still needed for implementation.
   `SimpleScrollDCTest` pixel movement is now represented for raw
   framebuffer-backed `ScrollDC`: one-axis scrolls move screen pixels in CE's
   sign convention and clear the newly exposed edge.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\clip.cpp`:
+  `TestGetClipBox1` empty-clip behavior is now explicitly covered for raw
+  clip DC state: an empty `IntersectClipRect` produces `NULLREGION`, and
+  `GetClipBox` returns the CE zero rectangle.
 
 ## Active Roadmap
 

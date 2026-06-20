@@ -59131,6 +59131,65 @@ fn coredll_raw_clip_rect_entrypoints_validate_hdc_like_ce() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_get_clip_box_reports_empty_clip_like_ce() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 182_u32;
+    let rect_ptr = 0x1_1000_u32;
+    memory.map_words(rect_ptr, 4);
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC did not return a handle: {other:?}"),
+    };
+
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\clip.cpp::TestGetClipBox1.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INTERSECT_CLIP_RECT,
+            [dc, 50, 50, 50, 100],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIP_BOX,
+            [dc, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    for offset in [0, 4, 8, 12] {
+        assert_eq!(memory.read_u32(rect_ptr + offset)?, 0);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_select_clip_rgn_copies_region_lifetime_like_ce() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
