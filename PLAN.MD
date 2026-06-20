@@ -836,6 +836,12 @@ notes when it is still needed for implementation.
   partition-layer forwarding shape, accepting zero-byte caller input but
   reporting the host-backed lower disk driver's unsupported status instead of
   pretending the secure wipe completed.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`: file-handle
+  `DeviceIoControl(FSCTL_SET_EXTENDED_FLAGS/FSCTL_SET_ENCRYPTION/
+  FSCTL_SET_SPARSE)` now recognizes the CE optional-attribute FSCTL contracts
+  before generic device dispatch, validating DWORD encryption/extended-flag
+  packets and sparse-file zero-byte requests before reporting the host-backed
+  FSD's unsupported status.
 
 ## Active Roadmap
 

@@ -129,6 +129,9 @@ const FSCTL_COPY_EXTERNAL_START: u32 = 0x0009_004c;
 const FSCTL_COPY_EXTERNAL_COMPLETE: u32 = 0x0009_0050;
 const FSCTL_GET_COMPRESSION: u32 = 0x0009_003c;
 const FSCTL_SET_COMPRESSION: u32 = 0x0009_c040;
+const FSCTL_SET_EXTENDED_FLAGS: u32 = 0x0009_0034;
+const FSCTL_SET_ENCRYPTION: u32 = 0x0009_00d7;
+const FSCTL_SET_SPARSE: u32 = 0x0009_00c4;
 const FSCTL_QUERY_ALLOCATED_RANGES: u32 = 0x0009_40cf;
 const FSCTL_GET_STREAM_INFORMATION: u32 = 0x0009_4038;
 const FSCTL_SET_ZERO_DATA: u32 = 0x0009_80c8;
@@ -24116,6 +24119,72 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
             }
         }
     }
+    if ioctl_code == FSCTL_SET_EXTENDED_FLAGS {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_set_extended_flags_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    input_ptr,
+                    input_len,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
+    if ioctl_code == FSCTL_SET_ENCRYPTION {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_set_encryption_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    input_ptr,
+                    input_len,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
+    if ioctl_code == FSCTL_SET_SPARSE {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_set_sparse_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    input_ptr,
+                    input_len,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
     if ioctl_code == FSCTL_QUERY_ALLOCATED_RANGES {
         match kernel.is_file_handle(handle) {
             Ok(true) => {
@@ -25569,6 +25638,110 @@ fn file_handle_set_compression_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn file_handle_set_extended_flags_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    flags_ptr: u32,
+    flags_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    if flags_ptr == 0 || flags_len != 4 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if memory.read_u32(flags_ptr).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
+}
+
+fn file_handle_set_encryption_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    encryption_ptr: u32,
+    encryption_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    if encryption_ptr == 0 || encryption_len < 4 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    let Ok(operation) = memory.read_u32(encryption_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    if !(1..=4).contains(&operation) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
+}
+
+fn file_handle_set_sparse_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    input_ptr: u32,
+    input_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    if input_len != 0 {
+        if input_ptr == 0 {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        }
+        for offset in 0..input_len {
+            if memory.read_u8(input_ptr.wrapping_add(offset)).is_err() {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
+    if !write_optional_count(kernel, memory, thread_id, returned_ptr, 0) {
+        return false;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    false
 }
 
 fn file_handle_query_allocated_ranges_raw<M: CoredllGuestMemory>(
