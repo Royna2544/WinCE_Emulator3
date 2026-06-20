@@ -3557,6 +3557,31 @@ impl UnicornMips {
         self.prune_active_process_from_parked_readonly(kernel);
     }
 
+    fn remove_parked_process_tree_by_identity(&mut self, process_id: u32, thread_id: u32) {
+        Self::remove_parked_processes_by_identity(
+            &mut self.parked_child_processes,
+            process_id,
+            thread_id,
+        );
+    }
+
+    fn remove_parked_processes_by_identity(
+        processes: &mut VecDeque<ParkedProcess>,
+        process_id: u32,
+        thread_id: u32,
+    ) {
+        for process in processes.iter_mut() {
+            Self::remove_parked_processes_by_identity(
+                &mut process.cpu.parked_child_processes,
+                process_id,
+                thread_id,
+            );
+        }
+        processes.retain(|process| {
+            process.process_state.process_id != process_id || process.thread_id != thread_id
+        });
+    }
+
     #[cfg(feature = "unicorn")]
     pub fn prune_exited_and_active_processes_from_parked(&mut self, kernel: &mut CeKernel) {
         self.prune_exited_and_active_processes_from_parked_with_framebuffer(kernel, None);
@@ -3578,6 +3603,9 @@ impl UnicornMips {
         }
         let mut kept = VecDeque::new();
         while let Some(process) = self.parked_child_processes.pop_front() {
+            if Self::parked_process_handle_exit_code(&process, kernel).is_some() {
+                continue;
+            }
             if let Some(exit_code) = Self::parked_process_thread_exit_code(&process) {
                 kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                     op: "CreateProcessChildReturned",
@@ -3633,6 +3661,14 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn parked_process_handle_exit_code(process: &ParkedProcess, kernel: &CeKernel) -> Option<u32> {
+        let process_handle = process.process_handle?;
+        kernel
+            .process_exit_code_for_handle(process_handle)
+            .filter(|exit_code| *exit_code != crate::ce::kernel::STILL_ACTIVE)
+    }
+
+    #[cfg(feature = "unicorn")]
     pub fn complete_active_process_thread_exit_with_framebuffer(
         &mut self,
         kernel: &mut CeKernel,
@@ -3649,6 +3685,10 @@ impl UnicornMips {
     ) -> bool {
         if self.complete_saved_guest_thread_exit(kernel) {
             return false;
+        }
+        if self.active_terminal_child_process_return_code().is_some() {
+            let _ = self.complete_active_terminal_child_process_return(kernel, framebuffer);
+            return self.switch_to_next_parked_process(kernel, false);
         }
         let Some(exit_code) = self.active_process_thread_exit_code() else {
             return false;
@@ -3677,6 +3717,7 @@ impl UnicornMips {
             detail: Some(format!("active_exit show_cmd={:?}", launch.show_cmd)),
         });
         kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer);
+        self.remove_parked_process_tree_by_identity(launch.process_id, launch.thread_id);
         self.switch_to_next_parked_process(kernel, false)
     }
 
@@ -3835,6 +3876,10 @@ impl UnicornMips {
         });
         let modal_state = self.take_terminal_blocked_modal(kernel);
         kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer);
+        self.remove_parked_process_tree_by_identity(launch.process_id, launch.thread_id);
+        self.saved_context = None;
+        self.last_debug = None;
+        self.last_wall_clock_debug = None;
         modal_state
     }
 
@@ -28706,6 +28751,27 @@ mod guest_thread_stack_tests {
             pc: 0x0010_2000,
             regs: MipsGuestContext::zero(),
         });
+        let stale_child_cpu = scheduler.clone();
+        parent_cpu.parked_child_processes.push_back(ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: launch.process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: launch.thread_id,
+            cpu: Box::new(stale_child_cpu),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+            ),
+            command_line: launch.command_line.clone().unwrap_or_default(),
+            current_directory: None,
+        });
         scheduler.parked_child_processes.push_back(ParkedProcess {
             application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
             process_handle: None,
@@ -28735,6 +28801,158 @@ mod guest_thread_stack_tests {
                 && record.process_id == Some(launch.process_id)
                 && record.thread_id == Some(launch.thread_id)
                 && record.result == Some(0x42)
+        }));
+
+        Ok(())
+    }
+
+    #[test]
+    fn active_terminal_child_exit_hands_back_to_parked_parent() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            Some("iNavi|SDMMC Disk\\mapdata".to_owned()),
+        );
+        scheduler.set_initial_thread_id(launch.thread_id);
+        scheduler.current_thread_id = launch.thread_id;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            regs: MipsGuestContext::zero(),
+        });
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            ra: GUEST_THREAD_RETURN_STUB_ADDR,
+            v0: 0x24,
+            ..Default::default()
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0040_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+        ));
+        let child_hwnd =
+            kernel.create_window_ex_w(launch.thread_id, "hidden_child", "", None, 0, 0, 0);
+        assert!(kernel.post_message_w(child_hwnd, crate::ce::gwe::WM_USER + 1, 0, 0));
+
+        let parent_thread = 1;
+        let mut parent_cpu = UnicornMips::new()?;
+        parent_cpu.set_initial_thread_id(parent_thread);
+        parent_cpu.current_thread_id = parent_thread;
+        parent_cpu.saved_context = Some(SavedCpuContext {
+            pc: 0x0010_2000,
+            regs: MipsGuestContext::zero(),
+        });
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: parent_thread,
+            cpu: Box::new(parent_cpu),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        assert!(scheduler.complete_active_process_thread_exit_with_framebuffer(&mut kernel, None));
+
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(scheduler.current_thread_id, parent_thread);
+        assert!(!scheduler.has_parked_child_processes());
+        assert!(
+            kernel
+                .gwe
+                .window(child_hwnd)
+                .is_none_or(|window| window.destroyed)
+        );
+        assert!(kernel.recent_process_ops().iter().any(|record| {
+            record.op == "CreateProcessExited"
+                && record.process_id == Some(launch.process_id)
+                && record.thread_id == Some(launch.thread_id)
+                && record.result == Some(0x24)
+        }));
+        scheduler.prune_exited_and_active_processes_from_parked(&mut kernel);
+        let child_exit_count = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| {
+                record.op == "CreateProcessExited"
+                    && record.process_id == Some(launch.process_id)
+                    && record.thread_id == Some(launch.thread_id)
+            })
+            .count();
+        assert_eq!(child_exit_count, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn prune_drops_parked_child_with_exited_handle_without_duplicate_exit() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            Some("iNavi|SDMMC Disk\\mapdata".to_owned()),
+        );
+        let _ = kernel.take_pending_process_launches();
+        kernel.mark_process_launch_exited(&launch, 0x24);
+
+        let mut scheduler = UnicornMips::new()?;
+        let child_cpu = UnicornMips::new()?;
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: launch.process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: launch.thread_id,
+            cpu: Box::new(child_cpu),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+            ),
+            command_line: launch.command_line.clone().unwrap_or_default(),
+            current_directory: None,
+        });
+
+        scheduler.prune_exited_and_active_processes_from_parked(&mut kernel);
+
+        assert!(scheduler.parked_child_processes.is_empty());
+        let child_exit_count = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| {
+                record.op == "CreateProcessExited"
+                    && record.process_id == Some(launch.process_id)
+                    && record.thread_id == Some(launch.thread_id)
+            })
+            .count();
+        assert_eq!(child_exit_count, 1);
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.starts_with("parked_prune_exit"))
         }));
 
         Ok(())
