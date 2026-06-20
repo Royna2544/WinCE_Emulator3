@@ -851,10 +851,10 @@ fn run_cpu_loop(
                 continue;
             }
             if live_pump_slice && message_waiter {
-                if !should_run_active_visible_work_for_live_message_waiter(
+                if !should_run_active_receiver_work_for_live_message_waiter(
                     live_pump_slice,
                     message_waiter,
-                    cpu.active_process_has_visible_receiver_work(kernel),
+                    cpu.active_process_has_receiver_work(kernel),
                 ) {
                     if non_message_waiter {
                         reported_blocked_message_wait = false;
@@ -959,12 +959,12 @@ fn should_rotate_parked_process(
     ready_message_waiter || ready_live_wall_stop || ready_live_message_waiter
 }
 
-fn should_run_active_visible_work_for_live_message_waiter(
+fn should_run_active_receiver_work_for_live_message_waiter(
     live_pump_slice: bool,
     message_waiter: bool,
-    active_visible_receiver_work: bool,
+    active_receiver_work: bool,
 ) -> bool {
-    live_pump_slice && message_waiter && active_visible_receiver_work
+    live_pump_slice && message_waiter && active_receiver_work
 }
 
 fn host_idle_message_poll_slice(cpu: &UnicornMips, desktop: DesktopMode) -> bool {
@@ -4085,17 +4085,17 @@ mod tests {
     }
 
     #[test]
-    fn live_message_waiter_runs_active_visible_work_instead_of_idling() {
-        assert!(should_run_active_visible_work_for_live_message_waiter(
+    fn live_message_waiter_runs_active_receiver_work_instead_of_idling() {
+        assert!(should_run_active_receiver_work_for_live_message_waiter(
             true, true, true
         ));
-        assert!(!should_run_active_visible_work_for_live_message_waiter(
+        assert!(!should_run_active_receiver_work_for_live_message_waiter(
             true, true, false
         ));
-        assert!(!should_run_active_visible_work_for_live_message_waiter(
+        assert!(!should_run_active_receiver_work_for_live_message_waiter(
             true, false, true
         ));
-        assert!(!should_run_active_visible_work_for_live_message_waiter(
+        assert!(!should_run_active_receiver_work_for_live_message_waiter(
             false, true, true
         ));
     }
