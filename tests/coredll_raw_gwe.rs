@@ -1765,23 +1765,26 @@ fn coredll_raw_ext_escape_matches_ce_query_and_protected_escape_edges() -> Resul
         );
     }
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
-            ORD_EXT_ESCAPE,
-            [0x1234_5678, QUERYESCSUPPORT, 4, query_ptr, 0, 0],
-        ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::U32(0),
-            ..
-        }
-    ));
-    assert_eq!(
-        kernel.threads.get_last_error(thread_id),
-        ERROR_INVALID_HANDLE
-    );
+    for bad_hdc in [0, 0x1234_5678, 0x0000_0001] {
+        kernel.threads.set_last_error(thread_id, 0);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_EXT_ESCAPE,
+                [bad_hdc, QUERYESCSUPPORT, 4, query_ptr, 0, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
+    }
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

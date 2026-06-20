@@ -99,6 +99,10 @@ notes when it is still needed for implementation.
   `passNull2DC(ECreateCompatibleDC)` is now covered for the CE invalid-source
   HDC cases: `CreateCompatibleDC(NULL)` still creates a screen-compatible
   memory DC, while bad nonzero HDCs fail with `ERROR_INVALID_HANDLE`.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\dc.cpp`:
+  `passNull2DC(EExtEscape)` is now covered for `QUERYESCSUPPORT` invalid-HDC
+  edges: null and bad HDC inputs return unsupported and report
+  `ERROR_INVALID_PARAMETER`, matching CE's parameter-first validation.
 
 ## Active Roadmap
 

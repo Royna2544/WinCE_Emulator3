@@ -41016,7 +41016,14 @@ fn ext_escape_raw<M: CoredllGuestMemory>(
     let input_ptr = raw_arg(args, 3);
     let output_len = raw_arg(args, 4);
     let output_ptr = raw_arg(args, 5);
-    if !is_valid_hdc(kernel, hdc) {
+    let valid_hdc = is_valid_hdc(kernel, hdc);
+    if escape == QUERYESCSUPPORT && !valid_hdc {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return EXTESC_NOTSUPPORTED;
+    }
+    if !valid_hdc {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
