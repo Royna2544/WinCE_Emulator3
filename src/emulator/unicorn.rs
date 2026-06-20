@@ -3672,7 +3672,7 @@ impl UnicornMips {
             if Self::parked_process_handle_exit_code(&process, kernel).is_some() {
                 continue;
             }
-            if let Some(exit_code) = Self::parked_process_thread_exit_code(&process) {
+            if let Some(exit_code) = Self::parked_process_thread_exit_code(&process, kernel) {
                 kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                     op: "CreateProcessChildReturned",
                     application: process.application.clone(),
@@ -3752,7 +3752,10 @@ impl UnicornMips {
         if self.complete_saved_guest_thread_exit(kernel) {
             return false;
         }
-        if self.active_terminal_child_process_return_code().is_some() {
+        if self
+            .active_terminal_child_process_return_code(kernel)
+            .is_some()
+        {
             let _ = self.complete_active_terminal_child_process_return(kernel, framebuffer);
             return self.switch_to_next_parked_process(kernel, false);
         }
@@ -3893,7 +3896,7 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> Option<crate::ce::coredll::MessageBoxModalState> {
-        let Some(exit_code) = self.active_terminal_child_process_return_code() else {
+        let Some(exit_code) = self.active_terminal_child_process_return_code(kernel) else {
             return None;
         };
         let Some(launch) = Self::active_process_launch_from_trace(kernel) else {
@@ -3963,7 +3966,7 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn active_terminal_child_process_return_code(&self) -> Option<u32> {
+    fn active_terminal_child_process_return_code(&self, kernel: &CeKernel) -> Option<u32> {
         let snapshot = self.last_debug_snapshot()?;
         if snapshot.pc != GUEST_THREAD_RETURN_STUB_ADDR
             || self.active_process_has_resumable_context()
@@ -3974,10 +3977,22 @@ impl UnicornMips {
             || !self.blocked_wait_threads.is_empty()
             || self.blocked_send_message_timeout.is_some()
             || self.blocked_clipboard_data.is_some()
+            || Self::process_has_visible_windows(kernel, kernel.current_process_id())
         {
             return None;
         }
         Some(snapshot.v0)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn process_has_visible_windows(kernel: &CeKernel, process_id: u32) -> bool {
+        kernel.gwe.windows_snapshot().into_iter().any(|window| {
+            window.process_id == process_id
+                && window.visible
+                && !window.destroyed
+                && window.rect.width() > 0
+                && window.rect.height() > 0
+        })
     }
 
     #[cfg(feature = "unicorn")]
@@ -4010,20 +4025,23 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn parked_process_thread_exit_code(process: &ParkedProcess) -> Option<u32> {
+    fn parked_process_thread_exit_code(process: &ParkedProcess, kernel: &CeKernel) -> Option<u32> {
         if process.cpu.blocked_modal_message_box.is_some() {
             return None;
         }
         process.cpu.last_debug_snapshot().and_then(|snapshot| {
             (snapshot.thread_exit_reached || snapshot.pc == THREAD_EXIT_STUB_ADDR)
                 .then_some(snapshot.v0)
-                .or_else(|| Self::parked_child_process_terminal_return_code(process, snapshot.pc))
+                .or_else(|| {
+                    Self::parked_child_process_terminal_return_code(process, kernel, snapshot.pc)
+                })
         })
     }
 
     #[cfg(feature = "unicorn")]
     fn parked_child_process_terminal_return_code(
         process: &ParkedProcess,
+        kernel: &CeKernel,
         snapshot_pc: u32,
     ) -> Option<u32> {
         if snapshot_pc != GUEST_THREAD_RETURN_STUB_ADDR
@@ -4037,6 +4055,7 @@ impl UnicornMips {
             || process.cpu.blocked_send_message_timeout.is_some()
             || process.cpu.blocked_clipboard_data.is_some()
             || process.blocked_send_id.is_some()
+            || Self::process_has_visible_windows(kernel, process.process_state.process_id)
         {
             return None;
         }
@@ -11010,7 +11029,7 @@ fn run_pending_process_launches<D>(
                         })
                         .or_else(|| {
                             child
-                                .active_terminal_child_process_return_code()
+                                .active_terminal_child_process_return_code(kernel)
                                 .map(ChildProcessRunOutcome::Exited)
                         })
                 })
@@ -28824,7 +28843,7 @@ mod guest_thread_stack_tests {
         let mut parked = parked_process_for_cpu(thread_id, cpu);
 
         assert_eq!(
-            UnicornMips::parked_process_thread_exit_code(&parked),
+            UnicornMips::parked_process_thread_exit_code(&parked, &kernel),
             Some(0x1234)
         );
 
@@ -28846,7 +28865,10 @@ mod guest_thread_stack_tests {
             modal_state,
         });
 
-        assert_eq!(UnicornMips::parked_process_thread_exit_code(&parked), None);
+        assert_eq!(
+            UnicornMips::parked_process_thread_exit_code(&parked, &kernel),
+            None
+        );
         assert!(UnicornMips::active_matching_parked_process_should_remain(
             &parked
         ));
@@ -28875,7 +28897,29 @@ mod guest_thread_stack_tests {
             ..Default::default()
         });
 
-        assert_eq!(cpu.active_terminal_child_process_return_code(), Some(0));
+        assert_eq!(
+            cpu.active_terminal_child_process_return_code(&kernel),
+            Some(0)
+        );
+
+        let hwnd = kernel.gwe.create_window_ex_with_process_and_rect(
+            thread_id,
+            kernel.current_process_id(),
+            "VISIBLE",
+            "live",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 320, 240),
+        );
+        assert_ne!(hwnd, 0);
+        assert_eq!(cpu.active_terminal_child_process_return_code(&kernel), None);
+        assert!(kernel.gwe.show_window(hwnd, false));
+        assert_eq!(
+            cpu.active_terminal_child_process_return_code(&kernel),
+            Some(0)
+        );
 
         let modal_state = crate::ce::coredll::message_box_w_prepare(
             &mut kernel,
@@ -28895,7 +28939,7 @@ mod guest_thread_stack_tests {
             modal_state,
         });
 
-        assert_eq!(cpu.active_terminal_child_process_return_code(), None);
+        assert_eq!(cpu.active_terminal_child_process_return_code(&kernel), None);
         Ok(())
     }
 
