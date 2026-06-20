@@ -8350,21 +8350,40 @@ impl CeKernel {
                 });
                 continue;
             };
+            let Some((target_thread_id, _)) = self.gwe.window_thread_process_id(key_target) else {
+                details.push(format!(
+                    "drop:key=0x{:02x}/msg=0x{:04x}/hwnd=0x{key_target:08x}",
+                    event.vk, event.message
+                ));
+                self.record_message_trace(MessageTraceRecord {
+                    op: "remote_key_drop",
+                    thread_id,
+                    hwnd: Some(key_target),
+                    msg: Some(event.message),
+                    wparam: Some(event.vk),
+                    lparam: Some(1),
+                    screen_pos: None,
+                    source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
+                    result: Some(0),
+                    detail: Some("no target window owner".to_owned()),
+                });
+                continue;
+            };
             self.post_gwe_message(
-                thread_id,
+                target_thread_id,
                 Message::new(key_target, event.message, event.vk, 1, time_ms)
                     .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
             );
-            if !target_thread_ids.contains(&thread_id) {
-                target_thread_ids.push(thread_id);
+            if !target_thread_ids.contains(&target_thread_id) {
+                target_thread_ids.push(target_thread_id);
             }
             details.push(format!(
-                "key:hwnd=0x{key_target:08x}/thread={thread_id}/msg=0x{:04x}/vk=0x{:02x}",
+                "key:hwnd=0x{key_target:08x}/thread={target_thread_id}/msg=0x{:04x}/vk=0x{:02x}",
                 event.message, event.vk
             ));
             self.record_message_trace(MessageTraceRecord {
                 op: "remote_key_target",
-                thread_id,
+                thread_id: target_thread_id,
                 hwnd: Some(key_target),
                 msg: Some(event.message),
                 wparam: Some(event.vk),
@@ -8372,7 +8391,8 @@ impl CeKernel {
                 screen_pos: None,
                 source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
                 result: Some(1),
-                detail: None,
+                detail: (target_thread_id != thread_id)
+                    .then(|| format!("drain_thread={thread_id}")),
             });
             posted += 1;
         }
@@ -9606,6 +9626,52 @@ mod tests {
             .copied()
             .expect("blocked target receives mouse up");
         assert!(up.2 > down.2);
+        Ok(())
+    }
+
+    #[test]
+    fn remote_key_input_posts_to_window_owner_thread() -> Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let owner_thread_id = 1;
+        let draining_thread_id = 2;
+        let owned = kernel.create_window_ex_w(owner_thread_id, "OWNER", "", None, 0, 0, 0);
+        let helper = kernel.create_window_ex_w(draining_thread_id, "HELPER", "", None, 0, 0, 0);
+        assert!(kernel.gwe.is_window(helper));
+        while kernel.gwe.get_message(owner_thread_id).is_some() {}
+        while kernel.gwe.get_message(draining_thread_id).is_some() {}
+
+        kernel.remote.enqueue_key("down", 0x0d).unwrap();
+
+        assert_eq!(
+            kernel.drain_remote_input_to_thread_window(draining_thread_id, Some(owned)),
+            1
+        );
+
+        let owner_message = kernel
+            .gwe
+            .peek_message_filtered(
+                owner_thread_id,
+                Some(owned),
+                crate::ce::gwe::WM_KEYDOWN,
+                crate::ce::gwe::WM_KEYDOWN,
+                PeekFlags::REMOVE,
+            )
+            .expect("window owner receives remote key");
+        assert_eq!(owner_message.hwnd, owned);
+        assert_eq!(owner_message.wparam, 0x0d);
+        assert!(
+            kernel
+                .gwe
+                .peek_message_filtered(
+                    draining_thread_id,
+                    Some(owned),
+                    crate::ce::gwe::WM_KEYDOWN,
+                    crate::ce::gwe::WM_KEYDOWN,
+                    PeekFlags::REMOVE,
+                )
+                .is_none()
+        );
         Ok(())
     }
 
