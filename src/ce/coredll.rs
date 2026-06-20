@@ -3425,11 +3425,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_AFS_NOTIFY_MOUNTED_FS => {
-            // AFS_NotifyMountedFS(pvMount, pfnNotify) — register mount notification. No-op.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_AFS_NOTIFY_MOUNTED_FS => Some(CoredllValue::Bool(afs_notify_mounted_fs_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_AFS_REGISTER_FILE_SYSTEM_FUNCTION => Some(CoredllValue::Bool(
             afs_register_file_system_function_raw(kernel, thread_id, args),
         )),
@@ -17267,6 +17265,12 @@ fn afs_register_file_system_function_raw(
     args: &[u32],
 ) -> bool {
     let status = kernel.register_afs_file_system_function(raw_arg(args, 0), raw_arg(args, 1));
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
+}
+
+fn afs_notify_mounted_fs_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let status = kernel.notify_afs_mounted_fs(raw_arg(args, 0), raw_arg(args, 1));
     kernel.threads.set_last_error(thread_id, status);
     status == 0
 }

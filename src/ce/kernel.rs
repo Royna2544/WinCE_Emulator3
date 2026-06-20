@@ -289,6 +289,7 @@ pub struct CeKernel {
     next_afs_mount_index: u32,
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
     afs_file_system_functions: BTreeMap<u32, u32>,
+    afs_mounted_fs_notifications: BTreeMap<u32, Vec<u32>>,
     next_fsdmgr_volume_lock: u32,
     file_system_notification_callback: Option<u32>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
@@ -1129,6 +1130,7 @@ impl CeKernel {
             next_afs_mount_index: FIRST_USER_AFS_INDEX,
             fsdmgr_volume_locks: BTreeMap::new(),
             afs_file_system_functions: BTreeMap::new(),
+            afs_mounted_fs_notifications: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             file_system_notification_callback: None,
             modal_dialog_results: BTreeMap::new(),
@@ -3124,6 +3126,7 @@ impl CeKernel {
         self.fsdmgr_volume_locks
             .retain(|_, volume_lock| volume_lock.volume_handle != volume_handle);
         self.afs_file_system_functions.remove(&volume_handle);
+        self.afs_mounted_fs_notifications.remove(&volume_handle);
     }
 
     fn drop_fsdmgr_volume_locks_for_guest_root(&mut self, guest_root: &str) {
@@ -3143,6 +3146,7 @@ impl CeKernel {
             .retain(|_, volume_lock| !volume_handles.contains(&volume_lock.volume_handle));
         for volume_handle in volume_handles {
             self.afs_file_system_functions.remove(&volume_handle);
+            self.afs_mounted_fs_notifications.remove(&volume_handle);
         }
     }
 
@@ -3164,6 +3168,27 @@ impl CeKernel {
 
     pub fn afs_file_system_function(&self, volume_handle: u32) -> Option<u32> {
         self.afs_file_system_functions.get(&volume_handle).copied()
+    }
+
+    pub fn notify_afs_mounted_fs(&mut self, volume_handle: u32, flags: u32) -> u32 {
+        match self.volume_root_for_handle(volume_handle) {
+            Ok(_) => {
+                self.afs_mounted_fs_notifications
+                    .entry(volume_handle)
+                    .or_default()
+                    .push(flags);
+                ERROR_SUCCESS
+            }
+            Err(Error::AccessDenied(_)) => ERROR_ACCESS_DENIED,
+            Err(_) => ERROR_INVALID_HANDLE,
+        }
+    }
+
+    pub fn afs_mounted_fs_notifications(&self, volume_handle: u32) -> &[u32] {
+        self.afs_mounted_fs_notifications
+            .get(&volume_handle)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub fn fsdmgr_create_cache(&mut self, disk_ptr: u32, block_size: u32) -> Option<u32> {

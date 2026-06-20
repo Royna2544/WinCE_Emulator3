@@ -134,6 +134,14 @@ notes when it is still needed for implementation.
   volumes instead of discarding it as a no-op. Coverage verifies registration,
   replacement, clearing by zero, invalid-handle failure, cross-process access
   denial, and cleanup when the volume handle closes.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdmain.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\extfile.h`: raw `AFS_NotifyMountedFS`
+  now validates mounted volume handles and records forwarded power/device
+  notification flags for host-backed volumes instead of silently discarding the
+  call. Coverage verifies power-on/off/device flags, repeated notifications,
+  invalid-handle failure, cross-process access denial, and cleanup when the
+  volume handle closes.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: raw StoreMgr
@@ -601,7 +609,9 @@ notes when it is still needed for implementation.
   messages without forcing a guest callout. Coverage reproduces the hidden
   iSearch wait to visible iNavi handoff, verifies process/thread/module state
   after rotation, and checks stale child-thread recovery for mapped MFC
-  wndprocs.
+  wndprocs. Host-wall-clock live-pump stops now also rotate to runnable parked
+  processes even when no message waiter or priority wait is present, preventing
+  visible runnable work from being stranded behind the active process.
 
 ## Active Roadmap
 
