@@ -3802,12 +3802,14 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const FSD_DISK_INFO_SIZE: u32 = 24;
     const STORAGE_DEVICE_INFO_SIZE: u32 = 80;
     const DISK_IOCTL_INITIALIZED: u32 = 4;
+    const DISK_IOCTL_SETINFO: u32 = 5;
     const DISK_IOCTL_WRITE: u32 = 3;
     const DISK_IOCTL_GETNAME: u32 = 9;
     const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
     const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
     const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
     const IOCTL_DISK_GETINFO: u32 = 0x0007_1c00;
+    const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
     const IOCTL_DISK_READ: u32 = 0x0007_4008;
     const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
     const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
@@ -4008,6 +4010,12 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         assert_eq!(read_le_u32(&info, 16), 128 * 1024 * 1024 / 512);
         assert_eq!(read_le_u32(&info, 20), 0);
     };
+    let assert_disk_info_words = |memory: &TestGuestMemory, expected: [u32; 6]| {
+        let info = memory.read_bytes(disk_info_ptr, FSD_DISK_INFO_SIZE as usize);
+        for (index, value) in expected.into_iter().enumerate() {
+            assert_eq!(read_le_u32(&info, index * 4), value);
+        }
+    };
     let assert_sd_storage_device_info = |memory: &TestGuestMemory| {
         let info = memory.read_bytes(storage_device_info_ptr, STORAGE_DEVICE_INFO_SIZE as usize);
         assert_eq!(read_le_u32(&info, 0), STORAGE_DEVICE_INFO_SIZE);
@@ -4100,6 +4108,130 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, FSD_DISK_INFO_SIZE);
     assert_sd_disk_info(&memory);
+
+    let custom_disk_info = [0x1234, 1024, 2, 4, 8, 0x0000_0004];
+    for (index, value) in custom_disk_info.into_iter().enumerate() {
+        memory.write_word(disk_info_ptr + index as u32 * 4, value);
+    }
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                DISK_IOCTL_SETINFO,
+                disk_info_ptr,
+                FSD_DISK_INFO_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_bytes(disk_info_ptr, &[0xa5; FSD_DISK_INFO_SIZE as usize]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_GETINFO,
+                disk_info_ptr,
+                FSD_DISK_INFO_SIZE,
+                disk_info_ptr,
+                FSD_DISK_INFO_SIZE,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, FSD_DISK_INFO_SIZE);
+    assert_disk_info_words(&memory, custom_disk_info);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_SETINFO,
+                disk_info_ptr,
+                FSD_DISK_INFO_SIZE - 4,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_face);
+
+    let original_disk_info = [
+        128 * 1024 * 1024 / 512,
+        512,
+        1,
+        1,
+        128 * 1024 * 1024 / 512,
+        0,
+    ];
+    for (index, value) in original_disk_info.into_iter().enumerate() {
+        memory.write_word(disk_info_ptr + index as u32 * 4, value);
+    }
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_SETINFO,
+                disk_info_ptr,
+                FSD_DISK_INFO_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
     memory.write_bytes(
         storage_device_info_ptr,

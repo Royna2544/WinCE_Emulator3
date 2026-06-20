@@ -3610,6 +3610,10 @@ impl CeKernel {
         ])
     }
 
+    pub fn fsdmgr_disk_info_override(&self, disk_ptr: u32) -> Option<[u32; 6]> {
+        self.fsdmgr_disk_info_overrides.get(&disk_ptr).copied()
+    }
+
     pub fn fsdmgr_set_disk_info(&mut self, disk_ptr: u32, info: [u32; 6]) -> u32 {
         if disk_ptr == 0 {
             return ERROR_INVALID_PARAMETER;

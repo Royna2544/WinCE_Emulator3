@@ -24349,6 +24349,21 @@ fn store_or_partition_disk_sg_io_raw<M: CoredllGuestMemory>(
     write_optional_count(kernel, memory, thread_id, returned_ptr, 0)
 }
 
+fn store_or_partition_disk_set_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    info_ptr: u32,
+    info_bytes: u32,
+    returned_ptr: u32,
+) -> bool {
+    if !fsdmgr_disk_set_info_raw(kernel, memory, thread_id, disk_ptr, info_ptr, info_bytes) {
+        return false;
+    }
+    write_optional_count(kernel, memory, thread_id, returned_ptr, 0)
+}
+
 fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -24369,6 +24384,8 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_READ
             | DISK_IOCTL_WRITE
             | IOCTL_DISK_WRITE
+            | DISK_IOCTL_SETINFO
+            | IOCTL_DISK_SETINFO
             | DISK_IOCTL_GETNAME
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
@@ -24398,6 +24415,7 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             kernel,
             memory,
             thread_id,
+            disk_ptr,
             &info,
             if output_ptr != 0 {
                 output_ptr
@@ -24409,6 +24427,15 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             } else {
                 input_len
             },
+            returned_ptr,
+        ),
+        DISK_IOCTL_SETINFO | IOCTL_DISK_SETINFO => store_or_partition_disk_set_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            input_ptr,
+            input_len,
             returned_ptr,
         ),
         DISK_IOCTL_READ | IOCTL_DISK_READ => store_or_partition_disk_sg_io_raw(
@@ -24535,18 +24562,29 @@ fn store_disk_info_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,
+    disk_ptr: u32,
     info: &StoreManagerInfo,
     out_ptr: u32,
     out_len: u32,
     returned_ptr: u32,
 ) -> bool {
+    if let Some(info) = kernel.fsdmgr_disk_info_override(disk_ptr) {
+        return write_fsd_disk_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            info,
+            out_ptr,
+            out_len,
+            returned_ptr,
+        );
+    }
     let sectors = (info.total_bytes / STORE_SECTOR_SIZE as u64).min(u32::MAX as u64) as u32;
     write_fsd_disk_info_raw(
         kernel,
         memory,
         thread_id,
-        sectors,
-        info.writable,
+        default_fsd_disk_info(sectors, info.writable),
         out_ptr,
         out_len,
         returned_ptr,
@@ -24609,6 +24647,8 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_READ
             | DISK_IOCTL_WRITE
             | IOCTL_DISK_WRITE
+            | DISK_IOCTL_SETINFO
+            | IOCTL_DISK_SETINFO
             | DISK_IOCTL_GETNAME
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
@@ -24643,6 +24683,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             kernel,
             memory,
             thread_id,
+            disk_ptr,
             &info,
             if output_ptr != 0 {
                 output_ptr
@@ -24654,6 +24695,15 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             } else {
                 input_len
             },
+            returned_ptr,
+        ),
+        DISK_IOCTL_SETINFO | IOCTL_DISK_SETINFO => store_or_partition_disk_set_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            input_ptr,
+            input_len,
             returned_ptr,
         ),
         DISK_IOCTL_READ | IOCTL_DISK_READ => store_or_partition_disk_sg_io_raw(
@@ -25020,30 +25070,51 @@ fn partition_disk_info_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,
+    disk_ptr: u32,
     info: &PartitionManagerInfo,
     out_ptr: u32,
     out_len: u32,
     returned_ptr: u32,
 ) -> bool {
+    if let Some(info) = kernel.fsdmgr_disk_info_override(disk_ptr) {
+        return write_fsd_disk_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            info,
+            out_ptr,
+            out_len,
+            returned_ptr,
+        );
+    }
     let sectors = (info.total_bytes / STORE_SECTOR_SIZE as u64).min(u32::MAX as u64) as u32;
     write_fsd_disk_info_raw(
         kernel,
         memory,
         thread_id,
-        sectors,
-        info.writable,
+        default_fsd_disk_info(sectors, info.writable),
         out_ptr,
         out_len,
         returned_ptr,
     )
 }
 
+fn default_fsd_disk_info(sectors: u32, writable: bool) -> [u32; 6] {
+    [
+        sectors,
+        STORE_SECTOR_SIZE,
+        1,
+        1,
+        sectors,
+        if writable { 0 } else { FDI_READONLY },
+    ]
+}
+
 fn write_fsd_disk_info_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,
-    sectors: u32,
-    writable: bool,
+    info: [u32; 6],
     out_ptr: u32,
     out_len: u32,
     returned_ptr: u32,
@@ -25055,12 +25126,9 @@ fn write_fsd_disk_info_raw<M: CoredllGuestMemory>(
         return false;
     }
     let mut bytes = Vec::with_capacity(FSD_DISK_INFO_SIZE as usize);
-    append_store_dword(&mut bytes, sectors);
-    append_store_dword(&mut bytes, STORE_SECTOR_SIZE);
-    append_store_dword(&mut bytes, 1);
-    append_store_dword(&mut bytes, 1);
-    append_store_dword(&mut bytes, sectors);
-    append_store_dword(&mut bytes, if writable { 0 } else { FDI_READONLY });
+    for value in info {
+        append_store_dword(&mut bytes, value);
+    }
     debug_assert_eq!(bytes.len(), FSD_DISK_INFO_SIZE as usize);
     if !write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes) {
         return false;

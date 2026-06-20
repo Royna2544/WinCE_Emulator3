@@ -803,6 +803,12 @@ notes when it is still needed for implementation.
   through the opened partition handle, scatter-gather splitting, shared
   mounted-store identity, request status updates, zero byte-counts, and invalid
   SG request rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdmgrapi.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: mounted store and partition
+  `DeviceIoControl(DISK_IOCTL_SETINFO/IOCTL_DISK_SETINFO)` now accepts the CE
+  `DISK_INFO` packet and updates the synthetic disk metadata returned by later
+  `GETINFO` calls, while short packets fail with `ERROR_INVALID_PARAMETER`
+  without touching byte-count storage.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\NOTIFY\fsnotify.cpp`: raw
   `GetEventData`/`SetEventData` now preserve the CE event `dwData` payload
