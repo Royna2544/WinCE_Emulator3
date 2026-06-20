@@ -10,7 +10,7 @@ use wince_emulation_v3::{
             ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
             ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE,
             ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DESTROY_ICON,
+            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON,
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
             ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
             ORD_ENUM_DEVICE_INTERFACES, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W,
@@ -41,7 +41,7 @@ use wince_emulation_v3::{
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
-            ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_IMAGE_W,
+            ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_CURSOR_W, ORD_LOAD_IMAGE_W,
             ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
             ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
             ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_OPEN_MSG_QUEUE, ORD_PEEK_MESSAGE_W,
@@ -7729,6 +7729,117 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_load_cursor_w_resolves_resource_cursor_payload_like_ce() -> Result<()> {
+    const RT_CURSOR: u32 = 1;
+    const RT_GROUP_CURSOR: u32 = 12;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+    let module = 0x0040_0000;
+
+    let cursor_dib = icon_dib_32bpp(16, 16, 0x40);
+    let cursor_payload = rt_cursor_resource(4, 5, &cursor_dib);
+    let group = rt_group_cursor_resource(&[(16, 16, 4, 5, cursor_payload.len() as u32, 201)]);
+    let group_ptr = 0x2_8000;
+    let cursor_ptr = 0x2_8100;
+    let icon_info_ptr = 0x2_9000;
+    memory.map_bytes(group_ptr, group.len() as u32);
+    memory.map_bytes(cursor_ptr, cursor_payload.len() as u32);
+    memory.map_words(icon_info_ptr, 5);
+    memory.write_bytes(group_ptr, &group);
+    memory.write_bytes(cursor_ptr, &cursor_payload);
+    let group_handle = kernel.resources.register(
+        module,
+        ResourceId::Integer(88),
+        ResourceId::Integer(RT_GROUP_CURSOR as u16),
+        group_ptr,
+        group.len() as u32,
+    );
+    kernel.resources.register(
+        module,
+        ResourceId::Integer(201),
+        ResourceId::Integer(RT_CURSOR as u16),
+        cursor_ptr,
+        cursor_payload.len() as u32,
+    );
+
+    let cursor = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_CURSOR_W,
+        [module, 88],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(cursor),
+            ..
+        } => cursor,
+        other => panic!("LoadCursorW(resource cursor) returned unexpected result: {other:?}"),
+    };
+    assert_ne!(cursor, 0);
+    assert_ne!(
+        cursor, group_handle,
+        "CE LoadCursorW resolves RT_GROUP_CURSOR to an RT_CURSOR payload"
+    );
+    let cursor_object = kernel
+        .resources
+        .icon(cursor)
+        .expect("resource cursor should be an icon-pool object");
+    assert!(!cursor_object.is_icon);
+    assert_eq!((cursor_object.x_hotspot, cursor_object.y_hotspot), (4, 5));
+    let color_bitmap = kernel
+        .resources
+        .bitmap(cursor_object.color_bitmap)
+        .expect("resource cursor color bitmap");
+    assert_eq!((color_bitmap.width, color_bitmap.height), (16, 16));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ICON_INFO,
+            [cursor, icon_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(icon_info_ptr)?, 0);
+    assert_eq!(memory.read_u32(icon_info_ptr + 4)?, 4);
+    assert_eq!(memory.read_u32(icon_info_ptr + 8)?, 5);
+    let mask_bitmap = memory.read_u32(icon_info_ptr + 12)?;
+    let color_bitmap = memory.read_u32(icon_info_ptr + 16)?;
+    assert_ne!(mask_bitmap, 0);
+    assert_ne!(color_bitmap, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DESTROY_CURSOR,
+            [cursor],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.icon(cursor).is_none());
+    assert!(kernel.resources.bitmap(mask_bitmap).is_none());
+    assert!(kernel.resources.bitmap(color_bitmap).is_none());
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_load_image_w_selects_requested_icon_resource_size_like_ce() -> Result<()> {
     const IMAGE_ICON: u32 = 1;
     const RT_ICON: u32 = 3;
@@ -8233,6 +8344,35 @@ fn rt_group_icon_resource(entries: &[(u8, u8, u16, u32, u16)]) -> Vec<u8> {
         put_test_u32(&mut bytes, entry + 8, bytes_in_resource);
         put_test_u16(&mut bytes, entry + 12, id);
     }
+    bytes
+}
+
+fn rt_group_cursor_resource(entries: &[(u8, u8, u16, u16, u32, u16)]) -> Vec<u8> {
+    let mut bytes = vec![0; 6 + entries.len() * 14];
+    put_test_u16(&mut bytes, 0, 0);
+    put_test_u16(&mut bytes, 2, 2);
+    put_test_u16(&mut bytes, 4, entries.len() as u16);
+    for (index, (width, height, hotspot_x, hotspot_y, bytes_in_resource, id)) in
+        entries.iter().copied().enumerate()
+    {
+        let entry = 6 + index * 14;
+        bytes[entry] = width;
+        bytes[entry + 1] = height;
+        bytes[entry + 2] = 0;
+        bytes[entry + 3] = 0;
+        put_test_u16(&mut bytes, entry + 4, hotspot_x);
+        put_test_u16(&mut bytes, entry + 6, hotspot_y);
+        put_test_u32(&mut bytes, entry + 8, bytes_in_resource);
+        put_test_u16(&mut bytes, entry + 12, id);
+    }
+    bytes
+}
+
+fn rt_cursor_resource(hotspot_x: u16, hotspot_y: u16, dib: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(4 + dib.len());
+    bytes.extend_from_slice(&hotspot_x.to_le_bytes());
+    bytes.extend_from_slice(&hotspot_y.to_le_bytes());
+    bytes.extend_from_slice(dib);
     bytes
 }
 

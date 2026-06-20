@@ -166,6 +166,11 @@ notes when it is still needed for implementation.
   callers rely on `LoadImageW(IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR)` selecting
   a concrete RT_ICON image from an RT_GROUP_ICON; raw `LoadImageW` now resolves
   module icon groups into bitmap-backed HICON objects for the requested size.
+- `C:\WINCE600\PUBLIC\SHELL\OAK\OWNERDRAWLIB\odapp.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\WTL\INCLUDE\atlmisc.h`: module cursor
+  resources loaded by `LoadCursorW`/`LoadImageW(IMAGE_CURSOR)` now resolve
+  RT_GROUP_CURSOR entries into real cursor objects with RT_CURSOR bitmaps and
+  `GetIconInfo` hotspot metadata instead of returning the group resource handle.
 
 ## Active Roadmap
 
