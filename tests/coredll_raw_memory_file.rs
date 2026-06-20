@@ -24,27 +24,29 @@ use wince_emulation_v3::{
             ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM,
             ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION,
             ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH,
-            ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_CLOSE_STORE,
-            ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W, ORD_FIND_FIRST_STORE,
-            ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FIND_NEXT_STORE,
-            ORD_FLOOR, ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE,
-            ORD_FLUSH_VIEW_OF_FILE_MAYBE, ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FPADD, ORD_FPCMP,
-            ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP, ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD,
-            ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES, ORD_GET_COMM_MODEM_STATUS,
-            ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W,
-            ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
-            ORD_GET_OBJECT_W, ORD_GET_PROCESS_HEAP, ORD_GET_STORE_INFO, ORD_GET_VERSION_EX,
-            ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
-            ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE, ORD_HEAP_VALIDATE, ORD_HYPOT,
-            ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE,
-            ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE,
-            ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT,
-            ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC,
-            ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
-            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
-            ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
-            ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_NED, ORD_NES, ORD_OPEN_STORE, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
+            ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
+            ORD_FIND_CLOSE_PARTITION, ORD_FIND_CLOSE_STORE, ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
+            ORD_FIND_FIRST_FILE_W, ORD_FIND_FIRST_PARTITION, ORD_FIND_FIRST_STORE,
+            ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FIND_NEXT_PARTITION,
+            ORD_FIND_NEXT_STORE, ORD_FLOOR, ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE,
+            ORD_FLUSH_VIEW_OF_FILE, ORD_FLUSH_VIEW_OF_FILE_MAYBE, ORD_FMOD, ORD_FMODF, ORD_FOPEN,
+            ORD_FPADD, ORD_FPCMP, ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP, ORD_FPTOLI,
+            ORD_FPTOUL, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES,
+            ORD_GET_COMM_MODEM_STATUS, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W,
+            ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE,
+            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W, ORD_GET_PARTITION_INFO,
+            ORD_GET_PROCESS_HEAP, ORD_GET_STORE_INFO, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS,
+            ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC,
+            ORD_HEAP_SIZE, ORD_HEAP_VALIDATE, ORD_HYPOT, ORD_INTERLOCKED_DECREMENT,
+            ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR,
+            ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED,
+            ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM,
+            ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS,
+            ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
+            ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX, ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC,
+            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W,
+            ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES, ORD_OPEN_PARTITION,
+            ORD_OPEN_STORE, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
             ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY,
             ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND, ORD_READ_FILE,
             ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W,
@@ -3790,10 +3792,12 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
 #[test]
 fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const STORE_INFO_SIZE: u32 = 232;
+    const PARTITION_INFO_SIZE: u32 = 296;
     const STORAGE_DEVICE_INFO_SIZE: u32 = 80;
     const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
     const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
     const STORE_ATTRIBUTE_AUTOMOUNT: u32 = 0x0000_0020;
+    const PARTITION_ATTRIBUTE_MOUNTED: u32 = 0x0000_0010;
     const STORAGE_DEVICE_CLASS_BLOCK: u32 = 0x0000_0001;
     const STORAGE_DEVICE_TYPE_FLASH: u32 = 1 << 1;
     const STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE: u32 = 1 << 30;
@@ -3848,8 +3852,10 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     let thread_id = 11;
     let name_ptr = 0x1_0000;
     let info_ptr = 0x3020_0000;
+    let partition_info_ptr = 0x3021_0000;
     memory.map_halfwords(name_ptr, 32);
     memory.map_bytes(info_ptr, STORE_INFO_SIZE);
+    memory.map_bytes(partition_info_ptr, PARTITION_INFO_SIZE);
 
     let read_le_u32 = |bytes: &[u8], offset: usize| -> u32 {
         u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("DWORD"))
@@ -3890,6 +3896,18 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         );
         assert_eq!(read_le_u32(&info, 224), 1);
         assert_eq!(read_le_u32(&info, 228), 1);
+    };
+    let assert_sd_partition = |memory: &TestGuestMemory| {
+        let info = memory.read_bytes(partition_info_ptr, PARTITION_INFO_SIZE as usize);
+        assert_eq!(read_le_u32(&info, 0), PARTITION_INFO_SIZE);
+        assert_eq!(read_fixed_wide(&info, 4, 32), "SDMMC Disk");
+        assert_eq!(read_fixed_wide(&info, 68, 32), "FATFS");
+        assert_eq!(read_fixed_wide(&info, 132, 64), "SDMMC Disk");
+        assert_eq!(read_le_u64(&info, 260), 128 * 1024 * 1024 / 512);
+        assert_eq!(read_le_u64(&info, 268), 0);
+        assert_eq!(read_le_u64(&info, 276), 0);
+        assert_eq!(read_le_u32(&info, 284), PARTITION_ATTRIBUTE_MOUNTED);
+        assert_eq!(info[288], 0x04);
     };
     let assert_flash_store = |memory: &TestGuestMemory| {
         let info = memory.read_bytes(info_ptr, STORE_INFO_SIZE as usize);
@@ -3937,6 +3955,124 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         }
     ));
     assert_sd_store(&memory);
+
+    memory.write_wide_z(name_ptr, "SDMMC Disk");
+    let partition_handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_OPEN_PARTITION,
+        [store_handle, name_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("OpenPartition returned {other:?}"),
+    };
+    assert_ne!(partition_handle, INVALID_HANDLE_VALUE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PARTITION_INFO,
+            [partition_handle, partition_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_sd_partition(&memory);
+
+    let partition_search_handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_PARTITION,
+        [store_handle, partition_info_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstPartition returned {other:?}"),
+    };
+    assert_ne!(partition_search_handle, INVALID_HANDLE_VALUE);
+    assert_sd_partition(&memory);
+
+    memory.write_bytes(partition_info_ptr, &[0xa5; PARTITION_INFO_SIZE as usize]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_PARTITION,
+            [partition_search_handle, partition_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_ITEMS
+    );
+    assert_eq!(
+        memory.read_bytes(partition_info_ptr, PARTITION_INFO_SIZE as usize),
+        vec![0xa5; PARTITION_INFO_SIZE as usize]
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE_PARTITION,
+            [partition_search_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE_PARTITION,
+            [partition_search_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    memory.write_wide_z(name_ptr, "MissingPartition");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_PARTITION,
+            [store_handle, name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(INVALID_HANDLE_VALUE),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
 
     memory.write_wide_z(name_ptr, r"\DSK1:");
     let slash_store_handle = match table.dispatch_raw_ordinal_with_memory(
@@ -4038,7 +4174,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_HANDLE
     );
-    for handle in [store_handle, slash_store_handle] {
+    for handle in [store_handle, slash_store_handle, partition_handle] {
         assert!(matches!(
             table.dispatch_raw_ordinal_with_memory(
                 &mut kernel,

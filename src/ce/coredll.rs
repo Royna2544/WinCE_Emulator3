@@ -16,7 +16,7 @@ use crate::{
         file::{
             CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
             FILE_ATTRIBUTE_SYSTEM, FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FileLockStatus,
-            FindData, GENERIC_WRITE, StoreManagerInfo, VolumeInfo,
+            FindData, GENERIC_WRITE, PartitionManagerInfo, StoreManagerInfo, VolumeInfo,
         },
         framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, PixelFormat},
         gwe::{
@@ -40,9 +40,10 @@ use crate::{
         },
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
-            CriticalSectionObject, FileMappingView, KernelObject, PowerNotificationObject,
-            PowerRelationshipObject, PowerRequirementObject, StoreObject, StoreSearchObject,
-            ThreadResumeResult, ThreadSuspendResult,
+            CriticalSectionObject, FileMappingView, KernelObject, PartitionObject,
+            PartitionSearchObject, PowerNotificationObject, PowerRelationshipObject,
+            PowerRequirementObject, StoreObject, StoreSearchObject, ThreadResumeResult,
+            ThreadSuspendResult,
         },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, HKey,
@@ -214,6 +215,13 @@ const STORE_SECTOR_SIZE: u32 = 512;
 const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
 const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
 const STORE_ATTRIBUTE_AUTOMOUNT: u32 = 0x0000_0020;
+const PARTITION_INFO_SIZE: u32 = 296;
+const PARTITION_NAME_CHARS: usize = 32;
+const PARTITION_FILESYS_NAME_CHARS: usize = 32;
+const PARTITION_VOLUME_NAME_CHARS: usize = 64;
+const PARTITION_ATTRIBUTE_READONLY: u32 = 0x0000_0002;
+const PARTITION_ATTRIBUTE_MOUNTED: u32 = 0x0000_0010;
+const PARTITION_TYPE_FAT16: u32 = 0x04;
 const STORAGE_DEVICE_CLASS_BLOCK: u32 = 0x0000_0001;
 const STORAGE_DEVICE_TYPE_FLASH: u32 = 1 << 1;
 const STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE: u32 = 1 << 30;
@@ -2103,6 +2111,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, thread_id, args,
         ))),
         ORD_GET_STORE_INFO => Some(CoredllValue::Bool(get_store_info_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_OPEN_PARTITION => Some(CoredllValue::Handle(open_partition_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_FIND_FIRST_PARTITION => Some(CoredllValue::Handle(find_first_partition_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_FIND_NEXT_PARTITION => Some(CoredllValue::Bool(find_next_partition_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_FIND_CLOSE_PARTITION => Some(CoredllValue::Bool(find_close_partition_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_GET_PARTITION_INFO => Some(CoredllValue::Bool(get_partition_info_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_GET_DISK_FREE_SPACE_EX_W => Some(CoredllValue::Bool(get_disk_free_space_ex_w_raw(
@@ -10403,6 +10426,206 @@ fn get_store_info_raw<M: CoredllGuestMemory>(
     true
 }
 
+fn open_partition_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let store_handle = raw_arg(args, 0);
+    let name_ptr = raw_arg(args, 1);
+    let store_guest_root = match kernel.handles.get(store_handle) {
+        Ok(KernelObject::Store(store)) => store.guest_root.clone(),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return STORE_INVALID_HANDLE;
+        }
+    };
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return STORE_INVALID_HANDLE;
+    };
+    let Some(info) = kernel
+        .files
+        .partition_manager_info_for_store_and_name(&store_guest_root, &name)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return STORE_INVALID_HANDLE;
+    };
+    let handle = kernel
+        .handles
+        .insert(KernelObject::Partition(PartitionObject {
+            store_guest_root: info.store_guest_root,
+            partition_name: info.partition_name,
+        }));
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn find_first_partition_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let store_handle = raw_arg(args, 0);
+    let info_ptr = raw_arg(args, 1);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return STORE_INVALID_HANDLE;
+    }
+    let store_guest_root = match kernel.handles.get(store_handle) {
+        Ok(KernelObject::Store(store)) => store.guest_root.clone(),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return STORE_INVALID_HANDLE;
+        }
+    };
+    let entries = kernel
+        .files
+        .partition_manager_infos_for_store_guest_root(&store_guest_root);
+    let Some(first) = entries.first() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_ITEMS);
+        return STORE_INVALID_HANDLE;
+    };
+    if !write_partition_manager_info(kernel, memory, thread_id, info_ptr, first) {
+        return STORE_INVALID_HANDLE;
+    }
+    let handle = kernel
+        .handles
+        .insert(KernelObject::PartitionSearch(PartitionSearchObject {
+            store_guest_root,
+            partition_names: entries
+                .into_iter()
+                .map(|entry| entry.partition_name)
+                .collect(),
+            cursor: 1,
+        }));
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn find_next_partition_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let info_ptr = raw_arg(args, 1);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let (store_guest_root, partition_name) = {
+        let Ok(KernelObject::PartitionSearch(search)) = kernel.handles.get_mut(handle) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        };
+        let Some(partition_name) = search.partition_names.get(search.cursor).cloned() else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NO_MORE_ITEMS);
+            return false;
+        };
+        search.cursor += 1;
+        (search.store_guest_root.clone(), partition_name)
+    };
+    let Some(info) = kernel
+        .files
+        .partition_manager_info_for_store_and_name(&store_guest_root, &partition_name)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_ITEMS);
+        return false;
+    };
+    if !write_partition_manager_info(kernel, memory, thread_id, info_ptr, &info) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn find_close_partition_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    if !matches!(
+        kernel.handles.get(handle),
+        Ok(KernelObject::PartitionSearch(_))
+    ) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if kernel.handles.close(handle).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_partition_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let info_ptr = raw_arg(args, 1);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let (store_guest_root, partition_name) = match kernel.handles.get(handle) {
+        Ok(KernelObject::Partition(partition)) => (
+            partition.store_guest_root.clone(),
+            partition.partition_name.clone(),
+        ),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
+    };
+    let Some(info) = kernel
+        .files
+        .partition_manager_info_for_store_and_name(&store_guest_root, &partition_name)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return false;
+    };
+    if !write_partition_manager_info(kernel, memory, thread_id, info_ptr, &info) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn write_store_manager_info<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -10449,6 +10672,36 @@ fn write_store_manager_info<M: CoredllGuestMemory>(
     append_store_dword(&mut bytes, 1);
     append_store_dword(&mut bytes, 1);
     debug_assert_eq!(bytes.len(), STORE_INFO_SIZE as usize);
+    write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes)
+}
+
+fn write_partition_manager_info<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    out_ptr: u32,
+    info: &PartitionManagerInfo,
+) -> bool {
+    let mut attributes = PARTITION_ATTRIBUTE_MOUNTED;
+    if !info.writable {
+        attributes |= PARTITION_ATTRIBUTE_READONLY;
+    }
+    let mut bytes = Vec::with_capacity(PARTITION_INFO_SIZE as usize);
+    append_store_dword(&mut bytes, PARTITION_INFO_SIZE);
+    append_fixed_wide_field(&mut bytes, &info.partition_name, PARTITION_NAME_CHARS);
+    append_fixed_wide_field(
+        &mut bytes,
+        &info.file_system_name,
+        PARTITION_FILESYS_NAME_CHARS,
+    );
+    append_fixed_wide_field(&mut bytes, &info.volume_name, PARTITION_VOLUME_NAME_CHARS);
+    append_store_qword(&mut bytes, info.total_bytes / STORE_SECTOR_SIZE as u64);
+    append_store_qword(&mut bytes, 0);
+    append_store_qword(&mut bytes, 0);
+    append_store_dword(&mut bytes, attributes);
+    bytes.push(PARTITION_TYPE_FAT16 as u8);
+    bytes.resize(PARTITION_INFO_SIZE as usize, 0);
+    debug_assert_eq!(bytes.len(), PARTITION_INFO_SIZE as usize);
     write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes)
 }
 

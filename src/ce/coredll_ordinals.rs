@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 105] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 110] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13875,6 +13875,26 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 105] = &[
     CoredllOrdinalDef {
         name: "GetStoreInfo",
         ordinal: ORD_GET_STORE_INFO,
+    },
+    CoredllOrdinalDef {
+        name: "OpenPartition",
+        ordinal: ORD_OPEN_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "FindFirstPartition",
+        ordinal: ORD_FIND_FIRST_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "FindNextPartition",
+        ordinal: ORD_FIND_NEXT_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "FindClosePartition",
+        ordinal: ORD_FIND_CLOSE_PARTITION,
+    },
+    CoredllOrdinalDef {
+        name: "GetPartitionInfo",
+        ordinal: ORD_GET_PARTITION_INFO,
     },
     CoredllOrdinalDef {
         name: "RegistryGetDword",

@@ -139,6 +139,16 @@ pub struct StoreManagerInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartitionManagerInfo {
+    pub store_guest_root: String,
+    pub partition_name: String,
+    pub file_system_name: String,
+    pub volume_name: String,
+    pub total_bytes: u64,
+    pub writable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountTableVolumeInfo {
     pub name: String,
     pub flags: u32,
@@ -737,6 +747,38 @@ impl HostFileSystem {
                 self.mounts
                     .get(&guest_root)
                     .map(|mount| store_manager_info_from_mount(index, mount))
+            })
+    }
+
+    pub fn partition_manager_infos_for_store_guest_root(
+        &self,
+        guest_root: &str,
+    ) -> Vec<PartitionManagerInfo> {
+        let guest_root = normalize_guest_path(guest_root);
+        self.mounts
+            .get(&guest_root)
+            .map(partition_manager_info_from_mount)
+            .into_iter()
+            .collect()
+    }
+
+    pub fn partition_manager_info_for_store_and_name(
+        &self,
+        guest_root: &str,
+        name: &str,
+    ) -> Option<PartitionManagerInfo> {
+        let normalized_name = normalize_store_manager_lookup_name(name);
+        self.partition_manager_infos_for_store_guest_root(guest_root)
+            .into_iter()
+            .find(|info| {
+                [
+                    info.partition_name.as_str(),
+                    info.volume_name.as_str(),
+                    info.store_guest_root.as_str(),
+                    info.store_guest_root.trim_start_matches('\\'),
+                ]
+                .iter()
+                .any(|candidate| normalize_store_manager_lookup_name(candidate) == normalized_name)
             })
     }
 
@@ -1996,6 +2038,24 @@ fn store_manager_info_from_mount(index: usize, mount: &FileMount) -> StoreManage
         free_bytes: mount.free_bytes.min(mount.total_bytes),
         writable: mount.writable,
         removable: mount.removable,
+    }
+}
+
+fn partition_manager_info_from_mount(mount: &FileMount) -> PartitionManagerInfo {
+    let volume_name = mount
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| volume_name_from_guest_root(&mount.guest_root));
+    PartitionManagerInfo {
+        store_guest_root: mount.guest_root.replace('/', "\\"),
+        partition_name: volume_name.clone(),
+        file_system_name: "FATFS".to_owned(),
+        volume_name,
+        total_bytes: mount.total_bytes,
+        writable: mount.writable,
     }
 }
 

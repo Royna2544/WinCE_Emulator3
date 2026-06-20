@@ -102,6 +102,17 @@ notes when it is still needed for implementation.
   leading-slash store names, ordered enumeration, store/device/profile fields,
   sector counts, read-only/removable flags, exhaustion, and closed-find-handle
   rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\partition.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: raw StoreMgr
+  `OpenPartition`/`FindFirstPartition`/`FindNextPartition`/
+  `FindClosePartition`/`GetPartitionInfo` now expose a synthetic mounted
+  partition for each mounted host-backed store. Coverage verifies CE-layout
+  `PARTINFO` size and offsets, partition/file-system/volume names, sector
+  counts, mounted attributes, whole-store FAT partition type, enumeration
+  exhaustion, missing partitions, and closed partition-find-handle rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now

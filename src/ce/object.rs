@@ -24,6 +24,8 @@ pub enum KernelObject {
     Volume(VolumeObject),
     Store(StoreObject),
     StoreSearch(StoreSearchObject),
+    Partition(PartitionObject),
+    PartitionSearch(PartitionSearchObject),
     FileChangeNotification(FileChangeNotificationObject),
     DeviceNotification(DeviceNotificationObject),
     MessageQueue(MessageQueueHandleObject),
@@ -89,6 +91,19 @@ pub struct StoreObject {
 #[derive(Debug, Clone)]
 pub struct StoreSearchObject {
     pub guest_roots: Vec<String>,
+    pub cursor: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct PartitionObject {
+    pub store_guest_root: String,
+    pub partition_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PartitionSearchObject {
+    pub store_guest_root: String,
+    pub partition_names: Vec<String>,
     pub cursor: usize,
 }
 
@@ -322,6 +337,16 @@ impl HandleTable {
                 "store_search(cursor={},entries={})",
                 search.cursor,
                 search.guest_roots.len()
+            ),
+            Ok(KernelObject::Partition(partition)) => format!(
+                "partition(store={},name={})",
+                partition.store_guest_root, partition.partition_name
+            ),
+            Ok(KernelObject::PartitionSearch(search)) => format!(
+                "partition_search(store={},cursor={},entries={})",
+                search.store_guest_root,
+                search.cursor,
+                search.partition_names.len()
             ),
             Ok(KernelObject::FileChangeNotification(notification)) => format!(
                 "file_change(owner={},path={},recursive={},filter=0x{:08x},signaled={})",
@@ -921,6 +946,8 @@ impl HandleTable {
             | KernelObject::Volume(_)
             | KernelObject::Store(_)
             | KernelObject::StoreSearch(_)
+            | KernelObject::Partition(_)
+            | KernelObject::PartitionSearch(_)
             | KernelObject::Device(_)
             | KernelObject::DeviceNotification(_)
             | KernelObject::MessageQueue(_)
@@ -977,6 +1004,8 @@ impl HandleTable {
             | KernelObject::Volume(_)
             | KernelObject::Store(_)
             | KernelObject::StoreSearch(_)
+            | KernelObject::Partition(_)
+            | KernelObject::PartitionSearch(_)
             | KernelObject::Device(_)
             | KernelObject::DeviceNotification(_)
             | KernelObject::MessageQueue(_)
