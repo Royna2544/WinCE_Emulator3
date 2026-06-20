@@ -89,6 +89,13 @@ notes when it is still needed for implementation.
   current process module path as a cached guest wide string. Coverage verifies
   non-null return, stable repeated calls, last-error success, and cache
   invalidation when the process module path changes.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`: raw `CeGetModuleInfo` is now
+  exported for `MINFO_MODULE_INFO`, and `GetModuleInformation` shares the same
+  CE-style `PROCGetModInfo` validation for process handles, exact
+  `MODULEINFO` sizing, and module-base lookup. Coverage verifies public and
+  raw calls, image size/entry-point reporting, invalid process handles,
+  unsupported info types, and oversized buffers.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract

@@ -136,6 +136,7 @@ const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
 const FILE_SCATTER_GATHER_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_RAM_BYTES: u64 = 64 * 1024 * 1024;
+const MINFO_MODULE_INFO: u32 = 0x8;
 const PAGE_OUT_PROCESS_ONLY: u32 = 0;
 const PAGE_OUT_DLL_USED_ONLY_BY_THISPROC: u32 = 1;
 const PAGE_OUT_ALL_DEPENDENT_DLL: u32 = 2;
@@ -2724,31 +2725,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Handle(ptr))
         }
         ORD_GET_MODULE_INFORMATION => {
-            // GetModuleInformation(hProcess, hModule, lpmodinfo, cb) — MODULEINFO struct.
-            // MODULEINFO: lpBaseOfDll(4) + SizeOfImage(4) + EntryPoint(4) = 12 bytes.
-            let hmodule = raw_arg(args, 1);
-            let out_ptr = raw_arg(args, 2);
-            let cb = raw_arg(args, 3);
-            if out_ptr == 0 || cb < 12 {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                return Some(CoredllValue::Bool(false));
-            }
-            let result = kernel.loaded_module_by_handle(hmodule);
-            if let Some(m) = result {
-                let _ = memory.write_u32(out_ptr, m.base);
-                let _ = memory.write_u32(out_ptr.wrapping_add(4), m.image_size);
-                let _ = memory.write_u32(out_ptr.wrapping_add(8), m.entry_point);
-                kernel.threads.set_last_error(thread_id, 0);
-                Some(CoredllValue::Bool(true))
-            } else {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-                Some(CoredllValue::Bool(false))
-            }
+            // GetModuleInformation wraps CeGetModuleInfo(..., MINFO_MODULE_INFO, ...).
+            Some(CoredllValue::Bool(get_module_information_raw(
+                kernel, memory, thread_id, args,
+            )))
         }
+        ORD_CE_GET_MODULE_INFO => Some(CoredllValue::Bool(ce_get_module_info_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_EXIT_THREAD => {
             let exit_code = raw_arg(args, 0);
             if let Some(handle) = kernel.guest_thread_handle_by_id(thread_id) {
@@ -22814,6 +22798,94 @@ fn get_command_line_w_raw<M: CoredllGuestMemory>(
     kernel.set_command_line_guest_ptr(ptr);
     kernel.threads.set_last_error(thread_id, 0);
     ptr
+}
+
+fn get_module_information_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    ce_get_module_info_module_raw(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 0),
+        raw_arg(args, 1),
+        raw_arg(args, 2),
+        raw_arg(args, 3),
+    )
+}
+
+fn ce_get_module_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let info_type = raw_arg(args, 2);
+    if info_type != MINFO_MODULE_INFO {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    ce_get_module_info_module_raw(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 0),
+        raw_arg(args, 1),
+        raw_arg(args, 3),
+        raw_arg(args, 4),
+    )
+}
+
+fn ce_get_module_info_module_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    process: u32,
+    module: u32,
+    out_ptr: u32,
+    cb: u32,
+) -> bool {
+    if kernel.process_id_for_handle(process).is_none() || out_ptr == 0 || cb != 12 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let (base, image_size, entry_point) = if module == 0 || module == kernel.process_module_base() {
+        (kernel.process_module_base(), 0, 0)
+    } else if let Some(loaded) = kernel.loaded_module_by_handle(module) {
+        (loaded.base, loaded.image_size, loaded.entry_point)
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !write_guest_u32(kernel, memory, thread_id, out_ptr, base)
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add(4),
+            image_size,
+        )
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add(8),
+            entry_point,
+        )
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn get_proc_name_raw<M: CoredllGuestMemory>(

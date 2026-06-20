@@ -8,14 +8,14 @@ use wince_emulation_v3::{
             ORD_ACTIVATE_DEVICE, ORD_ACTIVATE_DEVICE_EX, ORD_BATTERY_DRVR_GET_LEVELS,
             ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION, ORD_BATTERY_GET_LIFE_TIME_INFO,
             ORD_BATTERY_NOTIFY_OF_TIME_CHANGE, ORD_CE_FIND_CLOSE_REG_CHANGE,
-            ORD_CE_FIND_FIRST_REG_CHANGE, ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_THREAD_PRIORITY,
-            ORD_CE_GET_THREAD_QUANTUM, ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM,
-            ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
-            ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
-            ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE,
-            ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
-            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
-            ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
+            ORD_CE_FIND_FIRST_REG_CHANGE, ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_MODULE_INFO,
+            ORD_CE_GET_THREAD_PRIORITY, ORD_CE_GET_THREAD_QUANTUM, ORD_CE_SET_THREAD_PRIORITY,
+            ORD_CE_SET_THREAD_QUANTUM, ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE,
+            ORD_CLOSE_MSG_QUEUE, ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_COMPATIBLE_DC,
+            ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W,
+            ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
+            ORD_DEACTIVATE_DEVICE, ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT,
+            ORD_DEREGISTER_DEVICE, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
             ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
             ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
@@ -27,28 +27,29 @@ use wince_emulation_v3::{
             ORD_GET_DEVICE_POWER, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
             ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT,
             ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
-            ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
-            ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROC_NAME,
-            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
-            ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION,
-            ORD_GET_SYSTEM_POWER_STATE, ORD_GET_SYSTEM_POWER_STATUS_EX,
-            ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
-            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
-            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD,
-            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
-            ORD_IMAGE_LIST_COPY_DITHER_IMAGE, ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY,
-            ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE,
-            ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX,
-            ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG,
-            ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
-            ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
-            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
-            ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON,
-            ORD_IMAGE_LIST_SET_BK_COLOR, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
-            ORD_IMAGE_LIST_SET_ICON_SIZE, ORD_IMAGE_LIST_SET_IMAGE_COUNT,
-            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
+            ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_PRIORITY_CLIPBOARD_FORMAT,
+            ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W,
+            ORD_GET_PROC_NAME, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX,
+            ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION,
+            ORD_GET_SYSTEM_MEMORY_DIVISION, ORD_GET_SYSTEM_POWER_STATE,
+            ORD_GET_SYSTEM_POWER_STATUS_EX, ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
+            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
+            ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
+            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
+            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
+            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
+            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
+            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
+            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE,
+            ORD_IMAGE_LIST_GET_IMAGE_COUNT, ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE, ORD_IMAGE_LIST_REMOVE,
+            ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_ICON_SIZE,
+            ORD_IMAGE_LIST_SET_IMAGE_COUNT, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
             ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
             ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_IMAGE_W, ORD_LOAD_KERNEL_LIBRARY,
@@ -7115,12 +7116,15 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
     let module_path_ptr = 0x1_80c0;
     let missing_module_name_ptr = 0x1_8140;
     let missing_proc_w_ptr = 0x1_8180;
+    let module_info_ptr = 0x1_81c0;
     let process_path = r"\SDMMC Disk\INavi\iNavi.exe";
     let child_process_path = r"\SDMMC Disk\INavi\iSearch.exe";
     let module_base = 0x6200_0000;
     let proc_by_name = 0x6200_1234;
     let proc_by_ordinal = 0x6200_5678;
+    let module_entry = 0x6200_0080;
     let module_path = r"\Windows\commctrl.dll";
+    const MINFO_MODULE_INFO: u32 = 0x8;
 
     let mut exports_by_name = std::collections::BTreeMap::new();
     exports_by_name.insert("InitCommonControlsEx".to_owned(), proc_by_name);
@@ -7134,6 +7138,7 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
         LoadedModuleMetadata {
             guest_path: Some(module_path.to_owned()),
             image_size: 0x10000,
+            entry_point: module_entry,
             ..LoadedModuleMetadata::default()
         },
     );
@@ -7144,6 +7149,7 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
     memory.write_wide_z(missing_module_name_ptr, "missing.dll");
     memory.write_wide_z(missing_proc_w_ptr, "MissingExport");
     memory.map_halfwords(module_path_ptr, 64);
+    memory.map_words(module_info_ptr, 3);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -7173,6 +7179,115 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
     ));
     assert_eq!(memory.read_wide_z(module_path_ptr, 64), module_path);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MODULE_INFORMATION,
+            [
+                CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                module_base,
+                module_info_ptr,
+                12
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(module_info_ptr)?, module_base);
+    assert_eq!(memory.read_u32(module_info_ptr + 4)?, 0x10000);
+    assert_eq!(memory.read_u32(module_info_ptr + 8)?, module_entry);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    memory.write_word(module_info_ptr, 0xAAAA_AAAA);
+    memory.write_word(module_info_ptr + 4, 0xBBBB_BBBB);
+    memory.write_word(module_info_ptr + 8, 0xCCCC_CCCC);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_MODULE_INFO,
+            [
+                CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                module_base,
+                MINFO_MODULE_INFO,
+                module_info_ptr,
+                12
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(module_info_ptr)?, module_base);
+    assert_eq!(memory.read_u32(module_info_ptr + 4)?, 0x10000);
+    assert_eq!(memory.read_u32(module_info_ptr + 8)?, module_entry);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MODULE_INFORMATION,
+            [0xDEAD_0000, module_base, module_info_ptr, 12],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MODULE_INFORMATION,
+            [
+                CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                module_base,
+                module_info_ptr,
+                16
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_MODULE_INFO,
+            [
+                CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                module_base,
+                MINFO_MODULE_INFO + 1,
+                module_info_ptr,
+                12
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     let process_name_ptr = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
