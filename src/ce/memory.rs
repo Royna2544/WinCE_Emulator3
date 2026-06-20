@@ -377,6 +377,10 @@ impl MemorySystem {
         self.allocations.values()
     }
 
+    pub fn heaps(&self) -> impl Iterator<Item = &Heap> {
+        self.heaps.values().filter(|heap| !heap.destroyed)
+    }
+
     pub fn virtual_allocation(&self, base: u32) -> Option<&VirtualAllocation> {
         self.virtual_allocations.get(&base)
     }

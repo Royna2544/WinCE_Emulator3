@@ -23,8 +23,9 @@ use wince_emulation_v3::{
             ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
             ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS, ORD_GET_EXIT_CODE_PROCESS,
             ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
-            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
+            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
+            ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_POWER_STATUS_EX,
@@ -3810,13 +3811,27 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     const PROCESSENTRY32_SIZE: u32 = 564;
     const PROCESSENTRY32_EXE_OFFSET: u32 = 36;
     const INVALID_TOOLHELP_SNAPSHOT: u32 = 0xffff_ffff;
+    const TH32CS_SNAPHEAPLIST: u32 = 0x0000_0001;
+    const TH32HEAPLIST_SIZE: u32 = 24;
+    const HEAPENTRY32_SIZE: u32 = 36;
+    const HF32_DEFAULT: u32 = 1;
+    const LF32_FIXED: u32 = 1;
+
+    let heap_alloc_a = kernel
+        .memory
+        .heap_alloc(PROCESS_HEAP_HANDLE, 0, 32)
+        .expect("process heap allocation");
+    let heap_alloc_b = kernel
+        .memory
+        .heap_alloc(PROCESS_HEAP_HANDLE, 0, 48)
+        .expect("process heap allocation");
 
     let process_snapshot = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
         thread_id,
         ORD_THCREATE_SNAPSHOT,
-        [TH32CS_SNAPPROCESS, 0],
+        [TH32CS_SNAPHEAPLIST | TH32CS_SNAPPROCESS, 0],
     ) {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),
@@ -3839,7 +3854,7 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(read_guest_le_u32(&memory, process_snapshot + 16), 2);
     assert_eq!(
         read_guest_le_u32(&memory, process_snapshot + 28),
-        TH32CS_SNAPPROCESS
+        TH32CS_SNAPHEAPLIST | TH32CS_SNAPPROCESS
     );
     assert_eq!(read_guest_le_u32(&memory, process_snapshot + 36), 0);
     let first_entry = process_snapshot + THSNAP_SIZE;
@@ -3865,6 +3880,77 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(
         read_guest_wide_z(&memory, launch_entry + PROCESSENTRY32_EXE_OFFSET, 260),
         "raw-child.exe"
+    );
+    let heap_snapshot_bytes = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_HEAP_SNAPSHOT,
+        [process_snapshot],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(bytes),
+            ..
+        } => bytes,
+        other => panic!("expected GetHeapSnapshot byte count, got {other:?}"),
+    };
+    let heap_list = process_snapshot + THSNAP_SIZE + PROCESSENTRY32_SIZE * 2;
+    let heap_entry_count = read_guest_le_u32(&memory, heap_list + 16);
+    let heap_total_size = read_guest_le_u32(&memory, heap_list + 20);
+    assert_eq!(read_guest_le_u32(&memory, process_snapshot + 32), 1);
+    assert_eq!(
+        read_guest_le_u32(&memory, process_snapshot + 4),
+        THSNAP_SIZE + PROCESSENTRY32_SIZE * 2 + heap_snapshot_bytes
+    );
+    assert_eq!(read_guest_le_u32(&memory, heap_list), 16);
+    assert_eq!(
+        read_guest_le_u32(&memory, heap_list + 4),
+        kernel.current_process_id()
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, heap_list + 8),
+        PROCESS_HEAP_HANDLE
+    );
+    assert_eq!(read_guest_le_u32(&memory, heap_list + 12), HF32_DEFAULT);
+    assert!(heap_entry_count >= 2);
+    assert_eq!(
+        heap_snapshot_bytes,
+        TH32HEAPLIST_SIZE + heap_entry_count * HEAPENTRY32_SIZE
+    );
+    assert_eq!(heap_total_size, heap_snapshot_bytes);
+    let heap_entry_start = heap_list + TH32HEAPLIST_SIZE;
+    let heap_entry_addresses = (0..heap_entry_count)
+        .map(|index| {
+            let entry = heap_entry_start + index * HEAPENTRY32_SIZE;
+            assert_eq!(read_guest_le_u32(&memory, entry), HEAPENTRY32_SIZE);
+            assert_eq!(read_guest_le_u32(&memory, entry + 16), LF32_FIXED);
+            assert_eq!(read_guest_le_u32(&memory, entry + 20), 1);
+            assert_eq!(
+                read_guest_le_u32(&memory, entry + 28),
+                kernel.current_process_id()
+            );
+            assert_eq!(read_guest_le_u32(&memory, entry + 32), PROCESS_HEAP_HANDLE);
+            read_guest_le_u32(&memory, entry + 8)
+        })
+        .collect::<Vec<_>>();
+    assert!(heap_entry_addresses.contains(&heap_alloc_a));
+    assert!(heap_entry_addresses.contains(&heap_alloc_b));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_HEAP_SNAPSHOT,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
     );
 
     assert!(matches!(

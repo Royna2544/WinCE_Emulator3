@@ -37,6 +37,14 @@ notes when it is still needed for implementation.
   verifies header offsets, process-entry layout, current/launched process IDs,
   duplicate process-handle deduplication, wide executable names, and invalid
   process rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\LMEM\th32heap.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\toolhelp.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `GetHeapSnapshot` now
+  appends CE-layout `TH32HEAPLIST`/`HEAPENTRY32` records to a `THSNAP` buffer
+  instead of reporting unsupported. Coverage verifies process-heap filtering,
+  heap-list counts/sizes, default-heap flags, fixed allocation entries,
+  process/heap IDs, and invalid snapshot rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,

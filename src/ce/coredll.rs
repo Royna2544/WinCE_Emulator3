@@ -34,7 +34,10 @@ use crate::{
             KBDI_VKEY_TO_UNICODE_INFO_ID, KeybdAutoRepeatInfo, KeybdAutoRepeatSelectionsInfo,
             KeybdVKeyToUnicodeInfo,
         },
-        memory::{HEAP_ZERO_MEMORY, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PROCESS_HEAP_HANDLE},
+        memory::{
+            HEAP_ZERO_MEMORY, Heap, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, MemoryAllocation,
+            PROCESS_HEAP_HANDLE,
+        },
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
             CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
@@ -3948,12 +3951,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_GET_HEAP_SNAPSHOT => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_GET_HEAP_SNAPSHOT => Some(CoredllValue::U32(get_heap_snapshot_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_CE_MODULE_JIT => {
             kernel
                 .threads
@@ -57022,8 +57025,15 @@ const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
 const THSNAP_SIZE: usize = 60;
 const THSNAP_RESERVE: u32 = 0x0040_0000;
 const PROCESSENTRY32_SIZE: usize = 564;
+const MODULEENTRY32_SIZE: usize = 1076;
+const THREADENTRY32_SIZE: usize = 36;
+const TH32HEAPLIST_SIZE: usize = 24;
+const HEAPLIST32_SIZE: u32 = 16;
+const HEAPENTRY32_SIZE: usize = 36;
 const PROCESSENTRY32_EXE_OFFSET: usize = 36;
 const MAX_PATH_WCHARS: usize = 260;
+const HF32_DEFAULT: u32 = 1;
+const LF32_FIXED: u32 = 1;
 const INVALID_TOOLHELP_SNAPSHOT: u32 = 0xffff_ffff;
 
 fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
@@ -57116,6 +57126,179 @@ fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
     base
 }
 
+fn get_heap_snapshot_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    snapshot: u32,
+) -> u32 {
+    if snapshot == 0 || snapshot == INVALID_TOOLHELP_SNAPSHOT {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(header) = read_guest_bytes(kernel, memory, thread_id, snapshot, THSNAP_SIZE as u32)
+    else {
+        return 0;
+    };
+    let cb_size = read_toolhelp_le_u32(&header, 0);
+    let cb_inuse = read_toolhelp_le_u32(&header, 4);
+    let cb_commit = read_toolhelp_le_u32(&header, 8);
+    let cb_reserved = read_toolhelp_le_u32(&header, 12);
+    let proc_count = read_toolhelp_le_u32(&header, 16);
+    let mod_count = read_toolhelp_le_u32(&header, 20);
+    let thread_count = read_toolhelp_le_u32(&header, 24);
+    let flags = read_toolhelp_le_u32(&header, 28);
+    let heap_list_count = read_toolhelp_le_u32(&header, 32);
+
+    let min_heap_offset = THSNAP_SIZE as u32
+        + proc_count.saturating_mul(PROCESSENTRY32_SIZE as u32)
+        + mod_count.saturating_mul(MODULEENTRY32_SIZE as u32)
+        + thread_count.saturating_mul(THREADENTRY32_SIZE as u32);
+    if cb_size != THSNAP_SIZE as u32
+        || cb_inuse < min_heap_offset
+        || cb_inuse > cb_commit
+        || cb_commit > cb_reserved
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    let (heap_bytes, added_heap_count) = build_heap_snapshot_bytes(kernel, flags);
+    let Ok(added_size) = u32::try_from(heap_bytes.len()) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    };
+    let Some(new_inuse) = cb_inuse.checked_add(added_size) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    };
+    if new_inuse > cb_reserved {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
+    let new_commit = cb_commit.max(align_page_u32(new_inuse));
+    if new_commit > cb_reserved || memory.ensure_mapped(snapshot, new_commit).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    }
+    if !write_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        snapshot.wrapping_add(cb_inuse),
+        &heap_bytes,
+    ) {
+        return 0;
+    }
+    if !write_guest_toolhelp_le_u32(kernel, memory, thread_id, snapshot + 4, new_inuse)
+        || !write_guest_toolhelp_le_u32(kernel, memory, thread_id, snapshot + 8, new_commit)
+        || !write_guest_toolhelp_le_u32(
+            kernel,
+            memory,
+            thread_id,
+            snapshot + 32,
+            heap_list_count.saturating_add(added_heap_count as u32),
+        )
+    {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    tracing::trace!(
+        target: "ce.toolhelp",
+        thread_id,
+        snapshot = format_args!("0x{snapshot:08x}"),
+        added_heap_count,
+        added_size,
+        "GetHeapSnapshot"
+    );
+    added_size
+}
+
+fn build_heap_snapshot_bytes(kernel: &CeKernel, flags: u32) -> (Vec<u8>, usize) {
+    let current_process_id = kernel.current_process_id();
+    let heaps = kernel
+        .memory
+        .heaps()
+        .filter(|heap| flags & TH32CS_SNAPPROCESS == 0 || heap.handle == PROCESS_HEAP_HANDLE)
+        .collect::<Vec<_>>();
+    let mut bytes = Vec::new();
+    for heap in &heaps {
+        let heap_list_offset = bytes.len();
+        bytes.resize(heap_list_offset + TH32HEAPLIST_SIZE, 0);
+        let allocations = kernel
+            .memory
+            .allocations()
+            .filter(|allocation| allocation.heap == heap.handle)
+            .collect::<Vec<_>>();
+        for allocation in &allocations {
+            append_heap_entry32(&mut bytes, current_process_id, heap.handle, allocation);
+        }
+        let total_size = TH32HEAPLIST_SIZE + allocations.len() * HEAPENTRY32_SIZE;
+        write_heap_list32(
+            &mut bytes[heap_list_offset..heap_list_offset + TH32HEAPLIST_SIZE],
+            current_process_id,
+            heap,
+            allocations.len() as u32,
+            total_size as u32,
+        );
+    }
+    (bytes, heaps.len())
+}
+
+fn write_heap_list32(
+    entry: &mut [u8],
+    process_id: u32,
+    heap: &Heap,
+    entry_count: u32,
+    total_size: u32,
+) {
+    put_le_u32(entry, 0, HEAPLIST32_SIZE);
+    put_le_u32(entry, 4, process_id);
+    put_le_u32(entry, 8, heap.handle);
+    put_le_u32(
+        entry,
+        12,
+        if heap.handle == PROCESS_HEAP_HANDLE {
+            HF32_DEFAULT
+        } else {
+            0
+        },
+    );
+    put_le_u32(entry, 16, entry_count);
+    put_le_u32(entry, 20, total_size);
+}
+
+fn append_heap_entry32(
+    bytes: &mut Vec<u8>,
+    process_id: u32,
+    heap_id: u32,
+    allocation: &MemoryAllocation,
+) {
+    let offset = bytes.len();
+    bytes.resize(offset + HEAPENTRY32_SIZE, 0);
+    let entry = &mut bytes[offset..offset + HEAPENTRY32_SIZE];
+    put_le_u32(entry, 0, HEAPENTRY32_SIZE as u32);
+    put_le_u32(entry, 4, allocation.ptr);
+    put_le_u32(entry, 8, allocation.ptr);
+    put_le_u32(entry, 12, allocation.actual_size);
+    put_le_u32(entry, 16, LF32_FIXED);
+    put_le_u32(entry, 20, 1);
+    put_le_u32(entry, 28, process_id);
+    put_le_u32(entry, 32, heap_id);
+}
+
 fn write_process_entry32(entry: &mut [u8], process: &ToolhelpProcessSnapshot) {
     put_le_u32(entry, 0, PROCESSENTRY32_SIZE as u32);
     put_le_u32(entry, 4, 1);
@@ -57131,6 +57314,27 @@ fn write_process_entry32(entry: &mut [u8], process: &ToolhelpProcessSnapshot) {
         &process.name,
     );
     put_le_u32(entry, 556, process.memory_base);
+}
+
+fn read_toolhelp_le_u32(bytes: &[u8], offset: usize) -> u32 {
+    bytes
+        .get(offset..offset + 4)
+        .map(|slot| u32::from_le_bytes([slot[0], slot[1], slot[2], slot[3]]))
+        .unwrap_or(0)
+}
+
+fn write_guest_toolhelp_le_u32<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    value: u32,
+) -> bool {
+    write_guest_bytes(kernel, memory, thread_id, addr, &value.to_le_bytes())
+}
+
+fn align_page_u32(value: u32) -> u32 {
+    value.wrapping_add(0x0fff) & !0x0fff
 }
 
 fn put_le_u32(bytes: &mut [u8], offset: usize, value: u32) {

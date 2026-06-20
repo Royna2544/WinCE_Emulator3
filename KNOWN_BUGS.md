@@ -33,8 +33,8 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 - Popup/menu/modal behavior still needs broader live nested-modal routing,
   unusual cascade cancellation, timeout edges, and user-driven dispatch
   validation.
-- Sensor emulation remains partial. GPS/NMEA can drain through the configured
-  serial path, but the exact guest `ReadFile`/`WaitCommEvent` cadence,
+- Sensor emulation remains partial. GPS/NMEA reaches the configured serial
+  receive buffer, but the exact guest `ReadFile`/`WaitCommEvent` cadence,
   parsed-position consumption, and SMB380/G-sensor command contract still need
   real evidence.
 
