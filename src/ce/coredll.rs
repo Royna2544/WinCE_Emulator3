@@ -6247,11 +6247,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             args,
         ))),
         ORD_START_DOC_W | ORD_START_PAGE | ORD_END_PAGE | ORD_END_DOC | ORD_ABORT_DOC => {
-            // Printer/spooler APIs: not supported on CE emulator targets.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0xffff_ffff)) // SP_ERROR = -1
+            Some(CoredllValue::U32(print_doc_raw(
+                kernel,
+                thread_id,
+                export.ordinal,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+            )))
         }
         ORD_SET_ABORT_PROC => Some(CoredllValue::U32(set_abort_proc_raw(
             kernel,
@@ -58588,6 +58590,29 @@ fn set_abort_proc_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, abort_pro
 
     kernel.threads.set_last_error(thread_id, 0);
     1
+}
+
+fn print_doc_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    ordinal: u32,
+    hdc: u32,
+    docinfo: u32,
+) -> u32 {
+    const SP_ERROR: u32 = 0xffff_ffff;
+
+    if !is_valid_hdc(kernel, hdc) || (ordinal == ORD_START_DOC_W && docinfo == 0) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return SP_ERROR;
+    }
+
+    // Printer/spooler backends are not emulated yet, but CE validates handles first.
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+    SP_ERROR
 }
 
 fn nled_get_device_info_raw<M: CoredllGuestMemory>(
