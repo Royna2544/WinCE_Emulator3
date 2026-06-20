@@ -4617,13 +4617,6 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_GET_FOREGROUND_INFO => {
-            // GetForegroundInfo(pFI) — fills FOREGROUNDINFO struct; not supported.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
         ORD_GET_KEYBOARD_STATUS => {
             // GetKeyboardStatus() — returns keyboard type bitmask; 0 = no physical keyboard.
             kernel.threads.set_last_error(thread_id, 0);
@@ -6828,6 +6821,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_FOREGROUND_WINDOW => Some(CoredllValue::Handle(
             kernel.gwe.get_active_window().unwrap_or(0),
         )),
+        ORD_GET_FOREGROUND_INFO => Some(CoredllValue::Bool(get_foreground_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_SET_FOREGROUND_WINDOW => Some(CoredllValue::Bool(set_foreground_window_raw(
             kernel,
             thread_id,
@@ -37857,6 +37856,45 @@ fn set_foreground_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -
     }
     let _ = kernel.activate_window(Some(hwnd));
     let _ = kernel.set_focus(Some(hwnd));
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_foreground_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info_ptr: u32,
+) -> bool {
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let values = [
+        kernel.gwe.get_active_window().unwrap_or(0),
+        kernel.gwe.get_focus().unwrap_or(0),
+        0,
+        kernel.gwe.get_foreground_keyboard_target().unwrap_or(0),
+        0,
+        0,
+        0,
+        0,
+        kernel.gwe.keyboard_layout(),
+    ];
+    for (index, value) in values.iter().copied().enumerate() {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add((index as u32) * 4),
+            value,
+        ) {
+            return false;
+        }
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
