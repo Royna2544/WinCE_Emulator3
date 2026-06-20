@@ -41908,7 +41908,11 @@ fn add_font_resource_w_raw<M: CoredllGuestMemory>(
         return 0;
     };
     match kernel.read_guest_file(&path) {
-        Ok(_) => {
+        Ok(bytes) => {
+            if !is_supported_font_resource_bytes(&bytes) {
+                kernel.threads.set_last_error(thread_id, ERROR_INVALID_DATA);
+                return 0;
+            }
             kernel.add_font_resource_ref(&path);
             kernel.threads.set_last_error(thread_id, 0);
             kernel.send_notify_message_w(
@@ -41927,6 +41931,14 @@ fn add_font_resource_w_raw<M: CoredllGuestMemory>(
             0
         }
     }
+}
+
+fn is_supported_font_resource_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x00, 0x01, 0x00, 0x00])
+        || bytes.starts_with(b"true")
+        || bytes.starts_with(b"ttcf")
+        || bytes.starts_with(b"OTTO")
+        || bytes.starts_with(b"MZ")
 }
 
 fn remove_font_resource_w_raw<M: CoredllGuestMemory>(

@@ -127,6 +127,10 @@ notes when it is still needed for implementation.
   `AddFontResourceW` records CE-style per-path references, the matching number
   of `RemoveFontResourceW` calls succeeds, and extra removes fail with
   `ERROR_FILE_NOT_FOUND`.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`:
+  `SimpleAddRemoveFontPairs`/`SuperAddRemove` invalid-add paths are now
+  represented for raw `AddFontResourceW`: readable files with unsupported font
+  signatures fail with `ERROR_INVALID_DATA` instead of being registered.
 
 ## Active Roadmap
 

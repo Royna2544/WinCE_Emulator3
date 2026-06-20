@@ -166,6 +166,9 @@ use wince_emulation_v3::{
 mod support;
 use support::{TestGuestMemory, unique_test_root};
 
+const ERROR_INVALID_DATA: u32 = 13;
+const MINIMAL_TRUETYPE_FONT_BYTES: &[u8] = b"\x00\x01\x00\x00fake-ce-font";
+
 #[test]
 fn coredll_raw_gwe_rect_helpers_match_win32_semantics() -> Result<()> {
     let table = CoredllExportTable::default();
@@ -22177,15 +22180,19 @@ fn coredll_raw_add_font_resource_uses_guest_file_mounts() -> Result<()> {
     let root = unique_test_root("font_resource_add");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("create temporary mounted font directory");
-    fs::write(root.join("font.ttf"), b"fake-font").expect("write temporary mounted font");
+    fs::write(root.join("font.ttf"), MINIMAL_TRUETYPE_FONT_BYTES)
+        .expect("write temporary mounted font");
+    fs::write(root.join("invalid.ttf"), b"fake-font").expect("write invalid mounted font");
     kernel.mount_guest_root("\\SDMMC Disk", &root);
 
     let font_path_ptr = 0x1_0000;
     let missing_path_ptr = 0x1_0100;
     let empty_path_ptr = 0x1_0200;
+    let invalid_path_ptr = 0x1_0300;
     memory.write_wide_z(font_path_ptr, "\\SDMMC Disk\\font.ttf");
     memory.write_wide_z(missing_path_ptr, "\\SDMMC Disk\\missing.ttf");
     memory.write_wide_z(empty_path_ptr, "");
+    memory.write_wide_z(invalid_path_ptr, "\\SDMMC Disk\\invalid.ttf");
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -22218,6 +22225,20 @@ fn coredll_raw_add_font_resource_uses_guest_file_mounts() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_FILE_NOT_FOUND
     );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ADD_FONT_RESOURCE_W,
+            [invalid_path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_DATA);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -43693,7 +43714,7 @@ fn coredll_raw_add_remove_font_resource_broadcasts_wm_fontchange() -> Result<()>
     let root = unique_test_root("font_resource_remove");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("tahoma.ttf"), b"font-bytes").unwrap();
+    fs::write(root.join("tahoma.ttf"), MINIMAL_TRUETYPE_FONT_BYTES).unwrap();
     kernel.mount_guest_root("\\Windows", &root);
 
     // Reserve space for MSG (7 u32s) and short wide path strings.
