@@ -64,9 +64,10 @@ references for historical reconstruction.
 - Host live-pump idle polling no longer forces short 100 ms CPU slices while an
   active guest context is runnable.
 - Current live runs reach real iNavi splash/resource state, hidden map child
-  windows, map/resource file loading, and `UID1:` probing. The current
-  2026-06-21 sample has not opened `COM7:`, so remote GPS/NMEA bytes remain
-  queued instead of draining into guest serial reads.
+  windows, map/resource file loading, `UID1:` probing, and eventually `COM7:`
+  GPS startup. The 2026-06-21 post-drive sample opened `COM7:`, drained queued
+  remote NMEA into the serial RX buffer, and accepted the guest `$PUBX`
+  configuration writes.
 - Remote taps are accepted by the live server and now route through the main
   iNavi splash/window stack after stale visible-message cleanup.
 - Escaped visible-message WndProc callouts are now retired before the
@@ -89,6 +90,15 @@ references for historical reconstruction.
   process is runnable. The latest sample advances iNavi through additional
   map/resource loads and accepts touch/key WndProc callouts on the real splash
   window instead of sitting only in the hidden `happyway_win` helper slice.
+- Live-pump run entry now also prioritizes ready parked waits before starting a
+  hidden active slice. This matches the after-slice policy and covers the
+  observed state where hidden `happyway_win` had no receiver work while a
+  visible iNavi thread was parked on a ready sleep wait.
+- `YAS526B.dll` dump validation confirmed `MFS_IOControl` dispatches exact
+  IOCTLs `0xb0000000`, `0xb0000004`, `0xb0000008`, `0xb000000c`, and
+  `0xb0000010`. The virtual `MFS1:` shim now follows the dumped contract:
+  writes validate/send selector-command input but do not mutate the next sample,
+  and reads use input byte 0 as device selector plus byte 2 as count.
 - Elevated `cargo flamegraph` startup samples still stop in the real
   `happyway_win.exe+0x7b56c` traffic/shared-memory fill loop; the live-pump
   visible-window readiness check no longer clones the full GWE window list on
@@ -115,7 +125,7 @@ references for historical reconstruction.
   scheduler regressions.
 - Release/live validation survived the prior crash window, served framebuffer
   snapshots, consumed remote touch/key input on the iNavi splash window, and
-  confirmed remote GPS remains queued until the guest opens `COM7:`.
+  confirmed remote GPS drains once the guest opens `COM7:`.
 - Focused raw kernel ordinal validation covers duplicated process handles,
   shared process exit state, and process memory read/write copies.
 - Focused raw kernel ordinal validation covers normal and extended
@@ -130,6 +140,8 @@ references for historical reconstruction.
   handle failures.
 - Focused raw coredll/kernel validation covers `FindFirstDevice`/`FindNextDevice`
   device search output and cleanup semantics.
+- Focused Unicorn validation covers the ready parked wait handoff and the
+  hidden-helper live-pump handoff. Release build passed with existing warnings.
 - Focused raw coredll/kernel validation covers activation-time `BusName`
   capture, `$bus\...` device-info output, and bus-name wildcard search.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
