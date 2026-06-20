@@ -141,7 +141,7 @@ const IOCTL_KLIB_GET_POOL_STATE: u32 = 28;
 const IOCTL_KLIB_UNALIGNENABLE: u32 = 32;
 const IOCTL_KLIB_CACHE_REGISTER: u32 = 33;
 const IOCTL_KLIB_FLUSH_MAPFILES: u32 = 34;
-const KLIB_PHYSMEMINFO_SIZE: u32 = 24;
+const KLIB_PHYSMEMINFO_SIZE: u32 = 16;
 const KLIB_NK_PAGE_POOL_STATE_SIZE: u32 = 92;
 const ERROR_PATH_NOT_FOUND: u32 = 3;
 const FSCTL_COPY_EXTERNAL_START: u32 = 0x0009_004c;
@@ -179,6 +179,7 @@ const STORAGE_MEDIA_ATTACH_RESULT_UNCHANGED: u32 = 0;
 const FILE_SCATTER_GATHER_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_PAGE_SIZE: u32 = 4096;
 const CE_SYSTEM_RAM_BYTES: u64 = 64 * 1024 * 1024;
+const CE_SYNTHETIC_ROM_BYTES: u64 = 16 * 1024 * 1024;
 const MINFO_MODULE_INFO: u32 = 0x8;
 const PAGE_OUT_PROCESS_ONLY: u32 = 0;
 const PAGE_OUT_DLL_USED_ONLY_BY_THISPROC: u32 = 1;
@@ -26525,12 +26526,9 @@ fn kernel_lib_io_control_raw<M: CoredllGuestMemory>(
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-            } else {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+                return CoredllValue::Bool(false);
             }
-            CoredllValue::Bool(false)
+            CoredllValue::Bool(write_klib_phys_mem_info(kernel, memory, thread_id, out_ptr))
         }
         IOCTL_KLIB_GET_POOL_STATE => {
             if in_ptr != 0
@@ -26585,6 +26583,32 @@ fn kernel_lib_io_control_raw<M: CoredllGuestMemory>(
             CoredllValue::Bool(false)
         }
     }
+}
+
+fn write_klib_phys_mem_info<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    out_ptr: u32,
+) -> bool {
+    let rom_start = 0;
+    let rom_end = (CE_SYNTHETIC_ROM_BYTES / u64::from(CE_SYSTEM_PAGE_SIZE)) as u32;
+    let ram_start = rom_end;
+    let ram_end = ram_start + (CE_SYSTEM_RAM_BYTES / u64::from(CE_SYSTEM_PAGE_SIZE)) as u32;
+    let fields = [rom_start, rom_end, ram_start, ram_end];
+    for (index, value) in fields.into_iter().enumerate() {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add((index as u32) * 4),
+            value,
+        ) {
+            return false;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
 }
 
 fn write_hal_device_id<M: CoredllGuestMemory>(

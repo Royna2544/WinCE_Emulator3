@@ -27810,6 +27810,7 @@ fn coredll_raw_kernel_lib_io_control_follows_core_validation() -> Result<()> {
     const KMOD_CORE: u32 = 1;
     const IOCTL_KLIB_GETCOMPRESSIONINFO: u32 = 3;
     const IOCTL_KLIB_GETUSRCOREDLL: u32 = 23;
+    const IOCTL_KLIB_GETPHYSMEMINFO: u32 = 27;
     const IOCTL_KLIB_MAPPD: u32 = 24;
     const IOCTL_KLIB_CACHE_REGISTER: u32 = 33;
     const COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
@@ -27821,7 +27822,7 @@ fn coredll_raw_kernel_lib_io_control_follows_core_validation() -> Result<()> {
     let thread_id = 19;
     let out = 0x1600;
     let returned = 0x1700;
-    memory.map_words(out, 1);
+    memory.map_words(out, 4);
     memory.map_words(returned, 1);
 
     assert!(matches!(
@@ -27888,6 +27889,56 @@ fn coredll_raw_kernel_lib_io_control_follows_core_validation() -> Result<()> {
             ..
         }
     ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [KMOD_CORE, IOCTL_KLIB_GETPHYSMEMINFO, 0, 0, out, 24, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_LIB_IO_CONTROL,
+            [
+                KMOD_CORE,
+                IOCTL_KLIB_GETPHYSMEMINFO,
+                0,
+                0,
+                out,
+                16,
+                returned
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(out)?, 0);
+    assert_eq!(memory.read_u32(out + 4)?, 4096);
+    assert_eq!(memory.read_u32(out + 8)?, 4096);
+    assert_eq!(memory.read_u32(out + 12)?, 20480);
+    assert_eq!(
+        memory.read_u32(returned)?,
+        4,
+        "KernelLibIoControl GetPhysMemInfo does not report bytes returned"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
 
     assert!(matches!(
