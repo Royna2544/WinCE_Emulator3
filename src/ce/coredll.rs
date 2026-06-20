@@ -16,7 +16,7 @@ use crate::{
         file::{
             CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
             FILE_ATTRIBUTE_SYSTEM, FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FileLockStatus,
-            FindData, GENERIC_WRITE, VolumeInfo,
+            FindData, GENERIC_WRITE, StoreManagerInfo, VolumeInfo,
         },
         framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, PixelFormat},
         gwe::{
@@ -41,8 +41,8 @@ use crate::{
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
             CriticalSectionObject, FileMappingView, KernelObject, PowerNotificationObject,
-            PowerRelationshipObject, PowerRequirementObject, ThreadResumeResult,
-            ThreadSuspendResult,
+            PowerRelationshipObject, PowerRequirementObject, StoreObject, StoreSearchObject,
+            ThreadResumeResult, ThreadSuspendResult,
         },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, HKey,
@@ -204,6 +204,21 @@ const ERROR_INVALID_SECURITY_DESCR: u32 = 1338;
 const CE_VOLUME_INFO_LEVEL_STANDARD: u32 = 0;
 const CE_VOLUME_INFO_SIZE: u32 = 144;
 const CE_VOLUME_INFO_NAME_CHARS: usize = 32;
+const STORE_INVALID_HANDLE: u32 = 0xffff_ffff;
+const STORAGE_DEVICE_INFO_SIZE: u32 = 80;
+const STORE_INFO_SIZE: u32 = 232;
+const STORE_DEVICE_NAME_CHARS: usize = 8;
+const STORE_NAME_CHARS: usize = 32;
+const STORE_PROFILE_NAME_CHARS: usize = 32;
+const STORE_SECTOR_SIZE: u32 = 512;
+const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
+const STORE_ATTRIBUTE_AUTOMOUNT: u32 = 0x0000_0020;
+const STORAGE_DEVICE_CLASS_BLOCK: u32 = 0x0000_0001;
+const STORAGE_DEVICE_TYPE_FLASH: u32 = 1 << 1;
+const STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE: u32 = 1 << 30;
+const STORAGE_DEVICE_FLAG_READWRITE: u32 = 1 << 0;
+const STORAGE_DEVICE_FLAG_READONLY: u32 = 1 << 1;
 const SECURITY_ATTRIBUTES_SIZE: u32 = 12;
 const CE_KERNEL_MODE_BASE: u32 = 0x8000_0000;
 const EVENT_ALL_ACCESS: u32 = 0x001f_0003;
@@ -2074,6 +2089,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             memory,
             thread_id,
             raw_arg(args, 0),
+        ))),
+        ORD_OPEN_STORE => Some(CoredllValue::Handle(open_store_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_FIND_FIRST_STORE => Some(CoredllValue::Handle(find_first_store_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_FIND_NEXT_STORE => Some(CoredllValue::Bool(find_next_store_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_FIND_CLOSE_STORE => Some(CoredllValue::Bool(find_close_store_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_GET_STORE_INFO => Some(CoredllValue::Bool(get_store_info_raw(
+            kernel, memory, thread_id, args,
         ))),
         ORD_GET_DISK_FREE_SPACE_EX_W => Some(CoredllValue::Bool(get_disk_free_space_ex_w_raw(
             kernel, memory, thread_id, args,
@@ -10216,6 +10246,231 @@ fn ce_register_file_system_notification_raw(
     kernel.register_file_system_notification_callback(raw_arg(args, 0));
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn open_store_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(name) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return STORE_INVALID_HANDLE;
+    };
+    let Some(info) = kernel.files.store_manager_info_for_name(&name) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return STORE_INVALID_HANDLE;
+    };
+    let handle = kernel.handles.insert(KernelObject::Store(StoreObject {
+        guest_root: info.guest_root,
+    }));
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn find_first_store_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let info_ptr = raw_arg(args, 0);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return STORE_INVALID_HANDLE;
+    }
+    let entries = kernel.files.store_manager_infos();
+    let Some(first) = entries.first() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_ITEMS);
+        return STORE_INVALID_HANDLE;
+    };
+    if !write_store_manager_info(kernel, memory, thread_id, info_ptr, first) {
+        return STORE_INVALID_HANDLE;
+    }
+    let handle = kernel
+        .handles
+        .insert(KernelObject::StoreSearch(StoreSearchObject {
+            guest_roots: entries.into_iter().map(|entry| entry.guest_root).collect(),
+            cursor: 1,
+        }));
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn find_next_store_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let info_ptr = raw_arg(args, 1);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let guest_root = {
+        let Ok(KernelObject::StoreSearch(search)) = kernel.handles.get_mut(handle) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        };
+        let Some(guest_root) = search.guest_roots.get(search.cursor).cloned() else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NO_MORE_ITEMS);
+            return false;
+        };
+        search.cursor += 1;
+        guest_root
+    };
+    let Some(info) = kernel.files.store_manager_info_for_guest_root(&guest_root) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_ITEMS);
+        return false;
+    };
+    if !write_store_manager_info(kernel, memory, thread_id, info_ptr, &info) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn find_close_store_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    if !matches!(kernel.handles.get(handle), Ok(KernelObject::StoreSearch(_))) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if kernel.handles.close(handle).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_store_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let info_ptr = raw_arg(args, 1);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let guest_root = match kernel.handles.get(handle) {
+        Ok(KernelObject::Store(store)) => store.guest_root.clone(),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
+    };
+    let Some(info) = kernel.files.store_manager_info_for_guest_root(&guest_root) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return false;
+    };
+    if !write_store_manager_info(kernel, memory, thread_id, info_ptr, &info) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn write_store_manager_info<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    out_ptr: u32,
+    info: &StoreManagerInfo,
+) -> bool {
+    let sectors = info.total_bytes / STORE_SECTOR_SIZE as u64;
+    let free_sectors = info.free_bytes.min(info.total_bytes) / STORE_SECTOR_SIZE as u64;
+    let device_flags = if info.writable {
+        STORAGE_DEVICE_FLAG_READWRITE
+    } else {
+        STORAGE_DEVICE_FLAG_READONLY
+    };
+    let device_type = STORAGE_DEVICE_TYPE_FLASH
+        | if info.removable {
+            STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE
+        } else {
+            0
+        };
+    let mut attributes = STORE_ATTRIBUTE_AUTOMOUNT;
+    if !info.writable {
+        attributes |= STORE_ATTRIBUTE_READONLY;
+    }
+    if info.removable {
+        attributes |= STORE_ATTRIBUTE_REMOVABLE;
+    }
+
+    let mut bytes = Vec::with_capacity(STORE_INFO_SIZE as usize);
+    append_store_dword(&mut bytes, STORE_INFO_SIZE);
+    append_fixed_wide_field(&mut bytes, &info.device_name, STORE_DEVICE_NAME_CHARS);
+    append_fixed_wide_field(&mut bytes, &info.store_name, STORE_NAME_CHARS);
+    append_store_dword(&mut bytes, STORAGE_DEVICE_CLASS_BLOCK);
+    append_store_dword(&mut bytes, device_type);
+    append_storage_device_info(&mut bytes, info, device_type, device_flags);
+    append_store_dword(&mut bytes, device_flags);
+    append_store_qword(&mut bytes, sectors);
+    append_store_dword(&mut bytes, STORE_SECTOR_SIZE);
+    append_store_qword(&mut bytes, free_sectors);
+    append_store_qword(&mut bytes, free_sectors);
+    append_store_qword(&mut bytes, 0);
+    append_store_qword(&mut bytes, 0);
+    append_store_dword(&mut bytes, attributes);
+    append_store_dword(&mut bytes, 1);
+    append_store_dword(&mut bytes, 1);
+    debug_assert_eq!(bytes.len(), STORE_INFO_SIZE as usize);
+    write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes)
+}
+
+fn append_storage_device_info(
+    bytes: &mut Vec<u8>,
+    info: &StoreManagerInfo,
+    device_type: u32,
+    device_flags: u32,
+) {
+    append_store_dword(bytes, STORAGE_DEVICE_INFO_SIZE);
+    append_fixed_wide_field(bytes, &info.profile_name, STORE_PROFILE_NAME_CHARS);
+    append_store_dword(bytes, STORAGE_DEVICE_CLASS_BLOCK);
+    append_store_dword(bytes, device_type);
+    append_store_dword(bytes, device_flags);
+}
+
+fn append_store_dword(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn append_store_qword(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_le_bytes());
 }
 
 fn write_ce_volume_info<M: CoredllGuestMemory>(

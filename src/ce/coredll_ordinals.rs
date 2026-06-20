@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 100] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 105] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13855,6 +13855,26 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 100] = &[
     CoredllOrdinalDef {
         name: "CeGetVolumeInfoW",
         ordinal: ORD_CE_GET_VOLUME_INFO_W,
+    },
+    CoredllOrdinalDef {
+        name: "OpenStore",
+        ordinal: ORD_OPEN_STORE,
+    },
+    CoredllOrdinalDef {
+        name: "FindFirstStore",
+        ordinal: ORD_FIND_FIRST_STORE,
+    },
+    CoredllOrdinalDef {
+        name: "FindNextStore",
+        ordinal: ORD_FIND_NEXT_STORE,
+    },
+    CoredllOrdinalDef {
+        name: "FindCloseStore",
+        ordinal: ORD_FIND_CLOSE_STORE,
+    },
+    CoredllOrdinalDef {
+        name: "GetStoreInfo",
+        ordinal: ORD_GET_STORE_INFO,
     },
     CoredllOrdinalDef {
         name: "RegistryGetDword",

@@ -14,60 +14,60 @@ use wince_emulation_v3::{
             ORD_CE_FS_IO_CONTROL_W, ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_VOLUME_INFO_W,
             ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION, ORD_CEIL, ORD_CHAR_LOWER_BUFF_W,
             ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK,
-            ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS,
-            ORD_COSH, ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W,
-            ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W, ORD_DEREGISTER_AFS,
-            ORD_DEREGISTER_AFSNAME, ORD_DEVICE_IO_CONTROL, ORD_DPA_CLONE, ORD_DPA_CREATE,
-            ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK, ORD_DPA_ENUM_CALLBACK, ORD_DPA_GET_PTR,
-            ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL,
-            ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE, ORD_DSA_CREATE,
-            ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK, ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR,
-            ORD_DSA_GROW, ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD,
-            ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE,
-            ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
-            ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
-            ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W,
+            ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS, ORD_COSH, ORD_CREATE_DIRECTORY_W,
+            ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W, ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE,
+            ORD_DELETE_FILE_W, ORD_DEREGISTER_AFS, ORD_DEREGISTER_AFSNAME, ORD_DEVICE_IO_CONTROL,
+            ORD_DPA_CLONE, ORD_DPA_CREATE, ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK,
+            ORD_DPA_ENUM_CALLBACK, ORD_DPA_GET_PTR, ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD,
+            ORD_DPCMP, ORD_DPDIV, ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL,
+            ORD_DSA_CLONE, ORD_DSA_CREATE, ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK,
+            ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM,
+            ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION,
+            ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH,
+            ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_CLOSE_STORE,
+            ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W, ORD_FIND_FIRST_STORE,
+            ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FIND_NEXT_STORE,
             ORD_FLOOR, ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE,
             ORD_FLUSH_VIEW_OF_FILE_MAYBE, ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FPADD, ORD_FPCMP,
             ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP, ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD,
             ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES, ORD_GET_COMM_MODEM_STATUS,
             ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W,
             ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
-            ORD_GET_OBJECT_W, ORD_GET_PROCESS_HEAP, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS,
-            ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC,
-            ORD_HEAP_SIZE, ORD_HEAP_VALIDATE, ORD_HYPOT, ORD_INTERLOCKED_DECREMENT,
-            ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR,
-            ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED,
-            ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM,
-            ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS,
-            ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
-            ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX, ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC,
-            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W,
-            ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES, ORD_OPERATOR_DELETE,
-            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW,
-            ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND,
-            ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
-            ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W,
-            ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W,
-            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_REGISTER_AFSEX,
-            ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD,
-            ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING,
-            ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
-            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC,
-            ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
-            ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
-            ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER,
-            ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP,
-            ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND,
-            ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
-            ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN,
-            ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM,
-            ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP, ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE,
-            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF,
-            ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP,
-            ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK,
-            ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
-            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_GET_OBJECT_W, ORD_GET_PROCESS_HEAP, ORD_GET_STORE_INFO, ORD_GET_VERSION_EX,
+            ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
+            ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE, ORD_HEAP_VALIDATE, ORD_HYPOT,
+            ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE,
+            ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE,
+            ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT,
+            ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC,
+            ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
+            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
+            ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
+            ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            ORD_NED, ORD_NES, ORD_OPEN_STORE, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
+            ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY,
+            ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND, ORD_READ_FILE,
+            ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W,
+            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W,
+            ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W,
+            ORD_REG_SET_VALUE_EX_W, ORD_REGISTER_AFSEX, ORD_REGISTER_AFSNAME,
+            ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING,
+            ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD,
+            ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC,
+            ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE,
+            ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W,
+            ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK,
+            ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W,
+            ORD_SET_FILE_TIME, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH,
+            ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY,
+            ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK,
+            ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN, ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER,
+            ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM, ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP,
+            ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE,
+            ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
+            ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
+            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{
             CREATE_ALWAYS, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
@@ -3784,6 +3784,275 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
+    const STORE_INFO_SIZE: u32 = 232;
+    const STORAGE_DEVICE_INFO_SIZE: u32 = 80;
+    const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+    const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
+    const STORE_ATTRIBUTE_AUTOMOUNT: u32 = 0x0000_0020;
+    const STORAGE_DEVICE_CLASS_BLOCK: u32 = 0x0000_0001;
+    const STORAGE_DEVICE_TYPE_FLASH: u32 = 1 << 1;
+    const STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE: u32 = 1 << 30;
+    const STORAGE_DEVICE_FLAG_READWRITE: u32 = 1 << 0;
+    const STORAGE_DEVICE_FLAG_READONLY: u32 = 1 << 1;
+    const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
+
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.storage.mounts.clear();
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("store_manager");
+    let sd_root = root.join("sd");
+    let flash_root = root.join("flash");
+    fs::create_dir_all(&sd_root).unwrap();
+    fs::create_dir_all(&flash_root).unwrap();
+    kernel.set_file_root(&root);
+    kernel.files.mount(MountConfig {
+        name: Some("SDMMC Disk".to_owned()),
+        device_name: Some("DSK1:".to_owned()),
+        bus_name: None,
+        guest_root: "\\SDMMC Disk".to_owned(),
+        host_root: Some(sd_root),
+        total_mbytes: 128,
+        free_mbytes: 64,
+        writable: true,
+        removable: true,
+        system: false,
+        hidden: false,
+        interface_classes: Vec::new(),
+        registry_roots: vec![r"Drivers\BuiltIn\SDMemory".to_owned()],
+        registry_subkey: Some("SDMemory".to_owned()),
+    });
+    kernel.files.mount(MountConfig {
+        name: Some("ResidentFlash".to_owned()),
+        device_name: Some("DSK2:".to_owned()),
+        bus_name: None,
+        guest_root: "\\ResidentFlash".to_owned(),
+        host_root: Some(flash_root),
+        total_mbytes: 32,
+        free_mbytes: 8,
+        writable: false,
+        removable: false,
+        system: false,
+        hidden: false,
+        interface_classes: Vec::new(),
+        registry_roots: vec![r"Drivers\BuiltIn\FlashDisk".to_owned()],
+        registry_subkey: None,
+    });
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let name_ptr = 0x1_0000;
+    let info_ptr = 0x3020_0000;
+    memory.map_halfwords(name_ptr, 32);
+    memory.map_bytes(info_ptr, STORE_INFO_SIZE);
+
+    let read_le_u32 = |bytes: &[u8], offset: usize| -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("DWORD"))
+    };
+    let read_le_u64 = |bytes: &[u8], offset: usize| -> u64 {
+        u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("QWORD"))
+    };
+    let read_fixed_wide = |bytes: &[u8], offset: usize, chars: usize| -> String {
+        let units = bytes[offset..offset + chars * 2]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .take_while(|unit| *unit != 0)
+            .collect::<Vec<_>>();
+        String::from_utf16_lossy(&units)
+    };
+    let assert_sd_store = |memory: &TestGuestMemory| {
+        let info = memory.read_bytes(info_ptr, STORE_INFO_SIZE as usize);
+        assert_eq!(read_le_u32(&info, 0), STORE_INFO_SIZE);
+        assert_eq!(read_fixed_wide(&info, 4, 8), "DSK1:");
+        assert_eq!(read_fixed_wide(&info, 20, 32), "SDMMC Disk");
+        assert_eq!(read_le_u32(&info, 84), STORAGE_DEVICE_CLASS_BLOCK);
+        assert_eq!(
+            read_le_u32(&info, 88),
+            STORAGE_DEVICE_TYPE_FLASH | STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE
+        );
+        assert_eq!(read_le_u32(&info, 92), STORAGE_DEVICE_INFO_SIZE);
+        assert_eq!(read_fixed_wide(&info, 96, 32), "SDMemory");
+        assert_eq!(read_le_u32(&info, 160), STORAGE_DEVICE_CLASS_BLOCK);
+        assert_eq!(read_le_u32(&info, 168), STORAGE_DEVICE_FLAG_READWRITE);
+        assert_eq!(read_le_u32(&info, 172), STORAGE_DEVICE_FLAG_READWRITE);
+        assert_eq!(read_le_u64(&info, 176), 128 * 1024 * 1024 / 512);
+        assert_eq!(read_le_u32(&info, 184), 512);
+        assert_eq!(read_le_u64(&info, 188), 64 * 1024 * 1024 / 512);
+        assert_eq!(read_le_u64(&info, 196), 64 * 1024 * 1024 / 512);
+        assert_eq!(
+            read_le_u32(&info, 220),
+            STORE_ATTRIBUTE_REMOVABLE | STORE_ATTRIBUTE_AUTOMOUNT
+        );
+        assert_eq!(read_le_u32(&info, 224), 1);
+        assert_eq!(read_le_u32(&info, 228), 1);
+    };
+    let assert_flash_store = |memory: &TestGuestMemory| {
+        let info = memory.read_bytes(info_ptr, STORE_INFO_SIZE as usize);
+        assert_eq!(read_le_u32(&info, 0), STORE_INFO_SIZE);
+        assert_eq!(read_fixed_wide(&info, 4, 8), "DSK2:");
+        assert_eq!(read_fixed_wide(&info, 20, 32), "ResidentFlash");
+        assert_eq!(read_le_u32(&info, 88), STORAGE_DEVICE_TYPE_FLASH);
+        assert_eq!(read_fixed_wide(&info, 96, 32), "FlashDisk");
+        assert_eq!(read_le_u32(&info, 172), STORAGE_DEVICE_FLAG_READONLY);
+        assert_eq!(read_le_u64(&info, 176), 32 * 1024 * 1024 / 512);
+        assert_eq!(read_le_u64(&info, 188), 8 * 1024 * 1024 / 512);
+        assert_eq!(
+            read_le_u32(&info, 220),
+            STORE_ATTRIBUTE_READONLY | STORE_ATTRIBUTE_AUTOMOUNT
+        );
+    };
+
+    memory.write_wide_z(name_ptr, "DSK1:");
+    let store_handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_OPEN_STORE,
+        [name_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("OpenStore returned {other:?}"),
+    };
+    assert_ne!(store_handle, INVALID_HANDLE_VALUE);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STORE_INFO,
+            [store_handle, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_sd_store(&memory);
+
+    memory.write_wide_z(name_ptr, r"\DSK1:");
+    let slash_store_handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_OPEN_STORE,
+        [name_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("OpenStore with leading slash returned {other:?}"),
+    };
+    assert_ne!(slash_store_handle, INVALID_HANDLE_VALUE);
+
+    let search_handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_STORE,
+        [info_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstStore returned {other:?}"),
+    };
+    assert_ne!(search_handle, INVALID_HANDLE_VALUE);
+    assert_sd_store(&memory);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_STORE,
+            [search_handle, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_flash_store(&memory);
+
+    memory.write_bytes(info_ptr, &[0xa5; STORE_INFO_SIZE as usize]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_STORE,
+            [search_handle, info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_ITEMS
+    );
+    assert_eq!(
+        memory.read_bytes(info_ptr, STORE_INFO_SIZE as usize),
+        vec![0xa5; STORE_INFO_SIZE as usize]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE_STORE,
+            [search_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE_STORE,
+            [search_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    for handle in [store_handle, slash_store_handle] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CLOSE_HANDLE,
+                [handle],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
     Ok(())
 }
 

@@ -22,6 +22,8 @@ pub enum KernelObject {
     File(FileObject),
     FindFile(FindFileObject),
     Volume(VolumeObject),
+    Store(StoreObject),
+    StoreSearch(StoreSearchObject),
     FileChangeNotification(FileChangeNotificationObject),
     DeviceNotification(DeviceNotificationObject),
     MessageQueue(MessageQueueHandleObject),
@@ -77,6 +79,17 @@ pub struct VolumeObject {
     pub guest_root: String,
     pub disk_ptr: Option<u32>,
     pub fsd_volume_context: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoreObject {
+    pub guest_root: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoreSearchObject {
+    pub guest_roots: Vec<String>,
+    pub cursor: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -303,6 +316,12 @@ impl HandleTable {
                     .disk_ptr
                     .map(|disk| format!("0x{disk:08x}"))
                     .unwrap_or_else(|| "none".to_owned())
+            ),
+            Ok(KernelObject::Store(store)) => format!("store(root={})", store.guest_root),
+            Ok(KernelObject::StoreSearch(search)) => format!(
+                "store_search(cursor={},entries={})",
+                search.cursor,
+                search.guest_roots.len()
             ),
             Ok(KernelObject::FileChangeNotification(notification)) => format!(
                 "file_change(owner={},path={},recursive={},filter=0x{:08x},signaled={})",
@@ -900,6 +919,8 @@ impl HandleTable {
             KernelObject::File(_)
             | KernelObject::FindFile(_)
             | KernelObject::Volume(_)
+            | KernelObject::Store(_)
+            | KernelObject::StoreSearch(_)
             | KernelObject::Device(_)
             | KernelObject::DeviceNotification(_)
             | KernelObject::MessageQueue(_)
@@ -954,6 +975,8 @@ impl HandleTable {
             KernelObject::File(_)
             | KernelObject::FindFile(_)
             | KernelObject::Volume(_)
+            | KernelObject::Store(_)
+            | KernelObject::StoreSearch(_)
             | KernelObject::Device(_)
             | KernelObject::DeviceNotification(_)
             | KernelObject::MessageQueue(_)

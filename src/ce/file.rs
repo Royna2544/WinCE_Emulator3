@@ -127,6 +127,18 @@ pub struct VolumeInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreManagerInfo {
+    pub guest_root: String,
+    pub device_name: String,
+    pub store_name: String,
+    pub profile_name: String,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub writable: bool,
+    pub removable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountTableVolumeInfo {
     pub name: String,
     pub flags: u32,
@@ -693,6 +705,39 @@ impl HostFileSystem {
             store_name: "ObjectStore".to_owned(),
             partition_name: "ObjectStore".to_owned(),
         }
+    }
+
+    pub fn store_manager_infos(&self) -> Vec<StoreManagerInfo> {
+        self.mounts_in_order()
+            .enumerate()
+            .map(|(index, mount)| store_manager_info_from_mount(index, mount))
+            .collect()
+    }
+
+    pub fn store_manager_info_for_name(&self, name: &str) -> Option<StoreManagerInfo> {
+        let normalized_name = normalize_store_manager_lookup_name(name);
+        self.store_manager_infos().into_iter().find(|info| {
+            [
+                info.device_name.as_str(),
+                info.store_name.as_str(),
+                info.guest_root.as_str(),
+                info.guest_root.trim_start_matches('\\'),
+            ]
+            .iter()
+            .any(|candidate| normalize_store_manager_lookup_name(candidate) == normalized_name)
+        })
+    }
+
+    pub fn store_manager_info_for_guest_root(&self, guest_root: &str) -> Option<StoreManagerInfo> {
+        let guest_root = normalize_guest_path(guest_root);
+        self.mount_order
+            .iter()
+            .position(|root| root == &guest_root)
+            .and_then(|index| {
+                self.mounts
+                    .get(&guest_root)
+                    .map(|mount| store_manager_info_from_mount(index, mount))
+            })
     }
 
     pub fn mount_table_volume_info_for_guest_root(
@@ -1910,6 +1955,55 @@ fn volume_name_from_guest_root(guest_root: &str) -> String {
         .find(|part| !part.is_empty())
         .unwrap_or("ObjectStore")
         .to_owned()
+}
+
+fn store_manager_info_from_mount(index: usize, mount: &FileMount) -> StoreManagerInfo {
+    let store_name = mount
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| volume_name_from_guest_root(&mount.guest_root));
+    let device_name = mount
+        .device_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("DSK{}:", index + 1));
+    let profile_name = mount
+        .registry_subkey
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.trim_matches('\\').to_owned())
+        .or_else(|| {
+            mount
+                .registry_roots
+                .iter()
+                .find_map(|root| root.trim_matches('\\').rsplit('\\').next())
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "HostFS".to_owned());
+    StoreManagerInfo {
+        guest_root: mount.guest_root.replace('/', "\\"),
+        device_name,
+        store_name,
+        profile_name,
+        total_bytes: mount.total_bytes,
+        free_bytes: mount.free_bytes.min(mount.total_bytes),
+        writable: mount.writable,
+        removable: mount.removable,
+    }
+}
+
+fn normalize_store_manager_lookup_name(name: &str) -> String {
+    let trimmed = name.trim().trim_start_matches(['\\', '/']);
+    normalize_guest_path(trimmed)
+        .trim_start_matches('/')
+        .to_ascii_lowercase()
 }
 
 fn device_interface_advertisement_spec(

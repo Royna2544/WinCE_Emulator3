@@ -93,6 +93,15 @@ notes when it is still needed for implementation.
   by accepting and retaining the shell file-change callback pointer instead of
   returning unsupported. Coverage verifies callback registration, replacement,
   clearing by zero, and successful last-error behavior.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: raw StoreMgr
+  `OpenStore`/`FindFirstStore`/`FindNextStore`/`FindCloseStore`/
+  `GetStoreInfo` now expose mounted host-backed stores through CE-shaped
+  `STOREINFO` records instead of being name-only exports. Coverage verifies
+  leading-slash store names, ordered enumeration, store/device/profile fields,
+  sector counts, read-only/removable flags, exhaustion, and closed-find-handle
+  rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now

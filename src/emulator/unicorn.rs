@@ -728,6 +728,27 @@ fn pop_pending_guest_thread_return_for_thread(
 }
 
 #[cfg(feature = "unicorn")]
+fn guest_thread_wait_owner_id(kernel: &CeKernel, thread_id: u32, thread_handle: u32) -> u32 {
+    kernel.guest_thread_id(thread_handle).unwrap_or(thread_id)
+}
+
+#[cfg(feature = "unicorn")]
+fn running_guest_thread_for_wait(
+    kernel: &CeKernel,
+    thread_id: u32,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> Option<(u32, u32)> {
+    running_thread.borrow().and_then(|(id, handle)| {
+        (id == thread_id).then(|| {
+            (
+                guest_thread_wait_owner_id(kernel, thread_id, handle),
+                handle,
+            )
+        })
+    })
+}
+
+#[cfg(feature = "unicorn")]
 fn pop_pending_wndproc_return_for_call_sp(
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
     call_sp: u32,
@@ -15119,9 +15140,10 @@ fn try_block_wait_for_single_object<D>(
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         let kind = BlockedWaitKind::Kernel;
         let wait_handles = vec![wait_handle];
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+        let wait_thread_id = guest_thread_wait_owner_id(kernel, thread_id, callout.thread_handle);
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, wait_thread_id);
         let wait_id = kernel.register_blocked_waiter(
-            thread_id,
+            wait_thread_id,
             callout.thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
@@ -15136,13 +15158,13 @@ fn try_block_wait_for_single_object<D>(
             wait_handle,
             timeout,
             wait_started_ms,
-            thread_id,
+            wait_thread_id,
             return_pc,
             blocked_waits,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
-            thread_id,
+            thread_id: wait_thread_id,
             thread_handle: callout.thread_handle,
             wait_handles,
             kind,
@@ -15170,11 +15192,12 @@ fn try_block_wait_for_single_object<D>(
         return true;
     }
 
-    let running = *running_thread.borrow();
-    if let Some((_, thread_handle)) = running {
+    if let Some((wait_thread_id, thread_handle)) =
+        running_guest_thread_for_wait(kernel, thread_id, running_thread)
+    {
         if suspended_thread.borrow().is_none()
             && timeout != crate::ce::timer::INFINITE
-            && !has_ready_blocked_waiter(kernel, thread_id)
+            && !has_ready_blocked_waiter(kernel, wait_thread_id)
             && timer_delay_fits_host_wall_budget(
                 timeout,
                 host_wall_clock_started,
@@ -15185,7 +15208,7 @@ fn try_block_wait_for_single_object<D>(
                 kernel,
                 uc,
                 wait_handle,
-                thread_id,
+                wait_thread_id,
                 timeout,
                 return_pc,
                 live_pump,
@@ -15193,9 +15216,9 @@ fn try_block_wait_for_single_object<D>(
         }
         let kind = BlockedWaitKind::Kernel;
         let wait_handles = vec![wait_handle];
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, wait_thread_id);
         let wait_id = kernel.register_blocked_waiter(
-            thread_id,
+            wait_thread_id,
             thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
@@ -15210,13 +15233,13 @@ fn try_block_wait_for_single_object<D>(
             wait_handle,
             timeout,
             wait_started_ms,
-            thread_id,
+            wait_thread_id,
             return_pc,
             blocked_waits,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
-            thread_id,
+            thread_id: wait_thread_id,
             thread_handle,
             wait_handles,
             kind,
@@ -26402,11 +26425,15 @@ fn activate_suspended_thread<D>(
 ) {
     use unicorn_engine::RegisterMIPS;
 
-    *current_thread_id.borrow_mut() = suspended.thread_id;
-    let _ = update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
+    let active_thread_id = suspended
+        .thread_handle
+        .and_then(|handle| kernel.guest_thread_id(handle))
+        .unwrap_or(suspended.thread_id);
+    *current_thread_id.borrow_mut() = active_thread_id;
+    let _ = update_user_kdata_current_ids(uc, active_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = suspended
         .thread_handle
-        .map(|handle| (suspended.thread_id, handle));
+        .map(|handle| (active_thread_id, handle));
     restore_mips_gprs(uc, &suspended.regs);
     if suspended.thread_handle.is_some() && read_mips_reg(uc, RegisterMIPS::RA) == 0 {
         let _ = uc.reg_write(RegisterMIPS::RA, u64::from(GUEST_THREAD_RETURN_STUB_ADDR));
