@@ -6378,22 +6378,26 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_CURRENT_POSITION_EX => {
             let hdc = raw_arg(args, 0);
             let point_ptr = raw_arg(args, 1);
-            if let Some(pos) = kernel.resources.current_pos(hdc) {
-                if point_ptr != 0 {
-                    let _ = memory.write_u32(point_ptr, pos.x as u32);
-                    let _ = memory.write_u32(point_ptr + 4, pos.y as u32);
-                    kernel.threads.set_last_error(thread_id, 0);
-                    Some(CoredllValue::Bool(true))
-                } else {
-                    kernel
-                        .threads
-                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                    Some(CoredllValue::Bool(false))
-                }
-            } else {
+            if !is_valid_hdc(kernel, hdc) {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                Some(CoredllValue::Bool(false))
+            } else if point_ptr == 0 {
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                Some(CoredllValue::Bool(false))
+            } else if let Some(pos) = kernel.resources.current_pos(hdc) {
+                let ok = write_guest_point(kernel, memory, thread_id, point_ptr, pos);
+                if ok {
+                    kernel.threads.set_last_error(thread_id, 0);
+                }
+                Some(CoredllValue::Bool(ok))
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
                 Some(CoredllValue::Bool(false))
             }
         }
