@@ -349,12 +349,6 @@ fn run_cpu_loop(
             kernel,
             Some(desktop.framebuffer_mut()),
         );
-        if args.remote_server.is_some()
-            && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
-        {
-            reported_blocked_message_wait = false;
-            continue;
-        }
         if cpu.complete_escaped_saved_get_message_sent_callout(kernel) {
             reported_blocked_message_wait = false;
             continue;
@@ -364,6 +358,12 @@ fn run_cpu_loop(
             continue;
         }
         if cpu.clear_escaped_visible_message_callouts(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if args.remote_server.is_some()
+            && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
+        {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -959,14 +959,18 @@ fn rotate_idle_active_to_visible_parked(
     kernel: &mut CeKernel,
     desktop: &mut DesktopRuntime,
 ) -> bool {
-    if !cpu.active_process_has_receiver_work(kernel)
-        && (cpu.rotate_to_visible_window_parked_process(kernel)
-            || cpu.rotate_to_next_parked_process(kernel))
+    if cpu.active_process_has_receiver_work(kernel) {
+        return false;
+    }
+    if cpu.rotate_to_visible_window_parked_process(kernel)
+        || (!cpu.active_process_has_visible_windows(kernel)
+            && cpu.rotate_to_next_parked_process(kernel))
     {
         publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
-        return true;
+        true
+    } else {
+        false
     }
-    false
 }
 
 fn rotate_to_cross_process_send_target(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
