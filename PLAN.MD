@@ -133,6 +133,15 @@ notes when it is still needed for implementation.
   `IOCTL_DISK_DEVICE_INFO`, and `IOCTL_DISK_GETNAME` through an opened
   partition handle, including byte counts, profile/device flags, mounted
   volume names, and insufficient-buffer rejection for disk names.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsdmgr.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`: store-handle
+  `DeviceIoControl` now exposes the cached disk paths CE uses before
+  partition mounting. Coverage verifies `IOCTL_DISK_GETINFO` with shared
+  in/out `DISK_INFO`, cached `IOCTL_DISK_DEVICE_INFO`, byte counts, mounted
+  profile/device flags, and invalid cached-device-info no-touch behavior.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now

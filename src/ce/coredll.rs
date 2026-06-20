@@ -23197,6 +23197,20 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
             );
         }
     }
+    if let Some(result) = store_handle_disk_io_control_raw(
+        kernel,
+        memory,
+        thread_id,
+        handle,
+        ioctl_code,
+        input_ptr,
+        input_len,
+        output_ptr,
+        output_capacity,
+        returned_ptr,
+    ) {
+        return result;
+    }
     if let Some(result) = partition_handle_disk_io_control_raw(
         kernel,
         memory,
@@ -23316,6 +23330,115 @@ fn partition_store_guest_root(kernel: &mut CeKernel, handle: u32) -> Option<Stri
     }
 }
 
+fn store_manager_info_for_handle(kernel: &mut CeKernel, handle: u32) -> Option<StoreManagerInfo> {
+    let guest_root = match kernel.handles.get(handle) {
+        Ok(KernelObject::Store(store)) => store.guest_root.clone(),
+        Ok(_) | Err(_) => return None,
+    };
+    kernel.files.store_manager_info_for_guest_root(&guest_root)
+}
+
+fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    ioctl_code: u32,
+    input_ptr: u32,
+    input_len: u32,
+    output_ptr: u32,
+    output_capacity: u32,
+    returned_ptr: u32,
+) -> Option<bool> {
+    let handled = matches!(
+        ioctl_code,
+        DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO | IOCTL_DISK_DEVICE_INFO
+    );
+    if !handled {
+        return None;
+    }
+    let info = store_manager_info_for_handle(kernel, handle)?;
+    Some(match ioctl_code {
+        DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO => store_disk_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            &info,
+            if output_ptr != 0 {
+                output_ptr
+            } else {
+                input_ptr
+            },
+            if output_ptr != 0 {
+                output_capacity
+            } else {
+                input_len
+            },
+            returned_ptr,
+        ),
+        IOCTL_DISK_DEVICE_INFO => store_disk_device_info_raw(
+            kernel,
+            memory,
+            thread_id,
+            &info,
+            if input_ptr != 0 {
+                input_ptr
+            } else {
+                output_ptr
+            },
+            if input_ptr != 0 {
+                input_len
+            } else {
+                output_capacity
+            },
+            returned_ptr,
+        ),
+        _ => unreachable!(),
+    })
+}
+
+fn store_disk_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info: &StoreManagerInfo,
+    out_ptr: u32,
+    out_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    let sectors = (info.total_bytes / STORE_SECTOR_SIZE as u64).min(u32::MAX as u64) as u32;
+    write_fsd_disk_info_raw(
+        kernel,
+        memory,
+        thread_id,
+        sectors,
+        info.writable,
+        out_ptr,
+        out_len,
+        returned_ptr,
+    )
+}
+
+fn store_disk_device_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info: &StoreManagerInfo,
+    out_ptr: u32,
+    out_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    write_storage_device_info_raw(
+        kernel,
+        memory,
+        thread_id,
+        info,
+        out_ptr,
+        out_len,
+        returned_ptr,
+    )
+}
+
 fn partition_manager_info_for_handle(
     kernel: &mut CeKernel,
     handle: u32,
@@ -23421,20 +23544,42 @@ fn partition_disk_info_raw<M: CoredllGuestMemory>(
     out_len: u32,
     returned_ptr: u32,
 ) -> bool {
+    let sectors = (info.total_bytes / STORE_SECTOR_SIZE as u64).min(u32::MAX as u64) as u32;
+    write_fsd_disk_info_raw(
+        kernel,
+        memory,
+        thread_id,
+        sectors,
+        info.writable,
+        out_ptr,
+        out_len,
+        returned_ptr,
+    )
+}
+
+fn write_fsd_disk_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    sectors: u32,
+    writable: bool,
+    out_ptr: u32,
+    out_len: u32,
+    returned_ptr: u32,
+) -> bool {
     if out_ptr == 0 || out_len < FSD_DISK_INFO_SIZE {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let sectors = (info.total_bytes / STORE_SECTOR_SIZE as u64).min(u32::MAX as u64) as u32;
     let mut bytes = Vec::with_capacity(FSD_DISK_INFO_SIZE as usize);
     append_store_dword(&mut bytes, sectors);
     append_store_dword(&mut bytes, STORE_SECTOR_SIZE);
     append_store_dword(&mut bytes, 1);
     append_store_dword(&mut bytes, 1);
     append_store_dword(&mut bytes, sectors);
-    append_store_dword(&mut bytes, if info.writable { 0 } else { FDI_READONLY });
+    append_store_dword(&mut bytes, if writable { 0 } else { FDI_READONLY });
     debug_assert_eq!(bytes.len(), FSD_DISK_INFO_SIZE as usize);
     if !write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes) {
         return false;
@@ -23470,19 +23615,45 @@ fn partition_disk_device_info_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
         return false;
     };
+    write_storage_device_info_raw(
+        kernel,
+        memory,
+        thread_id,
+        &store_info,
+        out_ptr,
+        out_len,
+        returned_ptr,
+    )
+}
+
+fn write_storage_device_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info: &StoreManagerInfo,
+    out_ptr: u32,
+    out_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    if out_ptr == 0 || out_len < STORAGE_DEVICE_INFO_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
     let device_type = STORAGE_DEVICE_TYPE_FLASH
-        | if store_info.removable {
+        | if info.removable {
             STORAGE_DEVICE_TYPE_REMOVABLE_DRIVE
         } else {
             0
         };
-    let device_flags = if store_info.writable {
+    let device_flags = if info.writable {
         STORAGE_DEVICE_FLAG_READWRITE
     } else {
         STORAGE_DEVICE_FLAG_READONLY
     };
     let mut bytes = Vec::with_capacity(STORAGE_DEVICE_INFO_SIZE as usize);
-    append_storage_device_info(&mut bytes, &store_info, device_type, device_flags);
+    append_storage_device_info(&mut bytes, info, device_type, device_flags);
     debug_assert_eq!(bytes.len(), STORAGE_DEVICE_INFO_SIZE as usize);
     if !write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes) {
         return false;
