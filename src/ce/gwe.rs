@@ -4784,6 +4784,17 @@ impl Gwe {
         self.windows.values().cloned().collect()
     }
 
+    pub fn thread_has_dirty_visible_window(&self, thread_id: u32) -> bool {
+        self.windows.values().any(|window| {
+            window.thread_id == thread_id
+                && window.visible
+                && !window.destroyed
+                && window.rect.width() > 0
+                && window.rect.height() > 0
+                && (window.update_pending || window.erase_pending)
+        })
+    }
+
     pub fn queue_snapshot(&self) -> Vec<(u32, Vec<Message>)> {
         self.queues
             .iter()

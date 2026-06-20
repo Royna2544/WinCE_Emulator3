@@ -40,6 +40,10 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 - In the latest splash-phase sample, `COM7:` is not opened yet and the only
   device activity is repeated `UID1:` IOCTLs, so sensor data cannot currently
   unblock the visible splash/map transition.
+- Startup profiling still reaches the same real guest stop
+  (`happyway_win.exe+0x7b56c`) inside traffic/shared-memory initialization; the
+  remaining delay is not explained by unreadable MessageBox UI, remote input
+  routing, or sensor queuing.
 
 ## Build And Validation Risks
 

@@ -126,6 +126,7 @@ const ERROR_PATH_NOT_FOUND: u32 = 3;
 const FSCTL_COPY_EXTERNAL_START: u32 = 0x0009_004c;
 const FSCTL_COPY_EXTERNAL_COMPLETE: u32 = 0x0009_0050;
 const FSCTL_GET_STREAM_INFORMATION: u32 = 0x0009_4038;
+const FSCTL_SET_ZERO_DATA: u32 = 0x0009_80c8;
 const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
 const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
 const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
@@ -139,6 +140,8 @@ const FILE_CACHE_INFO_SIZE: u32 = 4;
 const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
 const FILE_STREAM_INFO_STANDARD: u32 = 0;
 const FILE_STREAM_INFO_SIZE: u32 = 52;
+const FILE_ZERO_DATA_INFORMATION_SIZE: u32 = 16;
+const FILE_ZERO_DATA_CHUNK_SIZE: usize = 64 * 1024;
 const STORAGE_MEDIA_CHANGE_EVENT_DETACHED: u32 = 0;
 const STORAGE_MEDIA_CHANGE_EVENT_ATTACHED: u32 = 1;
 const STORAGE_MEDIA_ATTACH_RESULT_UNCHANGED: u32 = 0;
@@ -23836,6 +23839,29 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
             }
         }
     }
+    if ioctl_code == FSCTL_SET_ZERO_DATA {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                return file_handle_set_zero_data_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    handle,
+                    input_ptr,
+                    input_len,
+                    returned_ptr,
+                );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
     if matches!(
         ioctl_code,
         FSCTL_GET_VOLUME_INFO | FSCTL_REFRESH_VOLUME | FSCTL_FLUSH_BUFFERS
@@ -24707,6 +24733,112 @@ fn file_handle_get_stream_information_raw<M: CoredllGuestMemory>(
     {
         return false;
     }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn file_handle_set_zero_data_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    input_ptr: u32,
+    input_len: u32,
+    returned_ptr: u32,
+) -> bool {
+    if input_ptr == 0 || input_len != FILE_ZERO_DATA_INFORMATION_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    let Ok(offset_low) = memory.read_u32(input_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    let Ok(offset_high) = memory.read_u32(input_ptr.wrapping_add(4)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    let Ok(beyond_low) = memory.read_u32(input_ptr.wrapping_add(8)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    let Ok(beyond_high) = memory.read_u32(input_ptr.wrapping_add(12)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    };
+    let start = u64::from(offset_low) | (u64::from(offset_high) << 32);
+    let finish = u64::from(beyond_low) | (u64::from(beyond_high) << 32);
+    if finish < start {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if start == finish {
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+
+    let file_size = match kernel.get_file_size(handle) {
+        Ok(size) => size as u64,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        }
+    };
+    let zero_finish = finish.min(file_size);
+    if start >= zero_finish {
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+
+    let mut cursor = start;
+    while cursor < zero_finish {
+        let chunk_len = ((zero_finish - cursor) as usize).min(FILE_ZERO_DATA_CHUNK_SIZE);
+        let zeroes = vec![0; chunk_len];
+        match kernel.write_file_handle_at(handle, cursor as usize, &zeroes) {
+            Ok(result) if result.success && result.bytes_transferred == chunk_len as u32 => {
+                cursor += chunk_len as u64;
+            }
+            Ok(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
+
+    write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }

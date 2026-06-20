@@ -62,6 +62,10 @@ references for historical reconstruction.
   before `COM7:` opens; touch/key input is consumed by the owned splash, while
   the app continues resource/window setup (`resmapi_800x480.bin` memory-backed
   opens and hidden `afxwnd42u` child creation).
+- Elevated `cargo flamegraph` startup samples still stop in the real
+  `happyway_win.exe+0x7b56c` traffic/shared-memory fill loop; the live-pump
+  visible-window readiness check no longer clones the full GWE window list on
+  that hot path.
 - `MultiByteToWideChar`/`WideCharToMultiByte` now skip host Windows conversion
   calls for zero-flag ASCII input under Korean ACP/UTF-8, preserving explicit
   length and null-terminated return counts.

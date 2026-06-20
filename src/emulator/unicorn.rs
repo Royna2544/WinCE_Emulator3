@@ -3103,14 +3103,7 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn thread_has_dirty_visible_window(thread_id: u32, kernel: &CeKernel) -> bool {
-        kernel.gwe.windows_snapshot().into_iter().any(|window| {
-            window.thread_id == thread_id
-                && window.visible
-                && !window.destroyed
-                && window.rect.width() > 0
-                && window.rect.height() > 0
-                && (window.update_pending || window.erase_pending)
-        })
+        kernel.gwe.thread_has_dirty_visible_window(thread_id)
     }
 
     #[cfg(feature = "unicorn")]

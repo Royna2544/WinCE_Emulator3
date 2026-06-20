@@ -6830,6 +6830,217 @@ fn coredll_raw_file_handle_get_stream_information_reports_standard_stream() -> R
 }
 
 #[test]
+fn coredll_raw_file_handle_set_zero_data_zeros_existing_range() -> Result<()> {
+    const FSCTL_SET_ZERO_DATA: u32 = 0x0009_80c8;
+    const ERROR_ACCESS_DENIED: u32 = 5;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let root = unique_test_root("file_handle_set_zero_data");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("zero.bin"), b"0123456789").unwrap();
+    kernel.files = HostFileSystem::new(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let path_ptr = 0x1_b000u32;
+    let zero_info_ptr = 0x1_b100u32;
+    let bytes_returned_ptr = 0x1_b200u32;
+    memory.write_wide_z(path_ptr, "\\zero.bin");
+    memory.map_words(zero_info_ptr, 4);
+    memory.map_words(bytes_returned_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a writable file handle: {other:?}"),
+    };
+
+    memory.write_word(zero_info_ptr, 3);
+    memory.write_word(zero_info_ptr + 4, 0);
+    memory.write_word(zero_info_ptr + 8, 6);
+    memory.write_word(zero_info_ptr + 12, 0);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_SET_ZERO_DATA,
+                zero_info_ptr,
+                16,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(zero_info_ptr, 8);
+    memory.write_word(zero_info_ptr + 8, 20);
+    memory.write_word(bytes_returned_ptr, 0xfeed_cafe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_SET_ZERO_DATA,
+                zero_info_ptr,
+                16,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(zero_info_ptr, 7);
+    memory.write_word(zero_info_ptr + 8, 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_SET_ZERO_DATA,
+                zero_info_ptr,
+                16,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        fs::read(root.join("zero.bin")).unwrap(),
+        vec![b'0', b'1', b'2', 0, 0, 0, b'6', b'7', 0, 0]
+    );
+
+    let readonly = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a read-only file handle: {other:?}"),
+    };
+    memory.write_word(zero_info_ptr, 0);
+    memory.write_word(zero_info_ptr + 8, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                readonly,
+                FSCTL_SET_ZERO_DATA,
+                zero_info_ptr,
+                16,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
+    );
+    assert_eq!(
+        fs::read(root.join("zero.bin")).unwrap(),
+        vec![b'0', b'1', b'2', 0, 0, 0, b'6', b'7', 0, 0]
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [readonly],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_copy_file_w_copies_between_ce_paths() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
