@@ -4360,16 +4360,36 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         // Resource manager (DDK)
         ORD_RESOURCE_CREATE_LIST => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
+            let status =
+                kernel.resource_create_list(raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2));
+            Some(CoredllValue::Bool(iorm_status_raw(
+                kernel, thread_id, status,
+            )))
         }
-        ORD_RESOURCE_REQUEST | ORD_RESOURCE_RELEASE => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
+        ORD_RESOURCE_REQUEST => {
+            let status =
+                kernel.resource_request_ex(raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2), 0);
+            Some(CoredllValue::Bool(iorm_status_raw(
+                kernel, thread_id, status,
+            )))
+        }
+        ORD_RESOURCE_REQUEST_EX => {
+            let status = kernel.resource_request_ex(
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+                raw_arg(args, 3),
+            );
+            Some(CoredllValue::Bool(iorm_status_raw(
+                kernel, thread_id, status,
+            )))
+        }
+        ORD_RESOURCE_RELEASE => {
+            let status =
+                kernel.resource_release(raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2));
+            Some(CoredllValue::Bool(iorm_status_raw(
+                kernel, thread_id, status,
+            )))
         }
         // InvalidateRgn — mark region dirty for repaint; return true
         ORD_INVALIDATE_RGN => {
@@ -9784,6 +9804,11 @@ fn page_out_module_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> b
 
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn iorm_status_raw(kernel: &mut CeKernel, thread_id: u32, status: u32) -> bool {
+    kernel.threads.set_last_error(thread_id, status);
+    status == 0
 }
 
 fn get_disk_free_space_ex_w_raw<M: CoredllGuestMemory>(

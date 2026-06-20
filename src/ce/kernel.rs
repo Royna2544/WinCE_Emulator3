@@ -77,6 +77,8 @@ const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
 const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
 const DISK_IOCTL_INITIALIZED: u32 = 4;
 const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
+const ERROR_BUSY: u32 = 170;
+const RREXF_REQUEST_EXCLUSIVE: u32 = 0x0001;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePumpResult {
@@ -116,6 +118,28 @@ struct FsdmgrVolumeLock {
 struct FsdmgrFmdBlockLockRange {
     start_block: u32,
     block_count: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+struct IormResourceDomain {
+    minimum: u32,
+    count: u32,
+    valid: BTreeSet<u32>,
+    use_counts: BTreeMap<u32, u16>,
+    exclusive: BTreeSet<u32>,
+}
+
+fn iorm_domain_range(
+    domain: &IormResourceDomain,
+    id: u32,
+    len: u32,
+) -> Option<std::ops::Range<u32>> {
+    if len == 0 || id < domain.minimum {
+        return None;
+    }
+    let start = id.checked_sub(domain.minimum)?;
+    let end = start.checked_add(len)?;
+    (start < domain.count && end <= domain.count).then_some(start..end)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -269,6 +293,7 @@ pub struct CeKernel {
     comm_event_mask_changed_waits: BTreeSet<u64>,
     font_families: Vec<CeFontFamily>,
     fsdmgr_caches: Vec<Option<FsdmgrCacheEntry>>,
+    iorm_resource_domains: BTreeMap<u32, IormResourceDomain>,
     display_gamma_value: u32,
     display_rotation: u32,
     display_lcdcon3_high_nibble: u8,
@@ -1097,6 +1122,7 @@ impl CeKernel {
             comm_event_mask_changed_waits: BTreeSet::new(),
             font_families: ce_system_font_families(),
             fsdmgr_caches: Vec::new(),
+            iorm_resource_domains: BTreeMap::new(),
             display_gamma_value: 2330,
             display_rotation: 0,
             display_lcdcon3_high_nibble: 0,
@@ -1110,6 +1136,82 @@ impl CeKernel {
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
         self.runtime_loader_stats
+    }
+
+    pub fn resource_create_list(&mut self, resource_id: u32, minimum: u32, count: u32) -> u32 {
+        if self.iorm_resource_domains.contains_key(&resource_id) {
+            return ERROR_ALREADY_EXISTS;
+        }
+        if count == 0 {
+            return ERROR_INVALID_PARAMETER;
+        }
+        self.iorm_resource_domains.insert(
+            resource_id,
+            IormResourceDomain {
+                minimum,
+                count,
+                ..IormResourceDomain::default()
+            },
+        );
+        ERROR_SUCCESS
+    }
+
+    pub fn resource_release(&mut self, resource_id: u32, id: u32, len: u32) -> u32 {
+        let Some(domain) = self.iorm_resource_domains.get_mut(&resource_id) else {
+            return ERROR_FILE_NOT_FOUND;
+        };
+        let Some(range) = iorm_domain_range(domain, id, len) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        for item in range.clone() {
+            if domain.valid.contains(&item)
+                && domain.use_counts.get(&item).copied().unwrap_or(0) == 0
+            {
+                return ERROR_INVALID_PARAMETER;
+            }
+        }
+        for item in range {
+            if domain.valid.insert(item) {
+                domain.use_counts.insert(item, 0);
+            } else {
+                let current = domain.use_counts.get(&item).copied().unwrap_or(0);
+                if current == 1 {
+                    domain.exclusive.remove(&item);
+                }
+                domain.use_counts.insert(item, current.saturating_sub(1));
+            }
+        }
+        ERROR_SUCCESS
+    }
+
+    pub fn resource_request_ex(&mut self, resource_id: u32, id: u32, len: u32, flags: u32) -> u32 {
+        if flags & !RREXF_REQUEST_EXCLUSIVE != 0 {
+            return ERROR_INVALID_PARAMETER;
+        }
+        let Some(domain) = self.iorm_resource_domains.get_mut(&resource_id) else {
+            return ERROR_FILE_NOT_FOUND;
+        };
+        let Some(range) = iorm_domain_range(domain, id, len) else {
+            return ERROR_INVALID_PARAMETER;
+        };
+        let exclusive = flags & RREXF_REQUEST_EXCLUSIVE != 0;
+        for item in range.clone() {
+            if !domain.valid.contains(&item) {
+                return ERROR_INVALID_PARAMETER;
+            }
+            let use_count = domain.use_counts.get(&item).copied().unwrap_or(0);
+            if use_count != 0 {
+                return ERROR_BUSY;
+            }
+        }
+        for item in range {
+            let use_count = domain.use_counts.get(&item).copied().unwrap_or(0);
+            domain.use_counts.insert(item, use_count.saturating_add(1));
+            if exclusive {
+                domain.exclusive.insert(item);
+            }
+        }
+        ERROR_SUCCESS
     }
 
     pub fn advertise_device_interface(&mut self, class_guid: [u8; 16], name: String, add: bool) {
