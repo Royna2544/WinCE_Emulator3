@@ -3064,12 +3064,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_ENUM_DEVICES => Some(CoredllValue::U32(enum_devices_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_GET_DEVICE_KEYS => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_GET_DEVICE_KEYS => Some(CoredllValue::U32(get_device_keys_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_ATTACH_DEBUGGER | ORD_SET_INTERRUPT_EVENT => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -54145,6 +54142,106 @@ fn enum_devices_raw<M: CoredllGuestMemory>(
 ) -> u32 {
     let names = kernel.devices.enabled_names();
     enum_wide_multi_sz_raw(kernel, memory, thread_id, args, &names)
+}
+
+fn get_device_keys_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let dev_name_ptr = raw_arg(args, 0);
+    let active_key_ptr = raw_arg(args, 1);
+    let active_len_ptr = raw_arg(args, 2);
+    let driver_key_ptr = raw_arg(args, 3);
+    let driver_len_ptr = raw_arg(args, 4);
+    if dev_name_ptr == 0 || active_len_ptr == 0 || driver_len_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    let Some(dev_name) = read_guest_wide_arg(memory, dev_name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return ERROR_INVALID_PARAMETER;
+    };
+    let Some((active_key, driver_key)) = kernel.devices.device_keys(&dev_name) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return ERROR_FILE_NOT_FOUND;
+    };
+
+    let active_capacity = match memory.read_u32(active_len_ptr) {
+        Ok(value) => value,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return ERROR_INVALID_PARAMETER;
+        }
+    };
+    let driver_capacity = match memory.read_u32(driver_len_ptr) {
+        Ok(value) => value,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return ERROR_INVALID_PARAMETER;
+        }
+    };
+    let active_required = active_key.encode_utf16().count() as u32 + 1;
+    let driver_required = driver_key.encode_utf16().count() as u32 + 1;
+    if !write_guest_u32(kernel, memory, thread_id, active_len_ptr, active_required)
+        || !write_guest_u32(kernel, memory, thread_id, driver_len_ptr, driver_required)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    if (active_key_ptr != 0 && active_capacity < active_required)
+        || (driver_key_ptr != 0 && driver_capacity < driver_required)
+    {
+        kernel.threads.set_last_error(thread_id, ERROR_MORE_DATA);
+        return ERROR_MORE_DATA;
+    }
+
+    if active_key_ptr != 0
+        && !write_guest_wide_z(kernel, memory, thread_id, active_key_ptr, &active_key)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    if driver_key_ptr != 0
+        && !write_guest_wide_z(kernel, memory, thread_id, driver_key_ptr, &driver_key)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    kernel.threads.set_last_error(thread_id, 0);
+    0
+}
+
+fn write_guest_wide_z<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    ptr: u32,
+    text: &str,
+) -> bool {
+    for (index, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add((index as u32) * 2),
+            unit,
+        ) {
+            return false;
+        }
+    }
+    true
 }
 
 fn enum_wide_multi_sz_raw<M: CoredllGuestMemory>(

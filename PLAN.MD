@@ -28,6 +28,13 @@ notes when it is still needed for implementation.
 
 ## Recent CE-Backed Progress
 
+- `C:\WINCE600\PUBLIC\COMMON\DDK\INC\devload.h` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\windev.h`: raw `GetDeviceKeys` now
+  returns deterministic CE-style active and driver registry paths for enabled
+  configured devices instead of reporting unsupported. Coverage verifies null
+  argument rejection, unknown/disabled device lookup failures, length-only
+  queries, `ERROR_MORE_DATA` size reporting, case-insensitive device matching,
+  and successful `Drivers\Active\N` / `Drivers\BuiltIn\NAME` output.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battery.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battimpl.h`,

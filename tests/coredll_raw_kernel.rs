@@ -21,10 +21,10 @@ use wince_emulation_v3::{
             ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
             ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
             ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
-            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_ICON_INFO,
-            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
-            ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_POWER_STATUS_EX,
@@ -648,6 +648,227 @@ fn coredll_raw_device_enumerators_return_ce_multisz_lists() -> Result<()> {
     assert_eq!(memory.read_wide_z(list_ptr, 16), "COM7:");
     assert_eq!(memory.read_wide_z(list_ptr + 12, 16), "I2C1:");
     assert_eq!(memory.read_u16(list_ptr + 24)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_device_keys_reports_active_and_driver_registry_paths() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.devices = DeviceConfigFile {
+        version: 1,
+        defaults: DeviceDefaults::default(),
+        devices: vec![
+            DeviceConfig {
+                guest: "COM7:".to_owned(),
+                kind: DeviceKind::Serial,
+                backend: DeviceBackend::Stub,
+                host: None,
+                remote_gps: false,
+                enabled: true,
+                note: None,
+            },
+            DeviceConfig {
+                guest: "ACC1:".to_owned(),
+                kind: DeviceKind::IoctlDevice,
+                backend: DeviceBackend::Accelerometer,
+                host: None,
+                remote_gps: false,
+                enabled: false,
+                note: None,
+            },
+            DeviceConfig {
+                guest: "UID1:".to_owned(),
+                kind: DeviceKind::IoctlDevice,
+                backend: DeviceBackend::NandUuid,
+                host: None,
+                remote_gps: false,
+                enabled: true,
+                note: None,
+            },
+        ],
+    };
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let name_ptr = 0x3100_0000;
+    let missing_name_ptr = 0x3100_0100;
+    let disabled_name_ptr = 0x3100_0200;
+    let active_len_ptr = 0x3100_1000;
+    let driver_len_ptr = 0x3100_1004;
+    let active_key_ptr = 0x3100_2000;
+    let driver_key_ptr = 0x3100_2100;
+    memory.map_words(active_len_ptr, 2);
+    memory.map_halfwords(active_key_ptr, 64);
+    memory.map_halfwords(driver_key_ptr, 64);
+    memory.write_wide_z(name_ptr, "com7:");
+    memory.write_wide_z(missing_name_ptr, "COM8:");
+    memory.write_wide_z(disabled_name_ptr, "ACC1:");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_KEYS,
+            [
+                0,
+                active_key_ptr,
+                active_len_ptr,
+                driver_key_ptr,
+                driver_len_ptr
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_KEYS,
+            [name_ptr, active_key_ptr, 0, driver_key_ptr, driver_len_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_KEYS,
+            [
+                missing_name_ptr,
+                active_key_ptr,
+                active_len_ptr,
+                driver_key_ptr,
+                driver_len_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_FILE_NOT_FOUND),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_KEYS,
+            [
+                disabled_name_ptr,
+                active_key_ptr,
+                active_len_ptr,
+                driver_key_ptr,
+                driver_len_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_FILE_NOT_FOUND),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    memory.write_word(active_len_ptr, 0);
+    memory.write_word(driver_len_ptr, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_KEYS,
+            [name_ptr, 0, active_len_ptr, 0, driver_len_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(active_len_ptr)?, 17);
+    assert_eq!(memory.read_u32(driver_len_ptr)?, 21);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_word(active_len_ptr, 16);
+    memory.write_word(driver_len_ptr, 21);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_KEYS,
+            [
+                name_ptr,
+                active_key_ptr,
+                active_len_ptr,
+                driver_key_ptr,
+                driver_len_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_MORE_DATA),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(active_len_ptr)?, 17);
+    assert_eq!(memory.read_u32(driver_len_ptr)?, 21);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_MORE_DATA);
+
+    memory.write_word(active_len_ptr, 17);
+    memory.write_word(driver_len_ptr, 21);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_KEYS,
+            [
+                name_ptr,
+                active_key_ptr,
+                active_len_ptr,
+                driver_key_ptr,
+                driver_len_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(active_len_ptr)?, 17);
+    assert_eq!(memory.read_u32(driver_len_ptr)?, 21);
+    assert_eq!(memory.read_wide_z(active_key_ptr, 64), r"Drivers\Active\1");
+    assert_eq!(
+        memory.read_wide_z(driver_key_ptr, 64),
+        r"Drivers\BuiltIn\COM7"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
 
     Ok(())

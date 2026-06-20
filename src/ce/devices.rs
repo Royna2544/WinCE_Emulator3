@@ -243,6 +243,21 @@ impl DeviceNamespace {
             .collect()
     }
 
+    pub fn device_keys(&self, guest_name: &str) -> Option<(String, String)> {
+        let normalized = normalize_device_name(guest_name);
+        for (index, (key, device)) in self.devices.iter().enumerate() {
+            if key == &normalized {
+                let active_key = format!(r"Drivers\Active\{}", index + 1);
+                let driver_key = format!(
+                    r"Drivers\BuiltIn\{}",
+                    registry_key_suffix_from_device_name(&device.guest)
+                );
+                return Some((active_key, driver_key));
+            }
+        }
+        None
+    }
+
     pub fn remote_gps_target(&self) -> Option<String> {
         let mut fallback = None;
         for device in self.devices.values() {
@@ -698,6 +713,24 @@ fn normalize_device_name(name: &str) -> String {
         .trim_start_matches("\\\\.\\")
         .trim_end_matches(':')
         .to_ascii_uppercase()
+}
+
+fn registry_key_suffix_from_device_name(name: &str) -> String {
+    let suffix: String = name
+        .trim()
+        .trim_start_matches("\\\\.\\")
+        .trim_end_matches(':')
+        .chars()
+        .map(|ch| match ch {
+            '\\' | '/' | ':' => '_',
+            _ => ch,
+        })
+        .collect();
+    if suffix.is_empty() {
+        "Device".to_owned()
+    } else {
+        suffix
+    }
 }
 
 fn default_baud() -> u32 {
