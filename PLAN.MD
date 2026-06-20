@@ -81,6 +81,12 @@ notes when it is still needed for implementation.
   signaled state without consuming auto-reset events or changing last-error on
   missing or invalid names. Coverage verifies missing events, set/reset state,
   repeated peeks, null names, and invalid guest pointers.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\compr2.c` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\kwin32.h`: raw
+  `BinaryCompress`/`BinaryDecompress` now use the CE compression stream helper
+  instead of reporting unsupported. Coverage verifies computed-only output
+  sizing, stored binary packets, full and skipped decompression, all-zero
+  buffers, short output buffers, invalid packets, and null output rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kdriver.c` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\loader.h`: raw
   `LoadKernelLibrary` now resolves registered CE kernel libraries instead of

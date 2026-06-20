@@ -7,15 +7,15 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_ACTIVATE_DEVICE, ORD_ACTIVATE_DEVICE_EX, ORD_BATTERY_DRVR_GET_LEVELS,
             ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION, ORD_BATTERY_GET_LIFE_TIME_INFO,
-            ORD_BATTERY_NOTIFY_OF_TIME_CHANGE, ORD_CE_FIND_CLOSE_REG_CHANGE,
-            ORD_CE_FIND_FIRST_REG_CHANGE, ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_MODULE_INFO,
-            ORD_CE_GET_THREAD_PRIORITY, ORD_CE_GET_THREAD_QUANTUM, ORD_CE_OPEN_FILE_HANDLE,
-            ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM, ORD_CLEAR_COMM_ERROR,
-            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
-            ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_APIHANDLE, ORD_CREATE_APISET,
-            ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
-            ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W,
-            ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
+            ORD_BATTERY_NOTIFY_OF_TIME_CHANGE, ORD_BINARY_COMPRESS, ORD_BINARY_DECOMPRESS,
+            ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
+            ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_MODULE_INFO, ORD_CE_GET_THREAD_PRIORITY,
+            ORD_CE_GET_THREAD_QUANTUM, ORD_CE_OPEN_FILE_HANDLE, ORD_CE_SET_THREAD_PRIORITY,
+            ORD_CE_SET_THREAD_QUANTUM, ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE,
+            ORD_CLOSE_MSG_QUEUE, ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_APIHANDLE,
+            ORD_CREATE_APISET, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
+            ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE,
+            ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
             ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
             ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
@@ -9535,6 +9535,158 @@ fn coredll_raw_string_compress_decompress_matches_ce_raw_packet_edges() -> Resul
         kernel.threads.get_last_error(thread_id),
         ERROR_NOT_SUPPORTED
     );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_binary_compress_decompress_uses_ce_stream_packets() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 43;
+    let input_ptr = 0x3001_1000;
+    let packet_ptr = 0x3001_2000;
+    let output_ptr = 0x3001_3000;
+    let input = b"AAAAABBBBBCCCCCDDDDD";
+
+    memory.write_bytes(input_ptr, input);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BINARY_COMPRESS,
+            [input_ptr, input.len() as u32, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(10),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BINARY_COMPRESS,
+            [input_ptr, input.len() as u32, packet_ptr, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(10),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        memory.read_bytes(packet_ptr, 10),
+        [0xce, 0x53, 0x84, b'A', 0x84, b'B', 0x84, b'C', 0x84, b'D']
+    );
+
+    memory.write_bytes(output_ptr, &[0xee; 20]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BINARY_DECOMPRESS,
+            [packet_ptr, 10, output_ptr, input.len() as u32, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(20),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_bytes(output_ptr, input.len()), input);
+
+    memory.write_bytes(output_ptr, &[0xee; 8]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BINARY_DECOMPRESS,
+            [packet_ptr, 10, output_ptr, 8, 6],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(20),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(output_ptr, 8), b"BBBBCCCC");
+
+    memory.write_bytes(input_ptr, &[0; 12]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BINARY_COMPRESS,
+            [input_ptr, 12, packet_ptr, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_bytes(input_ptr, input);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BINARY_COMPRESS,
+            [input_ptr, input.len() as u32, packet_ptr, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_bytes(packet_ptr, &[1, 2, 3, 4]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BINARY_DECOMPRESS,
+            [packet_ptr, 4, output_ptr, 4, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BINARY_DECOMPRESS,
+            [packet_ptr, 4, 0, 4, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
     Ok(())
 }
 

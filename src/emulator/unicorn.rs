@@ -1915,7 +1915,10 @@ impl UnicornMips {
             return false;
         }
         let wndproc = if window.process_id == kernel.current_process_id() {
-            Some(original_wndproc)
+            Some(
+                self.mapped_guest_wndproc(original_wndproc)
+                    .unwrap_or(original_wndproc),
+            )
         } else {
             self.receiver_process_wndproc(original_wndproc)
         };
@@ -2124,11 +2127,14 @@ impl UnicornMips {
             let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
             return true;
         };
-        let wndproc = window.wndproc;
-        if !is_guest_wndproc(wndproc) {
+        let original_wndproc = window.wndproc;
+        if !is_guest_wndproc(original_wndproc) {
             let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
             return true;
         }
+        let wndproc = self
+            .mapped_guest_wndproc(original_wndproc)
+            .unwrap_or(original_wndproc);
 
         let mut call_regs = saved.regs.clone();
         let return_sp = saved.regs.regs[29];

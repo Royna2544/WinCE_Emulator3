@@ -2883,18 +2883,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_BINARY_COMPRESS => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
-        ORD_BINARY_DECOMPRESS => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_BINARY_COMPRESS => Some(CoredllValue::U32(binary_compress_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_BINARY_DECOMPRESS => Some(CoredllValue::U32(binary_decompress_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_MAP_PTR_TO_PROCESS | ORD_MAP_PTR_UNSECURE => {
             // MapPtrToProcess(lpv, hProc) / MapPtrUnsecure — return the pointer as-is.
             kernel.threads.set_last_error(thread_id, 0);
@@ -61157,6 +61151,44 @@ fn string_compress_stream_part(bytes: &[u8]) -> StringCompressPart {
     StringCompressPart::Raw(bytes.to_vec())
 }
 
+fn binary_compress_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let input_ptr = raw_arg(args, 0);
+    let input_len = raw_arg(args, 1);
+    let output_ptr = raw_arg(args, 2);
+    let output_len = raw_arg(args, 3);
+    if input_len == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CECOMPRESS_ALLZEROS;
+    }
+    let Some(input) = read_guest_bytes(kernel, memory, thread_id, input_ptr, input_len) else {
+        return CECOMPRESS_FAILED;
+    };
+    if input.iter().all(|&byte| byte == 0) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CECOMPRESS_ALLZEROS;
+    }
+    let Some(compressed) = string_engine_compress_stream(&input) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CECOMPRESS_FAILED;
+    };
+    if output_ptr != 0 {
+        if compressed.len() > output_len as usize {
+            kernel.threads.set_last_error(thread_id, 0);
+            return CECOMPRESS_FAILED;
+        }
+        if !write_guest_bytes(kernel, memory, thread_id, output_ptr, &compressed) {
+            return CECOMPRESS_FAILED;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    compressed.len() as u32
+}
+
 fn string_engine_compress_stream(bytes: &[u8]) -> Option<Vec<u8>> {
     let mut encoded = Vec::with_capacity(bytes.len());
     encoded.extend_from_slice(&STRING_COMPRESS_ENGINE_MAGIC);
@@ -61204,6 +61236,61 @@ fn string_engine_compress_stream(bytes: &[u8]) -> Option<Vec<u8>> {
         encoded.extend_from_slice(&bytes[literal_start..literal_start + literal_len]);
     }
     Some(encoded)
+}
+
+fn binary_decompress_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let input_ptr = raw_arg(args, 0);
+    let input_len = raw_arg(args, 1);
+    let output_ptr = raw_arg(args, 2);
+    let output_len = raw_arg(args, 3);
+    let skip = raw_arg(args, 4);
+    if output_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return CEDECOMPRESS_FAILED;
+    }
+    let Some(input) = read_guest_bytes(kernel, memory, thread_id, input_ptr, input_len) else {
+        return CEDECOMPRESS_FAILED;
+    };
+    let requested_end = match (skip as usize).checked_add(output_len as usize) {
+        Some(end) => end,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return CEDECOMPRESS_FAILED;
+        }
+    };
+    let decode_bound = input
+        .len()
+        .saturating_mul(STRING_COMPRESS_MAX_TOKEN_LEN)
+        .max(requested_end);
+    let decoded = match string_engine_decompress_stream(&input, decode_bound) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            kernel.threads.set_last_error(thread_id, error);
+            return CEDECOMPRESS_FAILED;
+        }
+    };
+    let skip = skip as usize;
+    let end = skip.saturating_add(output_len as usize).min(decoded.len());
+    if skip > decoded.len() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return CEDECOMPRESS_FAILED;
+    }
+    if !write_guest_bytes(kernel, memory, thread_id, output_ptr, &decoded[skip..end]) {
+        return CEDECOMPRESS_FAILED;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    decoded.len() as u32
 }
 
 fn string_engine_decompress_stream(
