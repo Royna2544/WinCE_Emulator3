@@ -401,6 +401,11 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
+        if cpu.reconcile_active_visible_window_thread(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            continue;
+        }
         if cpu.prepare_active_orphaned_visible_message_callout(kernel) {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
@@ -564,6 +569,11 @@ fn run_cpu_loop(
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.reconcile_active_visible_window_thread(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if cpu.prepare_active_orphaned_visible_message_callout(kernel) {
@@ -809,6 +819,11 @@ fn run_cpu_loop(
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.reconcile_active_visible_window_thread(kernel) {
+            reported_blocked_message_wait = false;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
         if cpu.prepare_active_orphaned_visible_message_callout(kernel) {

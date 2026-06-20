@@ -40,8 +40,8 @@ use crate::{
         },
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
-            CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
-            ThreadSuspendResult,
+            CriticalSectionObject, FileMappingView, KernelObject, PowerRequirementObject,
+            ThreadResumeResult, ThreadSuspendResult,
         },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, HKey,
@@ -4300,12 +4300,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_SET_SYSTEM_POWER_STATE => Some(CoredllValue::U32(set_system_power_state_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_SET_POWER_REQUIREMENT | ORD_RELEASE_POWER_REQUIREMENT => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_SET_POWER_REQUIREMENT => Some(CoredllValue::Handle(set_power_requirement_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_RELEASE_POWER_REQUIREMENT => Some(CoredllValue::U32(release_power_requirement_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_REQUEST_POWER_NOTIFICATIONS | ORD_STOP_POWER_NOTIFICATIONS => {
             kernel
                 .threads
@@ -20537,6 +20539,92 @@ fn write_current_system_time<M: CoredllGuestMemory>(
         );
     if ok {
         kernel.threads.set_last_error(thread_id, 0);
+    }
+}
+
+fn set_power_requirement_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let device_ptr = raw_arg(args, 0);
+    let device_state = raw_arg(args, 1);
+    let device_flags = raw_arg(args, 2);
+    let system_state_ptr = raw_arg(args, 3);
+    let system_flags = raw_arg(args, 4);
+    if !valid_device_power_state(device_state) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let device_name = if device_ptr == 0 {
+        None
+    } else {
+        if !valid_power_name_flags(device_flags, true) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        match read_guest_wide_arg(memory, device_ptr) {
+            Some(name) if !name.is_empty() => Some(name),
+            _ => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            }
+        }
+    };
+    let system_state = if system_state_ptr == 0 {
+        None
+    } else {
+        match read_guest_wide_arg(memory, system_state_ptr) {
+            Some(name) if !name.is_empty() => Some(name),
+            _ => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            }
+        }
+    };
+    if device_name.is_none() && system_state.is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if let Some(device_name) = device_name.as_deref() {
+        let _ = kernel.set_device_power_state(device_name, device_state);
+    }
+    let handle = kernel
+        .handles
+        .insert(KernelObject::PowerRequirement(PowerRequirementObject {
+            device_name,
+            device_state,
+            device_flags,
+            system_state,
+            system_flags,
+        }));
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    handle
+}
+
+fn release_power_requirement_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    if handle == 0
+        || !matches!(
+            kernel.handles.get(handle),
+            Ok(KernelObject::PowerRequirement(_))
+        )
+    {
+        return power_status(kernel, thread_id, ERROR_INVALID_HANDLE);
+    }
+    match kernel.close_handle(handle) {
+        Ok(_) => power_status(kernel, thread_id, ERROR_SUCCESS),
+        Err(_) => power_status(kernel, thread_id, ERROR_INVALID_HANDLE),
     }
 }
 

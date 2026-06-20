@@ -199,10 +199,13 @@ notes when it is still needed for implementation.
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\pm.h`: raw `SetSystemPowerState`,
   `GetSystemPowerState`, `DevicePowerNotify`, `SetDevicePower`, and
   `GetDevicePower` now track emulator power-manager state instead of
-  reporting unsupported. System state names/flags round-trip through the CE
-  `DWORD` status APIs, configured devices expose default `D0` and mutable Dx
-  state, and coverage verifies missing devices, invalid Dx values, null
-  outputs, and short system-state buffers.
+  reporting unsupported. `SetPowerRequirement`/`ReleasePowerRequirement` now
+  return and validate typed requirement handles, allowing PM-only device names
+  while updating configured device Dx state when possible. System state
+  names/flags round-trip through the CE `DWORD` status APIs, configured
+  devices expose default `D0` and mutable Dx state, and coverage verifies
+  missing devices, invalid Dx values, null outputs, closed requirement
+  handles, and short system-state buffers.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battery.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battimpl.h`,

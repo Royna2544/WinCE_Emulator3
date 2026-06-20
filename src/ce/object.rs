@@ -28,6 +28,7 @@ pub enum KernelObject {
     Device(DeviceSession),
     Window(u32),
     WaveOut(u32),
+    PowerRequirement(PowerRequirementObject),
     FileMapping(FileMappingObject),
     CriticalSection(CriticalSectionObject),
     Thread(ThreadObject),
@@ -105,6 +106,15 @@ pub struct DeviceNotificationObject {
 pub struct MessageQueueHandleObject {
     pub queue_id: u32,
     pub read_access: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PowerRequirementObject {
+    pub device_name: Option<String>,
+    pub device_state: u32,
+    pub device_flags: u32,
+    pub system_state: Option<String>,
+    pub system_flags: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -298,6 +308,14 @@ impl HandleTable {
             Ok(KernelObject::Device(_)) => "device".to_owned(),
             Ok(KernelObject::Window(hwnd)) => format!("window(hwnd=0x{hwnd:08x})"),
             Ok(KernelObject::WaveOut(id)) => format!("waveout(id={id})"),
+            Ok(KernelObject::PowerRequirement(requirement)) => format!(
+                "power_requirement(device={},state={},device_flags=0x{:08x},system={},system_flags=0x{:08x})",
+                requirement.device_name.as_deref().unwrap_or("<none>"),
+                requirement.device_state,
+                requirement.device_flags,
+                requirement.system_state.as_deref().unwrap_or("<none>"),
+                requirement.system_flags
+            ),
             Ok(KernelObject::FileMapping(mapping)) => format!(
                 "mapping(name={},size={},views={},closed={})",
                 mapping.name.as_deref().unwrap_or("<unnamed>"),
@@ -860,6 +878,7 @@ impl HandleTable {
             | KernelObject::MessageQueue(_)
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
+            | KernelObject::PowerRequirement(_)
             | KernelObject::FileMapping(_)
             | KernelObject::CriticalSection(_) => WaitResult::Failed,
             KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
@@ -911,6 +930,7 @@ impl HandleTable {
             | KernelObject::MessageQueue(_)
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
+            | KernelObject::PowerRequirement(_)
             | KernelObject::FileMapping(_)
             | KernelObject::CriticalSection(_) => return None,
         })
