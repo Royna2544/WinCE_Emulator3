@@ -4410,13 +4410,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_ENUM_DEVICE_INTERFACES => Some(CoredllValue::Bool(enum_device_interfaces_raw(
             kernel, memory, thread_id, args[0], args[1], args[2], args[3], args[4],
         ))),
-        // GetCallStackSnapshot
-        ORD_GET_CALL_STACK_SNAPSHOT => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_GET_CALL_STACK_SNAPSHOT => Some(CoredllValue::U32(get_call_stack_snapshot_raw(
+            kernel, memory, thread_id, args,
+        ))),
         // CeSetProcessVersion
         ORD_CE_SET_PROCESS_VERSION => {
             kernel.threads.set_last_error(thread_id, 0);
@@ -22743,6 +22739,108 @@ fn wait_for_multiple_objects_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
     }
     result
+}
+
+fn get_call_stack_snapshot_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    const STACKSNAP_FAIL_IF_INCOMPLETE: u32 = 0x0001;
+    const STACKSNAP_EXTENDED_INFO: u32 = 0x0002;
+    const STACKSNAP_INPROC_ONLY: u32 = 0x0004;
+    const STACKSNAP_RETURN_FRAMES_ON_ERROR: u32 = 0x0008;
+    const GTC_VALID_FLAGS: u32 = STACKSNAP_FAIL_IF_INCOMPLETE
+        | STACKSNAP_EXTENDED_INFO
+        | STACKSNAP_INPROC_ONLY
+        | STACKSNAP_RETURN_FRAMES_ON_ERROR;
+    const MAX_SKIP: u32 = 0x1_0000;
+    const MAX_NUM_FRAME: u32 = 0x1_0000;
+    const CALL_SNAPSHOT_SIZE: u32 = 4;
+    const CALL_SNAPSHOT_EX_SIZE: u32 = 28;
+
+    let max_frames = raw_arg(args, 0);
+    let frames_ptr = raw_arg(args, 1);
+    let flags = raw_arg(args, 2);
+    let skip = raw_arg(args, 3);
+    let frame_size = if flags & STACKSNAP_EXTENDED_INFO != 0 {
+        CALL_SNAPSHOT_EX_SIZE
+    } else {
+        CALL_SNAPSHOT_SIZE
+    };
+    let Some(total_size) = max_frames.checked_mul(frame_size) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+
+    if flags & !GTC_VALID_FLAGS != 0
+        || skip > MAX_SKIP
+        || max_frames == 0
+        || max_frames > MAX_NUM_FRAME
+        || frames_ptr == 0
+        || total_size == 0
+        || !guest_words_mapped(kernel, memory, thread_id, frames_ptr, total_size)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    if skip != 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+
+    let return_addr = 0xeffe_0000 | (thread_id & 0x0000_ffff);
+    if !write_guest_u32(kernel, memory, thread_id, frames_ptr, return_addr) {
+        return 0;
+    }
+    if flags & STACKSNAP_EXTENDED_INFO != 0 {
+        for (offset, value) in [
+            (4, 0),
+            (8, kernel.current_process_id()),
+            (12, 0),
+            (16, 0),
+            (20, 0),
+            (24, 0),
+        ] {
+            if !write_guest_u32(kernel, memory, thread_id, frames_ptr + offset, value) {
+                return 0;
+            }
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    1
+}
+
+fn guest_words_mapped<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+    byte_count: u32,
+) -> bool {
+    let Some(last_offset) = byte_count.checked_sub(4) else {
+        return false;
+    };
+    let Some(end) = ptr.checked_add(last_offset) else {
+        return false;
+    };
+    let mut addr = ptr;
+    while addr <= end {
+        if read_guest_u32(kernel, memory, thread_id, addr).is_none() {
+            return false;
+        }
+        addr = match addr.checked_add(4) {
+            Some(next) => next,
+            None => return false,
+        };
+    }
+    true
 }
 
 fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(

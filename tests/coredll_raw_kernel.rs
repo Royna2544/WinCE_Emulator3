@@ -18,11 +18,11 @@ use wince_emulation_v3::{
             ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
             ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
             ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
-            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
-            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
-            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
-            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
+            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
+            ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
             ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
             ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
             ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
@@ -3806,6 +3806,90 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         String::from_utf16_lossy(&units)
     }
 
+    const STACKSNAP_EXTENDED_INFO: u32 = 0x0000_0002;
+    let call_snapshot_ptr = 0x01_9000;
+    memory.map_words(call_snapshot_ptr, 1);
+    memory.write_u32(call_snapshot_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CALL_STACK_SNAPSHOT,
+            [1, call_snapshot_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(call_snapshot_ptr)?, 0xeffe_0000 | thread_id);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let call_snapshot_ex_ptr = call_snapshot_ptr + 0x100;
+    memory.map_words(call_snapshot_ex_ptr, 7);
+    for offset in (0..28).step_by(4) {
+        memory.write_u32(call_snapshot_ex_ptr + offset, 0xcccc_cccc)?;
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CALL_STACK_SNAPSHOT,
+            [1, call_snapshot_ex_ptr, STACKSNAP_EXTENDED_INFO, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(call_snapshot_ex_ptr)?,
+        0xeffe_0000 | thread_id
+    );
+    assert_eq!(memory.read_u32(call_snapshot_ex_ptr + 4)?, 0);
+    assert_eq!(
+        memory.read_u32(call_snapshot_ex_ptr + 8)?,
+        kernel.current_process_id()
+    );
+    assert_eq!(memory.read_u32(call_snapshot_ex_ptr + 12)?, 0);
+    assert_eq!(memory.read_u32(call_snapshot_ex_ptr + 16)?, 0);
+    assert_eq!(memory.read_u32(call_snapshot_ex_ptr + 20)?, 0);
+    assert_eq!(memory.read_u32(call_snapshot_ex_ptr + 24)?, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CALL_STACK_SNAPSHOT,
+            [1, call_snapshot_ptr, 0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CALL_STACK_SNAPSHOT,
+            [1, call_snapshot_ptr, 0x8000_0000, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
     const TH32CS_SNAPPROCESS: u32 = 0x0000_0002;
     const THSNAP_SIZE: u32 = 60;
     const PROCESSENTRY32_SIZE: u32 = 564;
@@ -4734,6 +4818,139 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_call_stack_snapshot_writes_ce_frame_layouts() -> Result<()> {
+    const STACKSNAP_EXTENDED_INFO: u32 = 0x0002;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 34;
+    let basic_frames = 0x3a00;
+    let extended_frames = 0x3b00;
+    memory.map_words(basic_frames, 2);
+    memory.map_words(extended_frames, 7);
+    memory.write_word(basic_frames, 0xfeed_cafe);
+    memory.write_word(basic_frames + 4, 0xfeed_cafe);
+    for offset in (0..28).step_by(4) {
+        memory.write_word(extended_frames + offset, 0xfeed_cafe);
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CALL_STACK_SNAPSHOT,
+            [2, basic_frames, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(basic_frames)?, 0xeffe_0000 | thread_id);
+    assert_eq!(
+        memory.read_u32(basic_frames + 4)?,
+        0xfeed_cafe,
+        "CE only writes frames it returns"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CALL_STACK_SNAPSHOT,
+            [1, extended_frames, STACKSNAP_EXTENDED_INFO, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(extended_frames)?, 0xeffe_0000 | thread_id);
+    assert_eq!(memory.read_u32(extended_frames + 4)?, 0);
+    assert_eq!(
+        memory.read_u32(extended_frames + 8)?,
+        kernel.current_process_id()
+    );
+    assert_eq!(memory.read_u32(extended_frames + 12)?, 0);
+    assert_eq!(memory.read_u32(extended_frames + 16)?, 0);
+    assert_eq!(memory.read_u32(extended_frames + 20)?, 0);
+    assert_eq!(memory.read_u32(extended_frames + 24)?, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CALL_STACK_SNAPSHOT,
+            [1, extended_frames, STACKSNAP_EXTENDED_INFO, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        0,
+        "valid CE calls that skip past the emulator frame are empty, not unsupported"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_call_stack_snapshot_rejects_ce_invalid_parameters() -> Result<()> {
+    const STACKSNAP_NEW_VM: u32 = 0x0010;
+    const MAX_SKIP: u32 = 0x1_0000;
+    const MAX_NUM_FRAME: u32 = 0x1_0000;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 35;
+    let frames = 0x3c00;
+    memory.map_words(frames, 1);
+
+    for args in [
+        [0, frames, 0, 0],
+        [1, 0, 0, 0],
+        [1, frames, STACKSNAP_NEW_VM, 0],
+        [1, frames, 0, MAX_SKIP + 1],
+        [MAX_NUM_FRAME + 1, frames, 0, 0],
+        [2, frames, 0, 0],
+        [1, 0x4d00, 0, 0],
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_CALL_STACK_SNAPSHOT,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER,
+            "unexpected last-error for args {args:?}"
+        );
+    }
 
     Ok(())
 }

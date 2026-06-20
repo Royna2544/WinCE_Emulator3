@@ -57,6 +57,10 @@ notes when it is still needed for implementation.
   snapshots now append CE-layout `MODULEENTRY32` records from live loaded
   modules. Coverage verifies module IDs, owner process IDs, base/size fields,
   refcounts, names, guest paths, and flags.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c` and related CE
+  diagnostics: raw `GetCallStackSnapshot` now returns one synthetic in-process
+  frame for normal and extended buffers, validates supported flags, and handles
+  skipped frames without fabricating deeper stacks.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\tlhelp32.h`: raw `THCreateSnapshot`

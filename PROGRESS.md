@@ -29,6 +29,9 @@ references for historical reconstruction.
 - Process-handle behavior includes opening launched process IDs as distinct
   handles plus raw `ReadProcessMemory`/`WriteProcessMemory` byte copies with
   CE-style handle validation and transferred-byte counts.
+- Raw stack diagnostic behavior includes a minimal `GetCallStackSnapshot`
+  surface for normal and extended frame buffers, skip handling, flag validation,
+  and CE-style last-error reporting.
 - Toolhelp process snapshots now expose the current process and launched child
   process entries through raw `THCreateSnapshot` memory blocks.
 - Toolhelp thread snapshots now expose current and launched thread entries,
@@ -65,6 +68,8 @@ references for historical reconstruction.
   snapshots, consumed remote touch, and drained remote GPS into `COM7:`.
 - Focused raw kernel ordinal validation covers duplicated process handles,
   shared process exit state, and process memory read/write copies.
+- Focused raw kernel ordinal validation covers normal and extended
+  `GetCallStackSnapshot` buffers plus skip and invalid-flag behavior.
 - Focused raw kernel ordinal validation covers `THCreateSnapshot` success and
   invalid requested-process failure, thread-entry serialization, module-entry
   serialization, and `GetHeapSnapshot` heap-list and entry serialization.
