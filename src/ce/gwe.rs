@@ -1875,6 +1875,7 @@ impl Gwe {
                     .saturating_add(1);
             }
         }
+        self.remove_active_sent_messages(&doomed_sent);
         for id in &doomed_sent {
             if self
                 .sent_messages
@@ -4474,7 +4475,44 @@ impl Gwe {
             .stats
             .send_transaction_receiver_terminated_count
             .saturating_add(sent_ids.len() as u64);
+        self.remove_active_sent_messages(&sent_ids);
         sent_ids
+    }
+
+    fn remove_active_sent_messages(&mut self, sent_ids: &[u64]) {
+        if sent_ids.is_empty() {
+            return;
+        }
+        let sent_ids = sent_ids.iter().copied().collect::<BTreeSet<_>>();
+        let threads = self
+            .active_sent_stack_by_thread
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for thread_id in threads {
+            let Some(stack) = self.active_sent_stack_by_thread.get_mut(&thread_id) else {
+                continue;
+            };
+            let before = stack.len();
+            stack.retain(|id| !sent_ids.contains(id));
+            let removed = before.saturating_sub(stack.len());
+            if stack.is_empty() {
+                self.active_sent_stack_by_thread.remove(&thread_id);
+            }
+            if removed == 0 {
+                continue;
+            }
+            if let Some(depth) = self.send_depth_by_thread.get_mut(&thread_id) {
+                *depth = depth.saturating_sub(removed as u32);
+                if *depth == 0 {
+                    self.send_depth_by_thread.remove(&thread_id);
+                }
+            }
+            if let Some(replied_depths) = self.replied_send_depth_by_thread.get_mut(&thread_id) {
+                replied_depths.clear();
+                self.replied_send_depth_by_thread.remove(&thread_id);
+            }
+        }
     }
 
     pub fn expire_timed_out_sent_messages(&mut self, now_ms: u32) -> Vec<u64> {
@@ -6523,6 +6561,36 @@ mod tests {
     }
 
     #[test]
+    fn terminating_receiver_clears_active_sync_send_stack() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 11;
+        let receiver_thread = 12;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 5, 0x21, 0x22, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("queued sync send");
+        let message = gwe.get_message(receiver_thread).expect("active send");
+        assert_eq!(message.msg, WM_USER + 5);
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(send_id));
+        assert!(gwe.in_send_message(receiver_thread));
+
+        assert_eq!(
+            gwe.terminate_sent_messages_to_receiver(receiver_thread),
+            vec![send_id]
+        );
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), None);
+        assert!(!gwe.in_send_message(receiver_thread));
+        assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
+    }
+
+    #[test]
     fn sent_message_dispatch_honors_hwnd_and_message_filters() {
         let mut gwe = Gwe::default();
         let receiver_thread = 12;
@@ -6582,6 +6650,33 @@ mod tests {
         assert_ne!(sent.flags & SMF_RECEIVER_TERMINATED, 0);
         assert_ne!(sent.flags & SMF_RESULT_READY, 0);
         assert_eq!(gwe.get_message(receiver_thread), None);
+        assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
+    }
+
+    #[test]
+    fn destroying_target_clears_active_sync_send_stack() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 21;
+        let receiver_thread = 22;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 56, 1, 2, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("queued sync send");
+        let message = gwe.get_message(receiver_thread).expect("active send");
+        assert_eq!(message.msg, WM_USER + 56);
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(send_id));
+        assert!(gwe.in_send_message(receiver_thread));
+
+        assert!(gwe.destroy_window(hwnd, 0));
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), None);
+        assert!(!gwe.in_send_message(receiver_thread));
         assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
     }
 
