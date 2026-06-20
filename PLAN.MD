@@ -194,6 +194,15 @@ notes when it is still needed for implementation.
   driver key, and coverage verifies invalid parameters, missing devices,
   configured handle paths, active registry metadata, and closed-handle
   rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\PMIF\pmif.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\NOPMIF\nopmif.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\pm.h`: raw `SetSystemPowerState`,
+  `GetSystemPowerState`, `DevicePowerNotify`, `SetDevicePower`, and
+  `GetDevicePower` now track emulator power-manager state instead of
+  reporting unsupported. System state names/flags round-trip through the CE
+  `DWORD` status APIs, configured devices expose default `D0` and mutable Dx
+  state, and coverage verifies missing devices, invalid Dx values, null
+  outputs, and short system-state buffers.
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battery.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\battimpl.h`,

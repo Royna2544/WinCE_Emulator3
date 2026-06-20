@@ -88,6 +88,10 @@ const CTYPE_BLANK: u32 = 0x0040;
 const CTYPE_HEX: u32 = 0x0080;
 const CTYPE_ALPHA: u32 = 0x0100;
 const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+const POWER_NAME: u32 = 0x0000_0001;
+const POWER_FORCE: u32 = 0x0000_1000;
+const POWER_STATE_ON: u32 = 0x0001_0000;
+const PWR_DEVICE_MAXIMUM: u32 = 5;
 const SPI_GETWORKAREA: u32 = 0x0030;
 const SPI_GETWHEELSCROLLLINES: u32 = 0x0068;
 const SPI_SETWHEELSCROLLLINES: u32 = 0x0069;
@@ -4293,12 +4297,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Handle(0))
         }
         // Power management
-        ORD_SET_SYSTEM_POWER_STATE => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_SET_SYSTEM_POWER_STATE => Some(CoredllValue::U32(set_system_power_state_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SET_POWER_REQUIREMENT | ORD_RELEASE_POWER_REQUIREMENT => {
             kernel
                 .threads
@@ -4311,24 +4312,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_DEVICE_POWER_NOTIFY => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0xffff_ffff)) // ERROR_INVALID_FUNCTION equivalent
-        }
+        ORD_DEVICE_POWER_NOTIFY => Some(CoredllValue::U32(device_power_notify_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_REGISTER_POWER_RELATIONSHIP | ORD_RELEASE_POWER_RELATIONSHIP => {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Handle(0))
         }
-        ORD_SET_DEVICE_POWER | ORD_GET_DEVICE_POWER => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0xffff_ffff))
-        }
+        ORD_SET_DEVICE_POWER => Some(CoredllValue::U32(set_device_power_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_DEVICE_POWER => Some(CoredllValue::U32(get_device_power_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_CE_SET_POWER_ON_EVENT => {
             kernel
                 .threads
@@ -4683,19 +4681,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 raw_arg(args, 1),
             )))
         }
-        ORD_GET_SYSTEM_POWER_STATE => {
-            // GetSystemPowerState(pszState, pdwStateFlags) — returns current power state name.
-            let buf_ptr = raw_arg(args, 0);
-            let flags_ptr = raw_arg(args, 1);
-            if buf_ptr != 0 {
-                let _ = memory.write_u16(buf_ptr, 0);
-            } // empty string
-            if flags_ptr != 0 {
-                let _ = memory.write_u32(flags_ptr, 0);
-            }
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_GET_SYSTEM_POWER_STATE => Some(CoredllValue::U32(get_system_power_state_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_POWER_OFF_SYSTEM => {
             // PowerOffSystem() — power off; treated as a no-op in emulator.
             kernel.threads.set_last_error(thread_id, 0);
@@ -20550,6 +20538,140 @@ fn write_current_system_time<M: CoredllGuestMemory>(
     if ok {
         kernel.threads.set_last_error(thread_id, 0);
     }
+}
+
+fn set_system_power_state_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let name_ptr = raw_arg(args, 0);
+    let flags = raw_arg(args, 1);
+    let name = if name_ptr == 0 {
+        None
+    } else {
+        match read_guest_wide_arg(memory, name_ptr) {
+            Some(name) => Some(name),
+            None => return power_status(kernel, thread_id, ERROR_INVALID_PARAMETER),
+        }
+    };
+    kernel.set_system_power_state(name, if flags == 0 { POWER_STATE_ON } else { flags });
+    power_status(kernel, thread_id, ERROR_SUCCESS)
+}
+
+fn get_system_power_state_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let buf_ptr = raw_arg(args, 0);
+    let buf_chars = raw_arg(args, 1);
+    let flags_ptr = raw_arg(args, 2);
+    let (name, flags) = kernel.system_power_state();
+    let name = name.unwrap_or("").to_owned();
+    let required_chars = name.encode_utf16().count() as u32 + 1;
+    if buf_ptr != 0 && buf_chars < required_chars {
+        return power_status(kernel, thread_id, ERROR_MORE_DATA);
+    }
+    if flags_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, flags_ptr, flags) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    if buf_ptr != 0 && !write_guest_wide_z(kernel, memory, thread_id, buf_ptr, &name) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    power_status(kernel, thread_id, ERROR_SUCCESS)
+}
+
+fn device_power_notify_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    set_device_power_state_from_args(kernel, memory, thread_id, args, false)
+}
+
+fn set_device_power_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    set_device_power_state_from_args(kernel, memory, thread_id, args, true)
+}
+
+fn set_device_power_state_from_args<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+    allow_force: bool,
+) -> u32 {
+    let device_ptr = raw_arg(args, 0);
+    let flags = raw_arg(args, 1);
+    let state = raw_arg(args, 2);
+    if !valid_power_name_flags(flags, allow_force) || !valid_device_power_state(state) {
+        return power_status(kernel, thread_id, ERROR_INVALID_PARAMETER);
+    }
+    let Some(device_name) = read_guest_wide_arg(memory, device_ptr) else {
+        return power_status(kernel, thread_id, ERROR_INVALID_PARAMETER);
+    };
+    match kernel.set_device_power_state(&device_name, state) {
+        Ok(()) => power_status(kernel, thread_id, ERROR_SUCCESS),
+        Err(Error::MissingDevice(_)) => power_status(kernel, thread_id, ERROR_FILE_NOT_FOUND),
+        Err(_) => power_status(kernel, thread_id, ERROR_INVALID_PARAMETER),
+    }
+}
+
+fn get_device_power_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let device_ptr = raw_arg(args, 0);
+    let flags = raw_arg(args, 1);
+    let state_ptr = raw_arg(args, 2);
+    if !valid_power_name_flags(flags, false) || state_ptr == 0 {
+        return power_status(kernel, thread_id, ERROR_INVALID_PARAMETER);
+    }
+    let Some(device_name) = read_guest_wide_arg(memory, device_ptr) else {
+        return power_status(kernel, thread_id, ERROR_INVALID_PARAMETER);
+    };
+    let state = match kernel.get_device_power_state(&device_name) {
+        Ok(state) => state,
+        Err(Error::MissingDevice(_)) => {
+            return power_status(kernel, thread_id, ERROR_FILE_NOT_FOUND);
+        }
+        Err(_) => return power_status(kernel, thread_id, ERROR_INVALID_PARAMETER),
+    };
+    if !write_guest_u32(kernel, memory, thread_id, state_ptr, state) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    power_status(kernel, thread_id, ERROR_SUCCESS)
+}
+
+fn valid_power_name_flags(flags: u32, allow_force: bool) -> bool {
+    if flags & POWER_NAME == 0 {
+        return false;
+    }
+    let allowed = if allow_force {
+        POWER_NAME | POWER_FORCE
+    } else {
+        POWER_NAME
+    };
+    flags & !allowed == 0
+}
+
+fn valid_device_power_state(state: u32) -> bool {
+    state < PWR_DEVICE_MAXIMUM
+}
+
+fn power_status(kernel: &mut CeKernel, thread_id: u32, status: u32) -> u32 {
+    kernel.threads.set_last_error(thread_id, status);
+    status
 }
 
 fn get_system_power_status_ex_raw<M: CoredllGuestMemory>(

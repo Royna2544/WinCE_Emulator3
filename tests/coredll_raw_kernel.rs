@@ -15,39 +15,39 @@ use wince_emulation_v3::{
             ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE,
             ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
             ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
-            ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DISABLE_THREAD_LIBRARY_CALLS,
-            ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX, ORD_EMPTY_CLIPBOARD,
-            ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS, ORD_ENUM_DEVICE_INTERFACES,
-            ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W,
-            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALL_STACK_SNAPSHOT,
-            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
-            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
-            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
-            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
-            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
-            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
+            ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
+            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
+            ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
+            ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
+            ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
+            ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
+            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
+            ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_KEYS,
+            ORD_GET_DEVICE_POWER, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
+            ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT,
+            ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
             ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION,
-            ORD_GET_SYSTEM_POWER_STATUS_EX, ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME,
-            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
-            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
-            ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
-            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
-            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
-            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
-            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
-            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE,
-            ORD_IMAGE_LIST_GET_IMAGE_COUNT, ORD_IMAGE_LIST_GET_IMAGE_INFO,
-            ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE, ORD_IMAGE_LIST_REMOVE,
-            ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
-            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_ICON_SIZE,
-            ORD_IMAGE_LIST_SET_IMAGE_COUNT, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
-            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_GET_SYSTEM_POWER_STATE, ORD_GET_SYSTEM_POWER_STATUS_EX,
+            ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
+            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
+            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD,
+            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
+            ORD_IMAGE_LIST_COPY_DITHER_IMAGE, ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY,
+            ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE,
+            ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX,
+            ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG,
+            ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
+            ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
+            ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_IMAGE_LIST_SET_BK_COLOR, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            ORD_IMAGE_LIST_SET_ICON_SIZE, ORD_IMAGE_LIST_SET_IMAGE_COUNT,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
             ORD_KERNEL_IO_CONTROL, ORD_KEYBD_GET_DEVICE_INFO, ORD_LEAVE_CRITICAL_SECTION,
             ORD_LOAD_CURSOR_W, ORD_LOAD_DRIVER, ORD_LOAD_IMAGE_W, ORD_LOAD_KERNEL_LIBRARY,
@@ -63,16 +63,16 @@ use wince_emulation_v3::{
             ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_DESTROY_LIST, ORD_RESOURCE_MARK_AS_SHAREABLE,
             ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST, ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD,
             ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
-            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
-            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
-            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
-            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
-            ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS,
-            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
-            ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER, ORD_SET_LAST_ERROR,
+            ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS,
+            ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
+            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
+            ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
+            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
+            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
+            ORD_SLEEP_TILL_TICK, ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STRING_COMPRESS,
+            ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
+            ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
             ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
             ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
             ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
@@ -1170,6 +1170,240 @@ fn coredll_raw_device_activation_opens_configured_devices_and_active_registry() 
             .as_dword(),
         Some(0x77)
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_power_manager_tracks_system_and_device_power_state() -> Result<()> {
+    const POWER_NAME: u32 = 0x0000_0001;
+    const POWER_FORCE: u32 = 0x0000_1000;
+    const POWER_STATE_IDLE: u32 = 0x0010_0000;
+    const POWER_STATE_OFF: u32 = 0x0002_0000;
+    const D0: u32 = 0;
+    const D1: u32 = 1;
+    const D3: u32 = 3;
+    const D5: u32 = 5;
+
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.devices = DeviceConfigFile {
+        version: 1,
+        defaults: DeviceDefaults::default(),
+        devices: vec![DeviceConfig {
+            guest: "COM7:".to_owned(),
+            kind: DeviceKind::Serial,
+            backend: DeviceBackend::Stub,
+            host: None,
+            remote_gps: false,
+            enabled: true,
+            note: None,
+        }],
+    };
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let device_ptr = 0x3130_0000;
+    let missing_device_ptr = 0x3130_0100;
+    let system_state_ptr = 0x3130_0200;
+    let device_state_ptr = 0x3130_1000;
+    let system_flags_ptr = 0x3130_1004;
+    let system_name_ptr = 0x3130_2000;
+    memory.map_words(device_state_ptr, 2);
+    memory.map_halfwords(system_name_ptr, 32);
+    memory.write_wide_z(device_ptr, "com7:");
+    memory.write_wide_z(missing_device_ptr, "COM8:");
+    memory.write_wide_z(system_state_ptr, "screenoff");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_POWER,
+            [device_ptr, POWER_NAME, device_state_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(device_state_ptr)?, D0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DEVICE_POWER,
+            [device_ptr, POWER_NAME | POWER_FORCE, D3],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_POWER,
+            [device_ptr, POWER_NAME, device_state_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(device_state_ptr)?, D3);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_POWER_NOTIFY,
+            [device_ptr, POWER_NAME, D1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_POWER,
+            [device_ptr, POWER_NAME, device_state_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(device_state_ptr)?, D1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DEVICE_POWER,
+            [missing_device_ptr, POWER_NAME, D0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_FILE_NOT_FOUND),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DEVICE_POWER,
+            [device_ptr, POWER_NAME, D5],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DEVICE_POWER,
+            [device_ptr, POWER_NAME, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_SYSTEM_POWER_STATE,
+            [0, POWER_STATE_IDLE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_POWER_STATE,
+            [system_name_ptr, 32, system_flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(system_name_ptr, 32), "");
+    assert_eq!(memory.read_u32(system_flags_ptr)?, POWER_STATE_IDLE);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_SYSTEM_POWER_STATE,
+            [system_state_ptr, POWER_STATE_OFF, POWER_FORCE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_POWER_STATE,
+            [system_name_ptr, 32, system_flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(system_name_ptr, 32), "screenoff");
+    assert_eq!(memory.read_u32(system_flags_ptr)?, POWER_STATE_OFF);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_POWER_STATE,
+            [system_name_ptr, 4, system_flags_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_MORE_DATA),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_MORE_DATA);
 
     Ok(())
 }

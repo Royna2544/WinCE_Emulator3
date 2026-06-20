@@ -289,6 +289,9 @@ pub struct CeKernel {
     fsdmgr_volume_locks: BTreeMap<u32, FsdmgrVolumeLock>,
     next_fsdmgr_volume_lock: u32,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
+    system_power_state_name: Option<String>,
+    system_power_state_flags: u32,
+    device_power_states: BTreeMap<String, u32>,
     live_pump_timeout_stop_tick: Option<u32>,
     runtime_loader_stats: RuntimeLoaderStats,
     pulsed_wait_handles: BTreeMap<u64, u32>,
@@ -1042,6 +1045,10 @@ fn font_resource_key(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn normalize_power_device_name(name: &str) -> String {
+    name.trim().trim_end_matches(':').to_ascii_lowercase()
+}
+
 impl CeKernel {
     const MSGQUEUE_MSGALERT: u32 = 0x0000_0001;
     const MSGQUEUE_NOPRECOMMIT: u32 = 0x0000_0001;
@@ -1119,6 +1126,9 @@ impl CeKernel {
             fsdmgr_volume_locks: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             modal_dialog_results: BTreeMap::new(),
+            system_power_state_name: None,
+            system_power_state_flags: 0x0001_0000,
+            device_power_states: BTreeMap::new(),
             live_pump_timeout_stop_tick: None,
             runtime_loader_stats: RuntimeLoaderStats::default(),
             pulsed_wait_handles: BTreeMap::new(),
@@ -1140,6 +1150,38 @@ impl CeKernel {
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
         self.runtime_loader_stats
+    }
+
+    pub fn set_system_power_state(&mut self, name: Option<String>, flags: u32) {
+        self.system_power_state_name = name.filter(|name| !name.is_empty());
+        self.system_power_state_flags = flags;
+    }
+
+    pub fn system_power_state(&self) -> (Option<&str>, u32) {
+        (
+            self.system_power_state_name.as_deref(),
+            self.system_power_state_flags,
+        )
+    }
+
+    pub fn set_device_power_state(&mut self, guest_name: &str, state: u32) -> Result<()> {
+        if self.devices.device_keys(guest_name).is_none() {
+            return Err(Error::MissingDevice(guest_name.to_owned()));
+        }
+        self.device_power_states
+            .insert(normalize_power_device_name(guest_name), state);
+        Ok(())
+    }
+
+    pub fn get_device_power_state(&self, guest_name: &str) -> Result<u32> {
+        if self.devices.device_keys(guest_name).is_none() {
+            return Err(Error::MissingDevice(guest_name.to_owned()));
+        }
+        Ok(self
+            .device_power_states
+            .get(&normalize_power_device_name(guest_name))
+            .copied()
+            .unwrap_or(0))
     }
 
     pub fn resource_create_list(&mut self, resource_id: u32, minimum: u32, count: u32) -> u32 {
