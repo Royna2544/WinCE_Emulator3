@@ -5929,6 +5929,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         )),
         ORD_CREATE_PEN => Some(CoredllValue::Handle(create_pen_raw(
             kernel,
+            thread_id,
             raw_arg(args, 0),
             raw_i32_arg(args, 1),
             raw_arg(args, 2),
@@ -42063,7 +42064,20 @@ fn create_dib_pattern_brush_pt_raw<M: CoredllGuestMemory>(
     brush
 }
 
-fn create_pen_raw(kernel: &mut CeKernel, style: u32, width: i32, color: u32) -> u32 {
+fn create_pen_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    style: u32,
+    width: i32,
+    color: u32,
+) -> u32 {
+    if !is_ce_create_pen_style(style) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
     kernel.resources.create_pen(style, width, color)
 }
 
@@ -42100,8 +42114,18 @@ fn create_pen_indirect_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
+    if !is_ce_create_pen_style(style) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     kernel.threads.set_last_error(thread_id, 0);
     kernel.resources.create_pen(style, width, color)
+}
+
+fn is_ce_create_pen_style(style: u32) -> bool {
+    matches!(style, PS_SOLID | PS_DASH | PS_NULL)
 }
 
 fn create_palette_raw<M: CoredllGuestMemory>(

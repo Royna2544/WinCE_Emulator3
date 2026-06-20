@@ -20412,7 +20412,7 @@ fn coredll_raw_create_pen_indirect_reads_logpen() -> Result<()> {
     memory.write_bytes(
         logpen_ptr,
         &[
-            0x02, 0x00, 0x00, 0x00, // lopnStyle
+            0x01, 0x00, 0x00, 0x00, // lopnStyle = PS_DASH
             0x07, 0x00, 0x00, 0x00, // lopnWidth.x
             0x00, 0x00, 0x00, 0x00, // lopnWidth.y
             0x56, 0x34, 0x12, 0x00, // lopnColor
@@ -20434,7 +20434,7 @@ fn coredll_raw_create_pen_indirect_reads_logpen() -> Result<()> {
     };
     assert_ne!(pen, 0);
     let object = kernel.resources.pen(pen).expect("pen object");
-    assert_eq!(object.style, 2);
+    assert_eq!(object.style, 1);
     assert_eq!(object.width, 7);
     assert_eq!(object.color, 0x0012_3456);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
@@ -20446,6 +20446,85 @@ fn coredll_raw_create_pen_indirect_reads_logpen() -> Result<()> {
             thread_id,
             ORD_CREATE_PEN_INDIRECT,
             [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_create_pen_rejects_ce_unsupported_styles() -> Result<()> {
+    const PS_DOT: u32 = 2;
+    const PS_DASHDOT: u32 = 3;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let logpen_ptr = 0x1_0000;
+    memory.map_bytes(logpen_ptr, 16);
+    memory.write_bytes(
+        logpen_ptr,
+        &[
+            0x02, 0x00, 0x00, 0x00, // lopnStyle = PS_DOT
+            0x01, 0x00, 0x00, 0x00, // lopnWidth.x
+            0x00, 0x00, 0x00, 0x00, // lopnWidth.y
+            0x00, 0x00, 0x00, 0x00, // lopnColor
+        ],
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PEN_INDIRECT,
+            [logpen_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PEN,
+            [PS_DOT, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PEN,
+            [PS_DASHDOT, 1, 0],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(0),
@@ -55782,20 +55861,9 @@ fn coredll_raw_pen_dot_style_draws_alternating_pixels() -> Result<()> {
     let (mem_dc, bits_ptr, stride) =
         create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 4);
 
-    // PS_DOT = 2, width = 1, color = blue
-    let dot_pen = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        ORD_CREATE_PEN,
-        [2u32, 1u32, 0x00ff_0000u32],
-    ) {
-        CoredllDispatch::Returned {
-            value: CoredllValue::Handle(h),
-            ..
-        } => h,
-        other => panic!("{other:?}"),
-    };
+    // Keep renderer coverage for the internal dotted style even though CE raw
+    // CreatePen rejects PS_DOT.
+    let dot_pen = kernel.resources.create_pen(2, 1, 0x00ff_0000);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel, &mut memory, thread_id, ORD_SELECT_OBJECT, [mem_dc, dot_pen],

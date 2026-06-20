@@ -107,6 +107,11 @@ notes when it is still needed for implementation.
   `SimpleCreateSolidBrushTest` is now covered for the CE `CLR_INVALID`
   rejection path: `CreateSolidBrush(0xffffffff)` fails with
   `ERROR_INVALID_PARAMETER`, while valid colors still create brush handles.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\brush.cpp`:
+  `CreatePenIndirectBadParamTest` is now covered for CE raw pen creation
+  style validation: `CreatePen` and `CreatePenIndirect` accept only
+  `PS_SOLID`, `PS_DASH`, and `PS_NULL`; unsupported desktop styles fail with
+  `ERROR_INVALID_PARAMETER`.
 
 ## Active Roadmap
 
