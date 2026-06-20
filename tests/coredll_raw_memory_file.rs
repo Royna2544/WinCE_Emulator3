@@ -4903,6 +4903,7 @@ fn coredll_raw_public_afs_registration_reserves_binds_and_removes_mounts() -> Re
 #[test]
 fn coredll_raw_file_handle_set_file_cache_follows_cache_filter_shape() -> Result<()> {
     const FSCTL_SET_FILE_CACHE: u32 = 0x0009_0090;
+    const FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR: u32 = 0x0009_00a8;
     const FILE_CACHE_ENABLE_STANDARD: u32 = 0;
     const FILE_CACHE_DISABLE_STANDARD: u32 = 2;
     const ERROR_INVALID_HANDLE: u32 = 6;
@@ -4944,6 +4945,39 @@ fn coredll_raw_file_handle_set_file_cache_follows_cache_filter_shape() -> Result
         } => handle,
         other => panic!("CreateFileW did not return a file handle: {other:?}"),
     };
+
+    memory.write_word(bytes_returned_ptr, 0xABCD_1234);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                file,
+                FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
+    );
+    assert_eq!(
+        memory.read_u32(bytes_returned_ptr)?,
+        0xABCD_1234,
+        "CE FSDMGR rejects external security-descriptor FSCTLs before touching byte counts"
+    );
 
     memory.write_word(cache_info_ptr, FILE_CACHE_DISABLE_STANDARD);
     memory.write_word(bytes_returned_ptr, 0xDEAD_BEEF);

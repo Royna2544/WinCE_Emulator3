@@ -126,6 +126,7 @@ const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
 const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
 const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
 const FSCTL_SET_FILE_CACHE: u32 = 0x0009_0090;
+const FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR: u32 = 0x0009_00a8;
 const IOCTL_FILE_WRITE_GATHER: u32 = 0x0009_0044;
 const IOCTL_FILE_READ_SCATTER: u32 = 0x0009_0048;
 const FILE_COPY_EXTERNAL_SIZE: u32 = 536;
@@ -22646,6 +22647,24 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
                     input_len,
                     returned_ptr,
                 );
+            }
+            Ok(false) => {}
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+                return false;
+            }
+        }
+    }
+    if ioctl_code == FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR {
+        match kernel.is_file_handle(handle) {
+            Ok(true) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+                return false;
             }
             Ok(false) => {}
             Err(_) => {

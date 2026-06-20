@@ -73,6 +73,11 @@ notes when it is still needed for implementation.
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract
   instead of returning unconditional false. Coverage verifies system-mounted
   files, non-system mounted files, missing paths, and null path rejection.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`: file-handle
+  `DeviceIoControl(FSCTL_READ_OR_WRITE_SECURITY_DESCRIPTOR)` now follows CE
+  FSDMGR's external-call rejection path, returning `ERROR_ACCESS_DENIED`
+  before generic device dispatch and leaving caller byte counts untouched.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\mdsched.c`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`: raw `QueryInstructionSet` now
