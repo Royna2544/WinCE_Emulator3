@@ -43654,20 +43654,57 @@ fn coredll_raw_add_remove_font_resource_broadcasts_wm_fontchange() -> Result<()>
     let caller_thread = 93_u32;
     let receiver_thread = 94_u32;
     let msg_ptr = 0xa400_u32;
-    // Reserve space for MSG (7 u32s) and a short wide path string
+    let root = unique_test_root("font_resource_remove");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("tahoma.ttf"), b"font-bytes").unwrap();
+    kernel.mount_guest_root("\\Windows", &root);
+
+    // Reserve space for MSG (7 u32s) and short wide path strings.
     memory.map_words(msg_ptr, 7);
-    let path_ptr = 0xa500_u32;
-    // Write a valid-looking guest path: "\Windows\tahoma.ttf" as UTF-16LE
-    let path: Vec<u16> = "\\Windows\\tahoma.ttf\0".encode_utf16().collect();
-    let path_bytes: Vec<u8> = path.iter().flat_map(|c| c.to_le_bytes()).collect();
-    memory.write_bytes(path_ptr, &path_bytes);
+    let path_ptr = 0x1_a500_u32;
+    let missing_path_ptr = 0x1_a600_u32;
+    memory.write_wide_z(path_ptr, "\\Windows\\tahoma.ttf");
+    memory.write_wide_z(missing_path_ptr, "\\Windows\\missing.ttf");
 
     let hwnd = kernel.create_window_ex_w(receiver_thread, "FONTCHANGE_TEST", "", None, 0, 0, 0);
 
-    // AddFontResourceW: even when the file is not found in the guest FS, we still check the
-    // broadcast path by using a path that exists. Use a missing path → returns 0 but still we
-    // need to test the success path. For this test use a NULL path first (should fail silently).
-    // Then call RemoveFontResourceW which always returns TRUE and broadcasts.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            caller_thread,
+            ORD_REMOVE_FONT_RESOURCE_W,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(caller_thread),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            caller_thread,
+            ORD_REMOVE_FONT_RESOURCE_W,
+            [missing_path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(caller_thread),
+        ERROR_FILE_NOT_FOUND
+    );
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -43704,6 +43741,8 @@ fn coredll_raw_add_remove_font_resource_broadcasts_wm_fontchange() -> Result<()>
     assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_FONTCHANGE);
     assert_eq!(memory.read_u32(msg_ptr + 8)?, 0);
     assert_eq!(memory.read_u32(msg_ptr + 12)?, 0);
+
+    let _ = fs::remove_dir_all(&root);
 
     Ok(())
 }

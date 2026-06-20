@@ -5896,17 +5896,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_REMOVE_FONT_RESOURCE_W => {
-            // Broadcast WM_FONTCHANGE regardless of whether the font was actually loaded.
-            kernel.send_notify_message_w(
-                thread_id,
-                crate::ce::gwe::HWND_BROADCAST,
-                crate::ce::gwe::WM_FONTCHANGE,
-                0,
-                0,
-            );
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_REMOVE_FONT_RESOURCE_W => Some(CoredllValue::Bool(remove_font_resource_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_CREATE_FONT_INDIRECT_W => Some(CoredllValue::Handle(create_font_indirect_w_raw(
             kernel,
             memory,
@@ -41931,6 +41926,41 @@ fn add_font_resource_w_raw<M: CoredllGuestMemory>(
             0
         }
     }
+}
+
+fn remove_font_resource_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    path_ptr: u32,
+) -> bool {
+    if path_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if kernel.read_guest_file(&path).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.send_notify_message_w(
+        thread_id,
+        crate::ce::gwe::HWND_BROADCAST,
+        crate::ce::gwe::WM_FONTCHANGE,
+        0,
+        0,
+    );
+    true
 }
 
 fn create_solid_brush_raw(kernel: &mut CeKernel, thread_id: u32, color: u32) -> u32 {

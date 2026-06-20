@@ -112,6 +112,11 @@ notes when it is still needed for implementation.
   style validation: `CreatePen` and `CreatePenIndirect` accept only
   `PS_SOLID`, `PS_DASH`, and `PS_NULL`; unsupported desktop styles fail with
   `ERROR_INVALID_PARAMETER`.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`:
+  `passNull2Font(ERemoveFontResource)` is now covered for raw
+  `RemoveFontResourceW`: null paths fail with `ERROR_INVALID_PARAMETER`,
+  missing paths fail with `ERROR_FILE_NOT_FOUND`, and existing mounted font
+  paths still broadcast `WM_FONTCHANGE` on success.
 
 ## Active Roadmap
 
