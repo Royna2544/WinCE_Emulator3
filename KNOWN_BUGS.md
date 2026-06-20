@@ -48,6 +48,9 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 - The stale `happyway_win` escaped visible-message callout no longer remains
   in `pending-wndproc`; keep watching for fresh send-stack or wait-state leaks
   before treating the splash transition as purely app readiness.
+- Receiver-terminated sends no longer leave active send-stack depth behind in
+  live startup; the current completed `happyway_win` send result is retained for
+  sender observation without blocking receiver state.
 
 ## Build And Validation Risks
 
@@ -73,3 +76,5 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
   live path, and remote touch reaches the real iNavi window stack.
 - Stale escaped visible-message WndProc callouts no longer block later visible
   input dispatch after the CPU is already parked at their resume PC.
+- Receiver/window teardown clears active send stacks for terminated synchronous
+  sends.

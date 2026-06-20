@@ -64,6 +64,10 @@ references for historical reconstruction.
 - Current live taps route to the main iNavi splash/window stack with accepted
   remote key/touch posts; the framebuffer still shows the real iNavi splash
   artwork, so the remaining issue is after message dispatch has resumed.
+- Receiver/window teardown now removes terminated send ids from active send
+  stacks. The latest live `happyway_win` receiver-terminated send still leaves
+  a completed result for the sender, but `active_stacks=0` and
+  `depth_threads=0`.
 - Current 2026-06-21 live samples show the splash phase persists after
   touch/key input is accepted and routed; the app continues resource/window
   setup (`resmapi_800x480.bin` memory-backed opens and hidden `afxwnd42u` child
