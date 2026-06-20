@@ -2286,6 +2286,7 @@ impl UnicornMips {
         let active_has_visible_receiver = self.active_process_has_visible_receiver_work(kernel);
         let active_has_visible_queued_receiver =
             self.active_process_has_visible_queued_receiver_work(kernel);
+        let active_has_visible_windows = self.active_process_has_visible_windows(kernel);
         if live_pump
             && !active_has_visible_queued_receiver
             && self.has_ready_parked_wait_unblock(kernel)
@@ -2295,6 +2296,7 @@ impl UnicornMips {
         }
         if self.running_guest_thread.is_none()
             && !active_has_visible_queued_receiver
+            && (!live_pump || !active_has_visible_windows)
             && self.has_runnable_parked_process(kernel)
             && self.rotate_to_next_parked_process(kernel)
         {
@@ -2307,7 +2309,7 @@ impl UnicornMips {
             return;
         }
         if live_pump
-            && !self.active_process_has_visible_windows(kernel)
+            && !active_has_visible_windows
             && self.rotate_to_visible_window_parked_process(kernel)
         {
             return;
@@ -2327,7 +2329,7 @@ impl UnicornMips {
         } else if live_pump
             && active_has_visible_receiver
             && !active_has_visible_queued_receiver
-            && !self.active_process_has_visible_windows(kernel)
+            && !active_has_visible_windows
             && self.rotate_to_live_pump_cpu_runnable_parked_process(kernel)
         {
             return;
@@ -5626,6 +5628,7 @@ impl UnicornMips {
 
         let active_has_visible_queued_receiver =
             self.active_process_has_visible_queued_receiver_work(kernel);
+        let active_has_visible_windows = self.active_process_has_visible_windows(kernel);
         if limits.live_pump
             && !active_has_visible_queued_receiver
             && self.has_ready_parked_wait_unblock(kernel)
@@ -5635,13 +5638,14 @@ impl UnicornMips {
         }
         if limits.live_pump
             && !active_has_visible_queued_receiver
-            && !self.active_process_has_visible_windows(kernel)
+            && !active_has_visible_windows
             && self.rotate_to_visible_window_parked_process(kernel)
         {
             return Ok(());
         }
         if self.running_guest_thread.is_none()
             && !active_has_visible_queued_receiver
+            && (!limits.live_pump || !active_has_visible_windows)
             && self.has_runnable_parked_process(kernel)
             && self.rotate_to_next_parked_process(kernel)
         {
@@ -31805,7 +31809,7 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
-    fn live_pump_handoff_rotates_when_active_has_no_running_thread() -> Result<()> {
+    fn live_pump_handoff_keeps_visible_active_over_generic_runnable_child() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
@@ -31860,15 +31864,15 @@ mod guest_thread_stack_tests {
 
         scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
 
-        assert_eq!(kernel.current_process_id(), 1);
-        assert_eq!(scheduler.current_thread_id, parked_thread);
-        assert_eq!(scheduler.running_guest_thread, Some((parked_thread, 0x101)));
-        assert_eq!(scheduler.saved_context.as_ref().unwrap().pc, 0x0010_2000);
+        assert_eq!(kernel.current_process_id(), 67);
+        assert_eq!(scheduler.current_thread_id, active_thread);
+        assert_eq!(scheduler.running_guest_thread, None);
+        assert_eq!(scheduler.saved_context.as_ref().unwrap().pc, 0x0040_1000);
         assert!(
             scheduler
                 .parked_child_processes
                 .iter()
-                .any(|process| process.process_state.process_id == 67)
+                .any(|process| process.process_state.process_id == 1)
         );
 
         Ok(())
