@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 121] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 122] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13795,6 +13795,10 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 121] = &[
     CoredllOrdinalDef {
         name: "GetThreadId",
         ordinal: ORD_GET_THREAD_ID,
+    },
+    CoredllOrdinalDef {
+        name: "GetProcAddressInProcess",
+        ordinal: ORD_GET_PROC_ADDRESS_IN_PROCESS,
     },
     CoredllOrdinalDef {
         name: "RegisterGesture",

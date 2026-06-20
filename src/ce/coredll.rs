@@ -4935,6 +4935,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_PROC_ADDRESS_A => Some(CoredllValue::Handle(get_proc_address_a_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_GET_PROC_ADDRESS_IN_PROCESS => Some(CoredllValue::Handle(
+            get_proc_address_in_process_raw(kernel, memory, thread_id, args),
+        )),
         ORD_WCSRCHR => Some(CoredllValue::Handle(crt::wcsrchr_raw(
             memory,
             raw_arg(args, 0),
@@ -23153,6 +23156,101 @@ fn get_proc_address_a_raw<M: CoredllGuestMemory>(
         return 0;
     };
     get_proc_address_name_raw(kernel, thread_id, module, &name)
+}
+
+fn get_proc_address_in_process_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let process = raw_arg(args, 0);
+    if kernel.process_id_for_handle(process).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(module_name) = read_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let module = if is_coredll_module_name(&module_name) {
+        Some(COREDLL_MODULE_HANDLE)
+    } else {
+        kernel.loaded_module_handle(&module_name)
+    };
+    let Some(module) = module else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let name_ptr = raw_arg(args, 2);
+    if name_ptr <= 0xffff {
+        return get_proc_address_in_process_ordinal_raw(kernel, thread_id, module, name_ptr);
+    }
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    get_proc_address_in_process_name_raw(kernel, thread_id, module, &name)
+}
+
+fn get_proc_address_in_process_name_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    module: u32,
+    name: &str,
+) -> u32 {
+    let address = if module == COREDLL_MODULE_HANDLE {
+        get_coredll_proc_address_name_raw(kernel, thread_id, name)
+    } else {
+        match kernel.resolve_loaded_module_proc_by_name(module, name) {
+            Some(address) => {
+                kernel.threads.set_last_error(thread_id, 0);
+                address
+            }
+            None => 0,
+        }
+    };
+    finish_get_proc_address_in_process(kernel, thread_id, address)
+}
+
+fn get_proc_address_in_process_ordinal_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    module: u32,
+    ordinal: u32,
+) -> u32 {
+    let address = if module == COREDLL_MODULE_HANDLE {
+        get_coredll_proc_address_ordinal_raw(kernel, thread_id, ordinal)
+    } else {
+        match kernel.resolve_loaded_module_proc_by_ordinal(module, ordinal) {
+            Some(address) => {
+                kernel.threads.set_last_error(thread_id, 0);
+                address
+            }
+            None => 0,
+        }
+    };
+    finish_get_proc_address_in_process(kernel, thread_id, address)
+}
+
+fn finish_get_proc_address_in_process(kernel: &mut CeKernel, thread_id: u32, address: u32) -> u32 {
+    if address == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel.record_runtime_loader_export_lookup(false);
+    } else {
+        kernel.record_runtime_loader_export_lookup(true);
+    }
+    address
 }
 
 fn get_proc_address_name_raw(

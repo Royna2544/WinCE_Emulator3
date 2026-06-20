@@ -79,6 +79,11 @@ notes when it is still needed for implementation.
   `GetModuleFileNameW` now accepts registered DLL module handles as well as
   the process module handle, returning the module guest path and preserving
   CE's `ERROR_INVALID_PARAMETER` failure for bad handles or empty buffers.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\loader.cpp`: raw
+  `GetProcAddressInProcess` is now exported and follows CE's process/module
+  validation plus `DoGetProcAddressA` lookup path for registered modules,
+  including ordinal lookup and `ERROR_INVALID_PARAMETER` on missing modules,
+  missing exports, invalid names, or invalid process handles.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract
