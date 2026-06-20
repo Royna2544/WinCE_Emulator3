@@ -1713,7 +1713,7 @@ impl UnicornMips {
             return true;
         }
         let wndproc = self
-            .mapped_guest_wndproc(original_wndproc)
+            .receiver_process_wndproc(original_wndproc)
             .unwrap_or(original_wndproc);
 
         let return_sp = saved.regs.regs[29];
@@ -1917,7 +1917,7 @@ impl UnicornMips {
         let wndproc = if window.process_id == kernel.current_process_id() {
             Some(original_wndproc)
         } else {
-            self.mapped_guest_wndproc(original_wndproc)
+            self.receiver_process_wndproc(original_wndproc)
         };
         let Some(wndproc) = wndproc else {
             kernel.record_window_lifecycle_trace(
@@ -2038,7 +2038,7 @@ impl UnicornMips {
         let wndproc = window.wndproc;
         !is_guest_wndproc(wndproc)
             || window.process_id == kernel.current_process_id()
-            || self.mapped_guest_wndproc(wndproc).is_some()
+            || self.receiver_process_wndproc(wndproc).is_some()
     }
 
     #[cfg(feature = "unicorn")]
@@ -3137,6 +3137,17 @@ impl UnicornMips {
             }
         }
         None
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn receiver_process_wndproc(&self, wndproc: u32) -> Option<u32> {
+        if !is_guest_wndproc(wndproc) {
+            return None;
+        }
+        if is_ce_high_process_slot_callback(wndproc) {
+            return Some(wndproc);
+        }
+        self.mapped_guest_wndproc(wndproc)
     }
 
     #[cfg(feature = "unicorn")]
@@ -34586,7 +34597,14 @@ const CE_PROCESS_SLOT_SIZE: u32 = 1 << CE_VA_SECTION_SHIFT;
 #[cfg(feature = "unicorn")]
 const CE_PROCESS_SLOT_MASK: u32 = CE_PROCESS_SLOT_SIZE - 1;
 #[cfg(feature = "unicorn")]
+const CE_SHARED_HEAP_BASE: u32 = 0x7000_0000;
+#[cfg(feature = "unicorn")]
 const CE_USER_KERNEL_SPLIT: u32 = 0x8000_0000;
+
+#[cfg(feature = "unicorn")]
+fn is_ce_high_process_slot_callback(callback: u32) -> bool {
+    (CE_SHARED_HEAP_BASE..CE_USER_KERNEL_SPLIT).contains(&callback)
+}
 
 #[cfg(feature = "unicorn")]
 fn can_read_unicorn_code<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> bool {
@@ -43644,6 +43662,21 @@ mod unicorn_tests {
         assert_eq!(
             emulator.mapped_guest_wndproc(0x6004_f134),
             Some(0x0014_f134)
+        );
+    }
+
+    #[test]
+    fn receiver_process_wndproc_preserves_high_ce_slot_callback() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "dll:commctrl.dll".to_owned(),
+            base: 0x4015_0000,
+            bytes: vec![0; 0x7f000],
+        });
+
+        assert_eq!(
+            emulator.receiver_process_wndproc(0x7004_f0f4),
+            Some(0x7004_f0f4)
         );
     }
 

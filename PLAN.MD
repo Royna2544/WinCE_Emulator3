@@ -725,7 +725,10 @@ notes when it is still needed for implementation.
   Unicorn timeslice hook now also stops immediately when live-pump execution
   has a hidden active process and a runnable visible parked process, allowing
   route UI work to progress even before the current PC reaches a normal safe
-  scheduling boundary.
+  scheduling boundary. CE high process-slot callbacks in the user/shared VM
+  range are now preserved as receiver-process wndprocs instead of requiring a
+  loaded-DLL alias, matching the `VM_SHARED_HEAP_BASE` through `VM_KMODE_BASE`
+  range documented in `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c`.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   and `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\MAIN\utils.cpp`: raw
   `SHNotificationAddI`/`SHNotificationUpdateI` now follow CE TaskbarBubble
