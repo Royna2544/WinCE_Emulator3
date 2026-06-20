@@ -5892,7 +5892,9 @@ impl UnicornMips {
                     let _ = uc.emu_stop();
                     return;
                 }
-                if !is_mips_delay_slot_pc(|addr| read_unicorn_u32(uc, addr), previous_pc, pc) {
+                if !is_control_transfer_target(previous_pc, pc)
+                    && !is_mips_delay_slot_pc(|addr| read_unicorn_u32(uc, addr), previous_pc, pc)
+                {
                     host_wall_clock_stop_pending_hook.set(false);
                     *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
                         pc,
@@ -6219,6 +6221,8 @@ impl UnicornMips {
             let fast_mapped_code = Rc::new(MappedCodeIndex::new(&self.mapped_blobs));
             let fast_trampoline_ranges = Rc::new(self.trampoline_ranges.clone());
             let fast_trampoline_stub_by_origin = Rc::new(trampoline_stub_by_origin.clone());
+            let fast_trampoline_jump_index = trampoline_jump_index.clone();
+            let fast_code_previous_pc = Rc::new(Cell::new(None::<u32>));
             let fast_code_trace_counter = Rc::clone(&code_trace_counter);
             let fast_host_wall_clock_counter = Rc::clone(&host_wall_clock_counter);
             let fast_host_wall_clock_stop = Rc::clone(&host_wall_clock_stop);
@@ -6233,6 +6237,8 @@ impl UnicornMips {
                 let mapped_code = Rc::clone(&fast_mapped_code);
                 let trampoline_ranges = Rc::clone(&fast_trampoline_ranges);
                 let stub_by_origin = Rc::clone(&fast_trampoline_stub_by_origin);
+                let trampoline_jump_index = fast_trampoline_jump_index.clone();
+                let fast_code_previous_pc = Rc::clone(&fast_code_previous_pc);
                 let code_trace_counter = Rc::clone(&fast_code_trace_counter);
                 let host_wall_clock_counter = Rc::clone(&fast_host_wall_clock_counter);
                 let host_wall_clock_stop = Rc::clone(&fast_host_wall_clock_stop);
@@ -6246,6 +6252,7 @@ impl UnicornMips {
                     u64::from(end),
                     move |uc, address, _size| {
                         let pc = address as u32;
+                        let previous_pc = fast_code_previous_pc.replace(Some(pc));
                         let code_trace_index = code_trace_counter.get().wrapping_add(1);
                         code_trace_counter.set(code_trace_index);
                         let Some(instruction) = read_unicorn_code_u32(uc, &mapped_code, pc) else {
@@ -6282,17 +6289,32 @@ impl UnicornMips {
                                     live_blocked,
                                 );
                             if live_pump && remote_drained != 0 {
-                                *host_wall_clock_stop.borrow_mut() =
-                                    Some(UnicornHostWallClockStop {
-                                        pc,
-                                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                                        instruction: Some(instruction),
-                                        elapsed_ms: host_wall_clock_started.elapsed().as_millis()
-                                            as u64,
-                                    });
-                                let _ = uc.emu_stop();
-                                return;
+                                if let Some(stop_pc) = live_wall_clock_block_stop_pc(
+                                    pc,
+                                    previous_pc,
+                                    &trampoline_ranges,
+                                    &trampoline_jump_index,
+                                    |addr| read_unicorn_code_u32(uc, &mapped_code, addr),
+                                ) {
+                                    *host_wall_clock_stop.borrow_mut() =
+                                        Some(UnicornHostWallClockStop {
+                                            pc: stop_pc,
+                                            ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                            sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                            instruction: read_unicorn_code_u32(
+                                                uc,
+                                                &mapped_code,
+                                                stop_pc,
+                                            ),
+                                            elapsed_ms: host_wall_clock_started
+                                                .elapsed()
+                                                .as_millis()
+                                                as u64,
+                                        });
+                                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(stop_pc));
+                                    let _ = uc.emu_stop();
+                                    return;
+                                }
                             }
                             if live_pump
                                 && parked_child_processes.borrow().iter().any(|process| {
@@ -6308,17 +6330,32 @@ impl UnicornMips {
                                     )
                                 })
                             {
-                                *host_wall_clock_stop.borrow_mut() =
-                                    Some(UnicornHostWallClockStop {
-                                        pc,
-                                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                                        instruction: Some(instruction),
-                                        elapsed_ms: host_wall_clock_started.elapsed().as_millis()
-                                            as u64,
-                                    });
-                                let _ = uc.emu_stop();
-                                return;
+                                if let Some(stop_pc) = live_wall_clock_block_stop_pc(
+                                    pc,
+                                    previous_pc,
+                                    &trampoline_ranges,
+                                    &trampoline_jump_index,
+                                    |addr| read_unicorn_code_u32(uc, &mapped_code, addr),
+                                ) {
+                                    *host_wall_clock_stop.borrow_mut() =
+                                        Some(UnicornHostWallClockStop {
+                                            pc: stop_pc,
+                                            ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                            sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                            instruction: read_unicorn_code_u32(
+                                                uc,
+                                                &mapped_code,
+                                                stop_pc,
+                                            ),
+                                            elapsed_ms: host_wall_clock_started
+                                                .elapsed()
+                                                .as_millis()
+                                                as u64,
+                                        });
+                                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(stop_pc));
+                                    let _ = uc.emu_stop();
+                                    return;
+                                }
                             }
                             if let Err(err) =
                                 drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
@@ -6347,17 +6384,32 @@ impl UnicornMips {
                                             )
                                         })))
                             {
-                                *host_wall_clock_stop.borrow_mut() =
-                                    Some(UnicornHostWallClockStop {
-                                        pc,
-                                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                                        instruction: Some(instruction),
-                                        elapsed_ms: host_wall_clock_started.elapsed().as_millis()
-                                            as u64,
-                                    });
-                                let _ = uc.emu_stop();
-                                return;
+                                if let Some(stop_pc) = live_wall_clock_block_stop_pc(
+                                    pc,
+                                    previous_pc,
+                                    &trampoline_ranges,
+                                    &trampoline_jump_index,
+                                    |addr| read_unicorn_code_u32(uc, &mapped_code, addr),
+                                ) {
+                                    *host_wall_clock_stop.borrow_mut() =
+                                        Some(UnicornHostWallClockStop {
+                                            pc: stop_pc,
+                                            ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                            sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                            instruction: read_unicorn_code_u32(
+                                                uc,
+                                                &mapped_code,
+                                                stop_pc,
+                                            ),
+                                            elapsed_ms: host_wall_clock_started
+                                                .elapsed()
+                                                .as_millis()
+                                                as u64,
+                                        });
+                                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(stop_pc));
+                                    let _ = uc.emu_stop();
+                                    return;
+                                }
                             }
                         }
                         if is_trampoline_sentinel_first_word(instruction) {
@@ -24924,6 +24976,33 @@ mod wait_scheduler_tests {
         assert!(!super::is_control_transfer_target(Some(0x1000), 0x1004));
         assert!(super::is_control_transfer_target(Some(0x1004), 0x2000));
         assert!(super::is_control_transfer_target(Some(0x2000), 0x1008));
+    }
+
+    #[test]
+    fn live_wall_clock_stop_skips_control_transfer_targets() {
+        let trampoline_index = super::MipsTrampolineJumpIndex::default();
+        let read_word = |_| None;
+
+        assert_eq!(
+            super::live_wall_clock_block_stop_pc(
+                0x1004,
+                Some(0x1000),
+                &[],
+                &trampoline_index,
+                read_word,
+            ),
+            Some(0x1004)
+        );
+        assert_eq!(
+            super::live_wall_clock_block_stop_pc(
+                0x49c22c,
+                Some(0x7390c),
+                &[],
+                &trampoline_index,
+                read_word,
+            ),
+            None
+        );
     }
 
     #[test]
