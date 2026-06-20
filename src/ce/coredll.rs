@@ -3990,6 +3990,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 memory,
                 thread_id,
                 raw_arg(args, 0),
+                false,
             )))
         }
         // U_r* — ROM FS low-level file ops. Not supported.
@@ -29769,7 +29770,7 @@ fn load_bitmap_w_raw<M: CoredllGuestMemory>(
     module: u32,
     name: u32,
 ) -> u32 {
-    load_bitmap_resource(kernel, memory, thread_id, module, name)
+    load_bitmap_resource(kernel, memory, thread_id, module, name, false)
 }
 
 fn load_image_w_raw<M: CoredllGuestMemory>(
@@ -29796,11 +29797,12 @@ fn load_image_w_raw<M: CoredllGuestMemory>(
         return 0;
     }
 
+    let create_dib_section = flags & LR_CREATEDIBSECTION != 0;
     if flags & LR_LOADFROMFILE != 0 {
-        return load_bitmap_file(kernel, memory, thread_id, name);
+        return load_bitmap_file(kernel, memory, thread_id, name, create_dib_section);
     }
 
-    load_bitmap_resource(kernel, memory, thread_id, module, name)
+    load_bitmap_resource(kernel, memory, thread_id, module, name, create_dib_section)
 }
 
 fn load_cursor_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32) -> u32 {
@@ -34703,6 +34705,7 @@ fn load_bitmap_resource<M: CoredllGuestMemory>(
     thread_id: u32,
     module: u32,
     name: u32,
+    create_dib_section: bool,
 ) -> u32 {
     let module = if module == 0 {
         kernel.process_module_base()
@@ -34734,7 +34737,14 @@ fn load_bitmap_resource<M: CoredllGuestMemory>(
     let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, data_ptr, size) else {
         return 0;
     };
-    create_bitmap_from_dib_bytes(kernel, memory, thread_id, &bytes)
+    create_bitmap_from_dib_bytes_with_options(
+        kernel,
+        memory,
+        thread_id,
+        &bytes,
+        DIB_RGB_COLORS,
+        create_dib_section,
+    )
 }
 
 fn load_bitmap_file<M: CoredllGuestMemory>(
@@ -34742,6 +34752,7 @@ fn load_bitmap_file<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     name_ptr: u32,
+    create_dib_section: bool,
 ) -> u32 {
     let Some(path) = read_guest_wide_arg(memory, name_ptr) else {
         kernel
@@ -34755,7 +34766,7 @@ fn load_bitmap_file<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
         return 0;
     };
-    create_bitmap_from_file_bytes(kernel, memory, thread_id, &bytes)
+    create_bitmap_from_file_bytes(kernel, memory, thread_id, &bytes, create_dib_section)
 }
 
 fn create_bitmap_from_file_bytes<M: CoredllGuestMemory>(
@@ -34763,6 +34774,7 @@ fn create_bitmap_from_file_bytes<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     bytes: &[u8],
+    create_dib_section: bool,
 ) -> u32 {
     if bytes.len() < 14 || &bytes[0..2] != b"BM" {
         kernel
@@ -34833,13 +34845,17 @@ fn create_bitmap_from_file_bytes<M: CoredllGuestMemory>(
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    kernel.resources.create_readonly_owned_bitmap(
+    let bitmap = kernel.resources.create_readonly_owned_bitmap(
         header.width,
         header.height,
         header.planes,
         header.bits_pixel,
         bits_ptr,
-    )
+    );
+    if create_dib_section && let Some(object) = kernel.resources.bitmap_mut(bitmap) {
+        object.dib_section = true;
+    }
+    bitmap
 }
 
 fn create_bitmap_from_dib_bytes<M: CoredllGuestMemory>(
@@ -34857,6 +34873,17 @@ fn create_bitmap_from_dib_bytes_with_color_usage<M: CoredllGuestMemory>(
     thread_id: u32,
     bytes: &[u8],
     color_usage: u32,
+) -> u32 {
+    create_bitmap_from_dib_bytes_with_options(kernel, memory, thread_id, bytes, color_usage, false)
+}
+
+fn create_bitmap_from_dib_bytes_with_options<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    bytes: &[u8],
+    color_usage: u32,
+    create_dib_section: bool,
 ) -> u32 {
     let Some(header) = parse_dib_header(bytes) else {
         kernel
@@ -34974,6 +35001,9 @@ fn create_bitmap_from_dib_bytes_with_color_usage<M: CoredllGuestMemory>(
     }
     if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
         object.alpha_mask = alpha_mask;
+        if create_dib_section {
+            object.dib_section = true;
+        }
     }
     bitmap
 }
@@ -56884,6 +56914,7 @@ const PALETTE_ENTRY_SIZE_U32: u32 = 4;
 const MAX_LOG_PALETTE_ENTRIES: u32 = 4096;
 const DS_SETFONT: u32 = 0x0000_0040;
 const LR_LOADFROMFILE: u32 = 0x0000_0010;
+const LR_CREATEDIBSECTION: u32 = 0x0000_2000;
 const MIIM_STATE: u32 = 0x0000_0001;
 const MIIM_ID: u32 = 0x0000_0002;
 const MIIM_SUBMENU: u32 = 0x0000_0004;

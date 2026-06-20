@@ -32,32 +32,32 @@ use wince_emulation_v3::{
             ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES, ORD_GET_COMM_MODEM_STATUS,
             ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W,
             ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
-            ORD_GET_PROCESS_HEAP, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC,
-            ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE,
-            ORD_HEAP_VALIDATE, ORD_HYPOT, ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE,
-            ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR,
-            ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP,
-            ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W,
-            ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
-            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
-            ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
-            ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_NED, ORD_NES, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
-            ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY,
-            ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND, ORD_READ_FILE,
-            ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W,
-            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W,
-            ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W,
-            ORD_REG_SET_VALUE_EX_W, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD,
-            ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING,
-            ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
-            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC,
-            ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
-            ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
-            ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER,
-            ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP,
-            ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND,
-            ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
+            ORD_GET_OBJECT_W, ORD_GET_PROCESS_HEAP, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS,
+            ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC,
+            ORD_HEAP_SIZE, ORD_HEAP_VALIDATE, ORD_HYPOT, ORD_INTERLOCKED_DECREMENT,
+            ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR,
+            ORD_IS_BAD_WRITE_PTR, ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP,
+            ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT,
+            ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE,
+            ORD_LOCAL_FREE_IN_PROCESS, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
+            ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX, ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC,
+            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W,
+            ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES, ORD_OPERATOR_DELETE,
+            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW,
+            ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND,
+            ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
+            ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W,
+            ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W,
+            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_REGISTRY_DELETE_VALUE,
+            ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD,
+            ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC,
+            ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE,
+            ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC,
+            ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE,
+            ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W,
+            ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME, ORD_SETUP_COMM,
+            ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF,
+            ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
             ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN,
             ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM,
             ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP, ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE,
@@ -16389,8 +16389,10 @@ fn coredll_raw_shload_dibitmap_loads_file_and_rejects_missing_path() -> Result<(
 
 #[test]
 fn coredll_raw_load_image_w_loads_bitmap_file_like_ce() -> Result<()> {
+    const DIBSECTION_SIZE: u32 = 84;
     const IMAGE_BITMAP: u32 = 0;
     const LR_LOADFROMFILE: u32 = 0x10;
+    const LR_CREATEDIBSECTION: u32 = 0x2000;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -16404,7 +16406,9 @@ fn coredll_raw_load_image_w_loads_bitmap_file_like_ce() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 201_u32;
     let path_ptr = 0x1_0000_u32;
+    let object_out = 0x1_0200_u32;
     memory.map_halfwords(path_ptr, 64);
+    memory.map_bytes(object_out, DIBSECTION_SIZE);
 
     memory.write_wide_z(path_ptr, r"\frame.bmp");
     let hbm = match table.dispatch_raw_ordinal_with_memory(
@@ -16434,6 +16438,87 @@ fn coredll_raw_load_image_w_loads_bitmap_file_like_ce() -> Result<()> {
     assert_eq!(bitmap.bits_pixel, 24);
     assert!(bitmap.bits_owned);
     assert!(!bitmap.bits_writable);
+    assert!(!bitmap.dib_section);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_OBJECT_W,
+                [hbm, DIBSECTION_SIZE, object_out],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(24),
+                ..
+            }
+        ),
+        "LoadImageW without LR_CREATEDIBSECTION should expose a BITMAP-sized object"
+    );
+
+    memory.write_wide_z(path_ptr, r"\frame.bmp");
+    let dib_hbm = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [
+            0,
+            path_ptr,
+            IMAGE_BITMAP,
+            0,
+            0,
+            LR_LOADFROMFILE | LR_CREATEDIBSECTION,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("LoadImageW LR_CREATEDIBSECTION unexpected: {other:?}"),
+    };
+    assert_ne!(
+        dib_hbm, 0,
+        "LoadImageW must still return a HBITMAP with LR_CREATEDIBSECTION"
+    );
+    let dib_bitmap = kernel
+        .resources
+        .bitmap(dib_hbm)
+        .expect("LoadImageW LR_CREATEDIBSECTION returns a bitmap handle");
+    assert!(dib_bitmap.dib_section);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_OBJECT_W,
+                [dib_hbm, DIBSECTION_SIZE, object_out],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(DIBSECTION_SIZE),
+                ..
+            }
+        ),
+        "LR_CREATEDIBSECTION should make GetObjectW return the DIBSECTION size"
+    );
+    let dib_object = memory.read_bytes(object_out, DIBSECTION_SIZE as usize);
+    assert_eq!(
+        i32::from_le_bytes(dib_object[28..32].try_into().unwrap()),
+        1
+    );
+    assert_eq!(
+        i32::from_le_bytes(dib_object[32..36].try_into().unwrap()),
+        1
+    );
+    assert_eq!(
+        u16::from_le_bytes(dib_object[36..38].try_into().unwrap()),
+        1
+    );
+    assert_eq!(
+        u16::from_le_bytes(dib_object[38..40].try_into().unwrap()),
+        24
+    );
 
     memory.write_wide_z(path_ptr, r"\missing.bmp");
     assert!(

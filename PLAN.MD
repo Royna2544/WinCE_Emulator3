@@ -156,6 +156,10 @@ notes when it is still needed for implementation.
   `LoadImage(NULL, file, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE)` is now covered
   for raw `LoadImageW`; existing bitmap files return read-only HBITMAP objects
   and missing paths report `ERROR_FILE_NOT_FOUND`.
+- `C:\WINCE600\PUBLIC\COMMON\OAK\WTL\INCLUDE\atlframe.h` and
+  `atlctrlw.h`: `LR_CREATEDIBSECTION` on `LoadImageW(IMAGE_BITMAP)` is now
+  honored for raw file/resource bitmap loads, so `GetObjectW` can expose the
+  CE DIBSECTION-sized object shape when callers request it.
 
 ## Active Roadmap
 
