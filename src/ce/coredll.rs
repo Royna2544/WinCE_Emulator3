@@ -44,8 +44,9 @@ use crate::{
             ThreadSuspendResult,
         },
         registry::{
-            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HKEY_LOCAL_MACHINE, HKey, RegOpenResult,
-            RegQueryValueResult, RegistryValue,
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HKEY_LOCAL_MACHINE, HKey, REG_BINARY,
+            REG_DWORD, REG_SZ, RegOpenResult, RegQueryValueResult, RegistryData, RegistryType,
+            RegistryValue,
         },
         resource::{
             AcceleratorEntry, FontObject, IconObject, ImageListDraw, MenuItem,
@@ -2505,32 +2506,25 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_ACTIVATE_DEVICE | ORD_ACTIVATE_DEVICE_EX => {
-            // ActivateDevice(lpszDevKey, dwClientInfo) / ActivateDeviceEx(...)
-            // Device driver activation; not supported in emulation.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
-        ORD_DEACTIVATE_DEVICE => {
-            // DeactivateDevice(hDevice) — deactivate a device driver handle. No-op.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
-        ORD_REGISTER_DEVICE => {
-            // RegisterDevice(lpszType, dwIndex, lpszLib, dwInfo) — register device driver.
-            // Not supported; return NULL (0 = failure).
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
-        ORD_DEREGISTER_DEVICE => {
-            // DeregisterDevice(hDevice) — deregister a device driver. No-op.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_ACTIVATE_DEVICE => Some(CoredllValue::Handle(activate_device_raw(
+            kernel, memory, thread_id, args, false,
+        ))),
+        ORD_ACTIVATE_DEVICE_EX => Some(CoredllValue::Handle(activate_device_raw(
+            kernel, memory, thread_id, args, true,
+        ))),
+        ORD_DEACTIVATE_DEVICE => Some(CoredllValue::Bool(deactivate_device_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_REGISTER_DEVICE => Some(CoredllValue::Handle(register_device_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_DEREGISTER_DEVICE => Some(CoredllValue::Bool(deactivate_device_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_ACTIVATE_SERVICE => {
             // ActivateService(lpszSvcName, dwClientInfo) — activate a CE service.
             // Service manager not supported; return NULL handle.
@@ -54706,6 +54700,329 @@ fn open_device_key_raw<M: CoredllGuestMemory>(
         None => {
             kernel.threads.set_last_error(thread_id, driver_open.status);
             0
+        }
+    }
+}
+
+fn activate_device_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+    extended: bool,
+) -> u32 {
+    let dev_key_ptr = raw_arg(args, 0);
+    let Some(dev_key) = read_guest_wide_arg(memory, dev_key_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+
+    if extended {
+        let reg_entries_ptr = raw_arg(args, 1);
+        let reg_entry_count = raw_arg(args, 2);
+        if !apply_activate_device_regini_raw(
+            kernel,
+            memory,
+            thread_id,
+            &dev_key,
+            reg_entries_ptr,
+            reg_entry_count,
+        ) {
+            return 0;
+        }
+    }
+
+    let client_info = if extended {
+        raw_arg(args, 3)
+    } else {
+        raw_arg(args, 1)
+    };
+    activate_configured_device_by_key(kernel, thread_id, &dev_key, client_info)
+}
+
+fn register_device_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let type_ptr = raw_arg(args, 0);
+    let index = raw_arg(args, 1);
+    let info = raw_arg(args, 3);
+    let Some(device_type) = read_guest_wide_arg(memory, type_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let guest_name = format!("{}{}:", device_type.trim_end_matches(':'), index);
+    activate_configured_device_by_name(kernel, thread_id, &guest_name, info)
+}
+
+fn deactivate_device_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    if handle == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if !matches!(kernel.handles.get(handle), Ok(KernelObject::Device(_))) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    match kernel.close_handle(handle) {
+        Ok(_) => {
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            true
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn activate_configured_device_by_key(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    dev_key: &str,
+    client_info: u32,
+) -> u32 {
+    ensure_configured_device_registry_keys(kernel);
+    let normalized = normalize_device_registry_subkey(dev_key);
+    let Some(entry) = kernel
+        .devices
+        .device_key_entries()
+        .into_iter()
+        .find(|entry| {
+            normalize_device_registry_subkey(&entry.driver_key).eq_ignore_ascii_case(&normalized)
+                || normalize_device_registry_subkey(&entry.active_key)
+                    .eq_ignore_ascii_case(&normalized)
+        })
+        .or_else(|| {
+            let registry_name = format!(r"hklm\{normalized}");
+            kernel
+                .registry
+                .query_value(&registry_name, "Name")
+                .ok()
+                .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                .and_then(|name| device_key_entry_for_guest_name(kernel, &name))
+        })
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return 0;
+    };
+
+    activate_configured_device_entry(kernel, thread_id, &entry, client_info)
+}
+
+fn activate_configured_device_by_name(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    guest_name: &str,
+    client_info: u32,
+) -> u32 {
+    ensure_configured_device_registry_keys(kernel);
+    let Some(entry) = device_key_entry_for_guest_name(kernel, guest_name) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return 0;
+    };
+    activate_configured_device_entry(kernel, thread_id, &entry, client_info)
+}
+
+fn activate_configured_device_entry(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    entry: &crate::ce::devices::DeviceKeyEntry,
+    client_info: u32,
+) -> u32 {
+    let session = match kernel.devices.open(&entry.guest_name) {
+        Ok(session) => session,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            return 0;
+        }
+    };
+    let handle = kernel.handles.insert(KernelObject::Device(session));
+    let active_path = format!(r"hklm\{}", entry.active_key);
+    kernel.registry.create_key(&active_path);
+    kernel
+        .registry
+        .set_value(&active_path, "Key", RegistryValue::string(&entry.driver_key));
+    kernel
+        .registry
+        .set_value(&active_path, "Name", RegistryValue::string(&entry.guest_name));
+    kernel
+        .registry
+        .set_value(&active_path, "Hnd", RegistryValue::dword(handle));
+    kernel
+        .registry
+        .set_value(&active_path, "ClientInfo", RegistryValue::dword(client_info));
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    handle
+}
+
+fn device_key_entry_for_guest_name(
+    kernel: &CeKernel,
+    guest_name: &str,
+) -> Option<crate::ce::devices::DeviceKeyEntry> {
+    let normalized = normalize_device_name_for_registry_match(guest_name);
+    kernel.devices.device_key_entries().into_iter().find(|entry| {
+        normalize_device_name_for_registry_match(&entry.guest_name).eq_ignore_ascii_case(&normalized)
+    })
+}
+
+fn normalize_device_name_for_registry_match(name: &str) -> String {
+    name.trim().trim_end_matches(':').to_ascii_lowercase()
+}
+
+fn normalize_device_registry_subkey(path: &str) -> String {
+    let mut normalized = path.trim().replace('/', "\\");
+    while normalized.starts_with('\\') {
+        normalized.remove(0);
+    }
+    for prefix in [
+        "hklm\\",
+        "hkey_local_machine\\",
+        "machine\\",
+        "\\registry\\machine\\",
+    ] {
+        if normalized.len() >= prefix.len()
+            && normalized[..prefix.len()].eq_ignore_ascii_case(prefix)
+        {
+            normalized = normalized[prefix.len()..].to_owned();
+            break;
+        }
+    }
+    normalized
+}
+
+fn apply_activate_device_regini_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dev_key: &str,
+    reg_entries_ptr: u32,
+    reg_entry_count: u32,
+) -> bool {
+    if reg_entry_count == 0 {
+        return true;
+    }
+    if reg_entries_ptr == 0 || reg_entry_count > 256 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let key_path = format!(r"hklm\{}", normalize_device_registry_subkey(dev_key));
+    kernel.registry.create_key(&key_path);
+    for index in 0..reg_entry_count {
+        let base = reg_entries_ptr.wrapping_add(index.wrapping_mul(16));
+        let Some(value_name_ptr) = read_guest_u32(kernel, memory, thread_id, base) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        let Some(data_ptr) = read_guest_u32(kernel, memory, thread_id, base.wrapping_add(4)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        let Some(data_len) = read_guest_u32(kernel, memory, thread_id, base.wrapping_add(8)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        let Some(data_type) = read_guest_u32(kernel, memory, thread_id, base.wrapping_add(12))
+        else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        let Some(value_name) = read_guest_wide_arg(memory, value_name_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        let Some(value) =
+            read_activate_device_regini_value_raw(kernel, memory, thread_id, data_ptr, data_len, data_type)
+        else {
+            return false;
+        };
+        kernel.registry.set_value(&key_path, &value_name, value);
+    }
+    true
+}
+
+fn read_activate_device_regini_value_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    data_ptr: u32,
+    data_len: u32,
+    data_type: u32,
+) -> Option<RegistryValue> {
+    if data_len != 0 && data_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    match data_type {
+        REG_DWORD if data_len >= 4 => read_guest_u32(kernel, memory, thread_id, data_ptr)
+            .map(RegistryValue::dword)
+            .or_else(|| {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                None
+            }),
+        REG_SZ => {
+            let bytes = if data_len == 0 {
+                Vec::new()
+            } else {
+                read_guest_bytes(kernel, memory, thread_id, data_ptr, data_len)?
+            };
+            let units = bytes
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .take_while(|unit| *unit != 0)
+                .collect::<Vec<_>>();
+            Some(RegistryValue::string(String::from_utf16_lossy(&units)))
+        }
+        REG_BINARY => {
+            let bytes = if data_len == 0 {
+                Vec::new()
+            } else {
+                read_guest_bytes(kernel, memory, thread_id, data_ptr, data_len)?
+            };
+            Some(RegistryValue {
+                ty: RegistryType::RegBinary,
+                data: RegistryData::Binary(bytes),
+            })
+        }
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            None
         }
     }
 }
