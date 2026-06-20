@@ -721,6 +721,15 @@ notes when it is still needed for implementation.
   destroying the prior copied icon on update/remove. Coverage verifies add,
   query, non-null update, null-icon update, duplicate iconic add, and remove
   lifecycle behavior against copied handles.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storedisk.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: mounted store and partition
+  `DeviceIoControl` now route CE `SG_REQ` disk read/write IOCTLs through the
+  synthetic FSDMGR sector store instead of falling through as unsupported.
+  Coverage verifies `DISK_IOCTL_WRITE` through a store handle, `IOCTL_DISK_READ`
+  through the opened partition handle, scatter-gather splitting, shared
+  mounted-store identity, request status updates, zero byte-counts, and invalid
+  SG request rejection.
 
 ## Active Roadmap
 

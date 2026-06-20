@@ -161,6 +161,8 @@ const PAGE_OUT_DLL_USED_ONLY_BY_THISPROC: u32 = 1;
 const PAGE_OUT_ALL_DEPENDENT_DLL: u32 = 2;
 const FILE_SEGMENT_ELEMENT_SIZE: u32 = 8;
 const DISK_IOCTL_GETINFO: u32 = 1;
+const DISK_IOCTL_READ: u32 = 2;
+const DISK_IOCTL_WRITE: u32 = 3;
 const DISK_IOCTL_SETINFO: u32 = 5;
 const DISK_IOCTL_INITIALIZED: u32 = 4;
 const DISK_IOCTL_FORMAT_MEDIA: u32 = 6;
@@ -170,6 +172,8 @@ const IOCTL_DISK_SCAN_VOLUME: u32 = 0x0007_0224;
 const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
 const IOCTL_DISK_GETINFO: u32 = 0x0007_1c00;
 const IOCTL_DISK_SETINFO: u32 = 0x0007_1c04;
+const IOCTL_DISK_READ: u32 = 0x0007_4008;
+const IOCTL_DISK_WRITE: u32 = 0x0007_800c;
 const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
 const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
 const IOCTL_DISK_SET_STANDBY_TIMER: u32 = 0x0007_1c18;
@@ -24099,6 +24103,31 @@ fn store_manager_info_for_handle(kernel: &mut CeKernel, handle: u32) -> Option<S
     kernel.files.store_manager_info_for_guest_root(&guest_root)
 }
 
+fn store_manager_disk_ptr(guest_root: &str) -> u32 {
+    let mut hash = 0x811c_9dc5u32;
+    for byte in guest_root.bytes().map(|byte| byte.to_ascii_lowercase()) {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash.max(1)
+}
+
+fn store_or_partition_disk_sg_io_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    disk_ptr: u32,
+    sg_ptr: u32,
+    sg_bytes: u32,
+    returned_ptr: u32,
+    read: bool,
+) -> bool {
+    if !fsdmgr_disk_sg_io_raw(kernel, memory, thread_id, disk_ptr, sg_ptr, sg_bytes, read) {
+        return false;
+    }
+    write_optional_count(kernel, memory, thread_id, returned_ptr, 0)
+}
+
 fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -24115,6 +24144,10 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         ioctl_code,
         DISK_IOCTL_GETINFO
             | IOCTL_DISK_GETINFO
+            | DISK_IOCTL_READ
+            | IOCTL_DISK_READ
+            | DISK_IOCTL_WRITE
+            | IOCTL_DISK_WRITE
             | DISK_IOCTL_GETNAME
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
@@ -24137,6 +24170,7 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         return None;
     }
     let info = store_manager_info_for_handle(kernel, handle)?;
+    let disk_ptr = store_manager_disk_ptr(&info.guest_root);
     Some(match ioctl_code {
         DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO => store_disk_info_raw(
             kernel,
@@ -24154,6 +24188,26 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
                 input_len
             },
             returned_ptr,
+        ),
+        DISK_IOCTL_READ | IOCTL_DISK_READ => store_or_partition_disk_sg_io_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            input_ptr,
+            input_len,
+            returned_ptr,
+            true,
+        ),
+        DISK_IOCTL_WRITE | IOCTL_DISK_WRITE => store_or_partition_disk_sg_io_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            input_ptr,
+            input_len,
+            returned_ptr,
+            false,
         ),
         DISK_IOCTL_GETNAME | IOCTL_DISK_GETNAME => store_disk_get_name_raw(
             kernel,
@@ -24319,6 +24373,10 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         ioctl_code,
         DISK_IOCTL_GETINFO
             | IOCTL_DISK_GETINFO
+            | DISK_IOCTL_READ
+            | IOCTL_DISK_READ
+            | DISK_IOCTL_WRITE
+            | IOCTL_DISK_WRITE
             | DISK_IOCTL_GETNAME
             | IOCTL_DISK_GETNAME
             | IOCTL_DISK_DEVICE_INFO
@@ -24346,6 +24404,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         return None;
     }
     let info = partition_manager_info_for_handle(kernel, handle)?;
+    let disk_ptr = store_manager_disk_ptr(&info.store_guest_root);
     Some(match ioctl_code {
         DISK_IOCTL_GETINFO | IOCTL_DISK_GETINFO => partition_disk_info_raw(
             kernel,
@@ -24363,6 +24422,26 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
                 input_len
             },
             returned_ptr,
+        ),
+        DISK_IOCTL_READ | IOCTL_DISK_READ => store_or_partition_disk_sg_io_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            input_ptr,
+            input_len,
+            returned_ptr,
+            true,
+        ),
+        DISK_IOCTL_WRITE | IOCTL_DISK_WRITE => store_or_partition_disk_sg_io_raw(
+            kernel,
+            memory,
+            thread_id,
+            disk_ptr,
+            input_ptr,
+            input_len,
+            returned_ptr,
+            false,
         ),
         DISK_IOCTL_GETNAME | IOCTL_DISK_GETNAME => partition_disk_get_name_raw(
             kernel,

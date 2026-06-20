@@ -3802,11 +3802,13 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const FSD_DISK_INFO_SIZE: u32 = 24;
     const STORAGE_DEVICE_INFO_SIZE: u32 = 80;
     const DISK_IOCTL_INITIALIZED: u32 = 4;
+    const DISK_IOCTL_WRITE: u32 = 3;
     const DISK_IOCTL_GETNAME: u32 = 9;
     const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
     const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
     const IOCTL_DISK_DEVICE_INFO: u32 = 0x0007_1800;
     const IOCTL_DISK_GETINFO: u32 = 0x0007_1c00;
+    const IOCTL_DISK_READ: u32 = 0x0007_4008;
     const IOCTL_DISK_INITIALIZED: u32 = 0x0007_1c10;
     const IOCTL_DISK_FORMAT_MEDIA: u32 = 0x0007_5c14;
     const IOCTL_DISK_FORMAT_VOLUME: u32 = 0x0007_0220;
@@ -3899,6 +3901,11 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     let sector_list_ptr = 0x3028_0000;
     let sector_addr_ptr = 0x3029_0000;
     let copy_external_ptr = 0x302a_0000;
+    let sg_write_ptr = 0x302b_0000;
+    let sg_read_ptr = 0x302b_0100;
+    let disk_write_ptr = 0x302b_1000;
+    let disk_read_a_ptr = 0x302b_2000;
+    let disk_read_b_ptr = 0x302b_3000;
     memory.map_halfwords(name_ptr, 32);
     memory.map_words(info_level_ptr, 1);
     memory.map_words(bytes_returned_ptr, 1);
@@ -3913,6 +3920,11 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     memory.map_bytes(sector_list_ptr, 8);
     memory.map_bytes(sector_addr_ptr, 8);
     memory.map_bytes(copy_external_ptr, DISK_COPY_EXTERNAL_SIZE + 8);
+    memory.map_bytes(sg_write_ptr, 28);
+    memory.map_bytes(sg_read_ptr, 36);
+    memory.map_bytes(disk_write_ptr, 512);
+    memory.map_bytes(disk_read_a_ptr, 200);
+    memory.map_bytes(disk_read_b_ptr, 312);
     memory.write_word(info_level_ptr, 0);
 
     let read_le_u32 = |bytes: &[u8], offset: usize| -> u32 {
@@ -4915,6 +4927,115 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 16);
     assert_synthetic_storage_id(&memory);
+
+    let disk_payload = (0..512)
+        .map(|index| ((index * 37 + 11) & 0xff) as u8)
+        .collect::<Vec<_>>();
+    memory.write_bytes(disk_write_ptr, &disk_payload);
+    memory.write_bytes(sg_write_ptr, &[0; 28]);
+    memory.write_word(sg_write_ptr, 5);
+    memory.write_word(sg_write_ptr + 4, 1);
+    memory.write_word(sg_write_ptr + 8, 1);
+    memory.write_word(sg_write_ptr + 12, 0xdead_beef);
+    memory.write_word(sg_write_ptr + 20, disk_write_ptr);
+    memory.write_word(sg_write_ptr + 24, 512);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                DISK_IOCTL_WRITE,
+                sg_write_ptr,
+                28,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(sg_write_ptr + 12)?, 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_bytes(disk_read_a_ptr, &[0x91; 200]);
+    memory.write_bytes(disk_read_b_ptr, &[0x92; 312]);
+    memory.write_bytes(sg_read_ptr, &[0; 36]);
+    memory.write_word(sg_read_ptr, 5);
+    memory.write_word(sg_read_ptr + 4, 1);
+    memory.write_word(sg_read_ptr + 8, 2);
+    memory.write_word(sg_read_ptr + 12, 0xcafe_d00d);
+    memory.write_word(sg_read_ptr + 20, disk_read_a_ptr);
+    memory.write_word(sg_read_ptr + 24, 200);
+    memory.write_word(sg_read_ptr + 28, disk_read_b_ptr);
+    memory.write_word(sg_read_ptr + 32, 312);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_DISK_READ,
+                sg_read_ptr,
+                36,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(sg_read_ptr + 12)?, 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+    let mut read_payload = memory.read_bytes(disk_read_a_ptr, 200);
+    read_payload.extend(memory.read_bytes(disk_read_b_ptr, 312));
+    assert_eq!(read_payload, disk_payload);
+
+    memory.write_word(sg_read_ptr + 8, 9);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_DISK_READ,
+                sg_read_ptr,
+                36,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_babe);
 
     memory.write_word(bytes_returned_ptr, 0xfeed_babe);
     assert!(matches!(
