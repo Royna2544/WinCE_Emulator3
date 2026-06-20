@@ -7394,6 +7394,7 @@ impl UnicornMips {
                         &blocked_guest_thread_hook,
                         &displaced_blocked_get_messages_hook,
                         &suspended_guest_thread_hook,
+                        &suspended_guest_thread_queue_hook,
                         &self_suspended_guest_threads_hook,
                         &running_guest_thread_hook,
                         &pending_wndproc_returns_hook,
@@ -7433,6 +7434,7 @@ impl UnicornMips {
                         &blocked_guest_thread_hook,
                         &displaced_blocked_get_messages_hook,
                         &suspended_guest_thread_hook,
+                        &suspended_guest_thread_queue_hook,
                         &running_guest_thread_hook,
                         &pending_wndproc_returns_hook,
                         host_wall_clock_started,
@@ -7458,6 +7460,7 @@ impl UnicornMips {
                         &blocked_guest_thread_hook,
                         &displaced_blocked_get_messages_hook,
                         &suspended_guest_thread_hook,
+                        &suspended_guest_thread_queue_hook,
                         &running_guest_thread_hook,
                         &pending_wndproc_returns_hook,
                         host_wall_clock_started,
@@ -7481,6 +7484,7 @@ impl UnicornMips {
                         &blocked_guest_thread_hook,
                         &displaced_blocked_get_messages_hook,
                         &suspended_guest_thread_hook,
+                        &suspended_guest_thread_queue_hook,
                         &running_guest_thread_hook,
                         &pending_wndproc_returns_hook,
                         host_wall_clock_started,
@@ -7502,6 +7506,7 @@ impl UnicornMips {
                         &pending_guest_thread_returns_hook,
                         &current_thread_id_hook,
                         &suspended_guest_thread_hook,
+                        &suspended_guest_thread_queue_hook,
                         &running_guest_thread_hook,
                         host_wall_clock_started,
                         host_wall_clock_limit,
@@ -8127,6 +8132,7 @@ impl UnicornMips {
                         stack_top,
                         &current_thread_id_hook,
                         &suspended_guest_thread_hook,
+                        &suspended_guest_thread_queue_hook,
                         &self_suspended_guest_threads_hook,
                         &running_guest_thread_hook,
                         &guest_thread_stack_slots_hook,
@@ -14662,6 +14668,7 @@ fn try_block_message_queue_io<D>(
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     pending_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
     host_wall_clock_started: std::time::Instant,
@@ -14802,7 +14809,8 @@ fn try_block_message_queue_io<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+        if let Some(suspended) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue))
+        {
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
@@ -14953,6 +14961,7 @@ fn try_block_wait_for_single_object<D>(
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     pending_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
     host_wall_clock_started: std::time::Instant,
@@ -15097,7 +15106,8 @@ fn try_block_wait_for_single_object<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+        if let Some(suspended) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue))
+        {
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
@@ -15592,6 +15602,7 @@ fn try_block_sleep<D>(
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: &SuspendedGuestThreadQueue,
     self_suspended_threads: &std::rc::Rc<
         std::cell::RefCell<std::collections::BTreeMap<u32, SuspendedGuestThread>>,
     >,
@@ -15619,6 +15630,7 @@ fn try_block_sleep<D>(
                         pending_returns,
                         current_thread_id,
                         suspended_thread,
+                        suspended_queue,
                         running_thread,
                     );
                 }
@@ -15630,6 +15642,7 @@ fn try_block_sleep<D>(
                         pending_returns,
                         current_thread_id,
                         suspended_thread,
+                        suspended_queue,
                         self_suspended_threads,
                         running_thread,
                     );
@@ -15699,6 +15712,7 @@ fn try_block_sleep<D>(
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
         if suspended_thread.borrow().is_none()
+            && suspended_queue.borrow().is_empty()
             && can_complete_current_sleep_inline(kernel, blocked_waits, thread_id, timeout)
             && current_sleep_timeout_can_complete_inline(
                 live_pump,
@@ -15732,7 +15746,8 @@ fn try_block_sleep<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+        if let Some(suspended) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue))
+        {
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
@@ -16040,6 +16055,7 @@ fn try_suspend_sleep<D>(
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: &SuspendedGuestThreadQueue,
     self_suspended_threads: &std::rc::Rc<
         std::cell::RefCell<std::collections::BTreeMap<u32, SuspendedGuestThread>>,
     >,
@@ -16101,7 +16117,7 @@ fn try_suspend_sleep<D>(
     }
     capture(thread_handle);
     *running_thread.borrow_mut() = None;
-    if let Some(suspended) = suspended_thread.borrow_mut().take() {
+    if let Some(suspended) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue)) {
         activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
     } else {
         let _ = uc.emu_stop();
@@ -16117,6 +16133,7 @@ fn try_yield_sleep<D>(
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -16134,7 +16151,9 @@ fn try_yield_sleep<D>(
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         kernel.record_thread_yield();
         yielding.thread_handle = Some(callout.thread_handle);
-        *suspended_thread.borrow_mut() = Some(yielding);
+        if !push_suspended_guest_thread(suspended_thread, Some(suspended_queue), yielding) {
+            return false;
+        }
 
         let mut creator_regs = callout.creator_regs;
         creator_regs.set_v0(callout.thread_handle);
@@ -16157,7 +16176,7 @@ fn try_yield_sleep<D>(
         return true;
     }
 
-    let Some(resume) = suspended_thread.borrow_mut().take() else {
+    let Some(resume) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue)) else {
         kernel.record_thread_yield();
         let writes = [
             uc.reg_write(RegisterMIPS::V0, 0),
@@ -16171,7 +16190,9 @@ fn try_yield_sleep<D>(
     };
 
     kernel.record_thread_yield();
-    *suspended_thread.borrow_mut() = Some(yielding);
+    if !push_suspended_guest_thread(suspended_thread, Some(suspended_queue), yielding) {
+        return false;
+    }
     activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &resume);
     true
 }
@@ -16190,6 +16211,7 @@ fn try_block_wait_for_multiple_objects<D>(
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     pending_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
     host_wall_clock_started: std::time::Instant,
@@ -16345,7 +16367,8 @@ fn try_block_wait_for_multiple_objects<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+        if let Some(suspended) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue))
+        {
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
@@ -16455,6 +16478,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
@@ -16605,7 +16629,8 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+        if let Some(suspended) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue))
+        {
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
@@ -18897,6 +18922,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             std::time::Instant::now(),
@@ -19021,6 +19047,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             std::time::Instant::now(),
@@ -19128,6 +19155,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             std::time::Instant::now(),
@@ -21977,6 +22005,7 @@ mod wait_scheduler_tests {
             &pending_returns,
             &current_thread_id,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_millis(1)),
@@ -22166,6 +22195,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             std::time::Instant::now(),
@@ -22227,6 +22257,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             std::time::Instant::now(),
@@ -22302,6 +22333,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             std::time::Instant::now(),
@@ -22398,6 +22430,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &self_suspended_threads,
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
@@ -22463,6 +22496,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &self_suspended_threads,
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
@@ -22560,6 +22594,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &self_suspended_threads,
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
@@ -22634,6 +22669,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &self_suspended_threads,
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
@@ -22768,6 +22804,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &self_suspended_threads,
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
@@ -23228,6 +23265,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &self_suspended_threads,
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
@@ -23338,6 +23376,7 @@ mod wait_scheduler_tests {
             &blocked_get_message,
             &displaced_blocked_get_messages,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             std::time::Instant::now(),
@@ -23438,6 +23477,7 @@ mod wait_scheduler_tests {
             &pending_returns,
             &current_thread_id,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
@@ -25733,6 +25773,7 @@ fn try_enter_resumed_thread_callout<D>(
     process_stack_top: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: &SuspendedGuestThreadQueue,
     self_suspended_threads: &std::rc::Rc<
         std::cell::RefCell<std::collections::BTreeMap<u32, SuspendedGuestThread>>,
     >,
@@ -25769,7 +25810,9 @@ fn try_enter_resumed_thread_callout<D>(
             pc: read_mips_reg(uc, RegisterMIPS::RA),
         };
         creator.regs.set_v0(result);
-        *suspended_thread.borrow_mut() = Some(creator);
+        if !push_suspended_guest_thread(suspended_thread, Some(suspended_queue), creator) {
+            return false;
+        }
         activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &resumed);
         return true;
     }
@@ -25787,7 +25830,9 @@ fn try_enter_resumed_thread_callout<D>(
         pc: read_mips_reg(uc, RegisterMIPS::RA),
     };
     creator.regs.set_v0(result);
-    *suspended_thread.borrow_mut() = Some(creator);
+    if !push_suspended_guest_thread(suspended_thread, Some(suspended_queue), creator) {
+        return false;
+    }
     *current_thread_id.borrow_mut() = worker_thread_id;
     let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
@@ -26808,6 +26853,7 @@ mod guest_thread_stack_tests {
             0x8000_0000,
             &current_thread_id,
             &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
             &self_suspended_threads,
             &running_thread,
             &stack_slots,
