@@ -781,10 +781,10 @@ notes when it is still needed for implementation.
   wndprocs. Host-wall-clock live-pump stops now also rotate to runnable parked
   processes even when no message waiter or priority wait is present, preventing
   visible runnable work from being stranded behind the active process. Live
-  pump handoff also rotates from a visible active process with receiver work to
-  a hidden parked process that has CPU-runnable work but no visible windows or
-  queued receiver work, preserving progress for helper child processes. The
-  Unicorn timeslice hook now also stops immediately when live-pump execution
+  pump handoff also keeps visible active route UI ahead of hidden CPU-runnable
+  child helpers, only using the hidden-child fallback when the active process
+  has no visible windows. The Unicorn timeslice hook now also stops immediately
+  when live-pump execution
   has a hidden active process and a runnable visible parked process, allowing
   route UI work to progress even before the current PC reaches a normal safe
   scheduling boundary. CE high process-slot callbacks in the user/shared VM

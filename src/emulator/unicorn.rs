@@ -2301,6 +2301,7 @@ impl UnicornMips {
         } else if live_pump
             && active_has_visible_receiver
             && !active_has_visible_queued_receiver
+            && !self.active_process_has_visible_windows(kernel)
             && self.rotate_to_live_pump_cpu_runnable_parked_process(kernel)
         {
             return;
@@ -30438,7 +30439,7 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
-    fn live_pump_rotates_visible_active_to_hidden_cpu_runnable_child() -> Result<()> {
+    fn live_pump_keeps_visible_active_over_hidden_cpu_runnable_child() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
@@ -30516,8 +30517,9 @@ mod guest_thread_stack_tests {
 
         scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
 
-        assert_eq!(kernel.current_process_id(), 67);
-        assert_eq!(scheduler.current_thread_id, child_thread);
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(scheduler.current_thread_id, 1);
+        assert_eq!(scheduler.parked_child_processes.len(), 1);
 
         Ok(())
     }
