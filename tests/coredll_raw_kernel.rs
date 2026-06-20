@@ -36,8 +36,8 @@ use wince_emulation_v3::{
             ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_PRIORITY_CLIPBOARD_FORMAT,
             ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROC_NAME, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX,
-            ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION,
-            ORD_GET_SYSTEM_MEMORY_DIVISION, ORD_GET_SYSTEM_POWER_STATE,
+            ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STDIO_PATH_W,
+            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION, ORD_GET_SYSTEM_POWER_STATE,
             ORD_GET_SYSTEM_POWER_STATUS_EX, ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME,
             ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
             ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
@@ -76,20 +76,20 @@ use wince_emulation_v3::{
             ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
             ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER,
             ORD_SET_EVENT_DATA, ORD_SET_LAST_ERROR, ORD_SET_POWER_REQUIREMENT,
-            ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS,
-            ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
-            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
-            ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
-            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
-            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
-            ORD_SLEEP_TILL_TICK, ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS,
-            ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD,
-            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT,
-            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_VER_QUERY_VALUE_W, ORD_VERIFY_APIHANDLE, ORD_WAIT_COMM_EVENT,
-            ORD_WAIT_FOR_APIREADY, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_MSG_QUEUE,
-            ORD_WRITE_PROCESS_MEMORY,
+            ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_PRIORITY,
+            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
+            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
+            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
+            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
+            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
+            ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS, ORD_STRING_COMPRESS,
+            ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
+            ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_VER_QUERY_VALUE_W, ORD_VERIFY_APIHANDLE,
+            ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_APIREADY, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
         },
         devices::{
             CommDcb, DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind,
@@ -287,6 +287,152 @@ fn coredll_raw_battery_power_status_uses_ce_struct_layouts() -> Result<()> {
             ..
         }
     ));
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    let stdio_path_ptr = 0x2a00;
+    let stdio_out_ptr = 0x2b00;
+    let stdio_len_ptr = 0x2c00;
+    memory.map_halfwords(stdio_path_ptr, 64);
+    memory.map_halfwords(stdio_out_ptr, 64);
+    memory.map_words(stdio_len_ptr, 1);
+    memory.write_wide_z(stdio_path_ptr, r"\Temp\stdout.txt");
+    memory.write_wide_z(stdio_out_ptr, "unchanged");
+    memory.write_word(stdio_len_ptr, 64);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STDIO_PATH_W,
+            [1, stdio_out_ptr, stdio_len_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(stdio_len_ptr)?, 0);
+    assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), "unchanged");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_STDIO_PATH_W,
+            [1, stdio_path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    memory.write_wide_z(stdio_out_ptr, "");
+    memory.write_word(stdio_len_ptr, 64);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STDIO_PATH_W,
+            [1, stdio_out_ptr, stdio_len_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), r"\Temp\stdout.txt");
+    assert_eq!(memory.read_u32(stdio_len_ptr)?, 17);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    memory.write_wide_z(stdio_out_ptr, "short");
+    memory.write_word(stdio_len_ptr, 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STDIO_PATH_W,
+            [1, stdio_out_ptr, stdio_len_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(stdio_len_ptr)?, 4);
+    assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), "short");
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+    let saved_state = kernel.current_process_state();
+    kernel.set_current_process_id(99);
+    memory.write_wide_z(stdio_out_ptr, "other");
+    memory.write_word(stdio_len_ptr, 64);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STDIO_PATH_W,
+            [1, stdio_out_ptr, stdio_len_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(stdio_len_ptr)?, 0);
+    assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), "other");
+    kernel.set_current_process_state(saved_state);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_STDIO_PATH_W,
+            [1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    memory.write_wide_z(stdio_out_ptr, "cleared");
+    memory.write_word(stdio_len_ptr, 64);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STDIO_PATH_W,
+            [1, stdio_out_ptr, stdio_len_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(stdio_len_ptr)?, 0);
+    assert_eq!(memory.read_wide_z(stdio_out_ptr, 64), "cleared");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_STDIO_PATH_W,
+            [3, stdio_path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

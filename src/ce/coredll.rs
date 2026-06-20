@@ -4113,18 +4113,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_GET_STDIO_PATH_W => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
-        ORD_SET_STDIO_PATH_W => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_GET_STDIO_PATH_W => Some(CoredllValue::Bool(get_stdio_path_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SET_STDIO_PATH_W => Some(CoredllValue::Bool(set_stdio_path_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_WRITE_REGISTRY_TO_OEM | ORD_WRITE_DEBUG_LED => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -27272,6 +27266,93 @@ fn is_named_event_signaled_raw<M: CoredllGuestMemory>(
         return false;
     };
     kernel.is_named_event_signaled_w(&name)
+}
+
+fn set_stdio_path_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let id = raw_arg(args, 0);
+    let path_ptr = raw_arg(args, 1);
+    if id >= 3 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let path = if path_ptr == 0 {
+        None
+    } else {
+        let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        Some(path)
+    };
+    if !kernel.set_stdio_path(id, path) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_stdio_path_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let id = raw_arg(args, 0);
+    let buffer_ptr = raw_arg(args, 1);
+    let len_ptr = raw_arg(args, 2);
+    if id >= 3 || buffer_ptr == 0 || len_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(capacity_units) = memory.read_u32(len_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if capacity_units > 0 {
+        let last_unit_ptr = buffer_ptr.wrapping_add(capacity_units.saturating_sub(1) * 2);
+        if memory.read_u16(buffer_ptr).is_err() || memory.read_u16(last_unit_ptr).is_err() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    }
+    let path = kernel.stdio_path(id).unwrap_or("").to_owned();
+    let required_units = if path.is_empty() {
+        0
+    } else {
+        path.encode_utf16().count().saturating_add(1) as u32
+    };
+    if capacity_units < required_units {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+        return false;
+    }
+    if required_units != 0 && !write_guest_wide_z(kernel, memory, thread_id, buffer_ptr, &path) {
+        return false;
+    }
+    if !write_guest_u32(kernel, memory, thread_id, len_ptr, required_units) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn get_event_data_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {

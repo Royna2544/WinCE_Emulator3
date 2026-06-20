@@ -804,6 +804,14 @@ notes when it is still needed for implementation.
   discarding writes. Coverage verifies zero-payload last-error clearing,
   nonzero payload reads without clobbering last-error, successful updates, and
   invalid event handles.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\CORELIBC\CRTW32\STDIO\stioinit.c`,
+  and `C:\WINCE600\PRIVATE\WINCEOS\UTILS\CMD2\cmd.cxx`: raw
+  `GetStdioPathW`/`SetStdioPathW` now maintain CE per-process stdin/stdout/
+  stderr path names instead of returning unsupported. Coverage verifies unset
+  entries, null-path clearing, short-buffer `ERROR_INSUFFICIENT_BUFFER`
+  behavior that preserves the caller length, process isolation, and invalid
+  descriptor rejection.
 
 ## Active Roadmap
 

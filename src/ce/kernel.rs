@@ -256,6 +256,7 @@ pub struct CeKernel {
     process_command_line: String,
     command_line_guest_ptr: u32,
     process_current_directory: Option<String>,
+    process_stdio_paths: BTreeMap<(u32, u32), String>,
     process_show_cmd: u32,
     current_process_id: u32,
     current_process_exit_code: u32,
@@ -1107,6 +1108,7 @@ impl CeKernel {
             process_command_line: String::new(),
             command_line_guest_ptr: 0,
             process_current_directory: None,
+            process_stdio_paths: BTreeMap::new(),
             process_show_cmd: SW_SHOWNORMAL,
             current_process_id: 1,
             current_process_exit_code: STILL_ACTIVE,
@@ -2580,6 +2582,28 @@ impl CeKernel {
 
     pub fn current_process_id(&self) -> u32 {
         self.current_process_id
+    }
+
+    pub fn stdio_path(&self, id: u32) -> Option<&str> {
+        if id >= 3 {
+            return None;
+        }
+        self.process_stdio_paths
+            .get(&(self.current_process_id, id))
+            .map(String::as_str)
+    }
+
+    pub fn set_stdio_path(&mut self, id: u32, path: Option<String>) -> bool {
+        if id >= 3 {
+            return false;
+        }
+        let key = (self.current_process_id, id);
+        if let Some(path) = path {
+            self.process_stdio_paths.insert(key, path);
+        } else {
+            self.process_stdio_paths.remove(&key);
+        }
+        true
     }
 
     pub fn is_primary_thread_for_current_process(&self, thread_id: u32) -> bool {
