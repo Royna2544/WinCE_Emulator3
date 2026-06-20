@@ -17118,7 +17118,6 @@ fn fsdmgr_get_mount_flags_raw<M: CoredllGuestMemory>(
     if !write_guest_u32(kernel, memory, thread_id, flags_ptr, info.flags) {
         return ERROR_INVALID_PARAMETER;
     }
-    kernel.threads.set_last_error(thread_id, 0);
     0
 }
 
@@ -64129,7 +64128,125 @@ const CEMATH_EXPORTS: &[(&str, u32)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::RuntimeConfig;
+    use crate::config::{MountConfig, RuntimeConfig};
+
+    #[derive(Default)]
+    struct UnitGuestMemory {
+        bytes: BTreeMap<u32, u8>,
+    }
+
+    impl UnitGuestMemory {
+        fn map_bytes(&mut self, addr: u32, len: u32) {
+            for offset in 0..len {
+                self.bytes.insert(addr.wrapping_add(offset), 0);
+            }
+        }
+
+        fn write_wide_z(&mut self, addr: u32, text: &str) {
+            for (index, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
+                let [lo, hi] = unit.to_le_bytes();
+                let offset = addr.wrapping_add((index as u32) * 2);
+                self.bytes.insert(offset, lo);
+                self.bytes.insert(offset.wrapping_add(1), hi);
+            }
+        }
+
+        fn read_wide_z(&self, addr: u32, max_chars: usize) -> String {
+            let mut units = Vec::new();
+            for index in 0..max_chars {
+                let offset = addr.wrapping_add((index as u32) * 2);
+                let unit = u16::from_le_bytes([
+                    self.bytes.get(&offset).copied().unwrap_or(0),
+                    self.bytes
+                        .get(&offset.wrapping_add(1))
+                        .copied()
+                        .unwrap_or(0),
+                ]);
+                if unit == 0 {
+                    break;
+                }
+                units.push(unit);
+            }
+            String::from_utf16_lossy(&units)
+        }
+    }
+
+    impl CoredllGuestMemory for UnitGuestMemory {
+        fn read_u8(&self, addr: u32) -> Result<u8> {
+            self.bytes
+                .get(&addr)
+                .copied()
+                .ok_or_else(|| Error::Backend(format!("unmapped test byte 0x{addr:08x}")))
+        }
+
+        fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+            if let Some(byte) = self.bytes.get_mut(&addr) {
+                *byte = value;
+                Ok(())
+            } else {
+                Err(Error::Backend(format!("unmapped test byte 0x{addr:08x}")))
+            }
+        }
+
+        fn read_u32(&self, addr: u32) -> Result<u32> {
+            Ok(u32::from_le_bytes([
+                self.read_u8(addr)?,
+                self.read_u8(addr.wrapping_add(1))?,
+                self.read_u8(addr.wrapping_add(2))?,
+                self.read_u8(addr.wrapping_add(3))?,
+            ]))
+        }
+
+        fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+            for (offset, byte) in value.to_le_bytes().into_iter().enumerate() {
+                self.write_u8(addr.wrapping_add(offset as u32), byte)?;
+            }
+            Ok(())
+        }
+
+        fn read_u16(&self, addr: u32) -> Result<u16> {
+            Ok(u16::from_le_bytes([
+                self.read_u8(addr)?,
+                self.read_u8(addr.wrapping_add(1))?,
+            ]))
+        }
+
+        fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+            let [lo, hi] = value.to_le_bytes();
+            self.write_u8(addr, lo)?;
+            self.write_u8(addr.wrapping_add(1), hi)
+        }
+
+        fn ensure_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
+            self.map_bytes(addr, len);
+            Ok(())
+        }
+    }
+
+    fn kernel_with_sdmmc_volume() -> (CeKernel, u32) {
+        let config = RuntimeConfig::load_default().expect("load default config");
+        let mut kernel = CeKernel::boot(config);
+        kernel.files.mount(MountConfig {
+            name: Some("SDMMC Disk".to_owned()),
+            device_name: None,
+            bus_name: None,
+            guest_root: "\\SDMMC Disk".to_owned(),
+            host_root: None,
+            total_mbytes: 8192,
+            free_mbytes: 4096,
+            writable: true,
+            removable: false,
+            system: true,
+            hidden: true,
+            interface_classes: Vec::new(),
+            registry_roots: Vec::new(),
+            registry_subkey: None,
+        });
+        let volume = kernel
+            .create_volume_handle_for_guest_root("\\SDMMC Disk")
+            .expect("mounted volume handle");
+        (kernel, volume)
+    }
 
     #[test]
     fn pe_icon_bi_rgb_16bpp_uses_ce_555_masks() {
@@ -64139,6 +64256,84 @@ mod tests {
         );
         assert_eq!(pe_icon_bi_rgb_masks(24), None);
         assert_eq!(pe_icon_bi_rgb_masks(32), None);
+    }
+
+    #[test]
+    fn fsdmgr_get_volume_name_returns_name_length() {
+        let (mut kernel, volume) = kernel_with_sdmmc_volume();
+        let mut memory = UnitGuestMemory::default();
+        let thread_id = 4101;
+        let name_ptr = 0x0001_0000;
+        memory.map_bytes(name_ptr, 32);
+
+        let result = dispatch_fsdmgr_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            Some(22),
+            None,
+            &[volume, name_ptr, 16],
+        );
+
+        assert_eq!(result, Some(10));
+        assert_eq!(memory.read_wide_z(name_ptr, 16), "SDMMC Disk");
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    }
+
+    #[test]
+    fn fsdmgr_get_volume_name_rejects_exact_sized_buffer_without_writing() {
+        let (mut kernel, volume) = kernel_with_sdmmc_volume();
+        let mut memory = UnitGuestMemory::default();
+        let thread_id = 4102;
+        let name_ptr = 0x0001_0100;
+        memory.map_bytes(name_ptr, 32);
+        memory.write_wide_z(name_ptr, "unchanged");
+
+        let result = dispatch_fsdmgr_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            Some(22),
+            None,
+            &[volume, name_ptr, 10],
+        );
+
+        assert_eq!(result, Some(0));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INSUFFICIENT_BUFFER
+        );
+        assert_eq!(memory.read_wide_z(name_ptr, 16), "unchanged");
+    }
+
+    #[test]
+    fn fsdmgr_get_mount_flags_returns_lresult_without_clearing_last_error() {
+        const AFS_FLAG_HIDDEN: u32 = 0x0001;
+        const AFS_FLAG_SYSTEM: u32 = 0x0020;
+        const AFS_FLAG_PERMANENT: u32 = 0x0040;
+
+        let (mut kernel, volume) = kernel_with_sdmmc_volume();
+        let mut memory = UnitGuestMemory::default();
+        let thread_id = 4103;
+        let flags_ptr = 0x0001_0200;
+        memory.map_bytes(flags_ptr, 4);
+        kernel.threads.set_last_error(thread_id, 0x1234_5678);
+
+        let result = dispatch_fsdmgr_import_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            Some(37),
+            None,
+            &[volume, flags_ptr],
+        );
+
+        assert_eq!(result, Some(ERROR_SUCCESS));
+        assert_eq!(
+            memory.read_u32(flags_ptr).expect("mount flags"),
+            AFS_FLAG_HIDDEN | AFS_FLAG_SYSTEM | AFS_FLAG_PERMANENT
+        );
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0x1234_5678);
     }
 
     #[test]

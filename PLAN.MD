@@ -238,6 +238,12 @@ notes when it is still needed for implementation.
   storage-identification path. Coverage verifies the CE-layout
   `STORAGE_IDENTIFICATION` size/flags, byte counts, and invalid short-output
   rejection before any caller-buffer writes.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fsdmgrapi.cpp` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`:
+  FSDMGR helper imports now preserve CE's `FSDMGR_GetMountFlags` `LRESULT`
+  shape by writing mount flags without clearing the caller's last-error on
+  success. Coverage also locks down `FSDMGR_GetVolumeName` name-length return
+  values and exact-sized buffer rejection before caller-buffer writes.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\storemain.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\nullpart.cpp`, and
