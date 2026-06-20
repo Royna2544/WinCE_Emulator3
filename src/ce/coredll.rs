@@ -41909,6 +41909,7 @@ fn add_font_resource_w_raw<M: CoredllGuestMemory>(
     };
     match kernel.read_guest_file(&path) {
         Ok(_) => {
+            kernel.add_font_resource_ref(&path);
             kernel.threads.set_last_error(thread_id, 0);
             kernel.send_notify_message_w(
                 thread_id,
@@ -41947,6 +41948,12 @@ fn remove_font_resource_w_raw<M: CoredllGuestMemory>(
         return false;
     };
     if kernel.read_guest_file(&path).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return false;
+    }
+    if !kernel.remove_font_resource_ref(&path) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);

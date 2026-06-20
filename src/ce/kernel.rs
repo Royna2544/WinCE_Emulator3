@@ -225,6 +225,7 @@ pub struct CeKernel {
     loaded_modules: BTreeMap<String, LoadedModule>,
     next_loaded_module_order: u64,
     next_font_mem_resource_handle: u32,
+    font_resource_counts: BTreeMap<String, u32>,
     crt_rand_state: u32,
     crt_strtok_next_by_thread: BTreeMap<u32, u32>,
     crt_wcstok_next_by_thread: BTreeMap<u32, u32>,
@@ -939,6 +940,12 @@ fn encode_devdetail_payload(class_guid: [u8; 16], name: &str, attached: bool) ->
     payload
 }
 
+fn font_resource_key(path: &str) -> String {
+    path.replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
+}
+
 impl CeKernel {
     const MSGQUEUE_MSGALERT: u32 = 0x0000_0001;
     const MSGQUEUE_NOPRECOMMIT: u32 = 0x0000_0001;
@@ -985,6 +992,7 @@ impl CeKernel {
             loaded_modules: BTreeMap::new(),
             next_loaded_module_order: 0,
             next_font_mem_resource_handle: 0x5f00_0001,
+            font_resource_counts: BTreeMap::new(),
             crt_rand_state: 1,
             crt_strtok_next_by_thread: BTreeMap::new(),
             crt_wcstok_next_by_thread: BTreeMap::new(),
@@ -2031,6 +2039,28 @@ impl CeKernel {
         let handle = self.next_font_mem_resource_handle;
         self.next_font_mem_resource_handle = self.next_font_mem_resource_handle.wrapping_add(1);
         handle
+    }
+
+    pub fn add_font_resource_ref(&mut self, path: &str) {
+        let key = font_resource_key(path);
+        let count = self.font_resource_counts.entry(key).or_insert(0);
+        *count = count.saturating_add(1);
+    }
+
+    pub fn remove_font_resource_ref(&mut self, path: &str) -> bool {
+        let key = font_resource_key(path);
+        let Some(count) = self.font_resource_counts.get_mut(&key) else {
+            return false;
+        };
+        if *count == 0 {
+            self.font_resource_counts.remove(&key);
+            return false;
+        }
+        *count -= 1;
+        if *count == 0 {
+            self.font_resource_counts.remove(&key);
+        }
+        true
     }
 
     pub fn loaded_module_for_address(&self, addr: u32) -> Option<&LoadedModule> {

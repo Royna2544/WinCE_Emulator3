@@ -122,6 +122,11 @@ notes when it is still needed for implementation.
   `AddFontResourceW`: null paths fail with `ERROR_INVALID_PARAMETER`,
   missing and empty paths fail with `ERROR_FILE_NOT_FOUND`, and existing
   mounted font paths still broadcast `WM_FONTCHANGE` on success.
+- `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`:
+  `MultipleAddRemoveTest` is now covered for raw font resources:
+  `AddFontResourceW` records CE-style per-path references, the matching number
+  of `RemoveFontResourceW` calls succeeds, and extra removes fail with
+  `ERROR_FILE_NOT_FOUND`.
 
 ## Active Roadmap
 

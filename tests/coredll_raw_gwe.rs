@@ -43741,6 +43741,43 @@ fn coredll_raw_add_remove_font_resource_broadcasts_wm_fontchange() -> Result<()>
         ERROR_FILE_NOT_FOUND
     );
 
+    for _ in 0..3 {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                caller_thread,
+                ORD_ADD_FONT_RESOURCE_W,
+                [path_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
+        ));
+    }
+    for _ in 0..3 {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                receiver_thread,
+                ORD_PEEK_MESSAGE_W,
+                [
+                    msg_ptr,
+                    0,
+                    WM_FONTCHANGE,
+                    WM_FONTCHANGE,
+                    PeekFlags::REMOVE.bits()
+                ],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -43777,6 +43814,39 @@ fn coredll_raw_add_remove_font_resource_broadcasts_wm_fontchange() -> Result<()>
     assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_FONTCHANGE);
     assert_eq!(memory.read_u32(msg_ptr + 8)?, 0);
     assert_eq!(memory.read_u32(msg_ptr + 12)?, 0);
+
+    for _ in 0..2 {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                caller_thread,
+                ORD_REMOVE_FONT_RESOURCE_W,
+                [path_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            caller_thread,
+            ORD_REMOVE_FONT_RESOURCE_W,
+            [path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(caller_thread),
+        ERROR_FILE_NOT_FOUND
+    );
 
     let _ = fs::remove_dir_all(&root);
 
