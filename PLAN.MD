@@ -642,6 +642,14 @@ notes when it is still needed for implementation.
   storage untouched because no single window result exists. Coverage verifies
   top-level filtering, Z-order queueing, timeout metadata, and untouched
   result storage.
+- `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h` and the GWE monitor-handle
+  model under `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\MGDI\INC`: raw
+  `MonitorFromPoint`, `MonitorFromRect`, `MonitorFromWindow`, and
+  `GetMonitorInfo` now honor CE's default-to-null/primary/nearest flags on the
+  single emulated display and reject invalid monitor/window handles instead of
+  unconditionally returning the primary pseudo-handle. Coverage verifies
+  off-screen defaults, primary fallback, `MONITORINFO` layout, and invalid
+  handle errors.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
   raw `ImageList_GetImageInfo` now separates invalid image-list handles from
   invalid image indices/null output buffers and leaves the caller's

@@ -1896,34 +1896,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_GET_MONITOR_INFO => {
-            // GetMonitorInfo(hMonitor, lpmi) — fills MONITORINFO.
-            // CE has one monitor; write screen rect as both rcMonitor and rcWork, MONITORINFOF_PRIMARY=1.
-            let lpmi = raw_arg(args, 1);
-            let cx = kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN);
-            let cy = kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN);
-            kernel.threads.set_last_error(thread_id, 0);
-            if lpmi == 0 {
-                Some(CoredllValue::Bool(false))
-            } else {
-                // MONITORINFO: cbSize(4) + rcMonitor(16) + rcWork(16) + dwFlags(4) = 40 bytes
-                // (cbSize is already set by caller; we overwrite all fields)
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi, 40); // cbSize
-                // rcMonitor
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 4, 0);
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 8, 0);
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 12, cx as u32);
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 16, cy as u32);
-                // rcWork (same as monitor rect — no taskbar)
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 20, 0);
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 24, 0);
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 28, cx as u32);
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 32, cy as u32);
-                // dwFlags = MONITORINFOF_PRIMARY (1)
-                let _ = write_guest_u32(kernel, memory, thread_id, lpmi + 36, 1);
-                Some(CoredllValue::Bool(true))
-            }
-        }
+        ORD_GET_MONITOR_INFO => Some(CoredllValue::Bool(get_monitor_info_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_SYSTEM_TIME_AS_FILE_TIME => {
             write_current_file_time(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
@@ -4316,11 +4291,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::U32(0))
         }
-        // Multi-monitor — single display; return primary monitor pseudo-handle (1)
-        ORD_MONITOR_FROM_POINT | ORD_MONITOR_FROM_RECT | ORD_MONITOR_FROM_WINDOW => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Handle(1))
-        }
+        ORD_MONITOR_FROM_POINT => Some(CoredllValue::Handle(monitor_from_point_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_MONITOR_FROM_RECT => Some(CoredllValue::Handle(monitor_from_rect_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_MONITOR_FROM_WINDOW => Some(CoredllValue::Handle(monitor_from_window_raw(
+            kernel, thread_id, args,
+        ))),
         // Event data (user-event payload)
         ORD_GET_EVENT_DATA => {
             kernel
@@ -39329,6 +39308,106 @@ fn write_window_rect<M: CoredllGuestMemory>(
         return false;
     };
     write_guest_rect(kernel, memory, thread_id, rect_ptr, rect)
+}
+
+const PRIMARY_MONITOR_HANDLE: u32 = 1;
+const MONITOR_DEFAULTTOPRIMARY: u32 = 0x0000_0001;
+const MONITOR_DEFAULTTONEAREST: u32 = 0x0000_0002;
+
+fn primary_monitor_rect(kernel: &CeKernel) -> Rect {
+    Rect::from_origin_size(
+        0,
+        0,
+        kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN),
+        kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN),
+    )
+}
+
+fn primary_monitor_for_match(intersects: bool, flags: u32) -> u32 {
+    if intersects || flags & (MONITOR_DEFAULTTOPRIMARY | MONITOR_DEFAULTTONEAREST) != 0 {
+        PRIMARY_MONITOR_HANDLE
+    } else {
+        0
+    }
+}
+
+fn monitor_from_point_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let point = Point {
+        x: raw_i32_arg(args, 0),
+        y: raw_i32_arg(args, 1),
+    };
+    let flags = raw_arg(args, 2);
+    let monitor =
+        primary_monitor_for_match(primary_monitor_rect(kernel).contains_point(point), flags);
+    kernel.threads.set_last_error(thread_id, 0);
+    monitor
+}
+
+fn monitor_from_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let rect_ptr = raw_arg(args, 0);
+    let flags = raw_arg(args, 1);
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return 0;
+    };
+    let monitor = primary_monitor_for_match(
+        primary_monitor_rect(kernel).intersect(rect).is_some(),
+        flags,
+    );
+    kernel.threads.set_last_error(thread_id, 0);
+    monitor
+}
+
+fn monitor_from_window_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let flags = raw_arg(args, 1);
+    let Some(rect) = kernel.gwe.get_window_rect(hwnd) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    let monitor = primary_monitor_for_match(
+        primary_monitor_rect(kernel).intersect(rect).is_some(),
+        flags,
+    );
+    kernel.threads.set_last_error(thread_id, 0);
+    monitor
+}
+
+fn get_monitor_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let monitor = raw_arg(args, 0);
+    let info_ptr = raw_arg(args, 1);
+    if monitor != PRIMARY_MONITOR_HANDLE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let rect = primary_monitor_rect(kernel);
+    let ok = write_guest_u32(kernel, memory, thread_id, info_ptr, 40)
+        && write_guest_rect(kernel, memory, thread_id, info_ptr.wrapping_add(4), rect)
+        && write_guest_rect(kernel, memory, thread_id, info_ptr.wrapping_add(20), rect)
+        && write_guest_u32(kernel, memory, thread_id, info_ptr.wrapping_add(36), 1);
+    if ok {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    ok
 }
 
 // Strsafe helpers.

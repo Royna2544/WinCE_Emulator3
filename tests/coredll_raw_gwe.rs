@@ -42,26 +42,27 @@ use wince_emulation_v3::{
             ORD_GET_KEYBOARD_LAYOUT, ORD_GET_KEYBOARD_LAYOUT_LIST, ORD_GET_KEYBOARD_LAYOUT_NAME_W,
             ORD_GET_KEYBOARD_TARGET, ORD_GET_LAYOUT, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
             ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
-            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_COLOR,
-            ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM,
-            ORD_GET_OBJECT_TYPE, ORD_GET_OBJECT_W, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
-            ORD_GET_PIXEL, ORD_GET_QUEUE_STATUS, ORD_GET_REGION_DATA, ORD_GET_RGN_BOX,
-            ORD_GET_ROP2, ORD_GET_STOCK_OBJECT, ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU,
-            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
-            ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN,
-            ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W,
-            ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN,
-            ORD_GET_VERSION_EX_W, ORD_GET_VIEWPORT_EXT_EX, ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW,
-            ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_ORG_EX,
-            ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W,
-            ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT, ORD_GET_WINDOW_THREAD_PROCESS_ID,
-            ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL, ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD,
-            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
-            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
-            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
-            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
-            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_MONITOR_INFO,
+            ORD_GET_NEAREST_COLOR, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM,
+            ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_OBJECT_TYPE, ORD_GET_OBJECT_W,
+            ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT, ORD_GET_PIXEL, ORD_GET_QUEUE_STATUS,
+            ORD_GET_REGION_DATA, ORD_GET_RGN_BOX, ORD_GET_ROP2, ORD_GET_STOCK_OBJECT,
+            ORD_GET_STRETCH_BLT_MODE, ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH,
+            ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES,
+            ORD_GET_TEXT_ALIGN, ORD_GET_TEXT_CHARACTER_EXTRA, ORD_GET_TEXT_COLOR,
+            ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W,
+            ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W, ORD_GET_VIEWPORT_EXT_EX,
+            ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW, ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_LONG_W,
+            ORD_GET_WINDOW_ORG_EX, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
+            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
+            ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_GRADIENT_FILL,
+            ORD_HIDE_CARET, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
+            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_CREATE,
+            ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE,
+            ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW,
+            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE,
+            ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
+            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
             ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
             ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
             ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
@@ -88,7 +89,8 @@ use wince_emulation_v3::{
             ORD_LOAD_BITMAP_W, ORD_LOAD_CURSOR_W, ORD_LOAD_ICON_W, ORD_LOAD_KEYBOARD_LAYOUT_W,
             ORD_LOAD_MENU_W, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT,
             ORD_MAP_VIEW_OF_FILE, ORD_MAP_VIRTUAL_KEY_W, ORD_MAP_WINDOW_POINTS, ORD_MASK_BLT,
-            ORD_MESSAGE_BOX_W, ORD_MOVE_TO_EX, ORD_MOVE_WINDOW,
+            ORD_MESSAGE_BOX_W, ORD_MONITOR_FROM_POINT, ORD_MONITOR_FROM_RECT,
+            ORD_MONITOR_FROM_WINDOW, ORD_MOVE_TO_EX, ORD_MOVE_WINDOW,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_OFFSET_RGN,
             ORD_OFFSET_VIEWPORT_ORG_EX, ORD_PAT_BLT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE,
             ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE,
@@ -25798,6 +25800,156 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             ..
         }
     ));
+    const MONITOR_DEFAULTTONULL: u32 = 0;
+    const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
+    const MONITOR_DEFAULTTONEAREST: u32 = 2;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MONITOR_FROM_POINT,
+            [10, 20, MONITOR_DEFAULTTONULL],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MONITOR_FROM_POINT,
+            [900, 700, MONITOR_DEFAULTTONULL],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MONITOR_FROM_POINT,
+            [900, 700, MONITOR_DEFAULTTONEAREST],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(1),
+            ..
+        }
+    ));
+    let monitor_rect_ptr = 0x1_0180;
+    memory.map_words(monitor_rect_ptr, 4);
+    memory.write_u32(monitor_rect_ptr, 810)?;
+    memory.write_u32(monitor_rect_ptr + 4, 20)?;
+    memory.write_u32(monitor_rect_ptr + 8, 820)?;
+    memory.write_u32(monitor_rect_ptr + 12, 30)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MONITOR_FROM_RECT,
+            [monitor_rect_ptr, MONITOR_DEFAULTTONULL],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MONITOR_FROM_RECT,
+            [monitor_rect_ptr, MONITOR_DEFAULTTOPRIMARY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(1),
+            ..
+        }
+    ));
+    let monitor_info_ptr = 0x1_01c0;
+    memory.map_words(monitor_info_ptr, 10);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MONITOR_INFO,
+            [1, monitor_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(monitor_info_ptr)?, 40);
+    assert_eq!(memory.read_i32(monitor_info_ptr + 4)?, 0);
+    assert_eq!(memory.read_i32(monitor_info_ptr + 8)?, 0);
+    assert_eq!(memory.read_i32(monitor_info_ptr + 12)?, 800);
+    assert_eq!(memory.read_i32(monitor_info_ptr + 16)?, 480);
+    assert_eq!(memory.read_i32(monitor_info_ptr + 20)?, 0);
+    assert_eq!(memory.read_i32(monitor_info_ptr + 24)?, 0);
+    assert_eq!(memory.read_i32(monitor_info_ptr + 28)?, 800);
+    assert_eq!(memory.read_i32(monitor_info_ptr + 32)?, 480);
+    assert_eq!(memory.read_u32(monitor_info_ptr + 36)?, 1);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MONITOR_INFO,
+            [0x1234, monitor_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MONITOR_FROM_WINDOW,
+            [parent, MONITOR_DEFAULTTONULL],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MONITOR_FROM_WINDOW,
+            [0x1234_5678, MONITOR_DEFAULTTOPRIMARY],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
