@@ -9,13 +9,14 @@ use wince_emulation_v3::{
             ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION, ORD_BATTERY_GET_LIFE_TIME_INFO,
             ORD_BATTERY_NOTIFY_OF_TIME_CHANGE, ORD_CE_FIND_CLOSE_REG_CHANGE,
             ORD_CE_FIND_FIRST_REG_CHANGE, ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_MODULE_INFO,
-            ORD_CE_GET_THREAD_PRIORITY, ORD_CE_GET_THREAD_QUANTUM, ORD_CE_SET_THREAD_PRIORITY,
-            ORD_CE_SET_THREAD_QUANTUM, ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE,
-            ORD_CLOSE_MSG_QUEUE, ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_COMPATIBLE_DC,
-            ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W,
-            ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_DEACTIVATE_DEVICE, ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT,
-            ORD_DEREGISTER_DEVICE, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
+            ORD_CE_GET_THREAD_PRIORITY, ORD_CE_GET_THREAD_QUANTUM, ORD_CE_OPEN_FILE_HANDLE,
+            ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM, ORD_CLEAR_COMM_ERROR,
+            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
+            ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
+            ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE,
+            ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
+            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
+            ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
             ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
             ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
             ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
@@ -7108,6 +7109,11 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("module_api_file_handle");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::write(root.join("Windows").join("commctrl.dll"), b"module-bytes").unwrap();
+    kernel.set_file_root(&root);
     let mut memory = TestGuestMemory::default();
     let thread_id = 41;
     let module_name_ptr = 0x1_8000;
@@ -7281,6 +7287,39 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    let module_file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE_OPEN_FILE_HANDLE,
+        [module_base],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("unexpected CeOpenFileHandle dispatch: {other:?}"),
+    };
+    assert_ne!(module_file, u32::MAX);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(kernel.read_file(module_file, 12)?, b"module-bytes");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_OPEN_FILE_HANDLE,
+            [0xDEAD_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0xffff_ffff),
             ..
         }
     ));
@@ -7505,6 +7544,7 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
         }
     ));
 
+    let _ = fs::remove_dir_all(root);
     Ok(())
 }
 
@@ -24849,6 +24889,84 @@ fn coredll_multibyte_to_wide_char_uses_korean_acp() -> Result<()> {
         }
     ));
     assert_eq!(memory.read_wide_z(output, 4), "가");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_multibyte_to_wide_char_handles_ascii_acp() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let input = 0x1000;
+    let output = 0x2000;
+    memory.write_bytes(input, b"Car\\2\\223001\0");
+    memory.map_halfwords(output, 16);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            [0, 0, input, u32::MAX, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(13),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            [0, 0, input, u32::MAX, output, 16],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(13),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(output, 16), "Car\\2\\223001");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_multibyte_to_wide_char_explicit_ascii_len_omits_nul() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let input = 0x1000;
+    let output = 0x2000;
+    memory.write_bytes(input, b"ABC\0");
+    memory.map_halfwords(output, 4);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            [0, 0, input, 3, output, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(3),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u16(output)?, u16::from(b'A'));
+    assert_eq!(memory.read_u16(output + 2)?, u16::from(b'B'));
+    assert_eq!(memory.read_u16(output + 4)?, u16::from(b'C'));
+    assert_eq!(memory.read_u16(output + 6)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }

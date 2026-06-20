@@ -96,6 +96,12 @@ notes when it is still needed for implementation.
   `MODULEINFO` sizing, and module-base lookup. Coverage verifies public and
   raw calls, image size/entry-point reporting, invalid process handles,
   unsupported info types, and oversized buffers.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`: raw `CeOpenFileHandle` is now
+  exported and follows the `PROCGetModInfo`/`MINFO_FILE_HANDLE` path for
+  host-backed loaded modules by returning a readable handle to the module's
+  guest backing file. Coverage verifies returned file-handle readability,
+  success last-error behavior, and invalid module rejection.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp` and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`: public
   raw `IsSystemFile` now follows CE's system-volume/file-attribute contract

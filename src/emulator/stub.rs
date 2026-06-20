@@ -93,6 +93,10 @@ impl UnicornMips {
         false
     }
 
+    pub fn active_process_has_visible_windows(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
     pub fn current_thread_has_visible_receiver_work(&self, _kernel: &CeKernel) -> bool {
         false
     }
@@ -102,6 +106,10 @@ impl UnicornMips {
     }
 
     pub fn has_runnable_parked_process(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
+    pub fn has_live_pump_priority_parked_process(&self, _kernel: &CeKernel) -> bool {
         false
     }
 
@@ -209,6 +217,10 @@ impl UnicornMips {
         false
     }
 
+    pub fn rotate_to_visible_window_parked_process(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
     pub fn rotate_to_runnable_parked_threads(
         &mut self,
         _kernel: &mut CeKernel,
@@ -222,6 +234,10 @@ impl UnicornMips {
         _kernel: &CeKernel,
         _target_thread_ids: &[u32],
     ) -> bool {
+        false
+    }
+
+    pub fn reconcile_active_visible_window_thread(&mut self, _kernel: &CeKernel) -> bool {
         false
     }
 }

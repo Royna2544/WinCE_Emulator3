@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 123] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 124] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -13803,6 +13803,10 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 123] = &[
     CoredllOrdinalDef {
         name: "CeGetModuleInfo",
         ordinal: ORD_CE_GET_MODULE_INFO,
+    },
+    CoredllOrdinalDef {
+        name: "CeOpenFileHandle",
+        ordinal: ORD_CE_OPEN_FILE_HANDLE,
     },
     CoredllOrdinalDef {
         name: "RegisterGesture",

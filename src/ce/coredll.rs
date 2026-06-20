@@ -16,7 +16,8 @@ use crate::{
         file::{
             CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
             FILE_ATTRIBUTE_SYSTEM, FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FileLockStatus,
-            FindData, GENERIC_WRITE, PartitionManagerInfo, StoreManagerInfo, VolumeInfo,
+            FindData, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING, PartitionManagerInfo,
+            StoreManagerInfo, VolumeInfo,
         },
         framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, PixelFormat},
         gwe::{
@@ -80,6 +81,7 @@ pub struct CoredllExport {
 }
 
 const CE_ACP_CODE_PAGE: u32 = 949;
+const CP_UTF8_CODE_PAGE: u32 = 65001;
 const CTYPE_UPPER: u32 = 0x0001;
 const CTYPE_LOWER: u32 = 0x0002;
 const CTYPE_DIGIT: u32 = 0x0004;
@@ -2732,6 +2734,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_CE_GET_MODULE_INFO => Some(CoredllValue::Bool(ce_get_module_info_raw(
             kernel, memory, thread_id, args,
+        ))),
+        ORD_CE_OPEN_FILE_HANDLE => Some(CoredllValue::Handle(ce_open_file_handle_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
         ))),
         ORD_EXIT_THREAD => {
             let exit_code = raw_arg(args, 0);
@@ -11261,6 +11268,10 @@ fn active_conversion_code_page(code_page: u32) -> u32 {
 fn decode_multibyte_to_wide(code_page: u32, flags: u32, bytes: &[u8]) -> Option<Vec<u16>> {
     use windows::Win32::Globalization::{MULTI_BYTE_TO_WIDE_CHAR_FLAGS, MultiByteToWideChar};
 
+    if can_fast_convert_ascii(code_page, flags) && bytes.iter().all(u8::is_ascii) {
+        return Some(bytes.iter().copied().map(u16::from).collect());
+    }
+
     let flags = MULTI_BYTE_TO_WIDE_CHAR_FLAGS(flags);
     let needed = unsafe { MultiByteToWideChar(code_page, flags, bytes, None) };
     if needed <= 0 {
@@ -11278,6 +11289,10 @@ fn decode_multibyte_to_wide(code_page: u32, flags: u32, bytes: &[u8]) -> Option<
 #[cfg(not(windows))]
 fn decode_multibyte_to_wide(_code_page: u32, _flags: u32, bytes: &[u8]) -> Option<Vec<u16>> {
     Some(bytes.iter().copied().map(u16::from).collect())
+}
+
+fn can_fast_convert_ascii(code_page: u32, flags: u32) -> bool {
+    flags == 0 && matches!(code_page, CE_ACP_CODE_PAGE | CP_UTF8_CODE_PAGE)
 }
 
 fn wide_char_to_multi_byte_raw<M: CoredllGuestMemory>(
@@ -11401,6 +11416,13 @@ fn encode_wide_to_multibyte(
         },
         core::PCSTR,
     };
+
+    if can_fast_convert_ascii(code_page, flags) && units.iter().all(|unit| *unit <= 0x7f) {
+        return Some((
+            units.iter().copied().map(|unit| unit as u8).collect(),
+            false,
+        ));
+    }
 
     let mut used_default = BOOL(0);
     let used_default_ptr = track_used_default && (flags & WC_COMPOSITECHECK) == 0;
@@ -22886,6 +22908,39 @@ fn ce_get_module_info_module_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn ce_open_file_handle_raw(kernel: &mut CeKernel, thread_id: u32, module: u32) -> u32 {
+    let path = if module == 0 || module == kernel.process_module_base() {
+        kernel.process_module_path().to_owned()
+    } else if let Some(loaded) = kernel.loaded_module_by_handle(module) {
+        match loaded.guest_path {
+            Some(path) => path,
+            None => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return u32::MAX;
+            }
+        }
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
+    match kernel.create_file_w(&path, GENERIC_READ, OPEN_EXISTING) {
+        Ok(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            handle
+        }
+        Err(err) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, create_file_w_last_error(&err));
+            u32::MAX
+        }
+    }
 }
 
 fn get_proc_name_raw<M: CoredllGuestMemory>(
