@@ -2650,10 +2650,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(dying))
         }
         ORD_IS_PROCESSOR_FEATURE_PRESENT => {
-            // IsProcessorFeaturePresent(dwProcessorFeature) — check CPU capability.
-            // MIPSII emulation: no x86-specific features. All return FALSE.
+            // IsProcessorFeaturePresent(dwProcessorFeature) — CE's MIPS kernel
+            // reports the configured instruction set directly before falling
+            // through to OEM feature hooks.
             kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(false))
+            Some(CoredllValue::Bool(is_processor_feature_present_raw(
+                raw_arg(args, 0),
+            )))
         }
         ORD_IS_BAD_PTR => {
             // IsBadPtr(lp, ucb) — TRUE if range is not accessible (legacy CE ordinal).
@@ -25230,9 +25233,14 @@ const PROCESSOR_ARM_V4TFP_INSTRUCTION: u32 = processor_instruction_code(
     PROCESSOR_FEATURE_FP,
 );
 const CE_INSTRUCTION_SET: u32 = PROCESSOR_MIPS_MIPSII_INSTRUCTION;
+const PF_MIPS_MIPSII: u32 = 0x8100_0001;
 
 const fn processor_instruction_code(arch: u32, core: u32, feature: u32) -> u32 {
     (arch << 24) | (core << 16) | feature
+}
+
+fn is_processor_feature_present_raw(processor_feature: u32) -> bool {
+    matches!(processor_feature, PF_MIPS_MIPSII)
 }
 
 fn get_module_handle_w_raw<M: CoredllGuestMemory>(

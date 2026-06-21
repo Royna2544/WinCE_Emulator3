@@ -337,7 +337,9 @@ notes when it is still needed for implementation.
   writes the CE MIPSII instruction-set code and applies CE's compatibility
   checks instead of returning a placeholder zero. Coverage verifies
   query-current, exact MIPSII matches, incompatible ARM/MIPS requests, and
-  invalid output pointer failure.
+  invalid output pointer failure. Raw `IsProcessorFeaturePresent` now follows
+  CE's MIPS switch for the advertised MIPSII feature instead of returning
+  false for every feature, while MIPS16/FPU/unknown features remain absent.
 - `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwindbas.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwindbas.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\OOMUI\oomui.cpp`: raw
