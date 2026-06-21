@@ -1206,6 +1206,12 @@ notes when it is still needed for implementation.
      returning `ERROR_IO_PENDING`, resetting/signaling the event when remote
      bytes arrive, and letting `GetOverlappedResult` report
      `ERROR_IO_INCOMPLETE` until it copies the completed bytes and counts.
+   - Live-pump runnable parked-process rotation now remains visible-work
+     first: a visible active process is no longer preempted by a hidden child
+     that only has receiver work, while a hidden active process still rotates
+     back to a visible parked process with ready work. Coverage models the
+     iNavi visible route window versus hidden helper-child receiver queue from
+     both directions without adding app-specific scheduling shortcuts.
 
 ## Validation Gates
 
