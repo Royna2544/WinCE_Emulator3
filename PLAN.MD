@@ -1093,6 +1093,16 @@ notes when it is still needed for implementation.
     forwarding result on store and partition handles. Coverage verifies success
     byte-counts, CE `PowerTimings` sizing, invalid packet rejection, preserved
     sector-list inputs, and lower-driver `ERROR_NOT_SUPPORTED` forwarding.
+  - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgapi.cpp`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\stgmarshal.cpp`,
+    `C:\WINCE600\PUBLIC\COMMON\OAK\INC\cdioctl.h`, and
+    `C:\WINCE600\PUBLIC\COMMON\OAK\INC\diskio.h`: mounted store and partition
+    `DeviceIoControl(IOCTL_CDROM_READ_SG)` now recognizes CE's CD-ROM
+    scatter/gather read request, validates the `CDROM_READ` packet, enforces
+    `MAX_SG_BUF`, checks embedded `SGX_BUF` ranges, and only then forwards to
+    the current lower-driver unsupported result. Coverage verifies valid store
+    forwarding, short packets, oversized SG counts, unmapped embedded buffers,
+    byte-count preservation on validation failure, and untouched read buffers.
 
 6. Expand input, text, GDI, and drawing fidelity.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph

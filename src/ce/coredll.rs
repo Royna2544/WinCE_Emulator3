@@ -209,6 +209,7 @@ const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
 const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
 const IOCTL_DISK_READ_CDROM: u32 = 0x0007_1c44;
 const IOCTL_DISK_WRITE_CDROM: u32 = 0x0007_1c48;
+const IOCTL_CDROM_READ_SG: u32 = 0x0002_4c04;
 const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
 const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
 const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
@@ -233,6 +234,11 @@ const IOCTL_FMD_GET_INFO: u32 = 0x0007_1fb0;
 const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
 const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
 const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+const CDROM_READ_SIZE: u32 = 32;
+const CDROM_READ_SGCOUNT_OFFSET: u32 = 20;
+const CDROM_READ_SGLIST_OFFSET: u32 = 24;
+const SGX_BUF_SIZE: u32 = 8;
+const MAX_SG_BUF: u32 = 8;
 const DELETE_SECTOR_INFO_SIZE: u32 = 12;
 const FMD_INTERFACE_SIZE: u32 = 56;
 const FMD_FLASH_REGION_SIZE: u32 = 28;
@@ -15786,6 +15792,15 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, status);
             status == 0
         }
+        IOCTL_CDROM_READ_SG => {
+            if !validate_cdrom_read_sg_raw(kernel, memory, thread_id, in_ptr, in_bytes) {
+                false
+            } else {
+                let status = kernel.fsdmgr_disk_io_control_status(disk_ptr, ioctl);
+                kernel.threads.set_last_error(thread_id, status);
+                status == 0
+            }
+        }
         0x0007_1c4c => {
             fsdmgr_disk_delete_sectors_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
         }
@@ -24636,6 +24651,101 @@ fn store_or_partition_disk_sg_io_raw<M: CoredllGuestMemory>(
     write_optional_count(kernel, memory, thread_id, returned_ptr, 0)
 }
 
+fn store_or_partition_cdrom_read_sg_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    request_ptr: u32,
+    request_bytes: u32,
+    returned_ptr: u32,
+) -> bool {
+    if !validate_cdrom_read_sg_raw(kernel, memory, thread_id, request_ptr, request_bytes) {
+        return false;
+    }
+    disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
+}
+
+fn validate_cdrom_read_sg_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    request_ptr: u32,
+    request_bytes: u32,
+) -> bool {
+    if request_ptr == 0 || request_bytes < CDROM_READ_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let sgcount = match memory.read_u32(request_ptr.wrapping_add(CDROM_READ_SGCOUNT_OFFSET)) {
+        Ok(value) => value,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    };
+    if sgcount > MAX_SG_BUF {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(required_bytes) =
+        CDROM_READ_SIZE.checked_add(sgcount.saturating_sub(1).saturating_mul(SGX_BUF_SIZE))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if request_bytes < required_bytes {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    for index in 0..sgcount {
+        let entry = request_ptr.wrapping_add(CDROM_READ_SGLIST_OFFSET + index * SGX_BUF_SIZE);
+        let buf_ptr = match memory.read_u32(entry) {
+            Ok(value) => value,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+        };
+        let buf_len = match memory.read_u32(entry.wrapping_add(4)) {
+            Ok(value) => value,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+        };
+        if buf_len == 0 {
+            continue;
+        }
+        let Some(last_byte) = buf_ptr.checked_add(buf_len - 1) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        if buf_ptr == 0 || memory.read_u8(buf_ptr).is_err() || memory.read_u8(last_byte).is_err() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    }
+    true
+}
+
 fn store_or_partition_disk_set_info_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -24690,6 +24800,7 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_DELETE_CLUSTER
             | IOCTL_DISK_READ_CDROM
             | IOCTL_DISK_WRITE_CDROM
+            | IOCTL_CDROM_READ_SG
             | IOCTL_DISK_DELETE_SECTORS
     );
     if !handled {
@@ -24813,6 +24924,14 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         | IOCTL_DISK_WRITE_CDROM => {
             disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
         }
+        IOCTL_CDROM_READ_SG => store_or_partition_cdrom_read_sg_raw(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr,
+            input_len,
+            returned_ptr,
+        ),
         _ => unreachable!(),
     })
 }
@@ -24950,6 +25069,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_DELETE_CLUSTER
             | IOCTL_DISK_READ_CDROM
             | IOCTL_DISK_WRITE_CDROM
+            | IOCTL_CDROM_READ_SG
             | IOCTL_DISK_DELETE_SECTORS
     );
     if !handled {
@@ -25097,6 +25217,14 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
         | IOCTL_DISK_WRITE_CDROM => {
             disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
         }
+        IOCTL_CDROM_READ_SG => store_or_partition_cdrom_read_sg_raw(
+            kernel,
+            memory,
+            thread_id,
+            input_ptr,
+            input_len,
+            returned_ptr,
+        ),
         _ => unreachable!(),
     })
 }

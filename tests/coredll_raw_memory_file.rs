@@ -3866,10 +3866,14 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const IOCTL_DISK_SET_STANDBY_TIMER: u32 = 0x0007_1c18;
     const IOCTL_DISK_STANDBY_NOW: u32 = 0x0007_1c1c;
     const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
+    const IOCTL_CDROM_READ_SG: u32 = 0x0002_4c04;
     const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
     const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
     const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
     const DISK_POWER_TIMINGS_SIZE: u32 = 68;
+    const CDROM_READ_SIZE: u32 = 32;
+    const CDROM_READ_SGCOUNT_OFFSET: u32 = 20;
+    const CDROM_READ_SGLIST_OFFSET: u32 = 24;
     const DELETE_SECTOR_INFO_SIZE: u32 = 12;
     const STORE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
     const STORE_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0002;
@@ -3953,6 +3957,8 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     let disk_write_ptr = 0x302b_1000;
     let disk_read_a_ptr = 0x302b_2000;
     let disk_read_b_ptr = 0x302b_3000;
+    let cdrom_read_ptr = 0x302b_4000;
+    let cdrom_read_buffer_ptr = 0x302b_5000;
     memory.map_halfwords(name_ptr, 32);
     memory.map_words(info_level_ptr, 1);
     memory.map_words(bytes_returned_ptr, 1);
@@ -3973,6 +3979,8 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     memory.map_bytes(disk_write_ptr, 512);
     memory.map_bytes(disk_read_a_ptr, 200);
     memory.map_bytes(disk_read_b_ptr, 312);
+    memory.map_bytes(cdrom_read_ptr, CDROM_READ_SIZE);
+    memory.map_bytes(cdrom_read_buffer_ptr, 64);
     memory.write_word(info_level_ptr, 0);
 
     let read_le_u32 = |bytes: &[u8], offset: usize| -> u32 {
@@ -5360,6 +5368,135 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
                 IOCTL_DISK_READ,
                 sg_read_ptr,
                 36,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_babe);
+
+    memory.write_bytes(cdrom_read_ptr, &[0; CDROM_READ_SIZE as usize]);
+    memory.write_word(cdrom_read_ptr + 8, 1);
+    memory.write_word(cdrom_read_ptr + CDROM_READ_SGCOUNT_OFFSET, 1);
+    memory.write_word(
+        cdrom_read_ptr + CDROM_READ_SGLIST_OFFSET,
+        cdrom_read_buffer_ptr,
+    );
+    memory.write_word(cdrom_read_ptr + CDROM_READ_SGLIST_OFFSET + 4, 64);
+    memory.write_bytes(cdrom_read_buffer_ptr, &[0x5a; 64]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_CDROM_READ_SG,
+                cdrom_read_ptr,
+                CDROM_READ_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+    assert_eq!(memory.read_bytes(cdrom_read_buffer_ptr, 64), vec![0x5a; 64]);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_CDROM_READ_SG,
+                cdrom_read_ptr,
+                CDROM_READ_SIZE - 4,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_babe);
+
+    memory.write_word(cdrom_read_ptr + CDROM_READ_SGCOUNT_OFFSET, 9);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_CDROM_READ_SG,
+                cdrom_read_ptr,
+                CDROM_READ_SIZE,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_babe);
+
+    memory.write_word(cdrom_read_ptr + CDROM_READ_SGCOUNT_OFFSET, 1);
+    memory.write_word(cdrom_read_ptr + CDROM_READ_SGLIST_OFFSET, 0x7fff_0000);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_CDROM_READ_SG,
+                cdrom_read_ptr,
+                CDROM_READ_SIZE,
                 0,
                 0,
                 bytes_returned_ptr,
