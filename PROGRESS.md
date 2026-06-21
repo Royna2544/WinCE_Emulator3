@@ -70,6 +70,10 @@ references for historical reconstruction.
   configuration writes.
 - Remote taps are accepted by the live server and now route through the main
   iNavi splash/window stack after stale visible-message cleanup.
+- Remote live-pump servicing now drains queued remote-server controls from the
+  scheduler block hook and inline wait timeout paths. The 2026-06-21 live run
+  cleared `pendingControlMessages` to zero and posted a tap to splash window
+  `0x00020008` as real `WM_LBUTTONDOWN`/`WM_MOUSEMOVE` messages.
 - Escaped visible-message WndProc callouts are now retired before the
   visible-dispatch gate decides whether pending callbacks block new input. The
   live `happyway_win` stale `OrphanedVisibleMessage` case now clears, leaving

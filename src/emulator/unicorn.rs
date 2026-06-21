@@ -6927,6 +6927,26 @@ impl UnicornMips {
             {
                 scheduler_timeslice_pending_hook.set(true);
             }
+            if live_pump {
+                let has_pending_remote_control = unsafe { &*kernel_ptr }
+                    .remote_server
+                    .as_ref()
+                    .is_some_and(|server| server.pending_control_count() != 0);
+                if has_pending_remote_control {
+                    clear_orphaned_live_blocked_get_message(
+                        &blocked_get_message_timeslice_hook,
+                        unsafe { &*kernel_ptr },
+                    );
+                    let live_blocked = blocked_get_message_timeslice_hook.borrow().clone();
+                    let remote_drained = drain_remote_server_control_messages_for_message_target(
+                        unsafe { &mut *kernel_ptr },
+                        live_blocked,
+                    );
+                    if remote_drained != 0 {
+                        scheduler_timeslice_pending_hook.set(true);
+                    }
+                }
+            }
             if !scheduler_timeslice_pending_hook.get() {
                 let active_thread_id = *current_thread_id_timeslice_hook.borrow();
                 let kernel_ref = unsafe { &*kernel_ptr };
@@ -17018,6 +17038,9 @@ fn complete_current_single_wait_timeout<D>(
     kernel.pump_timers_to_gwe(thread_id);
     let result = kernel.wait_for_single_object_without_scheduler_record(wait_handle, 0, thread_id);
     kernel.record_resumed_wait(result);
+    if live_pump {
+        let _ = drain_remote_server_control_messages_for_message_target(kernel, None);
+    }
     let writes = [
         uc.reg_write(RegisterMIPS::V0, u64::from(result)),
         uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
@@ -17050,6 +17073,9 @@ fn complete_current_message_queue_io_timeout<D>(
     throttle_current_wait_host_loop(timeout, live_pump);
     kernel.timers.sleep_ms(timeout);
     kernel.pump_timers_to_gwe(thread_id);
+    if live_pump {
+        let _ = kernel.drain_remote_server_control_messages_to_thread_window(thread_id, None);
+    }
     let result = complete_message_queue_io_import(kind, kernel, uc, thread_id);
     kernel.record_resumed_wait(crate::ce::timer::WAIT_TIMEOUT);
     let writes = [
@@ -17084,6 +17110,9 @@ fn complete_current_sleep_timeout<D>(
     kernel.timers.sleep_ms(timeout);
     kernel.pump_timers_to_gwe(thread_id);
     kernel.record_resumed_thread_sleep();
+    if live_pump {
+        let _ = drain_remote_server_control_messages_for_message_target(kernel, None);
+    }
     let writes = [
         uc.reg_write(RegisterMIPS::V0, 0),
         uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
