@@ -378,6 +378,10 @@ const CURRENT_WAIT_HOST_THROTTLE_MS: u64 = 1;
 #[cfg(feature = "unicorn")]
 const LIVE_PUMP_INLINE_TIMEOUT_STOP_SLICE_MS: u32 = 5_000;
 #[cfg(feature = "unicorn")]
+const LIVE_PUMP_NATIVE_TIMEOUT_SLICE_MS: u64 = 1_000;
+#[cfg(feature = "unicorn")]
+const LIVE_PUMP_NATIVE_TIMEOUT_ENV: &str = "WINCE_EMU_LIVE_PUMP_NATIVE_TIMEOUT_MS";
+#[cfg(feature = "unicorn")]
 const REALTIME_WAIT_THROTTLE_ENV: &str = "WINCE_EMU_REALTIME_WAITS";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9337,7 +9341,7 @@ impl UnicornMips {
 
         // ── Run ───────────────────────────────────────────────────────────────────
         let native_timeout_us = if limits.live_pump {
-            0
+            live_pump_native_timeout_us()
         } else {
             limits.wall_clock_limit_ms.saturating_mul(1_000)
         };
@@ -15663,6 +15667,15 @@ fn host_wall_budget_has_expired(
     limit: Option<std::time::Duration>,
 ) -> bool {
     limit.is_some_and(|limit| started.elapsed() >= limit)
+}
+
+#[cfg(feature = "unicorn")]
+fn live_pump_native_timeout_us() -> u64 {
+    std::env::var(LIVE_PUMP_NATIVE_TIMEOUT_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(LIVE_PUMP_NATIVE_TIMEOUT_SLICE_MS)
+        .saturating_mul(1_000)
 }
 
 #[cfg(feature = "unicorn")]

@@ -49,6 +49,7 @@ use wince_emulation_v3::{
 };
 
 const FAST_START_RUN_SLICE_INSTRUCTIONS: usize = 250_000;
+const LIVE_PUMP_RUN_SLICE_INSTRUCTIONS: usize = 1_000_000;
 const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
 const HOST_IDLE_MESSAGE_POLL_SLICE_MS: u64 = 100;
 const LIVE_VISIBLE_WORK_RUN_SLICE_MS: u64 = 100;
@@ -59,6 +60,7 @@ const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 30_000;
 // fresh-Unicorn restart cost (blob copy + retranslation) every second.
 const REMOTE_LIVE_RUN_SLICE_MS: u64 = HOST_REMOTE_BUSY_RUN_SLICE_MS;
 const REMOTE_LIVE_RUN_SLICE_ENV: &str = "WINCE_EMU_REMOTE_LIVE_RUN_SLICE_MS";
+const LIVE_PUMP_RUN_SLICE_INSTRUCTIONS_ENV: &str = "WINCE_EMU_LIVE_PUMP_RUN_SLICE_INSTRUCTIONS";
 const REMOTE_DEBUG_PUBLISH_INTERVAL_MS: u64 = 500;
 const REMOTE_DEBUG_PUBLISH_INTERVAL_ENV: &str = "WINCE_EMU_REMOTE_DEBUG_PUBLISH_INTERVAL_MS";
 const COMPANION_START_DELAY_MS: u64 = 1_000;
@@ -349,6 +351,49 @@ fn run_cpu_loop(
             kernel,
             Some(desktop.framebuffer_mut()),
         );
+        if remote_server_has_pending_control(kernel) {
+            let pending_remote_target = blocked_remote_input_target(cpu, kernel);
+            let pending_remote_drained =
+                service_remote_endpoint(cpu, kernel, desktop, pending_remote_target.as_ref());
+            if pending_remote_drained.handled != 0 {
+                reported_blocked_message_wait = false;
+                let current_cpu_targeted = pending_remote_drained
+                    .target_thread_ids
+                    .contains(&cpu.current_thread_id());
+                if cpu.rotate_to_active_visible_receiver_thread(
+                    kernel,
+                    &pending_remote_drained.target_thread_ids,
+                ) {
+                    publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                    continue;
+                }
+                if cpu.rotate_to_ready_parked_threads_with_framebuffer(
+                    kernel,
+                    &pending_remote_drained.target_thread_ids,
+                    Some(desktop.framebuffer_mut()),
+                ) {
+                    publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                    continue;
+                }
+                if !cpu.active_process_has_visible_receiver_work(kernel)
+                    && cpu.rotate_to_runnable_parked_threads(
+                        kernel,
+                        &pending_remote_drained.target_thread_ids,
+                    )
+                {
+                    publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                    continue;
+                }
+                if !current_cpu_targeted
+                    && cpu.has_runnable_parked_process(kernel)
+                    && cpu.rotate_to_next_parked_process(kernel)
+                {
+                    publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                    continue;
+                }
+                continue;
+            }
+        }
         if cpu.complete_escaped_saved_get_message_sent_callout(kernel) {
             reported_blocked_message_wait = false;
             continue;
@@ -1061,6 +1106,13 @@ fn rotate_idle_active_to_visible_parked(
     }
 }
 
+fn remote_server_has_pending_control(kernel: &CeKernel) -> bool {
+    kernel
+        .remote_server
+        .as_ref()
+        .is_some_and(|server| server.pending_control_count() != 0)
+}
+
 fn rotate_to_cross_process_send_target(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
     let Some(yielded) = cpu
         .last_debug_snapshot()
@@ -1348,6 +1400,14 @@ fn remote_live_run_slice_ms() -> u64 {
         .unwrap_or(REMOTE_LIVE_RUN_SLICE_MS)
 }
 
+fn live_pump_run_slice_instructions() -> usize {
+    std::env::var(LIVE_PUMP_RUN_SLICE_INSTRUCTIONS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value != 0)
+        .unwrap_or(LIVE_PUMP_RUN_SLICE_INSTRUCTIONS)
+}
+
 fn remote_debug_publish_interval() -> Duration {
     std::env::var(REMOTE_DEBUG_PUBLISH_INTERVAL_ENV)
         .ok()
@@ -1408,7 +1468,10 @@ fn effective_instruction_limit(
     fast_start_enabled: bool,
 ) -> usize {
     if live_pump_slice {
-        return 0;
+        if explicit_instruction_limit != 0 {
+            return explicit_instruction_limit;
+        }
+        return live_pump_run_slice_instructions();
     }
     if explicit_instruction_limit == 0 && fast_start_enabled {
         return FAST_START_RUN_SLICE_INSTRUCTIONS;
@@ -4270,8 +4333,15 @@ mod tests {
     }
 
     #[test]
-    fn live_pump_disables_instruction_limit_for_safe_wall_clock_stops() {
-        assert_eq!(effective_instruction_limit(5_000_000, true, false), 0);
+    fn live_pump_uses_bounded_instruction_slice_for_host_service() {
+        assert_eq!(
+            effective_instruction_limit(0, true, false),
+            LIVE_PUMP_RUN_SLICE_INSTRUCTIONS
+        );
+        assert_eq!(
+            effective_instruction_limit(5_000_000, true, false),
+            5_000_000
+        );
         assert_eq!(
             effective_instruction_limit(0, false, true),
             FAST_START_RUN_SLICE_INSTRUCTIONS
