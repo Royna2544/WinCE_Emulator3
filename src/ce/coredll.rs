@@ -2040,14 +2040,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         | ORD_GET_USER_DEFAULT_UILANGUAGE => {
             Some(CoredllValue::U32(default_lcid_raw(kernel) & 0xffff))
         }
-        ORD_SET_LOCALE_INFO_W => {
-            // SetLocaleInfoW(Locale, LCType, lpLCData) — modify locale setting.
-            // Locale customization not supported; return FALSE.
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_SET_LOCALE_INFO_W => Some(CoredllValue::Bool(set_locale_info_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_NLS_TABLES => {
             // GetNLSTables(pNlsInfo) — fill NLS table pointers. Not needed; return FALSE.
             kernel.threads.set_last_error(thread_id, 0);
@@ -20994,6 +20989,103 @@ fn set_registry_international_dword(kernel: &mut CeKernel, value_name: &str, val
     );
 }
 
+fn registry_international_string(kernel: &mut CeKernel, value_name: &str) -> Option<String> {
+    let open = kernel.registry.reg_open_key_exw(
+        HKEY_LOCAL_MACHINE,
+        Some(CE_INTERNATIONAL_REGISTRY_KEY),
+        0,
+        0,
+    );
+    let hkey = open.hkey?;
+    let query = kernel
+        .registry
+        .reg_query_value_exw(hkey, Some(value_name), Some(usize::MAX));
+    let _ = kernel.registry.reg_close_key(hkey);
+    if query.status != ERROR_SUCCESS || query.value_type != Some(REG_SZ) {
+        return None;
+    }
+    let data = query.data?;
+    if data.len() % 2 != 0 {
+        return None;
+    }
+    let mut units = Vec::new();
+    for chunk in data.chunks_exact(2) {
+        let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+    }
+    Some(String::from_utf16_lossy(&units))
+}
+
+fn set_registry_international_string(kernel: &mut CeKernel, value_name: &str, value: String) {
+    kernel.registry.set_value(
+        &format!(r"hklm\{CE_INTERNATIONAL_REGISTRY_KEY}"),
+        value_name,
+        RegistryValue::string(value),
+    );
+}
+
+fn delete_registry_international_value(kernel: &mut CeKernel, value_name: &str) {
+    let open = kernel.registry.reg_open_key_exw(
+        HKEY_LOCAL_MACHINE,
+        Some(CE_INTERNATIONAL_REGISTRY_KEY),
+        0,
+        0,
+    );
+    if let Some(hkey) = open.hkey {
+        let _ = kernel.registry.reg_delete_value_w(hkey, Some(value_name));
+        let _ = kernel.registry.reg_close_key(hkey);
+    }
+}
+
+fn locale_override_value_name(lctype: u32) -> String {
+    format!("LocaleOverride{:04X}", lctype)
+}
+
+fn is_settable_locale_lctype(lctype: u32) -> bool {
+    matches!(
+        lctype,
+        0x000C // LOCALE_SLIST
+            | 0x000D // LOCALE_IMEASURE
+            | 0x000E // LOCALE_SDECIMAL
+            | 0x000F // LOCALE_STHOUSAND
+            | 0x0010 // LOCALE_SGROUPING
+            | 0x0011 // LOCALE_IDIGITS
+            | 0x0012 // LOCALE_ILZERO
+            | 0x0013 // LOCALE_SNATIVEDIGITS
+            | 0x0014 // LOCALE_SCURRENCY
+            | 0x0016 // LOCALE_SMONDECIMALSEP
+            | 0x0017 // LOCALE_SMONTHOUSANDSEP
+            | 0x0018 // LOCALE_SMONGROUPING
+            | 0x0019 // LOCALE_ICURRDIGITS
+            | 0x001A // LOCALE_IINTLCURRDIGITS
+            | 0x001B // LOCALE_ICURRENCY
+            | 0x001C // LOCALE_INEGCURR
+            | 0x001D // LOCALE_SDATE
+            | 0x001E // LOCALE_STIME
+            | 0x001F // LOCALE_SSHORTDATE
+            | 0x0020 // LOCALE_SLONGDATE
+            | 0x0021 // LOCALE_IDATE
+            | 0x0022 // LOCALE_ILDATE
+            | 0x0023 // LOCALE_ITIME
+            | 0x0024 // LOCALE_ICENTURY
+            | 0x0025 // LOCALE_ITLZERO
+            | 0x0026 // LOCALE_IDAYLZERO
+            | 0x0027 // LOCALE_IMONLZERO
+            | 0x0028 // LOCALE_S1159
+            | 0x0029 // LOCALE_S2359
+            | 0x1003 // LOCALE_STIMEFORMAT
+            | 0x1005 // LOCALE_ITIMEMARKPOSN
+            | 0x1009 // LOCALE_ICALENDARTYPE
+            | 0x100B // LOCALE_IOPTIONALCALENDAR
+            | 0x100C // LOCALE_IFIRSTDAYOFWEEK
+            | 0x100D // LOCALE_IFIRSTWEEKOFYEAR
+            | 0x1010 // LOCALE_INEGNUMBER
+    )
+}
+
 fn convert_default_locale_raw(kernel: &mut CeKernel, locale: u32) -> u32 {
     const LOCALE_USER_DEFAULT: u32 = 0x0400;
     const LOCALE_SYSTEM_DEFAULT: u32 = 0x0800;
@@ -21150,9 +21242,10 @@ fn get_locale_info_w_raw<M: CoredllGuestMemory>(
     };
 
     let return_number = lctype_raw & LOCALE_RETURN_NUMBER != 0;
+    let no_user_override = lctype_raw & LOCALE_NOUSEROVERRIDE != 0;
     let lctype = lctype_raw & !(LOCALE_NOUSEROVERRIDE | LOCALE_RETURN_NUMBER);
 
-    let value: &str = if lcid == 0x0409 {
+    let default_value = if lcid == 0x0409 {
         match lctype {
             0x0001 => "0409",                // LOCALE_ILANGUAGE
             0x0002 => "English",             // LOCALE_SLANGUAGE
@@ -21355,6 +21448,11 @@ fn get_locale_info_w_raw<M: CoredllGuestMemory>(
             }
         }
     };
+    let override_value_name = locale_override_value_name(lctype);
+    let override_value = (!no_user_override)
+        .then(|| registry_international_string(kernel, &override_value_name))
+        .flatten();
+    let value = override_value.as_deref().unwrap_or(default_value);
 
     if return_number {
         let n: u32 = value.parse().unwrap_or(0);
@@ -21387,6 +21485,55 @@ fn get_locale_info_w_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     required
+}
+
+fn set_locale_info_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    const LOCALE_USER_DEFAULT: u32 = 0x0400;
+    const LOCALE_SYSTEM_DEFAULT: u32 = 0x0800;
+    const LOCALE_NOUSEROVERRIDE: u32 = 0x8000_0000;
+    const LOCALE_RETURN_NUMBER: u32 = 0x2000_0000;
+
+    let locale = raw_arg(args, 0);
+    let lctype_raw = raw_arg(args, 1);
+    let data_ptr = raw_arg(args, 2);
+    let lcid = match locale {
+        LOCALE_USER_DEFAULT | LOCALE_SYSTEM_DEFAULT => default_lcid_raw(kernel),
+        0x0412 => 0x0412,
+        0x0409 => 0x0409,
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    };
+    let lctype = lctype_raw & !(LOCALE_NOUSEROVERRIDE | LOCALE_RETURN_NUMBER);
+    if !is_settable_locale_lctype(lctype) || !matches!(lcid, 0x0409 | 0x0412) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_FLAGS_LOCAL);
+        return false;
+    }
+    let value_name = locale_override_value_name(lctype);
+    if data_ptr == 0 {
+        delete_registry_international_value(kernel, &value_name);
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let Ok(value) = read_guest_wide_z(memory, data_ptr, 256) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    set_registry_international_string(kernel, &value_name, value);
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn compare_string_w_raw<M: CoredllGuestMemory>(

@@ -1314,6 +1314,11 @@ notes when it is still needed for implementation.
      model from `KINX_NLS_CP`, falling back through the active locale table
      (`0409` -> 437, `0412` -> 949) and honoring a `SetOEMCP` override for
      raw conversion/`GetCPInfo` callers.
+     `SetLocaleInfoW` now accepts the CE control-panel mutable locale fields,
+     stores per-`LCType` user overrides under the same `International`
+     registry area, resets an override when `lpLCData` is null, and
+     `GetLocaleInfoW` observes those values unless `LOCALE_NOUSEROVERRIDE`
+     requests the image default.
 
 ## Validation Gates
 
