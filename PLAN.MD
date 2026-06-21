@@ -1329,6 +1329,10 @@ notes when it is still needed for implementation.
     visible-parked yield predicate before switching away from the active
     process, and monitor output reports the predicate state alongside active
     receiver-work flags.
+  - Cross-process blocked-send handoff now also recovers a live receiver from
+    the last cross-process-send yield marker when the parked child no longer
+    carries an explicit wait record, preserving generic sender/receiver
+    rotation without app-specific shortcuts.
 
 8. Close core time and NLS parity gaps.
    - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\time.c` and

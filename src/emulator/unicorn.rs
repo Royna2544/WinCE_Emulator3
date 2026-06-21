@@ -2403,6 +2403,26 @@ impl UnicornMips {
             }
         }
 
+        let active_process_id = kernel.current_process_id();
+        for snapshot in [
+            self.last_debug.as_ref(),
+            self.last_wall_clock_debug.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let Some(yielded) = snapshot.cross_process_send_yield.as_ref() else {
+                continue;
+            };
+            if yielded.sender_process_id == active_process_id
+                && active_thread_ids.contains(&yielded.sender_thread_id)
+                && kernel.gwe.sent_message(yielded.send_id).is_some()
+                && !kernel.sent_message_result_ready(yielded.send_id)
+            {
+                push_receiver(yielded.target_thread_id);
+            }
+        }
+
         receiver_threads
     }
 
@@ -29117,7 +29137,7 @@ mod guest_thread_stack_tests {
         kernel.set_process_module_base(0x6000_0000);
         kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
         kernel.set_process_module_host_path(std::path::PathBuf::from(
-            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+            r"D:\INAVI_Emulator\INAVI\iNavi.exe",
         ));
 
         let mut cpu = UnicornMips::new()?;
@@ -29734,7 +29754,7 @@ mod guest_thread_stack_tests {
         kernel.set_process_module_base(0x0010_0000);
         kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
         kernel.set_process_module_host_path(std::path::PathBuf::from(
-            r"D:\INAVI_Emulator\INAVI\iNavi.exe",
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
         ));
         let visible_hwnd = kernel.create_window_ex_w_with_rect(
             1,
@@ -34111,6 +34131,115 @@ mod guest_thread_stack_tests {
                 .parked_child_processes
                 .iter()
                 .any(|process| process.process_state.process_id == 1)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_send_handoff_uses_live_yield_marker_when_wait_record_is_missing() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let sender_thread = 1;
+        let receiver_thread = 3;
+        let receiver_current_thread = 5;
+        let receiver_process = 67;
+
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+        let sender_hwnd = kernel.create_window_ex_w(
+            sender_thread,
+            "SENDER",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert_ne!(sender_hwnd, 0);
+
+        let saved_state = kernel.current_process_state();
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: receiver_process,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let receiver_hwnd =
+            kernel.create_window_ex_w(receiver_thread, "RECEIVER", "", None, 0, 0, 0);
+        kernel.set_current_process_state(saved_state);
+
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                receiver_hwnd,
+                crate::ce::gwe::WM_USER + 1,
+                0,
+                0,
+                None,
+            )
+            .expect("queued send to parked receiver");
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(sender_thread);
+        scheduler.current_thread_id = sender_thread;
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            cross_process_send_yield: Some(UnicornCrossProcessSendYield {
+                send_id,
+                sender_thread_id: sender_thread,
+                sender_process_id: 1,
+                target_thread_id: receiver_thread,
+                target_process_id: receiver_process,
+                hwnd: receiver_hwnd,
+                msg: crate::ce::gwe::WM_USER + 1,
+            }),
+            ..Default::default()
+        });
+
+        let mut receiver_cpu = UnicornMips::new()?;
+        receiver_cpu.set_initial_thread_id(receiver_thread);
+        receiver_cpu.current_thread_id = receiver_current_thread;
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: receiver_process,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: receiver_current_thread,
+            cpu: Box::new(receiver_cpu),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\happyway_win.exe"),
+            command_line: "child".to_owned(),
+            current_directory: None,
+        });
+
+        assert_eq!(
+            scheduler.active_blocked_send_receiver_threads(&kernel),
+            vec![receiver_thread]
+        );
+
+        scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
+
+        assert_eq!(kernel.current_process_id(), receiver_process);
+        assert_eq!(scheduler.current_thread_id, receiver_current_thread);
+        assert!(kernel.thread_has_pending_sent_message(receiver_thread));
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 1
+                    && process.blocked_send_id == Some(send_id))
         );
 
         Ok(())
