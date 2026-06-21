@@ -66793,6 +66793,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     // Icon APIs
     "LoadIconW",
     "CreateIconIndirect",
+    "KernExtractIcons",
     "ExtractIconExW",
     "DrawIconEx",
     // ImageList APIs

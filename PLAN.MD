@@ -1058,6 +1058,10 @@ notes when it is still needed for implementation.
    - Extend `ExtractIconExW`, `KernExtractIcons`, `DrawIconEx`, and image-list
      coverage across remaining PE formats, masks, palettes, stretch paths,
      framebuffer output, and invalid-handle cleanup.
+   - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\core_common.def`: coredll
+     now marks `KernExtractIcons` as a real name-based icon shim alongside
+     `LoadIconW`, `ExtractIconExW`, and `DrawIconEx`, matching the implemented
+     raw CE ordinal and keeping shell icon imports off the generic stub path.
 
 3. Finish modal UI and cross-thread message semantics.
    - Extend `SendMessageTimeout`, `MsgWaitForMultipleObjectsEx`, nested sends,
