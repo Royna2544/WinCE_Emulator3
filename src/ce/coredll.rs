@@ -209,7 +209,38 @@ const IOCTL_DISK_GET_STORAGEID: u32 = 0x0007_1c24;
 const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
 const IOCTL_DISK_READ_CDROM: u32 = 0x0007_1c44;
 const IOCTL_DISK_WRITE_CDROM: u32 = 0x0007_1c48;
+const IOCTL_CDROM_READ_TOC: u32 = 0x0002_4000;
+const IOCTL_CDROM_SEEK_AUDIO_MSF: u32 = 0x0002_4004;
+const IOCTL_CDROM_STOP_AUDIO: u32 = 0x0002_4008;
+const IOCTL_CDROM_PAUSE_AUDIO: u32 = 0x0002_400c;
+const IOCTL_CDROM_RESUME_AUDIO: u32 = 0x0002_4010;
+const IOCTL_CDROM_GET_VOLUME: u32 = 0x0002_4014;
+const IOCTL_CDROM_PLAY_AUDIO_MSF: u32 = 0x0002_4018;
+const IOCTL_CDROM_SET_VOLUME: u32 = 0x0002_4028;
+const IOCTL_CDROM_READ_Q_CHANNEL: u32 = 0x0002_402c;
+const IOCTL_CDROM_GET_CONTROL: u32 = 0x0002_4034;
+const IOCTL_CDROM_GET_LAST_SESSION: u32 = 0x0002_4038;
+const IOCTL_CDROM_RAW_READ: u32 = 0x0002_403e;
+const IOCTL_CDROM_DISK_TYPE: u32 = 0x0002_0040;
+const IOCTL_CDROM_GET_DRIVE_GEOMETRY: u32 = 0x0002_404c;
+const IOCTL_CDROM_SCAN_AUDIO: u32 = 0x0002_0080;
+const IOCTL_CDROM_CHECK_VERIFY: u32 = 0x0002_4800;
+const IOCTL_CDROM_MEDIA_REMOVAL: u32 = 0x0002_4804;
+const IOCTL_CDROM_EJECT_MEDIA: u32 = 0x0002_4808;
+const IOCTL_CDROM_LOAD_MEDIA: u32 = 0x0002_480c;
+const IOCTL_CDROM_RESERVE: u32 = 0x0002_4810;
+const IOCTL_CDROM_RELEASE: u32 = 0x0002_4814;
+const IOCTL_CDROM_FIND_NEW_DEVICES: u32 = 0x0002_4818;
 const IOCTL_CDROM_READ_SG: u32 = 0x0002_4c04;
+const IOCTL_CDROM_TEST_UNIT_READY: u32 = 0x0002_4c08;
+const IOCTL_CDROM_DISC_INFO: u32 = 0x0002_4c0c;
+const IOCTL_CDROM_TRACK_INFO: u32 = 0x0002_4c10;
+const IOCTL_CDROM_SET_SPEED: u32 = 0x0002_4c14;
+const IOCTL_CDROM_GET_SENSE_DATA: u32 = 0x0002_4c18;
+const IOCTL_CDROM_ISSUE_INQUIRY: u32 = 0x0002_4c1c;
+const IOCTL_CDROM_GET_MEDIA_TYPE: u32 = 0x0002_4c20;
+const IOCTL_CDROM_GET_PARTITION_INFO: u32 = 0x0002_4c24;
+const IOCTL_CDROM_UNLOAD_DRIVER: u32 = 0x0002_5008;
 const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
 const IOCTL_DISK_GET_SECTOR_ADDR: u32 = 0x0007_1c50;
 const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
@@ -15801,6 +15832,11 @@ fn fsdmgr_disk_io_control_raw<M: CoredllGuestMemory>(
                 status == 0
             }
         }
+        code if is_cdrom_passthrough_ioctl(code) => {
+            let status = kernel.fsdmgr_disk_io_control_status(disk_ptr, ioctl);
+            kernel.threads.set_last_error(thread_id, status);
+            status == 0
+        }
         0x0007_1c4c => {
             fsdmgr_disk_delete_sectors_raw(kernel, memory, thread_id, disk_ptr, in_ptr, in_bytes)
         }
@@ -24665,6 +24701,43 @@ fn store_or_partition_cdrom_read_sg_raw<M: CoredllGuestMemory>(
     disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
 }
 
+fn is_cdrom_passthrough_ioctl(ioctl_code: u32) -> bool {
+    matches!(
+        ioctl_code,
+        IOCTL_CDROM_READ_TOC
+            | IOCTL_CDROM_SEEK_AUDIO_MSF
+            | IOCTL_CDROM_STOP_AUDIO
+            | IOCTL_CDROM_PAUSE_AUDIO
+            | IOCTL_CDROM_RESUME_AUDIO
+            | IOCTL_CDROM_GET_VOLUME
+            | IOCTL_CDROM_PLAY_AUDIO_MSF
+            | IOCTL_CDROM_SET_VOLUME
+            | IOCTL_CDROM_READ_Q_CHANNEL
+            | IOCTL_CDROM_GET_CONTROL
+            | IOCTL_CDROM_GET_LAST_SESSION
+            | IOCTL_CDROM_RAW_READ
+            | IOCTL_CDROM_DISK_TYPE
+            | IOCTL_CDROM_GET_DRIVE_GEOMETRY
+            | IOCTL_CDROM_SCAN_AUDIO
+            | IOCTL_CDROM_CHECK_VERIFY
+            | IOCTL_CDROM_MEDIA_REMOVAL
+            | IOCTL_CDROM_EJECT_MEDIA
+            | IOCTL_CDROM_LOAD_MEDIA
+            | IOCTL_CDROM_RESERVE
+            | IOCTL_CDROM_RELEASE
+            | IOCTL_CDROM_FIND_NEW_DEVICES
+            | IOCTL_CDROM_TEST_UNIT_READY
+            | IOCTL_CDROM_DISC_INFO
+            | IOCTL_CDROM_TRACK_INFO
+            | IOCTL_CDROM_SET_SPEED
+            | IOCTL_CDROM_GET_SENSE_DATA
+            | IOCTL_CDROM_ISSUE_INQUIRY
+            | IOCTL_CDROM_GET_MEDIA_TYPE
+            | IOCTL_CDROM_GET_PARTITION_INFO
+            | IOCTL_CDROM_UNLOAD_DRIVER
+    )
+}
+
 fn validate_cdrom_read_sg_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -24802,7 +24875,7 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_WRITE_CDROM
             | IOCTL_CDROM_READ_SG
             | IOCTL_DISK_DELETE_SECTORS
-    );
+    ) || is_cdrom_passthrough_ioctl(ioctl_code);
     if !handled {
         return None;
     }
@@ -24932,6 +25005,9 @@ fn store_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             input_len,
             returned_ptr,
         ),
+        code if is_cdrom_passthrough_ioctl(code) => {
+            disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
+        }
         _ => unreachable!(),
     })
 }
@@ -25071,7 +25147,7 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             | IOCTL_DISK_WRITE_CDROM
             | IOCTL_CDROM_READ_SG
             | IOCTL_DISK_DELETE_SECTORS
-    );
+    ) || is_cdrom_passthrough_ioctl(ioctl_code);
     if !handled {
         return None;
     }
@@ -25225,6 +25301,9 @@ fn partition_handle_disk_io_control_raw<M: CoredllGuestMemory>(
             input_len,
             returned_ptr,
         ),
+        code if is_cdrom_passthrough_ioctl(code) => {
+            disk_zero_byte_failure_raw(kernel, memory, thread_id, returned_ptr, ERROR_NOT_SUPPORTED)
+        }
         _ => unreachable!(),
     })
 }

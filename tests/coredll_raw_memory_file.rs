@@ -3866,7 +3866,9 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const IOCTL_DISK_SET_STANDBY_TIMER: u32 = 0x0007_1c18;
     const IOCTL_DISK_STANDBY_NOW: u32 = 0x0007_1c1c;
     const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
+    const IOCTL_CDROM_EJECT_MEDIA: u32 = 0x0002_4808;
     const IOCTL_CDROM_READ_SG: u32 = 0x0002_4c04;
+    const IOCTL_CDROM_TEST_UNIT_READY: u32 = 0x0002_4c08;
     const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
     const DISK_COPY_EXTERNAL_SIZE: u32 = 552;
     const DISK_COPY_EXTERNAL_SECTOR_LIST_SIZE_OFFSET: u32 = 548;
@@ -5513,6 +5515,66 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         ERROR_INVALID_PARAMETER
     );
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0xfeed_babe);
+
+    memory.write_bytes(cdrom_read_ptr, &[0x6c; 8]);
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_CDROM_TEST_UNIT_READY,
+                0,
+                0,
+                cdrom_read_ptr,
+                8,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+    assert_eq!(memory.read_bytes(cdrom_read_ptr, 8), vec![0x6c; 8]);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_CDROM_EJECT_MEDIA,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
     memory.write_word(bytes_returned_ptr, 0xfeed_babe);
     assert!(matches!(
