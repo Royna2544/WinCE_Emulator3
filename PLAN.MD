@@ -1234,6 +1234,10 @@ notes when it is still needed for implementation.
      back to a visible parked process with ready work. Coverage models the
      iNavi visible route window versus hidden helper-child receiver queue from
      both directions without adding app-specific scheduling shortcuts.
+   - Live-pump handoff now also returns an idle visible active process with no
+     receiver work to a runnable parked process that owns visible windows,
+     keeping route UI progress alive while preserving the hidden receiver-only
+     no-flip-back guard.
 
 ## Validation Gates
 
