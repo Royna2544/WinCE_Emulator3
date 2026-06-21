@@ -1303,6 +1303,10 @@ notes when it is still needed for implementation.
      resolves that same registry-backed default LCID before selecting the
      CE image locale table, so registry-selected English defaults return the
      advertised `0409` strings and numbers instead of always using Korean.
+     `SetACP`, `SetSystemDefaultLCID`, and `SetUserDefaultLCID` now update
+     the same `International` registry DWORDs with basic CE table validation,
+     so the default code page/locale getters and locale-info queries observe
+     successful updates while invalid LCIDs leave the prior default intact.
 
 ## Validation Gates
 

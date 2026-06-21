@@ -3246,7 +3246,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_SET_ACP | ORD_SET_OEMCP | ORD_SET_SYSTEM_DEFAULT_LCID => {
+        ORD_SET_ACP => Some(CoredllValue::Bool(set_acp_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SET_SYSTEM_DEFAULT_LCID => Some(CoredllValue::Bool(set_default_lcid_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SET_OEMCP => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
@@ -4720,10 +4730,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         // SetUserDefaultLCID / UpdateNLSInfoEx
-        ORD_SET_USER_DEFAULT_LCID => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_SET_USER_DEFAULT_LCID => Some(CoredllValue::Bool(set_default_lcid_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_UPDATE_NLSINFO_EX => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -20886,8 +20897,32 @@ fn get_acp_raw(kernel: &mut CeKernel) -> u32 {
     registry_international_dword(kernel, "ACP", CE_ACP_CODE_PAGE)
 }
 
+fn set_acp_raw(kernel: &mut CeKernel, thread_id: u32, code_page: u32) -> bool {
+    if !is_valid_code_page_raw(code_page) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    set_registry_international_dword(kernel, "ACP", code_page);
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn default_lcid_raw(kernel: &mut CeKernel) -> u32 {
     registry_international_dword(kernel, "LCID", CE_DEFAULT_LCID)
+}
+
+fn set_default_lcid_raw(kernel: &mut CeKernel, thread_id: u32, locale: u32) -> bool {
+    if !is_known_supported_lcid(locale) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    set_registry_international_dword(kernel, "LCID", locale);
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn registry_international_dword(kernel: &mut CeKernel, value_name: &str, fallback: u32) -> u32 {
@@ -20914,6 +20949,14 @@ fn registry_international_dword(kernel: &mut CeKernel, value_name: &str, fallbac
         return fallback;
     };
     u32::from_le_bytes(bytes)
+}
+
+fn set_registry_international_dword(kernel: &mut CeKernel, value_name: &str, value: u32) {
+    kernel.registry.set_value(
+        &format!(r"hklm\{CE_INTERNATIONAL_REGISTRY_KEY}"),
+        value_name,
+        RegistryValue::dword(value),
+    );
 }
 
 fn convert_default_locale_raw(kernel: &mut CeKernel, locale: u32) -> u32 {
