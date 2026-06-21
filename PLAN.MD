@@ -1253,6 +1253,14 @@ notes when it is still needed for implementation.
      receiver work to a runnable parked process that owns visible windows,
      keeping route UI progress alive while preserving the hidden receiver-only
      no-flip-back guard.
+   - Live-pump Unicorn service ticks now run at a tighter cadence during
+     live-pump slices, keeping presenter and remote endpoint work responsive
+     while route UI progress is being preserved.
+   - Remote-server input now drains after active visible-window reconciliation
+     and before orphaned visible callout recovery, then reuses the existing
+     targeted visible/ready/runnable parked-thread rotation path so remote
+     touches and keys can wake the owning route UI thread without adding
+     app-specific scheduling shortcuts.
 
 ## Validation Gates
 

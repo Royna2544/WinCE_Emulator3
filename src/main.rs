@@ -420,6 +420,47 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
+        let early_blocked_remote_target = blocked_remote_input_target(cpu, kernel);
+        let early_remote_drained =
+            service_remote_endpoint(cpu, kernel, desktop, early_blocked_remote_target.as_ref());
+        if early_remote_drained.handled != 0 {
+            reported_blocked_message_wait = false;
+            let current_cpu_targeted = early_remote_drained
+                .target_thread_ids
+                .contains(&cpu.current_thread_id());
+            if cpu.rotate_to_active_visible_receiver_thread(
+                kernel,
+                &early_remote_drained.target_thread_ids,
+            ) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if cpu.rotate_to_ready_parked_threads_with_framebuffer(
+                kernel,
+                &early_remote_drained.target_thread_ids,
+                Some(desktop.framebuffer_mut()),
+            ) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if !cpu.active_process_has_visible_receiver_work(kernel)
+                && cpu.rotate_to_runnable_parked_threads(
+                    kernel,
+                    &early_remote_drained.target_thread_ids,
+                )
+            {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if !current_cpu_targeted
+                && cpu.has_runnable_parked_process(kernel)
+                && cpu.rotate_to_next_parked_process(kernel)
+            {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            continue;
+        }
         if cpu.prepare_active_orphaned_visible_message_callout(kernel) {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);

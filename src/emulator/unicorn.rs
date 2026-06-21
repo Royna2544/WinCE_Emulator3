@@ -6364,7 +6364,8 @@ impl UnicornMips {
                             let _ = uc.emu_stop();
                             return;
                         }
-                        if code_trace_index & 0x0fff == 0 {
+                        let service_tick_mask = if live_pump { 0x00ff } else { 0x0fff };
+                        if code_trace_index & service_tick_mask == 0 {
                             if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
                                 *framebuffer_tick_error.borrow_mut() = Some(err);
                                 let _ = uc.emu_stop();
