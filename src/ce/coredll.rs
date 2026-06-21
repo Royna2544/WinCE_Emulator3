@@ -3050,11 +3050,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_CONNECT_DEBUGGER | ORD_SET_HARDWARE_WATCH => {
+        ORD_CONNECT_DEBUGGER => {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
+        }
+        ORD_SET_HARDWARE_WATCH => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Bool(true))
         }
         ORD_PPSHRESTART => {
             kernel.threads.set_last_error(thread_id, 0);

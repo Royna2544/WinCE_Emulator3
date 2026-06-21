@@ -340,6 +340,13 @@ notes when it is still needed for implementation.
   invalid output pointer failure. Raw `IsProcessorFeaturePresent` now follows
   CE's MIPS switch for the advertised MIPSII feature instead of returning
   false for every feature, while MIPS16/FPU/unknown features remain absent.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kwin32.c`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`: raw `SetHardwareWatch` now
+  follows CE's trusted MIPS path by returning success instead of sharing the
+  unsupported debugger fallback. Coverage verifies write, read/write, null
+  address, and unfiltered flag combinations all clear last error and return
+  `TRUE`.
 - `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwindbas.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwindbas.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\OOMUI\oomui.cpp`: raw

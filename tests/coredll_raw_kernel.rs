@@ -86,10 +86,10 @@ use wince_emulation_v3::{
             ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST, ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD,
             ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
             ORD_SET_COMM_TIMEOUTS, ORD_SET_DAYLIGHT_TIME, ORD_SET_DEVICE_POWER, ORD_SET_EVENT_DATA,
-            ORD_SET_KMODE, ORD_SET_LAST_ERROR, ORD_SET_LOWEST_SCHEDULED_PRIORITY,
-            ORD_SET_POWER_REQUIREMENT, ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_MEMORY_DIVISION,
-            ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_CONTEXT, ORD_SET_THREAD_PRIORITY,
-            ORD_SET_TIME_ZONE_INFORMATION, ORD_SHADD_TO_RECENT_DOCS,
+            ORD_SET_HARDWARE_WATCH, ORD_SET_KMODE, ORD_SET_LAST_ERROR,
+            ORD_SET_LOWEST_SCHEDULED_PRIORITY, ORD_SET_POWER_REQUIREMENT, ORD_SET_STDIO_PATH_W,
+            ORD_SET_SYSTEM_MEMORY_DIVISION, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_CONTEXT,
+            ORD_SET_THREAD_PRIORITY, ORD_SET_TIME_ZONE_INFORMATION, ORD_SHADD_TO_RECENT_DOCS,
             ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
             ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
             ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
@@ -10947,6 +10947,40 @@ fn coredll_raw_set_lowest_scheduled_priority_returns_previous_clamped_ce_value()
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(set_lowest(&mut kernel, 7), 1);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_hardware_watch_follows_trusted_mips_success_path() -> Result<()> {
+    const HARDWARE_WATCH_WRITE: u32 = 0x1;
+    const HARDWARE_WATCH_READ: u32 = 0x2;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 44;
+
+    for (address, flags) in [
+        (0x0012_3000, HARDWARE_WATCH_WRITE),
+        (0x0012_4000, HARDWARE_WATCH_READ | HARDWARE_WATCH_WRITE),
+        (0, 0xffff_ffff),
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_HARDWARE_WATCH,
+                [address, flags],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    }
 
     Ok(())
 }
