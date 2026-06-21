@@ -108,6 +108,7 @@ mod support;
 use support::{TestGuestMemory, unique_test_root};
 
 const ERROR_PATH_NOT_FOUND: u32 = 3;
+const ERROR_DIRECTORY: u32 = 267;
 
 #[test]
 fn coredll_raw_string_conversion_ordinals_round_trip_ascii() -> Result<()> {
@@ -3386,6 +3387,66 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     );
     assert_eq!(read_u64(&memory, total_ptr)?, 8192_u64 * 1024 * 1024);
     assert_eq!(read_u64(&memory, total_free_ptr)?, 4096_u64 * 1024 * 1024);
+
+    let sentinel_free = 0x1111_2222_3333_4444_u64;
+    let sentinel_total = 0x5555_6666_7777_8888_u64;
+    let sentinel_total_free = 0x9999_aaaa_bbbb_cccc_u64;
+    memory.write_u32(free_to_caller_ptr, sentinel_free as u32)?;
+    memory.write_u32(free_to_caller_ptr + 4, (sentinel_free >> 32) as u32)?;
+    memory.write_u32(total_ptr, sentinel_total as u32)?;
+    memory.write_u32(total_ptr + 4, (sentinel_total >> 32) as u32)?;
+    memory.write_u32(total_free_ptr, sentinel_total_free as u32)?;
+    memory.write_u32(total_free_ptr + 4, (sentinel_total_free >> 32) as u32)?;
+    memory.write_wide_z(find_pattern_ptr, "\\SDMMC Disk\\missing");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DISK_FREE_SPACE_EX_W,
+            [
+                find_pattern_ptr,
+                free_to_caller_ptr,
+                total_ptr,
+                total_free_ptr
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_PATH_NOT_FOUND
+    );
+    assert_eq!(read_u64(&memory, free_to_caller_ptr)?, sentinel_free);
+    assert_eq!(read_u64(&memory, total_ptr)?, sentinel_total);
+    assert_eq!(read_u64(&memory, total_free_ptr)?, sentinel_total_free);
+
+    memory.write_wide_z(find_pattern_ptr, r"\SDMMC Disk\mapinfo.bin");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DISK_FREE_SPACE_EX_W,
+            [
+                find_pattern_ptr,
+                free_to_caller_ptr,
+                total_ptr,
+                total_free_ptr
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_DIRECTORY);
+    assert_eq!(read_u64(&memory, free_to_caller_ptr)?, sentinel_free);
+    assert_eq!(read_u64(&memory, total_ptr)?, sentinel_total);
+    assert_eq!(read_u64(&memory, total_free_ptr)?, sentinel_total_free);
 
     let object_store = kernel.files.object_store();
     assert!(matches!(

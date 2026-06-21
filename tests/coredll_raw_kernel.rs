@@ -1494,12 +1494,18 @@ fn coredll_raw_device_activation_opens_configured_devices_and_active_registry() 
             kind: DeviceKind::Serial,
             backend: DeviceBackend::Stub,
             host: None,
-            remote_gps: false,
+            remote_gps: true,
             enabled: true,
             note: None,
         }],
     };
     let mut kernel = CeKernel::boot(config);
+    assert_eq!(
+        kernel.remote.inject_nmea_sentences([
+            "$GPRMC,000000.000,A,3733.9900,N,12658.6800,E,0.0,0.0,210626,,,A*00"
+        ]),
+        1
+    );
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
     let driver_key_ptr = 0x3120_0000;
@@ -1575,6 +1581,7 @@ fn coredll_raw_device_activation_opens_configured_devices_and_active_registry() 
     };
     assert_ne!(device, 0);
     assert_eq!(kernel.path_for_handle(device).as_deref(), Some("COM7:"));
+    assert!(kernel.comm_queue_lengths(device)?.0 != 0);
     assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
     assert_eq!(
         kernel

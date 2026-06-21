@@ -10184,6 +10184,21 @@ fn get_disk_free_space_ex_w_raw<M: CoredllGuestMemory>(
             return false;
         }
     };
+    if let Some(directory) = directory.as_deref() {
+        let attributes = match kernel.file_attributes_w(directory) {
+            Ok(data) => data.attributes,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_PATH_NOT_FOUND);
+                return false;
+            }
+        };
+        if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            kernel.threads.set_last_error(thread_id, ERROR_DIRECTORY);
+            return false;
+        }
+    }
     let disk_space = kernel.files.disk_space_for_path(directory.as_deref());
     if !write_optional_u64(
         kernel,
@@ -60484,6 +60499,7 @@ fn activate_configured_device_entry(
     };
     session.bus_name = device_bus_name_for_device_key_entry(kernel, entry);
     let handle = kernel.handles.insert(KernelObject::Device(session));
+    kernel.drain_remote_serial_to_handle(handle, usize::MAX);
     let active_path = format!(r"hklm\{}", entry.active_key);
     kernel.registry.create_key(&active_path);
     kernel.registry.set_value(

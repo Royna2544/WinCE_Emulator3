@@ -1128,6 +1128,13 @@ notes when it is still needed for implementation.
     byte-count pointer faults. Coverage verifies bad byte-count pointers do not
     fail otherwise valid calls, while bad output buffers still fail after the
     CE-sized count is written.
+  - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp`:
+    public `GetDiskFreeSpaceExW` on explicit paths now follows CE's
+    `FS_GetDiskFreeSpaceExW` validation order by rejecting missing paths with
+    `ERROR_PATH_NOT_FOUND` and existing non-directories with `ERROR_DIRECTORY`
+    before writing any optional 64-bit output values. Coverage preserves the
+    existing null-path object-store query while verifying failed explicit paths
+    leave caller output buffers untouched.
 
 6. Expand input, text, GDI, and drawing fidelity.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph

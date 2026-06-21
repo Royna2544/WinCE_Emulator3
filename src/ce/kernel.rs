@@ -4791,7 +4791,7 @@ impl CeKernel {
         }
     }
 
-    fn drain_remote_serial_to_handle(&mut self, handle: u32, max_bytes: usize) -> usize {
+    pub(crate) fn drain_remote_serial_to_handle(&mut self, handle: u32, max_bytes: usize) -> usize {
         if max_bytes == 0 {
             return 0;
         }
