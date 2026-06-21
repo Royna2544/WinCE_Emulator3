@@ -3863,6 +3863,7 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
     const IOCTL_DISK_SECURE_WIPE: u32 = 0x0007_1c64;
     const IOCTL_DISK_SET_SECURE_WIPE_FLAG: u32 = 0x0007_1c80;
     const IOCTL_DISK_DELETE_SECTORS: u32 = 0x0007_1c4c;
+    const IOCTL_DISK_SET_STANDBY_TIMER: u32 = 0x0007_1c18;
     const IOCTL_DISK_STANDBY_NOW: u32 = 0x0007_1c1c;
     const IOCTL_DISK_DELETE_CLUSTER: u32 = 0x0007_1c40;
     const IOCTL_DISK_FLUSH_CACHE: u32 = 0x0007_1c54;
@@ -4490,6 +4491,35 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                store_handle,
+                IOCTL_DISK_SET_STANDBY_TIMER,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
     memory.write_word(bytes_returned_ptr, 0xfeed_face);
@@ -5400,6 +5430,35 @@ fn coredll_raw_store_manager_enumerates_mounted_stores() -> Result<()> {
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_babe);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                partition_handle,
+                IOCTL_DISK_SET_STANDBY_TIMER,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
 
     memory.write_word(bytes_returned_ptr, 0xfeed_babe);

@@ -1076,7 +1076,9 @@ notes when it is still needed for implementation.
     `IOCTL_DISK_COPY_EXTERNAL_START` packet validation before reporting the
     unsupported lower block-driver operation; `IOCTL_DISK_COPY_EXTERNAL_COMPLETE`
     follows CE `DOSPART` fallthrough behavior and forwards to the lower driver
-    without requiring a start-packet layout. Coverage verifies success
+    without requiring a start-packet layout. `IOCTL_DISK_SET_STANDBY_TIMER`
+    and `IOCTL_DISK_STANDBY_NOW` now share the same lower-driver unsupported
+    forwarding result on store and partition handles. Coverage verifies success
     byte-counts, CE `PowerTimings` sizing, invalid packet rejection, preserved
     sector-list inputs, and lower-driver `ERROR_NOT_SUPPORTED` forwarding.
 
