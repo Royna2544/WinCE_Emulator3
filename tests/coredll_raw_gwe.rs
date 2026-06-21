@@ -64,7 +64,7 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
             ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
             ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO,
-            ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
+            ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
             ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
             ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
             ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
@@ -56237,6 +56237,145 @@ fn coredll_raw_image_list_all_white_overlay_is_zero_sized() -> Result<()> {
     assert_eq!(memory.read_i32(draw_params + 24)?, 0);
     assert_eq!(memory.read_i32(draw_params + 28)?, 0);
     assert_eq!(memory.read_u32(draw_params + 48)?, ILD_TRANSPARENT);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_image_list_remove_keeps_single_overlay_and_clears_all() -> Result<()> {
+    const ILC_COLOR16: u32 = 0x0010;
+    const ILC_MASK: u32 = 0x0001;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 177_u32;
+
+    let list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_COLOR16 | ILC_MASK, 2, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(remove overlay) failed: {other:?}"),
+    };
+    assert_ne!(list, 0);
+
+    let cases: [(u32, [u16; 4]); 2] = [
+        (0, [0xf800, 0x07e0, 0x001f, 0xffff]),
+        (1, [0xffe0, 0xffe0, 0xffe0, 0xffe0]),
+    ];
+    for (expected, colors) in cases {
+        let (bitmap, bits, stride) =
+            create_rgb565_dib_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+        for y in 0..2 {
+            for x in 0..2 {
+                write_rgb565(
+                    &mut memory,
+                    bits,
+                    stride,
+                    x,
+                    y,
+                    colors[(y * 2 + x) as usize],
+                );
+            }
+        }
+        let (_, mask, mask_bits, mask_stride) =
+            create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+        memory.write_u8(mask_bits, 0x00)?;
+        memory.write_u8(mask_bits + mask_stride, 0x00)?;
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_IMAGE_LIST_ADD,
+                [list, bitmap, mask],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(index),
+                ..
+            } if index == expected
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            [list, 1, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(list)
+            .and_then(|list| list.overlays.get(&1))
+            .map(|overlay| overlay.image_index),
+        Some(1)
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REMOVE,
+            [list, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(kernel.resources.image_list_count(list), Some(1));
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(list)
+            .and_then(|list| list.overlays.get(&1))
+            .map(|overlay| overlay.image_index),
+        Some(1),
+        "CE ImageList_Remove(i) shifts images but leaves overlay indexes untouched"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REMOVE,
+            [list, u32::MAX],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(kernel.resources.image_list_count(list), Some(0));
+    assert!(
+        kernel
+            .resources
+            .image_list(list)
+            .map(|list| list.overlays.is_empty())
+            .unwrap_or(false),
+        "CE ImageList_Remove(-1) resets every overlay slot"
+    );
 
     Ok(())
 }

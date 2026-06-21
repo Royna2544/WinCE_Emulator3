@@ -808,6 +808,10 @@ notes when it is still needed for implementation.
   ordinal coverage for default `CLR_NONE`, previous-color returns, unchanged
   color early-return behavior, and invalid image-list handles returning
   `CLR_NONE` with `ERROR_INVALID_HANDLE`.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
+  raw `ImageList_Remove` now has CE-backed ordinal coverage for the split
+  overlay contract: single-image removal leaves overlay indexes untouched, and
+  `ImageList_Remove(-1)` clears every overlay slot while clearing the list.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\TASKBAR\taskbar.cpp`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\WTL\INCLUDE\atlframe.h`, and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp`: raw
