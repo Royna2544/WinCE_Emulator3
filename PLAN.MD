@@ -1297,14 +1297,18 @@ notes when it is still needed for implementation.
      executing, including inline `WaitForSingleObject`, message-queue, and
      `Sleep` timeouts, so remote touch/key input is not left pending across long
      host-wall-clock slices.
-   - Live-pump timeslice stops now compare visible-window surface area instead
-     of requiring the active process to be hidden, allowing an idle small active
-     surface to yield to a larger runnable parked route surface while preserving
-     queued active visible-window work.
-   - Live-pump timeslice hooks now perform the visible-parked-process yield
-     check before the host-wall-clock stop path when no guest return trampolines
-     are pending, so an idle active thread can hand off to visible parked UI
-     work without waiting for the outer wall-clock guard.
+  - Live-pump timeslice stops now compare visible-window surface area instead
+    of requiring the active process to be hidden, allowing an idle small active
+    surface to yield to a larger runnable parked route surface while preserving
+    queued active visible-window work.
+  - Live-pump timeslice hooks now perform the visible-parked-process yield
+    check before the host-wall-clock stop path when no guest return trampolines
+    are pending, so an idle active thread can hand off to visible parked UI
+    work without waiting for the outer wall-clock guard.
+  - Live-pump run-slice handoff now keeps a full-screen visible active process
+    in front of a smaller idle visible parked child instead of rotating merely
+    because the active thread is idle, while still allowing larger visible
+    parked UI work to take over.
 
 8. Close core time and NLS parity gaps.
    - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\time.c` and
