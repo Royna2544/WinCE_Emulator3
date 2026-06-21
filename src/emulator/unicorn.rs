@@ -19754,10 +19754,11 @@ mod wait_scheduler_tests {
         ce::{
             coredll::CoredllGuestMemory,
             file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
-            gwe::{QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
+            gwe::{QS_POSTMESSAGE, QS_TIMER, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_TIMER, WS_VISIBLE},
             timer::{INFINITE, WAIT_OBJECT_0, WAIT_TIMEOUT},
         },
         config::RuntimeConfig,
+        remote_server::{RemoteServer, RemoteServerConfig},
     };
     use std::{
         io::Write,
@@ -19777,6 +19778,38 @@ mod wait_scheduler_tests {
             base: wndproc & 0xfff0_0000,
             bytes: vec![0; 0x100000],
         });
+    }
+
+    fn queue_test_remote_touch(server: &RemoteServer, phase: &str, x: i32, y: i32) {
+        server.enqueue_control_message_for_test(serde_json::json!({
+            "type": "touch",
+            "phase": phase,
+            "x": x,
+            "y": y,
+        }));
+    }
+
+    fn collect_test_thread_messages(
+        kernel: &mut crate::ce::kernel::CeKernel,
+        thread_id: u32,
+        limit: usize,
+    ) -> Vec<crate::ce::gwe::Message> {
+        let mut messages = Vec::new();
+        for _ in 0..limit {
+            let Some(message) = kernel.gwe.get_message(thread_id) else {
+                break;
+            };
+            messages.push(message);
+        }
+        messages
+    }
+
+    fn drain_test_thread_messages(
+        kernel: &mut crate::ce::kernel::CeKernel,
+        thread_id: u32,
+        limit: usize,
+    ) {
+        let _ = collect_test_thread_messages(kernel, thread_id, limit);
     }
 
     fn blocked_wait(start: u32, timeout: u32) -> BlockedWaitThread {
@@ -23306,6 +23339,92 @@ mod wait_scheduler_tests {
             return_pc
         );
         assert_eq!(kernel.is_wait_ready(event, thread_id), Some(false));
+    }
+
+    #[test]
+    fn non_live_pump_current_single_wait_leaves_remote_server_input_pending() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+        kernel.set_remote_server(server.clone());
+        kernel.remote.set_framebuffer_size(800, 480);
+        let thread_id = 12;
+        kernel.create_window_ex_w(thread_id, "REMOTE_WAIT", "", None, 0, WS_VISIBLE, 0);
+        drain_test_thread_messages(&mut kernel, thread_id, 16);
+        let event = kernel.create_event_w(None, true, false);
+        let return_pc = 0x1357_3400;
+
+        queue_test_remote_touch(&server, "tap", 12, 34);
+        assert!(super::complete_current_single_wait_timeout(
+            &mut kernel,
+            &mut uc,
+            event,
+            thread_id,
+            1,
+            return_pc,
+            false,
+        ));
+
+        let queued = server.drain_control_messages();
+        assert_eq!(queued.len(), 1);
+    }
+
+    #[test]
+    fn live_pump_current_single_wait_drains_remote_server_input() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+        kernel.set_remote_server(server.clone());
+        kernel.remote.set_framebuffer_size(800, 480);
+        let thread_id = 13;
+        let hwnd = kernel.create_window_ex_w(thread_id, "REMOTE_WAIT", "", None, 0, WS_VISIBLE, 0);
+        drain_test_thread_messages(&mut kernel, thread_id, 16);
+        let event = kernel.create_event_w(None, true, false);
+        let return_pc = 0x1357_3500;
+
+        queue_test_remote_touch(&server, "tap", 12, 34);
+        assert!(super::complete_current_single_wait_timeout(
+            &mut kernel,
+            &mut uc,
+            event,
+            thread_id,
+            1,
+            return_pc,
+            true,
+        ));
+
+        assert!(server.drain_control_messages().is_empty());
+        let messages = collect_test_thread_messages(&mut kernel, thread_id, 64);
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.hwnd == hwnd && message.msg == WM_LBUTTONDOWN),
+            "{messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.hwnd == hwnd && message.msg == WM_LBUTTONUP),
+            "{messages:?}"
+        );
     }
 
     #[test]

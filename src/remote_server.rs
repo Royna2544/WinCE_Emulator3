@@ -414,6 +414,15 @@ impl RemoteServer {
             .collect()
     }
 
+    #[cfg(test)]
+    pub(crate) fn enqueue_control_message_for_test(&self, message: Value) {
+        self.state
+            .pending_control
+            .lock()
+            .expect("remote control mutex")
+            .push_back(message);
+    }
+
     pub fn pending_control_count(&self) -> usize {
         self.state
             .pending_control
