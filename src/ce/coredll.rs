@@ -20727,6 +20727,14 @@ const SYSTEM_TIME_BASE_YEAR: i32 = 2024;
 const SYSTEM_TIME_BASE_MONTH: i32 = 1;
 const SYSTEM_TIME_BASE_DAY: i32 = 1;
 const TIME_ZONE_INFORMATION_SIZE: usize = 172;
+const TIME_ZONE_BIAS_OFFSET: usize = 0;
+const TIME_ZONE_STANDARD_NAME_OFFSET: usize = 4;
+const TIME_ZONE_STANDARD_DATE_OFFSET: usize = 68;
+const TIME_ZONE_STANDARD_BIAS_OFFSET: usize = 84;
+const TIME_ZONE_DAYLIGHT_NAME_OFFSET: usize = 88;
+const TIME_ZONE_DAYLIGHT_DATE_OFFSET: usize = 152;
+const TIME_ZONE_DAYLIGHT_BIAS_OFFSET: usize = 168;
+const TIME_ZONE_NAME_CHARS: usize = 32;
 const TIME_ZONE_ID_UNKNOWN: u32 = 0;
 const TIME_ZONE_ID_INVALID: u32 = u32::MAX;
 const OEM_DEBUG_READ_NODATA: u32 = u32::MAX;
@@ -22585,45 +22593,145 @@ fn write_time_zone_information<M: CoredllGuestMemory>(
     thread_id: u32,
     time_zone_information_ptr: u32,
 ) -> u32 {
-    if time_zone_information_ptr == 0
-        || !write_guest_bytes(
-            kernel,
-            memory,
-            thread_id,
-            time_zone_information_ptr,
-            &[0; TIME_ZONE_INFORMATION_SIZE],
-        )
-        || !write_guest_i32(kernel, memory, thread_id, time_zone_information_ptr, 0)
-        || !write_guest_wide_fixed(
-            kernel,
-            memory,
-            thread_id,
-            time_zone_information_ptr.wrapping_add(4),
-            "UTC",
-            32,
-        )
-        || !write_guest_i32(
-            kernel,
-            memory,
-            thread_id,
-            time_zone_information_ptr.wrapping_add(84),
-            0,
-        )
-        || !write_guest_i32(
-            kernel,
-            memory,
-            thread_id,
-            time_zone_information_ptr.wrapping_add(168),
-            0,
-        )
-    {
+    if time_zone_information_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return TIME_ZONE_ID_INVALID;
     }
+
+    let bytes =
+        time_zone_information_from_registry(kernel).unwrap_or_else(default_time_zone_information);
+    if !write_guest_bytes(kernel, memory, thread_id, time_zone_information_ptr, &bytes) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return TIME_ZONE_ID_INVALID;
+    }
+    mirror_time_zone_information_typed_fields(memory, time_zone_information_ptr, &bytes);
     kernel.threads.set_last_error(thread_id, 0);
     TIME_ZONE_ID_UNKNOWN
+}
+
+fn time_zone_information_from_registry(kernel: &mut CeKernel) -> Option<Vec<u8>> {
+    let open = kernel
+        .registry
+        .reg_open_key_exw(HKEY_LOCAL_MACHINE, Some("Time"), 0, 0);
+    let hkey = open.hkey?;
+    let query = kernel.registry.reg_query_value_exw(
+        hkey,
+        Some("TimeZoneInformation"),
+        Some(TIME_ZONE_INFORMATION_SIZE),
+    );
+    let _ = kernel.registry.reg_close_key(hkey);
+    if query.status != ERROR_SUCCESS || query.value_type != Some(REG_BINARY) {
+        return None;
+    }
+    let data = query.data?;
+    (data.len() == TIME_ZONE_INFORMATION_SIZE).then_some(data)
+}
+
+fn default_time_zone_information() -> Vec<u8> {
+    let mut bytes = vec![0; TIME_ZONE_INFORMATION_SIZE];
+    write_tzi_i32(&mut bytes, TIME_ZONE_BIAS_OFFSET, 480);
+    write_tzi_wide_fixed(
+        &mut bytes,
+        TIME_ZONE_STANDARD_NAME_OFFSET,
+        "Pacific Standard Time",
+    );
+    write_tzi_system_time(
+        &mut bytes,
+        TIME_ZONE_STANDARD_DATE_OFFSET,
+        &SystemTimeFields {
+            year: 0,
+            month: 10,
+            day_of_week: 0,
+            day: 5,
+            hour: 2,
+            minute: 0,
+            second: 0,
+            milliseconds: 0,
+        },
+    );
+    write_tzi_i32(&mut bytes, TIME_ZONE_STANDARD_BIAS_OFFSET, 0);
+    write_tzi_wide_fixed(
+        &mut bytes,
+        TIME_ZONE_DAYLIGHT_NAME_OFFSET,
+        "Pacific Daylight Time",
+    );
+    write_tzi_system_time(
+        &mut bytes,
+        TIME_ZONE_DAYLIGHT_DATE_OFFSET,
+        &SystemTimeFields {
+            year: 0,
+            month: 4,
+            day_of_week: 0,
+            day: 1,
+            hour: 2,
+            minute: 0,
+            second: 0,
+            milliseconds: 0,
+        },
+    );
+    write_tzi_i32(&mut bytes, TIME_ZONE_DAYLIGHT_BIAS_OFFSET, -60);
+    bytes
+}
+
+fn write_tzi_i32(bytes: &mut [u8], offset: usize, value: i32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_tzi_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_tzi_wide_fixed(bytes: &mut [u8], offset: usize, text: &str) {
+    for (index, unit) in text
+        .encode_utf16()
+        .take(TIME_ZONE_NAME_CHARS.saturating_sub(1))
+        .enumerate()
+    {
+        write_tzi_u16(bytes, offset + index * 2, unit);
+    }
+}
+
+fn write_tzi_system_time(bytes: &mut [u8], offset: usize, fields: &SystemTimeFields) {
+    for (index, value) in [
+        fields.year,
+        fields.month,
+        fields.day_of_week,
+        fields.day,
+        fields.hour,
+        fields.minute,
+        fields.second,
+        fields.milliseconds,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        write_tzi_u16(bytes, offset + index * 2, value);
+    }
+}
+
+fn mirror_time_zone_information_typed_fields<M: CoredllGuestMemory>(
+    memory: &mut M,
+    time_zone_information_ptr: u32,
+    bytes: &[u8],
+) {
+    for (index, chunk) in bytes.chunks_exact(2).enumerate() {
+        let value = u16::from_le_bytes([chunk[0], chunk[1]]);
+        let _ = memory.write_u16(
+            time_zone_information_ptr.wrapping_add((index as u32) * 2),
+            value,
+        );
+    }
+    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+        let value = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let _ = memory.write_u32(
+            time_zone_information_ptr.wrapping_add((index as u32) * 4),
+            value,
+        );
+    }
 }
 
 fn current_filetime_ticks(kernel: &CeKernel) -> u64 {

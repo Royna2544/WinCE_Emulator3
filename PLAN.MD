@@ -1287,6 +1287,10 @@ notes when it is still needed for implementation.
      before reporting success, accepting disabled or recurring DST transition
      dates and rejecting malformed recurring or absolute `SYSTEMTIME` fields
      with `ERROR_INVALID_PARAMETER`.
+     `GetTimeZoneInformation` now copies the CE `HKLM\Time`
+     `TimeZoneInformation` binary blob when present and falls back to CE's
+     Pacific default layout when absent, while still returning
+     `TIME_ZONE_ID_UNKNOWN` until `UserKInfo[KINX_TIMEZONEBIAS]` is modeled.
 
 ## Validation Gates
 

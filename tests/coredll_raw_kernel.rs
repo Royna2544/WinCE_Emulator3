@@ -115,7 +115,8 @@ use wince_emulation_v3::{
         memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
         registry::{
-            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, RegistryValue,
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_BINARY,
+            RegistryValue,
         },
         resource::ResourceId,
         scheduler::SchedulerBlockedWaitKind,
@@ -5271,13 +5272,26 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
-    assert_eq!(memory.read_u32(time_zone)?, 0);
-    assert_eq!(memory.read_u16(time_zone + 4)?, b'U' as u16);
-    assert_eq!(memory.read_u16(time_zone + 6)?, b'T' as u16);
-    assert_eq!(memory.read_u16(time_zone + 8)?, b'C' as u16);
-    assert_eq!(memory.read_u16(time_zone + 10)?, 0);
-    assert_eq!(memory.read_u32(time_zone + 84)?, 0);
-    assert_eq!(memory.read_u32(time_zone + 168)?, 0);
+    let hkey = kernel
+        .registry
+        .reg_open_key_exw(HKEY_LOCAL_MACHINE, Some("Time"), 0, 0)
+        .hkey
+        .expect("HKLM\\Time");
+    let query = kernel
+        .registry
+        .reg_query_value_exw(hkey, Some("TimeZoneInformation"), Some(172));
+    assert_eq!(kernel.registry.reg_close_key(hkey), ERROR_SUCCESS);
+    assert_eq!(query.status, ERROR_SUCCESS);
+    assert_eq!(query.value_type, Some(REG_BINARY));
+    let expected_time_zone = query.data.expect("TimeZoneInformation bytes");
+    assert_eq!(
+        memory.read_bytes(time_zone, 172),
+        expected_time_zone.as_slice()
+    );
+    assert_eq!(
+        memory.read_u32(time_zone)?,
+        i32::from_le_bytes(expected_time_zone[0..4].try_into().unwrap()) as u32
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     assert!(matches!(
@@ -27733,6 +27747,64 @@ fn clipboard_data_alloc_rejects_unknown_source_handle() -> Result<()> {
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_HANDLE
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_time_zone_information_falls_back_to_ce_default() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 17;
+    let time_zone = 0x7100;
+    memory.map_bytes(time_zone, 172);
+    memory.map_halfwords(time_zone, 86);
+    memory.map_words(time_zone, 43);
+    assert_eq!(
+        kernel
+            .registry
+            .reg_delete_key_w(HKEY_LOCAL_MACHINE, Some("Time")),
+        ERROR_SUCCESS
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_TIME_ZONE_INFORMATION,
+            [time_zone],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    assert_eq!(memory.read_i32(time_zone)?, 480);
+    assert_eq!(
+        memory.read_wide_z(time_zone + 4, 32),
+        "Pacific Standard Time"
+    );
+    assert_eq!(memory.read_u16(time_zone + 68)?, 0);
+    assert_eq!(memory.read_u16(time_zone + 70)?, 10);
+    assert_eq!(memory.read_u16(time_zone + 72)?, 0);
+    assert_eq!(memory.read_u16(time_zone + 74)?, 5);
+    assert_eq!(memory.read_u16(time_zone + 76)?, 2);
+    assert_eq!(memory.read_i32(time_zone + 84)?, 0);
+    assert_eq!(
+        memory.read_wide_z(time_zone + 88, 32),
+        "Pacific Daylight Time"
+    );
+    assert_eq!(memory.read_u16(time_zone + 152)?, 0);
+    assert_eq!(memory.read_u16(time_zone + 154)?, 4);
+    assert_eq!(memory.read_u16(time_zone + 156)?, 0);
+    assert_eq!(memory.read_u16(time_zone + 158)?, 1);
+    assert_eq!(memory.read_u16(time_zone + 160)?, 2);
+    assert_eq!(memory.read_i32(time_zone + 168)?, -60);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }
