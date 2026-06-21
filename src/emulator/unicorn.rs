@@ -2978,6 +2978,9 @@ impl UnicornMips {
                     && Self::parked_process_can_run(process, kernel)
                     && Self::parked_process_has_visible_windows(process, kernel)
             });
+        if has_runnable_visible_window_process {
+            return false;
+        }
         let index = self
             .parked_child_processes
             .iter()
@@ -2987,9 +2990,6 @@ impl UnicornMips {
                     && Self::parked_process_has_visible_receiver_work(process, kernel)
             })
             .or_else(|| {
-                if has_runnable_visible_window_process {
-                    return None;
-                }
                 self.parked_child_processes.iter().position(|process| {
                     !self.parked_process_matches_current_active(process, kernel)
                         && Self::parked_process_can_run(process, kernel)
@@ -3030,13 +3030,33 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn rotate_to_live_pump_runnable_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
-        let index = self.parked_child_processes.iter().position(|process| {
-            !self.parked_process_matches_current_active(process, kernel)
-                && Self::parked_process_has_resumable_context(process)
-                && Self::parked_process_can_resume_from_live_pump(process, kernel)
-                && (Self::parked_process_has_visible_windows(process, kernel)
-                    || Self::parked_process_has_receiver_work(process, kernel))
-        });
+        let has_runnable_visible_window_process =
+            self.parked_child_processes.iter().any(|process| {
+                !self.parked_process_matches_current_active(process, kernel)
+                    && Self::parked_process_has_resumable_context(process)
+                    && Self::parked_process_can_resume_from_live_pump(process, kernel)
+                    && Self::parked_process_has_visible_windows(process, kernel)
+            });
+        let index = self
+            .parked_child_processes
+            .iter()
+            .position(|process| {
+                !self.parked_process_matches_current_active(process, kernel)
+                    && Self::parked_process_has_resumable_context(process)
+                    && Self::parked_process_can_resume_from_live_pump(process, kernel)
+                    && Self::parked_process_has_visible_windows(process, kernel)
+            })
+            .or_else(|| {
+                if has_runnable_visible_window_process {
+                    return None;
+                }
+                self.parked_child_processes.iter().position(|process| {
+                    !self.parked_process_matches_current_active(process, kernel)
+                        && Self::parked_process_has_resumable_context(process)
+                        && Self::parked_process_can_resume_from_live_pump(process, kernel)
+                        && Self::parked_process_has_receiver_work(process, kernel)
+                })
+            });
         let Some(index) = index else { return false };
         let Some(parked) = self.parked_child_processes.remove(index) else {
             return false;
@@ -30577,6 +30597,7 @@ mod guest_thread_stack_tests {
             0,
         );
         assert!(kernel.gwe.validate_window(visible_hwnd));
+        assert!(kernel.post_message_w(visible_hwnd, crate::ce::gwe::WM_USER, 0, 0));
         scheduler.parked_child_processes.push_back(ParkedProcess {
             application: Some("\\SDMMC Disk\\INavi\\visible_ui.exe".to_owned()),
             process_handle: None,
@@ -31899,6 +31920,145 @@ mod guest_thread_stack_tests {
                 .parked_child_processes
                 .iter()
                 .any(|process| process.process_state.process_id == 1)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn live_pump_handoff_prefers_visible_process_over_hidden_receiver_work() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(1);
+        scheduler.current_thread_id = 1;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0010_2000,
+            regs: MipsGuestContext::zero(),
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0010_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+        let active_hwnd =
+            kernel.create_window_ex_w(1, "active_ui", "", None, 0, crate::ce::gwe::WS_VISIBLE, 0);
+        assert!(
+            kernel
+                .gwe
+                .window(active_hwnd)
+                .is_some_and(|w| w.update_pending)
+        );
+
+        let hidden_thread = 3;
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let hidden_hwnd =
+            kernel.create_window_ex_w(hidden_thread, "hidden_helper", "", None, 0, 0, 0);
+        assert!(kernel.post_message_w(hidden_hwnd, crate::ce::gwe::WM_WINDOWPOSCHANGED, 0, 0));
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\hidden_helper.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 67,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: hidden_thread,
+            cpu: Box::new(resumable_cpu(hidden_thread, 0x0040_2000)?),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\hidden_helper.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\hidden_helper.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        let visible_thread = 4;
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 68,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let visible_hwnd = kernel.create_window_ex_w_with_rect(
+            visible_thread,
+            "visible_ui",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert!(kernel.gwe.validate_window(visible_hwnd));
+        assert!(kernel.gwe.invalidate_window(visible_hwnd, None, true));
+        assert!(kernel.post_message_w(visible_hwnd, crate::ce::gwe::WM_USER, 0, 0));
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\visible_ui.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 68,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: visible_thread,
+            cpu: Box::new(resumable_cpu(visible_thread, 0x0050_2000)?),
+            blocked_send_id: None,
+            module_base: 0x0050_0000,
+            module_path: "\\SDMMC Disk\\INavi\\visible_ui.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\visible_ui.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let visible_process = scheduler
+            .parked_child_processes
+            .iter()
+            .find(|process| process.process_state.process_id == 68)
+            .expect("visible parked process");
+        assert!(UnicornMips::parked_process_has_visible_windows(
+            visible_process,
+            &kernel
+        ));
+        assert!(UnicornMips::parked_process_has_resumable_context(
+            visible_process
+        ));
+        assert!(UnicornMips::parked_process_has_visible_receiver_work(
+            visible_process,
+            &kernel
+        ));
+        assert!(UnicornMips::parked_process_can_resume_from_live_pump(
+            visible_process,
+            &kernel
+        ));
+        assert!(scheduler.rotate_to_live_pump_runnable_parked_process(&mut kernel));
+
+        assert_eq!(kernel.current_process_id(), 68);
+        assert_eq!(scheduler.current_thread_id, visible_thread);
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 67)
         );
 
         Ok(())
