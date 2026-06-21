@@ -1049,6 +1049,12 @@ notes when it is still needed for implementation.
      reentrant waits, abort-if-hung behavior, and `ReplyMessage` parity.
    - Keep menu and message-box behavior aligned with CE blocking,
      owner-window, topmost, cancellation, and command-routing expectations.
+   - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`: raw
+     `SetWindowLongW(GWL_STYLE)` now treats `WS_VISIBLE` bit changes as
+     show/hide visibility transitions for paint purposes, scheduling a full
+     client update when a window becomes visible and invalidating newly exposed
+     windows when it is hidden. Coverage verifies both direct GWE state and
+     raw coredll `GetUpdateRect` behavior alongside enabled-state sync.
 
 4. Complete shell notification behavior.
    - Validate `Shell_NotifyIcon` and `SHNotification*` lifetimes, taskbar

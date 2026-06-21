@@ -1947,6 +1947,52 @@ impl Gwe {
         previous
     }
 
+    fn apply_style_visibility_change(
+        &mut self,
+        hwnd: u32,
+        previous_style: u32,
+        new_style: u32,
+        was_effectively_visible: bool,
+    ) {
+        let previous_visible_bit = previous_style & WS_VISIBLE != 0;
+        let new_visible_bit = new_style & WS_VISIBLE != 0;
+        if previous_visible_bit == new_visible_bit {
+            if let Some(window) = self.windows.get_mut(&hwnd) {
+                window.visible = new_visible_bit;
+            }
+            return;
+        }
+
+        let exposed_rect = (previous_visible_bit && was_effectively_visible)
+            .then(|| {
+                self.windows
+                    .get(&hwnd)
+                    .map(|window| window.client_rect.normalized())
+            })
+            .flatten();
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return;
+        };
+        let mut paint_thread = None;
+        window.visible = new_visible_bit;
+        if new_visible_bit {
+            window.update_pending = true;
+            window.erase_pending = true;
+            let full = window.client_rect.zero_origin();
+            window.update_rects = vec![full];
+            paint_thread = Some(window.thread_id);
+        } else {
+            Self::clear_window_update(window);
+        }
+        if let Some(thread_id) = paint_thread {
+            if self.is_window_visible(hwnd) {
+                self.mark_queue_status_changed(thread_id, QS_PAINT);
+            }
+        } else if let Some(rect) = exposed_rect {
+            self.invalidate_visible_windows_in_screen_rect(rect, true, &[hwnd]);
+        }
+    }
+
     pub fn set_redraw(&mut self, hwnd: u32, enable: bool) -> bool {
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
@@ -5174,13 +5220,24 @@ impl Gwe {
     }
 
     pub fn set_window_long(&mut self, hwnd: u32, index: i32, value: u32) -> Option<u32> {
-        let window = self.windows.get_mut(&hwnd)?;
-        let slot = window_long_slot_mut(window, index)?;
-        let previous = *slot;
-        *slot = value;
-        if index == GWL_STYLE {
-            window.enabled = value & WS_DISABLED == 0;
-            window.visible = value & WS_VISIBLE != 0;
+        let was_effectively_visible = (index == GWL_STYLE).then(|| self.is_window_visible(hwnd));
+        let (previous, style_changed) = {
+            let window = self.windows.get_mut(&hwnd)?;
+            let slot = window_long_slot_mut(window, index)?;
+            let previous = *slot;
+            *slot = value;
+            if index == GWL_STYLE {
+                window.enabled = value & WS_DISABLED == 0;
+            }
+            (previous, index == GWL_STYLE)
+        };
+        if style_changed {
+            self.apply_style_visibility_change(
+                hwnd,
+                previous,
+                value,
+                was_effectively_visible.unwrap_or(false),
+            );
         }
         Some(previous)
     }
@@ -7138,6 +7195,73 @@ mod tests {
 
         assert!(gwe.show_window(foreground, false));
 
+        assert!(gwe.update_rect(foreground).is_none());
+        assert_eq!(
+            gwe.update_rect(background).unwrap().rect,
+            Rect::from_origin_size(30, 30, 80, 60)
+        );
+    }
+
+    #[test]
+    fn set_window_long_style_show_marks_window_for_paint() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "foreground",
+            None,
+            0,
+            0,
+            0,
+            Rect::from_origin_size(20, 30, 80, 60),
+        );
+        assert!(gwe.update_rect(hwnd).is_none());
+
+        let previous = gwe
+            .set_window_long(hwnd, GWL_STYLE, WS_VISIBLE)
+            .expect("style slot");
+
+        assert_eq!(previous & WS_VISIBLE, 0);
+        assert!(gwe.is_window_visible(hwnd));
+        assert_eq!(
+            gwe.update_rect(hwnd).unwrap().rect,
+            Rect::from_origin_size(0, 0, 80, 60)
+        );
+        assert_ne!(gwe.get_queue_status(1, QS_PAINT), 0);
+    }
+
+    #[test]
+    fn set_window_long_style_hide_invalidates_newly_exposed_windows() {
+        let mut gwe = Gwe::default();
+        let background = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "background",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(10, 20, 200, 120),
+        );
+        let foreground = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "foreground",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(40, 50, 80, 60),
+        );
+        assert!(gwe.validate_window(background));
+        assert!(gwe.validate_window(foreground));
+
+        let previous = gwe
+            .set_window_long(foreground, GWL_STYLE, 0)
+            .expect("style slot");
+
+        assert_ne!(previous & WS_VISIBLE, 0);
+        assert!(!gwe.is_window_visible(foreground));
         assert!(gwe.update_rect(foreground).is_none());
         assert_eq!(
             gwe.update_rect(background).unwrap().rect,

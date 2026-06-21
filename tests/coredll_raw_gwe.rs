@@ -46778,8 +46778,19 @@ fn coredll_raw_set_window_long_style_syncs_visible_and_enabled_state() -> Result
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 111_u32;
+    let rect_ptr = 0x4_8000_u32;
+    memory.map_words(rect_ptr, 4);
 
-    let hwnd = kernel.create_window_ex_w(thread_id, "STYLESET", "", None, 0, 0, 0);
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "STYLESET",
+        "",
+        None,
+        0,
+        0,
+        0,
+        Rect::from_origin_size(20, 30, 80, 60),
+    );
 
     // Window starts invisible (WS_VISIBLE not set).
     assert!(matches!(
@@ -46833,6 +46844,26 @@ fn coredll_raw_set_window_long_style_syncs_visible_and_enabled_state() -> Result
         ),
         "GWL_STYLE with WS_VISIBLE must make IsWindowVisible true"
     );
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_UPDATE_RECT,
+                [hwnd, rect_ptr, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ),
+        "GWL_STYLE adding WS_VISIBLE must schedule a full client paint"
+    );
+    assert_eq!(memory.read_i32(rect_ptr)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 80);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 60);
 
     // SetWindowLong(GWL_STYLE) adding WS_DISABLED should make IsWindowEnabled return false.
     assert!(
@@ -46875,6 +46906,86 @@ fn coredll_raw_set_window_long_style_syncs_visible_and_enabled_state() -> Result
         ),
         "GWL_STYLE with WS_DISABLED must make IsWindowEnabled false"
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_window_long_style_hide_invalidates_exposed_window() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 112_u32;
+    let rect_ptr = 0x4_9000_u32;
+    memory.map_words(rect_ptr, 4);
+
+    let background = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "STYLESET_BG",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(10, 20, 200, 120),
+    );
+    let foreground = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "STYLESET_FG",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(40, 50, 80, 60),
+    );
+    assert!(kernel.gwe.validate_window(background));
+    assert!(kernel.gwe.validate_window(foreground));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_LONG_W,
+            [foreground, GWL_STYLE as u32, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(style),
+            ..
+        } if style & WS_VISIBLE != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [foreground, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [background, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 30);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 30);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 110);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 90);
 
     Ok(())
 }
