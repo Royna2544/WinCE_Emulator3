@@ -275,6 +275,8 @@ fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> 
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 11;
+    let buffer = 0x7100;
+    memory.map_bytes(buffer, 128);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -379,6 +381,21 @@ fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> 
             ..
         }
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LOCALE_INFO_W,
+            [0x0400, 0x0006, buffer, 64],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(14),
+            ..
+        }
+    ));
+    assert_eq!(read_wide_z_from_bytes(&memory, buffer, 64), "United States");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }

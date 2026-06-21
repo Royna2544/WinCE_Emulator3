@@ -1299,6 +1299,10 @@ notes when it is still needed for implementation.
      `ConvertDefaultLocale` now read CE's
      `HKLM\SOFTWARE\Microsoft\International` `ACP`/`LCID` DWORD values with
      Korean image fallbacks instead of returning only literals.
+     `GetLocaleInfoW(LOCALE_USER_DEFAULT|LOCALE_SYSTEM_DEFAULT, ...)` now
+     resolves that same registry-backed default LCID before selecting the
+     CE image locale table, so registry-selected English defaults return the
+     advertised `0409` strings and numbers instead of always using Korean.
 
 ## Validation Gates
 

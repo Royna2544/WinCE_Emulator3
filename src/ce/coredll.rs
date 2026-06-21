@@ -21060,7 +21060,7 @@ fn get_locale_info_w_raw<M: CoredllGuestMemory>(
 
     // Accept default LCIDs plus locales advertised by the CE image's locale list.
     let lcid = match locale {
-        LOCALE_USER_DEFAULT | LOCALE_SYSTEM_DEFAULT => 0x0412u32,
+        LOCALE_USER_DEFAULT | LOCALE_SYSTEM_DEFAULT => default_lcid_raw(kernel),
         0x0412 => 0x0412,
         0x0409 => 0x0409,
         _ => {
