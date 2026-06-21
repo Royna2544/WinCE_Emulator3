@@ -4842,6 +4842,15 @@ impl UnicornMips {
             command_line,
             current_directory,
         } = parked;
+        tracing::debug!(
+            target: "ce.scheduler",
+            outgoing_process_id = kernel.current_process_id(),
+            incoming_process_id = process_state.process_id,
+            incoming_thread_id = thread_id,
+            incoming_module = %module_path,
+            requeue_current,
+            "switching to parked process"
+        );
         #[cfg(feature = "unicorn")]
         let terminal_modal_state = if !requeue_current {
             if let Some(framebuffer) = framebuffer.as_mut() {
