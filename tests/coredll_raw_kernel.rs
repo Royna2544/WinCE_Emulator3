@@ -28904,6 +28904,8 @@ fn coredll_raw_api_sets_register_query_and_verify_handles() -> Result<()> {
     const QUERY_PTR: u32 = 0x3005_0300;
     const THREAD_ID: u32 = 77;
     const API_SET_ID: u32 = 112;
+    const LEGACY_UNREGISTERED_API: u32 = 31;
+    const INVALID_API_SET_ID: u32 = 128;
     const FIRST_METHOD_ARM: u32 = 0xf102_0000;
     const APISET_SHIFT: u32 = 8;
     const APICALL_SCALE_ARM: u32 = 4;
@@ -28925,6 +28927,52 @@ fn coredll_raw_api_sets_register_query_and_verify_handles() -> Result<()> {
     memory.write_word(SIGS_PTR + 4, 0);
     memory.write_word(SIGS_PTR + 8, 0x0000_0002);
     memory.write_word(SIGS_PTR + 12, 0);
+
+    kernel.threads.set_last_error(THREAD_ID, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            THREAD_ID,
+            ORD_WAIT_FOR_APIREADY,
+            [API_SET_ID, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(THREAD_ID), WAIT_TIMEOUT);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            THREAD_ID,
+            ORD_WAIT_FOR_APIREADY,
+            [INVALID_API_SET_ID, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_FAILED),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(THREAD_ID), WAIT_FAILED);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            THREAD_ID,
+            ORD_IS_APIREADY,
+            [LEGACY_UNREGISTERED_API],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(THREAD_ID), WAIT_TIMEOUT);
 
     let api_set_handle = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -28985,6 +29033,11 @@ fn coredll_raw_api_sets_register_query_and_verify_handles() -> Result<()> {
             ..
         }
     ));
+    assert_eq!(
+        kernel.threads.get_last_error(THREAD_ID),
+        ERROR_SUCCESS,
+        "successful WaitForAPIReady leaves the existing last error unchanged"
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

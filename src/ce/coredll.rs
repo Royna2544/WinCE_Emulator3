@@ -2866,14 +2866,22 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(true))
         }
         ORD_IS_APIREADY => {
-            let ready =
-                kernel.wait_for_api_ready(raw_arg(args, 0)) == crate::ce::timer::WAIT_OBJECT_0;
-            kernel.threads.set_last_error(thread_id, 0);
+            let mut set_id = raw_arg(args, 0);
+            if (16..32).contains(&set_id) {
+                set_id = set_id.wrapping_add(80 - 16);
+            }
+            let result = kernel.wait_for_api_ready(set_id, 0);
+            if result != crate::ce::timer::WAIT_OBJECT_0 {
+                kernel.threads.set_last_error(thread_id, result);
+            }
+            let ready = result == crate::ce::timer::WAIT_OBJECT_0;
             Some(CoredllValue::Bool(ready))
         }
         ORD_WAIT_FOR_APIREADY => {
-            let result = kernel.wait_for_api_ready(raw_arg(args, 0));
-            kernel.threads.set_last_error(thread_id, 0);
+            let result = kernel.wait_for_api_ready(raw_arg(args, 0), raw_arg(args, 1));
+            if result != crate::ce::timer::WAIT_OBJECT_0 {
+                kernel.threads.set_last_error(thread_id, result);
+            }
             Some(CoredllValue::U32(result))
         }
         ORD_GET_APIADDRESS => {

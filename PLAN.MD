@@ -36,6 +36,16 @@ notes when it is still needed for implementation.
   `CreateAPIHandle` objects back to their server data. Coverage verifies
   create/register/query, readiness, encoded method addresses, valid/invalid
   API handles, and bad guest method-table validation.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\apicall.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\apis.c`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\kfuncs.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\psyscall.h`: raw
+  `WaitForAPIReady`/`IsAPIReady` now distinguish registered and built-in
+  API-set slots from valid-but-not-ready slots, return `WAIT_FAILED` for
+  out-of-range IDs, preserve CE's wait-result last-error side effect, and
+  apply the legacy `IsAPIReady` 16..31 to 80..95 service-set remap.
+  Coverage verifies unregistered, invalid, remapped legacy, and registered
+  API-set readiness paths.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\toolhelp.h`, and

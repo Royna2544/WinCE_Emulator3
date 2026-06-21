@@ -84,9 +84,39 @@ pub const CE_DEFAULT_THREAD_QUANTUM_MS: u32 = 100;
 pub const CE_NUM_API_SETS: u32 = 128;
 const CE_METHOD_MASK: u32 = 0x00ff;
 const CE_REGISTER_APISET_TYPE: u32 = 0x8000_0000;
+const CE_SH_WIN32: u32 = 0;
+const CE_SH_CURTOKEN: u32 = 3;
+const CE_HT_EVENT: u32 = 4;
+const CE_HT_MUTEX: u32 = 5;
+const CE_HT_APISET: u32 = 6;
+const CE_HT_CRITSEC: u32 = 12;
+const CE_HT_SEMAPHORE: u32 = 13;
 const CE_SH_FIRST_EXT_API_SET: u32 = 112;
 const CE_SH_FIRST_EXT_HAPI_SET: u32 = 64;
 const CE_SH_FIRST_OS_API_SET: u32 = 80;
+const CE_SH_GDI: u32 = CE_SH_FIRST_OS_API_SET;
+const CE_SH_WMGR: u32 = CE_SH_FIRST_OS_API_SET + 1;
+const CE_SH_COMM: u32 = CE_SH_FIRST_OS_API_SET + 3;
+const CE_SH_FILESYS_APIS: u32 = CE_SH_FIRST_OS_API_SET + 4;
+const CE_SH_SHELL: u32 = CE_SH_FIRST_OS_API_SET + 5;
+const CE_SH_DEVMGR_APIS: u32 = CE_SH_FIRST_OS_API_SET + 6;
+const CE_BUILTIN_READY_API_SETS: &[u32] = &[
+    CE_SH_WIN32,
+    CE_SH_CURTHREAD,
+    CE_SH_CURPROC,
+    CE_SH_CURTOKEN,
+    CE_HT_EVENT,
+    CE_HT_MUTEX,
+    CE_HT_APISET,
+    CE_HT_CRITSEC,
+    CE_HT_SEMAPHORE,
+    CE_SH_GDI,
+    CE_SH_WMGR,
+    CE_SH_COMM,
+    CE_SH_FILESYS_APIS,
+    CE_SH_SHELL,
+    CE_SH_DEVMGR_APIS,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePumpResult {
@@ -1268,16 +1298,22 @@ impl CeKernel {
         })
     }
 
-    pub fn wait_for_api_ready(&self, set_id: u32) -> u32 {
-        if set_id < CE_NUM_API_SETS {
+    pub fn is_api_set_ready(&self, set_id: u32) -> bool {
+        CE_BUILTIN_READY_API_SETS.contains(&set_id) || self.api_sets.contains_key(&set_id)
+    }
+
+    pub fn wait_for_api_ready(&self, set_id: u32, _timeout_ms: u32) -> u32 {
+        if set_id >= CE_NUM_API_SETS {
+            WAIT_FAILED
+        } else if self.is_api_set_ready(set_id) {
             WAIT_OBJECT_0
         } else {
-            WAIT_FAILED
+            WAIT_TIMEOUT
         }
     }
 
     pub fn get_api_address(&self, set_id: u32, method: u32) -> u32 {
-        if self.wait_for_api_ready(set_id) != WAIT_OBJECT_0 || method > CE_METHOD_MASK {
+        if !self.is_api_set_ready(set_id) || method > CE_METHOD_MASK {
             return 0;
         }
         ce_implicit_call_address(set_id, method)
