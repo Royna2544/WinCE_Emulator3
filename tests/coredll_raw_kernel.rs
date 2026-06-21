@@ -11,32 +11,33 @@ use wince_emulation_v3::{
             ORD_ACTIVATE_DEVICE, ORD_ACTIVATE_DEVICE_EX, ORD_BATTERY_DRVR_GET_LEVELS,
             ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION, ORD_BATTERY_GET_LIFE_TIME_INFO,
             ORD_BATTERY_NOTIFY_OF_TIME_CHANGE, ORD_BINARY_COMPRESS, ORD_BINARY_DECOMPRESS,
-            ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
+            ORD_CE_EVENT_HAS_OCCURRED, ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
             ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_MODULE_INFO, ORD_CE_GET_THREAD_PRIORITY,
-            ORD_CE_GET_THREAD_QUANTUM, ORD_CE_OPEN_FILE_HANDLE, ORD_CE_RUN_APP_AT_TIME,
-            ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM,
-            ORD_CHECK_REMOTE_DEBUGGER_PRESENT, ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD,
-            ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE, ORD_COUNT_CLIPBOARD_FORMATS,
-            ORD_CREATE_APIHANDLE, ORD_CREATE_APISET, ORD_CREATE_COMPATIBLE_DC,
-            ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W,
-            ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_DEACTIVATE_DEVICE, ORD_DEBUG_ACTIVE_PROCESS, ORD_DEBUG_ACTIVE_PROCESS_STOP,
-            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
-            ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
-            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
-            ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
-            ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
-            ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE, ORD_FILE_TIME_TO_SYSTEM_TIME,
-            ORD_FIND_CLOSE, ORD_FIND_FIRST_DEVICE, ORD_FIND_NEXT_DEVICE, ORD_FREE_LIBRARY,
-            ORD_GET_APIADDRESS, ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX,
-            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
-            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
-            ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC,
-            ORD_GET_DEVICE_BY_INDEX, ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE,
-            ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE, ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER,
-            ORD_GET_EVENT_DATA, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT,
-            ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
+            ORD_CE_GET_THREAD_QUANTUM, ORD_CE_HANDLE_APP_NOTIFICATIONS, ORD_CE_OPEN_FILE_HANDLE,
+            ORD_CE_RUN_APP_AT_EVENT, ORD_CE_RUN_APP_AT_TIME, ORD_CE_SET_THREAD_PRIORITY,
+            ORD_CE_SET_THREAD_QUANTUM, ORD_CHECK_REMOTE_DEBUGGER_PRESENT, ORD_CLEAR_COMM_ERROR,
+            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
+            ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_APIHANDLE, ORD_CREATE_APISET,
+            ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
+            ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W,
+            ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
+            ORD_DEBUG_ACTIVE_PROCESS, ORD_DEBUG_ACTIVE_PROCESS_STOP, ORD_DELETE_CRITICAL_SECTION,
+            ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON,
+            ORD_DEVICE_POWER_NOTIFY, ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W,
+            ORD_DRAW_ICON_EX, ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION,
+            ORD_ENUM_CLIPBOARD_FORMATS, ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES,
+            ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FIND_CLOSE, ORD_FIND_FIRST_DEVICE,
+            ORD_FIND_NEXT_DEVICE, ORD_FREE_LIBRARY, ORD_GET_APIADDRESS,
+            ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
+            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
+            ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_BY_INDEX,
+            ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE, ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE,
+            ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER, ORD_GET_EVENT_DATA,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
+            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
+            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
             ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_OPEN_FILE_NAME_W,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
@@ -28004,6 +28005,195 @@ fn coredll_raw_ce_run_app_at_time_tracks_replace_and_remove() -> Result<()> {
             .scheduled_app_at_time(r"\Windows\nfyApp.exe")
             .is_none()
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_ce_run_app_at_event_tracks_and_triggers_launches() -> Result<()> {
+    const NOTIFICATION_EVENT_NONE: u32 = 0;
+    const NOTIFICATION_EVENT_SYNC_END: u32 = 2;
+    const NOTIFICATION_EVENT_DEVICE_CHANGE: u32 = 7;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 18;
+    let app_path = 0x7000;
+    let app_path_same_case_key = 0x7200;
+    let suffix = 0x7400;
+    memory.map_halfwords(app_path, 96);
+    memory.map_halfwords(app_path_same_case_key, 96);
+    memory.map_halfwords(suffix, 32);
+    memory.write_wide_z(app_path, r"\Windows\nfyApp.exe");
+    memory.write_wide_z(app_path_same_case_key, r"\WINDOWS\NFYAPP.EXE");
+    memory.write_wide_z(suffix, "/ADD COM2:");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_RUN_APP_AT_EVENT,
+            [0, NOTIFICATION_EVENT_SYNC_END],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_RUN_APP_AT_EVENT,
+            [app_path, 420],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_RUN_APP_AT_EVENT,
+            [app_path, NOTIFICATION_EVENT_SYNC_END],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .scheduled_app_at_event(r"\windows\nfyapp.exe", NOTIFICATION_EVENT_SYNC_END)
+            .is_some()
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_EVENT_HAS_OCCURRED,
+            [NOTIFICATION_EVENT_SYNC_END, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(
+        launches[0].application.as_deref(),
+        Some(r"\Windows\nfyApp.exe")
+    );
+    assert_eq!(launches[0].command_line.as_deref(), Some("AppRunAfterSync"));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_RUN_APP_AT_EVENT,
+            [app_path, NOTIFICATION_EVENT_DEVICE_CHANGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_EVENT_HAS_OCCURRED,
+            [NOTIFICATION_EVENT_DEVICE_CHANGE, suffix],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(
+        launches[0].command_line.as_deref(),
+        Some("AppRunDeviceChange /ADD COM2:")
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_RUN_APP_AT_EVENT,
+            [app_path_same_case_key, NOTIFICATION_EVENT_NONE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .scheduled_app_at_event(r"\Windows\nfyApp.exe", NOTIFICATION_EVENT_SYNC_END)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .scheduled_app_at_event(r"\Windows\nfyApp.exe", NOTIFICATION_EVENT_DEVICE_CHANGE)
+            .is_none()
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_HANDLE_APP_NOTIFICATIONS,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_HANDLE_APP_NOTIFICATIONS,
+            [app_path],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.handled_app_notifications(r"\windows\nfyapp.exe"));
 
     Ok(())
 }

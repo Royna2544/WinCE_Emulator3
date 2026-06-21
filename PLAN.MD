@@ -1090,6 +1090,12 @@ notes when it is still needed for implementation.
      names and absolute `SYSTEMTIME` fields, record one scheduled launch per
      app name, replace prior requests case-insensitively, and remove an
      existing request when `pstTime` is null.
+   - `notify.h` event constants and the CE notification CETK event tests:
+     raw `CeRunAppAtEvent`/`PegRunAppAtEvent`, `CeEventHasOccurred`, and
+     `CeHandleAppNotifications` now validate app names and event IDs, track
+     event launch registrations, clear an app's registrations through
+     `NOTIFICATION_EVENT_NONE`, and queue generic process launches with CE's
+     documented event command-line prefixes when events fire.
 
 5. Harden mounted storage behavior.
    - Continue physical block-driver, cache/filter, FMD, utility-DLL,

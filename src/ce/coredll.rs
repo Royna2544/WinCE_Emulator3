@@ -4058,17 +4058,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_PEG_RUN_APP_AT_TIME | ORD_CE_RUN_APP_AT_TIME => Some(CoredllValue::Bool(
             ce_run_app_at_time_raw(kernel, memory, thread_id, args),
         )),
-        ORD_PEG_RUN_APP_AT_EVENT | ORD_CE_RUN_APP_AT_EVENT => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_PEG_RUN_APP_AT_EVENT | ORD_CE_RUN_APP_AT_EVENT => Some(CoredllValue::Bool(
+            ce_run_app_at_event_raw(kernel, memory, thread_id, args),
+        )),
         ORD_PEG_HANDLE_APP_NOTIFICATIONS | ORD_CE_HANDLE_APP_NOTIFICATIONS => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
+            Some(CoredllValue::Bool(ce_handle_app_notifications_raw(
+                kernel, memory, thread_id, args,
+            )))
         }
         ORD_PEG_GET_USER_NOTIFICATION_PREFERENCES | ORD_CE_GET_USER_NOTIFICATION_PREFERENCES => {
             kernel
@@ -4076,12 +4072,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_CE_EVENT_HAS_OCCURRED => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_CE_EVENT_HAS_OCCURRED => Some(CoredllValue::Bool(ce_event_has_occurred_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_CE_GET_USER_NOTIFICATION_HANDLES | ORD_CE_GET_USER_NOTIFICATION => {
             kernel
                 .threads
@@ -22438,27 +22431,11 @@ fn ce_run_app_at_time_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> bool {
-    const MAX_PATH_CHARS: usize = 260;
     let app_ptr = raw_arg(args, 0);
     let time_ptr = raw_arg(args, 1);
-    if app_ptr == 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
-    let Ok(app_name) = read_guest_wide_z(memory, app_ptr, MAX_PATH_CHARS) else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    let Some(app_name) = read_notification_app_name(kernel, memory, thread_id, app_ptr) else {
         return false;
     };
-    if app_name.encode_utf16().count() >= MAX_PATH_CHARS {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
     if time_ptr == 0 {
         if kernel.remove_scheduled_app_at_time(&app_name) {
             kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
@@ -22494,6 +22471,143 @@ fn ce_run_app_at_time_raw<M: CoredllGuestMemory>(
         );
         kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
         true
+    }
+}
+
+fn ce_run_app_at_event_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    const NOTIFICATION_EVENT_NONE: u32 = 0;
+
+    let app_ptr = raw_arg(args, 0);
+    let event = raw_arg(args, 1);
+    let Some(app_name) = read_notification_app_name(kernel, memory, thread_id, app_ptr) else {
+        return false;
+    };
+    if !is_valid_notification_event(event) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if event == NOTIFICATION_EVENT_NONE {
+        kernel.remove_scheduled_app_events(&app_name);
+    } else {
+        kernel.schedule_app_at_event(app_name, event);
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
+}
+
+fn ce_handle_app_notifications_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(app_name) = read_notification_app_name(kernel, memory, thread_id, raw_arg(args, 0))
+    else {
+        return false;
+    };
+    kernel.record_handled_app_notifications(app_name);
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
+}
+
+fn ce_event_has_occurred_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let event = raw_arg(args, 0);
+    let suffix_ptr = raw_arg(args, 1);
+    if !is_valid_notification_event(event) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let suffix = if suffix_ptr == 0 {
+        String::new()
+    } else {
+        match read_guest_wide_z(memory, suffix_ptr, 260) {
+            Ok(value) if value.encode_utf16().count() < 260 => value,
+            _ => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+        }
+    };
+    if let Some(prefix) = notification_event_command_prefix(event) {
+        for record in kernel.scheduled_apps_for_event(event) {
+            let command_line = if suffix.is_empty() {
+                prefix.to_owned()
+            } else {
+                format!("{prefix} {suffix}")
+            };
+            kernel.queue_process_launch(Some(record.app_name), Some(command_line));
+        }
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
+}
+
+fn read_notification_app_name<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    app_ptr: u32,
+) -> Option<String> {
+    const MAX_PATH_CHARS: usize = 260;
+    if app_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let Ok(app_name) = read_guest_wide_z(memory, app_ptr, MAX_PATH_CHARS) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    };
+    if app_name.encode_utf16().count() >= MAX_PATH_CHARS {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    Some(app_name)
+}
+
+fn is_valid_notification_event(event: u32) -> bool {
+    event <= 15
+}
+
+fn notification_event_command_prefix(event: u32) -> Option<&'static str> {
+    match event {
+        1 => Some("AppRunAfterTimeChange"),
+        2 => Some("AppRunAfterSync"),
+        3 => Some("AppRunAtAcPowerOn"),
+        4 => Some("AppRunAtAcPowerOff"),
+        5 => Some("AppRunAtNetConnect"),
+        6 => Some("AppRunAtNetDisconnect"),
+        7 => Some("AppRunDeviceChange"),
+        8 => Some("AppRunAtIrDiscovery"),
+        9 => Some("AppRunAtRs232Detect"),
+        10 => Some("AppRunAfterRestore"),
+        11 => Some("AppRunAfterWakeup"),
+        12 => Some("AppRunAfterTzChange"),
+        13 => Some("AppRunAfterExtendedEvent"),
+        14 => Some("AppRunAfterRndisFnDetected"),
+        15 => Some("AppRunAfterInternetProxyChange"),
+        _ => None,
     }
 }
 

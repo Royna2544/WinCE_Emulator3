@@ -274,6 +274,12 @@ pub struct ScheduledAppAtTime {
     pub system_time: [u16; 8],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledAppAtEvent {
+    pub app_name: String,
+    pub event: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct CeKernel {
     pub registry: Registry,
@@ -351,6 +357,8 @@ pub struct CeKernel {
     next_fsdmgr_volume_lock: u32,
     file_system_notification_callback: Option<u32>,
     scheduled_apps_at_time: BTreeMap<String, ScheduledAppAtTime>,
+    scheduled_apps_at_event: BTreeMap<(u32, String), ScheduledAppAtEvent>,
+    handled_app_notifications: BTreeSet<String>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
     system_power_state_name: Option<String>,
     system_power_state_flags: u32,
@@ -1209,6 +1217,8 @@ impl CeKernel {
             next_fsdmgr_volume_lock: 0x6d00_0001,
             file_system_notification_callback: None,
             scheduled_apps_at_time: BTreeMap::new(),
+            scheduled_apps_at_event: BTreeMap::new(),
+            handled_app_notifications: BTreeSet::new(),
             modal_dialog_results: BTreeMap::new(),
             system_power_state_name: None,
             system_power_state_flags: 0x0001_0000,
@@ -1404,6 +1414,48 @@ impl CeKernel {
     pub fn scheduled_app_at_time(&self, app_name: &str) -> Option<&ScheduledAppAtTime> {
         self.scheduled_apps_at_time
             .get(&app_name.to_ascii_lowercase())
+    }
+
+    pub fn schedule_app_at_event(&mut self, app_name: String, event: u32) {
+        let key = app_name.to_ascii_lowercase();
+        self.scheduled_apps_at_event
+            .insert((event, key), ScheduledAppAtEvent { app_name, event });
+    }
+
+    pub fn remove_scheduled_app_events(&mut self, app_name: &str) -> bool {
+        let key = app_name.to_ascii_lowercase();
+        let before = self.scheduled_apps_at_event.len();
+        self.scheduled_apps_at_event
+            .retain(|(_, app_key), _| app_key != &key);
+        self.scheduled_apps_at_event.len() != before
+    }
+
+    pub fn scheduled_app_at_event(
+        &self,
+        app_name: &str,
+        event: u32,
+    ) -> Option<&ScheduledAppAtEvent> {
+        self.scheduled_apps_at_event
+            .get(&(event, app_name.to_ascii_lowercase()))
+    }
+
+    pub fn scheduled_apps_for_event(&self, event: u32) -> Vec<ScheduledAppAtEvent> {
+        self.scheduled_apps_at_event
+            .iter()
+            .filter_map(|((scheduled_event, _), record)| {
+                (*scheduled_event == event).then_some(record.clone())
+            })
+            .collect()
+    }
+
+    pub fn record_handled_app_notifications(&mut self, app_name: String) {
+        self.handled_app_notifications
+            .insert(app_name.to_ascii_lowercase());
+    }
+
+    pub fn handled_app_notifications(&self, app_name: &str) -> bool {
+        self.handled_app_notifications
+            .contains(&app_name.to_ascii_lowercase())
     }
 
     pub fn set_system_power_state(&mut self, name: Option<String>, flags: u32) {
