@@ -4,14 +4,13 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
-- Trace the current iNavi splash/map transition generically after `COM7:`,
-  `MFS1:`, and `SMB1:` are open: the latest fresh run drains GPS and reaches
-  map-era child window creation, but the visible framebuffer still shows the
-  splash artwork, so identify the CE wait, event, message, window state, file
-  result, or readiness condition gating final map presentation.
-- Trace why the real splash window keeps receiving repeated touch/key WndProc
-  callouts without transitioning to the map UI after iNavi resumes from the
-  hidden helper-process slice.
+- Trace the current iNavi splash/map transition generically after the visible
+  UI process regains slices from the helper process: identify the CE wait,
+  event, message, window state, file result, device open, or readiness
+  condition gating final map presentation.
+- Continue live driving after the scheduler handoff fix and confirm whether
+  `COM7:`, `MFS1:`, and `SMB1:` open again before the final map presentation
+  gate; queued GPS still cannot drain until the guest opens `COM7:`.
 - Disassemble/sample the current hot guest PCs around `0x0030f54c`,
   `0x00339c8c`/`0x00339d90`, and later mapdata loaders against the real
   `iNavi.exe` to separate normal resource/image work from a repeated readiness

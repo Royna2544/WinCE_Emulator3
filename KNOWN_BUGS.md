@@ -45,12 +45,11 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
   earliest visible splash interval. The current post-COM7 path reaches GPS and
   sensor devices plus map-era child windows, but final map presentation remains
   gated while the framebuffer still shows the iNavi splash artwork.
-- Startup profiling still reaches the real `happyway_win.exe+0x7b56c`
-  traffic/shared-memory loop, but the live scheduler now resumes iNavi from
-  that helper-process slice, prioritizes ready parked waits at live-pump entry,
-  and keeps visible active processes ahead of generic parked runnable rotation.
-  The remaining delay is not explained by unreadable MessageBox UI, remote
-  input routing, or pre-COM7 sensor queuing.
+- Startup profiling still reaches real `happyway_win.exe` table/traffic
+  preparation loops, but the scheduler no longer leaves an idle visible helper
+  process ahead of a runnable visible parked UI process outside the live-pump
+  branch. The remaining delay is not explained by unreadable MessageBox UI,
+  remote input routing, or pre-COM7 sensor queuing.
 - The stale `happyway_win` escaped visible-message callout no longer remains
   in `pending-wndproc`; keep watching for fresh send-stack or wait-state leaks
   before treating the splash transition as purely app readiness.

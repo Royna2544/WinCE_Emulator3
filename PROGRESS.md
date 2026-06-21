@@ -145,6 +145,11 @@ references for historical reconstruction.
   `ERROR_IO_PENDING`/`ERROR_IO_INCOMPLETE`, and completes through
   `GetOverlappedResult` once remote serial bytes arrive. Focused kernel and raw
   coredll tests cover the event wake and byte delivery path.
+- Idle visible helper-process slices no longer keep CPU ownership ahead of a
+  runnable visible parked UI process. The scheduler now applies the visible
+  parked-process handoff outside live-pump-only paths; the 2026-06-21 release
+  validation showed active execution returning to `iNavi.exe+0x317ea0` with
+  `happyway_win` parked after the earlier `happyway_win.exe+0x47490` sample.
 
 ## Recent Validation
 
@@ -182,6 +187,10 @@ references for historical reconstruction.
 - Release/live driving with `--remote-server 192.168.0.39:8765` confirmed
   `queuedSerialBytes` dropped to zero after `COM7:` opened, followed by repeated
   `SerialRemoteDrain` and `ReadFile` records with NMEA payloads.
+- Focused Unicorn scheduler validation covers the idle visible helper handoff
+  to a visible parked process even when the handoff is not entered through the
+  live-pump-only branch. Release build with `--features unicorn` passed with
+  existing warnings.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.
