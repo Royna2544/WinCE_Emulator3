@@ -150,6 +150,10 @@ references for historical reconstruction.
   parked-process handoff outside live-pump-only paths; the 2026-06-21 release
   validation showed active execution returning to `iNavi.exe+0x317ea0` with
   `happyway_win` parked after the earlier `happyway_win.exe+0x47490` sample.
+- The live code-hook stop path now uses the same larger visible parked-process
+  predicate as the pending-timeslice decision. This covers helpers with a small
+  visible window, such as `happyway_win`, instead of only stopping helpers with
+  no visible surface.
 
 ## Recent Validation
 

@@ -7227,18 +7227,11 @@ impl UnicornMips {
             }
             if live_pump {
                 let kernel_ref = unsafe { &*kernel_ptr };
-                let active_process_id = kernel_ref.current_process_id();
-                if !Self::process_has_visible_windows(kernel_ref, active_process_id)
-                    && parked_child_processes_timeslice_hook
-                        .borrow()
-                        .iter()
-                        .any(|process| {
-                            process.process_state.process_id != active_process_id
-                                && process.thread_id != active_thread_id
-                                && Self::parked_process_can_run(process, kernel_ref)
-                                && Self::parked_process_has_visible_windows(process, kernel_ref)
-                        })
-                {
+                if Self::live_pump_active_should_yield_to_visible_parked_process(
+                    &parked_child_processes_timeslice_hook.borrow(),
+                    kernel_ref,
+                    active_thread_id,
+                ) {
                     if uc
                         .reg_write(RegisterMIPS::PC, u64::from(context_pc))
                         .is_err()
