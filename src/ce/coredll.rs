@@ -2861,7 +2861,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_SET_TIME_ZONE_INFORMATION | ORD_SET_DAYLIGHT_TIME | ORD_SET_TIME_ZONE_BIAS => {
+        ORD_SET_TIME_ZONE_INFORMATION => Some(CoredllValue::Bool(set_time_zone_information_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SET_DAYLIGHT_TIME | ORD_SET_TIME_ZONE_BIAS => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
@@ -22688,6 +22694,62 @@ fn read_system_time_fields<M: CoredllGuestMemory>(
         second: read_guest_u16(kernel, memory, thread_id, ptr.wrapping_add(12))?,
         milliseconds: read_guest_u16(kernel, memory, thread_id, ptr.wrapping_add(14))?,
     })
+}
+
+fn is_valid_absolute_system_time(fields: SystemTimeFields) -> bool {
+    fields.year >= 1601
+        && fields.month != 0
+        && fields.month <= 12
+        && fields.day != 0
+        && fields.day <= days_in_month(fields.year as i32, fields.month as i32) as u16
+        && fields.hour <= 23
+        && fields.minute <= 59
+        && fields.second <= 59
+        && fields.milliseconds <= 999
+}
+
+fn is_valid_tzi_system_time(fields: SystemTimeFields) -> bool {
+    fields.month == 0
+        || (fields.year == 0 && fields.day_of_week <= 6 && (1..=5).contains(&fields.day))
+        || is_valid_absolute_system_time(fields)
+}
+
+fn set_time_zone_information_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    time_zone_information_ptr: u32,
+) -> bool {
+    if time_zone_information_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(standard_date) = read_system_time_fields(
+        kernel,
+        memory,
+        thread_id,
+        time_zone_information_ptr.wrapping_add(68),
+    ) else {
+        return false;
+    };
+    let Some(daylight_date) = read_system_time_fields(
+        kernel,
+        memory,
+        thread_id,
+        time_zone_information_ptr.wrapping_add(152),
+    ) else {
+        return false;
+    };
+    if !is_valid_tzi_system_time(standard_date) || !is_valid_tzi_system_time(daylight_date) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn system_time_to_file_time_raw<M: CoredllGuestMemory>(
@@ -66573,6 +66635,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetLocalTime",
     "GetSystemTimeAsFileTime",
     "FileTimeToSystemTime",
+    "SetTimeZoneInformation",
     "GetTickCount",
     "QueryPerformanceCounter",
     "QueryPerformanceFrequency",

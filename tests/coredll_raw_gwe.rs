@@ -113,8 +113,8 @@ use wince_emulation_v3::{
             ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_PIXEL,
             ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_RECT_RGN, ORD_SET_ROP2,
             ORD_SET_STRETCH_BLT_MODE, ORD_SET_SYS_COLORS, ORD_SET_SYSTEM_TIME, ORD_SET_TEXT_ALIGN,
-            ORD_SET_TEXT_CHARACTER_EXTRA, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
-            ORD_SET_VIEWPORT_ORG_EX, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_ORG_EX,
+            ORD_SET_TEXT_CHARACTER_EXTRA, ORD_SET_TEXT_COLOR, ORD_SET_TIME_ZONE_INFORMATION,
+            ORD_SET_TIMER, ORD_SET_VIEWPORT_ORG_EX, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_ORG_EX,
             ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_CARET,
             ORD_SHOW_WINDOW, ORD_SHSIP_PREFERENCE_I, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
             ORD_START_DOC_W, ORD_START_PAGE, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS,
@@ -45186,6 +45186,141 @@ fn coredll_raw_set_system_time_broadcasts_wm_timechange() -> Result<()> {
     assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_TIMECHANGE);
     assert_eq!(memory.read_u32(msg_ptr + 8)?, 0);
     assert_eq!(memory.read_u32(msg_ptr + 12)?, 0);
+
+    Ok(())
+}
+
+fn write_system_time_fields(
+    memory: &mut TestGuestMemory,
+    ptr: u32,
+    year: u16,
+    month: u16,
+    day_of_week: u16,
+    day: u16,
+) -> Result<()> {
+    memory.write_u16(ptr, year)?;
+    memory.write_u16(ptr + 2, month)?;
+    memory.write_u16(ptr + 4, day_of_week)?;
+    memory.write_u16(ptr + 6, day)?;
+    memory.write_u16(ptr + 8, 2)?;
+    memory.write_u16(ptr + 10, 0)?;
+    memory.write_u16(ptr + 12, 0)?;
+    memory.write_u16(ptr + 14, 0)?;
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_time_zone_information_validates_transition_dates() -> Result<()> {
+    const TZI_PTR: u32 = 0xa500;
+    const STANDARD_DATE: u32 = TZI_PTR + 68;
+    const DAYLIGHT_DATE: u32 = TZI_PTR + 152;
+    const THREAD_ID: u32 = 92;
+    const ERROR_SUCCESS: u32 = 0;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    memory.map_words(TZI_PTR, 43);
+    memory.map_halfwords(STANDARD_DATE, 8);
+    memory.map_halfwords(DAYLIGHT_DATE, 8);
+
+    // CE accepts recurring transition dates when wYear is zero, wDayOfWeek is
+    // 0..6, and wDay is the 1st through 5th occurrence in the month.
+    write_system_time_fields(&mut memory, STANDARD_DATE, 0, 10, 0, 5)?;
+    write_system_time_fields(&mut memory, DAYLIGHT_DATE, 0, 4, 0, 1)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            THREAD_ID,
+            ORD_SET_TIME_ZONE_INFORMATION,
+            [TZI_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(THREAD_ID), ERROR_SUCCESS);
+
+    // An absolute SYSTEMTIME follows normal SystemTimeToFileTime validation.
+    write_system_time_fields(&mut memory, STANDARD_DATE, 2024, 2, 4, 29)?;
+    write_system_time_fields(&mut memory, DAYLIGHT_DATE, 2024, 11, 0, 3)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            THREAD_ID,
+            ORD_SET_TIME_ZONE_INFORMATION,
+            [TZI_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(THREAD_ID), ERROR_SUCCESS);
+
+    // Recurring dates reject impossible occurrence/day-of-week values.
+    write_system_time_fields(&mut memory, STANDARD_DATE, 0, 10, 7, 5)?;
+    write_system_time_fields(&mut memory, DAYLIGHT_DATE, 0, 4, 0, 1)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            THREAD_ID,
+            ORD_SET_TIME_ZONE_INFORMATION,
+            [TZI_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(THREAD_ID),
+        ERROR_INVALID_PARAMETER
+    );
+
+    // Absolute invalid calendar dates are rejected through the same CE path.
+    write_system_time_fields(&mut memory, STANDARD_DATE, 2023, 2, 2, 29)?;
+    write_system_time_fields(&mut memory, DAYLIGHT_DATE, 0, 4, 0, 1)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            THREAD_ID,
+            ORD_SET_TIME_ZONE_INFORMATION,
+            [TZI_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(THREAD_ID),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            THREAD_ID,
+            ORD_SET_TIME_ZONE_INFORMATION,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(THREAD_ID),
+        ERROR_INVALID_PARAMETER
+    );
 
     Ok(())
 }

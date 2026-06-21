@@ -1280,6 +1280,14 @@ notes when it is still needed for implementation.
      surface to yield to a larger runnable parked route surface while preserving
      queued active visible-window work.
 
+8. Close core time and NLS parity gaps.
+   - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\time.c` and
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\time.c`: raw
+     `SetTimeZoneInformation` now follows CE's transition-date validation
+     before reporting success, accepting disabled or recurring DST transition
+     dates and rejecting malformed recurring or absolute `SYSTEMTIME` fields
+     with `ERROR_INVALID_PARAMETER`.
+
 ## Validation Gates
 
 - Run `cargo fmt` or targeted `rustfmt` after Rust edits.
