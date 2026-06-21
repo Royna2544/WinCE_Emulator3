@@ -11,12 +11,15 @@ use wince_emulation_v3::{
             ORD_ACTIVATE_DEVICE, ORD_ACTIVATE_DEVICE_EX, ORD_BATTERY_DRVR_GET_LEVELS,
             ORD_BATTERY_DRVR_SUPPORTS_CHANGE_NOTIFICATION, ORD_BATTERY_GET_LIFE_TIME_INFO,
             ORD_BATTERY_NOTIFY_OF_TIME_CHANGE, ORD_BINARY_COMPRESS, ORD_BINARY_DECOMPRESS,
-            ORD_CE_EVENT_HAS_OCCURRED, ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
+            ORD_CE_CLEAR_USER_NOTIFICATION, ORD_CE_EVENT_HAS_OCCURRED,
+            ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
             ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_MODULE_INFO, ORD_CE_GET_THREAD_PRIORITY,
-            ORD_CE_GET_THREAD_QUANTUM, ORD_CE_HANDLE_APP_NOTIFICATIONS, ORD_CE_OPEN_FILE_HANDLE,
-            ORD_CE_RUN_APP_AT_EVENT, ORD_CE_RUN_APP_AT_TIME, ORD_CE_SET_THREAD_PRIORITY,
-            ORD_CE_SET_THREAD_QUANTUM, ORD_CHECK_REMOTE_DEBUGGER_PRESENT, ORD_CLEAR_COMM_ERROR,
-            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
+            ORD_CE_GET_THREAD_QUANTUM, ORD_CE_GET_USER_NOTIFICATION,
+            ORD_CE_GET_USER_NOTIFICATION_HANDLES, ORD_CE_HANDLE_APP_NOTIFICATIONS,
+            ORD_CE_OPEN_FILE_HANDLE, ORD_CE_RUN_APP_AT_EVENT, ORD_CE_RUN_APP_AT_TIME,
+            ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM, ORD_CE_SET_USER_NOTIFICATION,
+            ORD_CE_SET_USER_NOTIFICATION_EX, ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
+            ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
             ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_APIHANDLE, ORD_CREATE_APISET,
             ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
             ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W,
@@ -27869,6 +27872,44 @@ fn write_system_time_fields(memory: &mut TestGuestMemory, ptr: u32, fields: [u16
     }
 }
 
+fn write_ce_user_notification(
+    memory: &mut TestGuestMemory,
+    ptr: u32,
+    flags: u32,
+    title: u32,
+    text: u32,
+    sound: u32,
+    max_sound: u32,
+) {
+    memory.map_words(ptr, 6);
+    memory.write_word(ptr, flags);
+    memory.write_word(ptr + 4, title);
+    memory.write_word(ptr + 8, text);
+    memory.write_word(ptr + 12, sound);
+    memory.write_word(ptr + 16, max_sound);
+    memory.write_word(ptr + 20, 0);
+}
+
+fn write_ce_notification_trigger(
+    memory: &mut TestGuestMemory,
+    ptr: u32,
+    trigger_type: u32,
+    event: u32,
+    app: u32,
+    args: u32,
+    start_time: [u16; 8],
+) {
+    memory.map_words(ptr, 13);
+    memory.map_halfwords(ptr + 20, 16);
+    memory.write_word(ptr, 52);
+    memory.write_word(ptr + 4, trigger_type);
+    memory.write_word(ptr + 8, event);
+    memory.write_word(ptr + 12, app);
+    memory.write_word(ptr + 16, args);
+    write_system_time_fields(memory, ptr + 20, start_time);
+    write_system_time_fields(memory, ptr + 36, [0; 8]);
+}
+
 #[test]
 fn coredll_raw_ce_run_app_at_time_tracks_replace_and_remove() -> Result<()> {
     let table = CoredllExportTable::default();
@@ -28194,6 +28235,356 @@ fn coredll_raw_ce_run_app_at_event_tracks_and_triggers_launches() -> Result<()> 
         }
     ));
     assert!(kernel.handled_app_notifications(r"\windows\nfyapp.exe"));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_user_notifications_store_enumerate_get_and_clear() -> Result<()> {
+    const PUN_DIALOG: u32 = 0x0000_0004;
+    const PUN_SOUND: u32 = 0x0000_0008;
+    const CNT_TIME: u32 = 2;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 18;
+    let app_path = 0x7000;
+    let title = 0x7200;
+    let text = 0x7400;
+    let sound = 0x7600;
+    let system_time = 0x7800;
+    let invalid_time = 0x7900;
+    let user = 0x7a00;
+    let invalid_sound_user = 0x7b00;
+    let trigger = 0x7c00;
+    let args = 0x7e00;
+    let handles = 0x3000_1000;
+    let needed = 0x3000_1100;
+    let out = 0x3000_2000;
+    memory.map_halfwords(app_path, 96);
+    memory.map_halfwords(title, 64);
+    memory.map_halfwords(text, 64);
+    memory.map_halfwords(sound, 64);
+    memory.map_halfwords(args, 64);
+    memory.map_halfwords(system_time, 8);
+    memory.map_halfwords(invalid_time, 8);
+    memory.write_wide_z(app_path, r"\Windows\nfyApp.exe");
+    memory.write_wide_z(title, "CeSetUserNotification");
+    memory.write_wide_z(text, "Notification BVT");
+    memory.write_wide_z(sound, "default");
+    memory.write_wide_z(args, "route=home");
+    write_system_time_fields(&mut memory, system_time, [2026, 6, 0, 21, 10, 30, 0, 0]);
+    write_system_time_fields(&mut memory, invalid_time, [2026, 13, 0, 21, 10, 30, 0, 0]);
+    write_ce_user_notification(&mut memory, user, PUN_DIALOG, title, text, 0, 260);
+    write_ce_user_notification(&mut memory, invalid_sound_user, PUN_SOUND, 0, 0, 0, 260);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_SET_USER_NOTIFICATION,
+            [0xdead, app_path, system_time, user],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_SET_USER_NOTIFICATION,
+            [0, 0, system_time, user],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_SET_USER_NOTIFICATION,
+            [0, app_path, invalid_time, user],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_SET_USER_NOTIFICATION,
+            [0, app_path, system_time, invalid_sound_user],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    let first = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE_SET_USER_NOTIFICATION,
+        [0, app_path, system_time, user],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("unexpected CeSetUserNotification result: {other:?}"),
+    };
+    assert_ne!(first, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_HANDLES,
+            [0, 0, needed],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(needed)?, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_HANDLES,
+            [handles, 0, needed],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_HANDLES,
+            [handles, 1, needed],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(handles)?, first);
+    assert_eq!(memory.read_u32(needed)?, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION,
+            [first, 0, needed, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    let required = memory.read_u32(needed)?;
+    assert!(required > 16 + 52);
+    assert!(required < 500);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION,
+            [first, required - 1, needed, out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION,
+            [first, required, needed, out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(out)?, first);
+    assert_eq!(memory.read_u32(out + 4)?, 0);
+    let trigger_out = memory.read_u32(out + 8)?;
+    let user_out = memory.read_u32(out + 12)?;
+    assert_eq!(trigger_out, out + 16);
+    assert_eq!(user_out, out + 16 + 52);
+    assert_eq!(memory.read_u32(trigger_out)?, 52);
+    assert_eq!(memory.read_u32(trigger_out + 4)?, 4);
+    assert_eq!(
+        memory.read_wide_z(memory.read_u32(trigger_out + 12)?, 96),
+        r"\Windows\nfyApp.exe"
+    );
+    assert_eq!(memory.read_u16(trigger_out + 20)?, 2026);
+    assert_eq!(memory.read_u16(trigger_out + 22)?, 6);
+    assert_eq!(memory.read_u32(user_out)?, PUN_DIALOG);
+    assert_eq!(
+        memory.read_wide_z(memory.read_u32(user_out + 4)?, 64),
+        "CeSetUserNotification"
+    );
+    assert_eq!(
+        memory.read_wide_z(memory.read_u32(user_out + 8)?, 64),
+        "Notification BVT"
+    );
+
+    write_ce_notification_trigger(
+        &mut memory,
+        trigger,
+        CNT_TIME,
+        0,
+        app_path,
+        args,
+        [2026, 6, 0, 21, 11, 0, 0, 0],
+    );
+    let replaced = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE_SET_USER_NOTIFICATION_EX,
+        [first, trigger, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("unexpected CeSetUserNotificationEx result: {other:?}"),
+    };
+    assert_eq!(replaced, first);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION,
+            [first, required, needed, out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let trigger_out = memory.read_u32(out + 8)?;
+    assert_eq!(memory.read_u32(out + 12)?, 0);
+    assert_eq!(memory.read_u32(trigger_out + 4)?, CNT_TIME);
+    assert_eq!(
+        memory.read_wide_z(memory.read_u32(trigger_out + 16)?, 64),
+        "route=home"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_CLEAR_USER_NOTIFICATION,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_CLEAR_USER_NOTIFICATION,
+            [first],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_CLEAR_USER_NOTIFICATION,
+            [first],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
 
     Ok(())
 }

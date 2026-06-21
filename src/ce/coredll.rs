@@ -29,7 +29,7 @@ use crate::{
             CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
             MessageQueueOptions, MessageQueueReadStatus, MessageQueueWriteStatus,
             PendingOverlappedSerialRead, ToolhelpModuleSnapshot, ToolhelpProcessSnapshot,
-            ToolhelpThreadSnapshot,
+            ToolhelpThreadSnapshot, UserNotificationAction, UserNotificationTrigger,
         },
         keybd::{
             KBDI_AUTOREPEAT_INFO_ID, KBDI_AUTOREPEAT_SELECTIONS_INFO_ID, KBDI_KEYBOARD_STATUS_ID,
@@ -4040,20 +4040,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::U32(0))
         }
-        // CE/Peg user notifications — no notification service in emulator.
         ORD_PEG_SET_USER_NOTIFICATION
         | ORD_CE_SET_USER_NOTIFICATION
-        | ORD_CE_SET_USER_NOTIFICATION_EX => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        | ORD_CE_SET_USER_NOTIFICATION_EX => Some(CoredllValue::Handle(
+            ce_set_user_notification_raw(kernel, memory, thread_id, export.ordinal, args),
+        )),
         ORD_PEG_CLEAR_USER_NOTIFICATION | ORD_CE_CLEAR_USER_NOTIFICATION => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
+            Some(CoredllValue::Bool(ce_clear_user_notification_raw(
+                kernel,
+                thread_id,
+                raw_arg(args, 0),
+            )))
         }
         ORD_PEG_RUN_APP_AT_TIME | ORD_CE_RUN_APP_AT_TIME => Some(CoredllValue::Bool(
             ce_run_app_at_time_raw(kernel, memory, thread_id, args),
@@ -4075,12 +4072,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CE_EVENT_HAS_OCCURRED => Some(CoredllValue::Bool(ce_event_has_occurred_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_CE_GET_USER_NOTIFICATION_HANDLES | ORD_CE_GET_USER_NOTIFICATION => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
+        ORD_CE_GET_USER_NOTIFICATION_HANDLES => Some(CoredllValue::Bool(
+            ce_get_user_notification_handles_raw(kernel, memory, thread_id, args),
+        )),
+        ORD_CE_GET_USER_NOTIFICATION => Some(CoredllValue::Bool(ce_get_user_notification_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_CE_FREE_NOTIFICATION => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
@@ -22472,6 +22469,545 @@ fn ce_run_app_at_time_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
         true
     }
+}
+
+fn ce_set_user_notification_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ordinal: u32,
+    args: &[u32],
+) -> u32 {
+    let existing_handle = raw_arg(args, 0);
+    let (trigger, action) = if ordinal == ORD_CE_SET_USER_NOTIFICATION_EX {
+        let trigger_ptr = raw_arg(args, 1);
+        if trigger_ptr == 0 {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        let Some(trigger) = read_user_notification_trigger(kernel, memory, thread_id, trigger_ptr)
+        else {
+            return 0;
+        };
+        let Some(action) =
+            read_optional_user_notification_action(kernel, memory, thread_id, raw_arg(args, 2))
+        else {
+            return 0;
+        };
+        (trigger, action)
+    } else {
+        let app_ptr = raw_arg(args, 1);
+        let time_ptr = raw_arg(args, 2);
+        let action_ptr = raw_arg(args, 3);
+        if time_ptr == 0 {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        let Some(app_name) = read_notification_app_name(kernel, memory, thread_id, app_ptr) else {
+            return 0;
+        };
+        let Some(fields) = read_system_time_fields(kernel, memory, thread_id, time_ptr) else {
+            return 0;
+        };
+        if !is_valid_absolute_system_time(fields) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        let Some(action) =
+            read_optional_user_notification_action(kernel, memory, thread_id, action_ptr)
+        else {
+            return 0;
+        };
+        (
+            UserNotificationTrigger {
+                trigger_type: 4,
+                event: 0,
+                application: Some(app_name),
+                arguments: None,
+                start_time: system_time_fields_to_array(fields),
+                end_time: [0; 8],
+            },
+            action,
+        )
+    };
+
+    let Some(handle) = kernel.set_user_notification(existing_handle, trigger, action) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    handle
+}
+
+fn ce_clear_user_notification_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    if handle == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if !kernel.clear_user_notification(handle) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
+}
+
+fn ce_get_user_notification_handles_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handles_ptr = raw_arg(args, 0);
+    let handle_capacity = raw_arg(args, 1);
+    let needed_ptr = raw_arg(args, 2);
+    if needed_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let handles = kernel.user_notification_handles();
+    if !write_guest_u32(kernel, memory, thread_id, needed_ptr, handles.len() as u32) {
+        return false;
+    }
+    if handles_ptr == 0 {
+        if handle_capacity == 0 {
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            return true;
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if handle_capacity < handles.len() as u32 {
+        for (index, handle) in handles.iter().take(handle_capacity as usize).enumerate() {
+            if !write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                handles_ptr.wrapping_add((index as u32) * 4),
+                *handle,
+            ) {
+                return false;
+            }
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER_LOCAL);
+        return false;
+    }
+    for (index, handle) in handles.iter().enumerate() {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            handles_ptr.wrapping_add((index as u32) * 4),
+            *handle,
+        ) {
+            return false;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
+}
+
+fn ce_get_user_notification_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let buffer_size = raw_arg(args, 1);
+    let needed_ptr = raw_arg(args, 2);
+    let buffer_ptr = raw_arg(args, 3);
+    let Some(record) = kernel.user_notification(handle).cloned() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let required = user_notification_serialized_size(&record.trigger, record.action.as_ref());
+    if needed_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, needed_ptr, required) {
+        return false;
+    }
+    if buffer_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if buffer_size < required {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER_LOCAL);
+        return false;
+    }
+    if !write_user_notification_record(kernel, memory, thread_id, buffer_ptr, &record) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    true
+}
+
+fn read_user_notification_trigger<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+) -> Option<UserNotificationTrigger> {
+    const CE_NOTIFICATION_TRIGGER_SIZE: u32 = 52;
+    const CNT_EVENT: u32 = 1;
+    const CNT_TIME: u32 = 2;
+    const CNT_PERIOD: u32 = 3;
+    const CNT_CLASSICTIME: u32 = 4;
+
+    let size = read_guest_u32(kernel, memory, thread_id, ptr)?;
+    if size != CE_NOTIFICATION_TRIGGER_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let trigger_type = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(4))?;
+    if !matches!(
+        trigger_type,
+        CNT_EVENT | CNT_TIME | CNT_PERIOD | CNT_CLASSICTIME
+    ) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let event = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(8))?;
+    if trigger_type == CNT_EVENT && !is_valid_notification_event(event) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let app_ptr = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(12))?;
+    let args_ptr = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(16))?;
+    let start = read_system_time_fields(kernel, memory, thread_id, ptr.wrapping_add(20))?;
+    let end = read_system_time_fields(kernel, memory, thread_id, ptr.wrapping_add(36))?;
+    if trigger_type != CNT_EVENT && !is_valid_absolute_system_time(start) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    if trigger_type == CNT_PERIOD && !is_valid_absolute_system_time(end) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    Some(UserNotificationTrigger {
+        trigger_type,
+        event,
+        application: read_optional_notification_wide(kernel, memory, thread_id, app_ptr)?,
+        arguments: read_optional_notification_wide(kernel, memory, thread_id, args_ptr)?,
+        start_time: system_time_fields_to_array(start),
+        end_time: system_time_fields_to_array(end),
+    })
+}
+
+fn read_optional_user_notification_action<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+) -> Option<Option<UserNotificationAction>> {
+    const PUN_SOUND: u32 = 0x0000_0008;
+    if ptr == 0 {
+        return Some(None);
+    }
+    let action_flags = read_guest_u32(kernel, memory, thread_id, ptr)?;
+    let title_ptr = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(4))?;
+    let text_ptr = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(8))?;
+    let sound_ptr = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(12))?;
+    let max_sound = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(16))?;
+    let expansion = read_guest_u32(kernel, memory, thread_id, ptr.wrapping_add(20))?;
+    if action_flags & PUN_SOUND != 0 && sound_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    Some(Some(UserNotificationAction {
+        action_flags,
+        dialog_title: read_optional_notification_wide(kernel, memory, thread_id, title_ptr)?,
+        dialog_text: read_optional_notification_wide(kernel, memory, thread_id, text_ptr)?,
+        sound: read_optional_notification_wide(kernel, memory, thread_id, sound_ptr)?,
+        max_sound,
+        expansion,
+    }))
+}
+
+fn read_optional_notification_wide<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+) -> Option<Option<String>> {
+    if ptr == 0 {
+        return Some(None);
+    }
+    match read_guest_wide_z(memory, ptr, 4096) {
+        Ok(value) => Some(Some(value)),
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            None
+        }
+    }
+}
+
+fn user_notification_serialized_size(
+    trigger: &UserNotificationTrigger,
+    action: Option<&UserNotificationAction>,
+) -> u32 {
+    let mut size = 16 + 52 + action.map(|_| 24).unwrap_or(0);
+    size += optional_wide_serialized_len(trigger.application.as_deref());
+    size += optional_wide_serialized_len(trigger.arguments.as_deref());
+    if let Some(action) = action {
+        size += optional_wide_serialized_len(action.dialog_title.as_deref());
+        size += optional_wide_serialized_len(action.dialog_text.as_deref());
+        size += optional_wide_serialized_len(action.sound.as_deref());
+    }
+    size
+}
+
+fn optional_wide_serialized_len(text: Option<&str>) -> u32 {
+    text.map(|value| align4(((value.encode_utf16().count() as u32) + 1) * 2))
+        .unwrap_or(0)
+}
+
+fn align4(value: u32) -> u32 {
+    (value + 3) & !3
+}
+
+fn write_user_notification_record<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    base: u32,
+    record: &crate::ce::kernel::UserNotificationRecord,
+) -> bool {
+    let trigger_ptr = base.wrapping_add(16);
+    let action_ptr = record
+        .action
+        .as_ref()
+        .map(|_| trigger_ptr.wrapping_add(52))
+        .unwrap_or(0);
+    let mut string_cursor = trigger_ptr
+        .wrapping_add(52)
+        .wrapping_add(record.action.as_ref().map(|_| 24).unwrap_or(0));
+    let app_ptr = write_optional_serialized_wide(
+        kernel,
+        memory,
+        thread_id,
+        &mut string_cursor,
+        record.trigger.application.as_deref(),
+    );
+    let args_ptr = write_optional_serialized_wide(
+        kernel,
+        memory,
+        thread_id,
+        &mut string_cursor,
+        record.trigger.arguments.as_deref(),
+    );
+    let (title_ptr, text_ptr, sound_ptr) = if let Some(action) = record.action.as_ref() {
+        (
+            write_optional_serialized_wide(
+                kernel,
+                memory,
+                thread_id,
+                &mut string_cursor,
+                action.dialog_title.as_deref(),
+            ),
+            write_optional_serialized_wide(
+                kernel,
+                memory,
+                thread_id,
+                &mut string_cursor,
+                action.dialog_text.as_deref(),
+            ),
+            write_optional_serialized_wide(
+                kernel,
+                memory,
+                thread_id,
+                &mut string_cursor,
+                action.sound.as_deref(),
+            ),
+        )
+    } else {
+        (0, 0, 0)
+    };
+    if app_ptr == u32::MAX || args_ptr == u32::MAX || title_ptr == u32::MAX {
+        return false;
+    }
+    if text_ptr == u32::MAX || sound_ptr == u32::MAX {
+        return false;
+    }
+
+    let mut ok = write_guest_u32(kernel, memory, thread_id, base, record.handle)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            base.wrapping_add(4),
+            record.status,
+        )
+        && write_guest_u32(kernel, memory, thread_id, base.wrapping_add(8), trigger_ptr)
+        && write_guest_u32(kernel, memory, thread_id, base.wrapping_add(12), action_ptr)
+        && write_guest_u32(kernel, memory, thread_id, trigger_ptr, 52)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            trigger_ptr.wrapping_add(4),
+            record.trigger.trigger_type,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            trigger_ptr.wrapping_add(8),
+            record.trigger.event,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            trigger_ptr.wrapping_add(12),
+            app_ptr,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            trigger_ptr.wrapping_add(16),
+            args_ptr,
+        )
+        && write_notification_system_time(
+            kernel,
+            memory,
+            thread_id,
+            trigger_ptr.wrapping_add(20),
+            record.trigger.start_time,
+        )
+        && write_notification_system_time(
+            kernel,
+            memory,
+            thread_id,
+            trigger_ptr.wrapping_add(36),
+            record.trigger.end_time,
+        );
+    if let Some(action) = record.action.as_ref() {
+        ok = ok
+            && write_guest_u32(kernel, memory, thread_id, action_ptr, action.action_flags)
+            && write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                action_ptr.wrapping_add(4),
+                title_ptr,
+            )
+            && write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                action_ptr.wrapping_add(8),
+                text_ptr,
+            )
+            && write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                action_ptr.wrapping_add(12),
+                sound_ptr,
+            )
+            && write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                action_ptr.wrapping_add(16),
+                action.max_sound,
+            )
+            && write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                action_ptr.wrapping_add(20),
+                action.expansion,
+            );
+    }
+    ok
+}
+
+fn write_optional_serialized_wide<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    cursor: &mut u32,
+    text: Option<&str>,
+) -> u32 {
+    let Some(text) = text else {
+        return 0;
+    };
+    let ptr = *cursor;
+    if !write_guest_wide_z(kernel, memory, thread_id, ptr, text) {
+        return u32::MAX;
+    }
+    *cursor = cursor.wrapping_add(optional_wide_serialized_len(Some(text)));
+    ptr
+}
+
+fn write_notification_system_time<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    ptr: u32,
+    fields: [u16; 8],
+) -> bool {
+    fields.into_iter().enumerate().all(|(index, value)| {
+        write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add((index as u32) * 2),
+            value,
+        )
+    })
+}
+
+fn system_time_fields_to_array(fields: SystemTimeFields) -> [u16; 8] {
+    [
+        fields.year,
+        fields.month,
+        fields.day_of_week,
+        fields.day,
+        fields.hour,
+        fields.minute,
+        fields.second,
+        fields.milliseconds,
+    ]
 }
 
 fn ce_run_app_at_event_raw<M: CoredllGuestMemory>(

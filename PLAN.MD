@@ -1090,12 +1090,22 @@ notes when it is still needed for implementation.
      names and absolute `SYSTEMTIME` fields, record one scheduled launch per
      app name, replace prior requests case-insensitively, and remove an
      existing request when `pstTime` is null.
-   - `notify.h` event constants and the CE notification CETK event tests:
-     raw `CeRunAppAtEvent`/`PegRunAppAtEvent`, `CeEventHasOccurred`, and
-     `CeHandleAppNotifications` now validate app names and event IDs, track
-     event launch registrations, clear an app's registrations through
-     `NOTIFICATION_EVENT_NONE`, and queue generic process launches with CE's
-     documented event command-line prefixes when events fire.
+  - `notify.h` event constants and the CE notification CETK event tests:
+    raw `CeRunAppAtEvent`/`PegRunAppAtEvent`, `CeEventHasOccurred`, and
+    `CeHandleAppNotifications` now validate app names and event IDs, track
+    event launch registrations, clear an app's registrations through
+    `NOTIFICATION_EVENT_NONE`, and queue generic process launches with CE's
+    documented event command-line prefixes when events fire.
+  - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\TNOTIFY\tnotify.cpp`,
+    `C:\WINCE600\PUBLIC\COMMON\SDK\INC\notify.h`, `notifdev.h`, and the CE
+    notification CETK tests: raw `CeSetUserNotification`,
+    `CeSetUserNotificationEx`, `CeClearUserNotification`,
+    `CeGetUserNotificationHandles`, and `CeGetUserNotification` now retain
+    CE-shaped notification records, validate handles, trigger sizes/types,
+    absolute `SYSTEMTIME` fields, app names, and sound pointers, enumerate
+    outstanding notification handles, serialize app-visible
+    `CE_NOTIFICATION_INFO_HEADER`/trigger/user structures with embedded wide
+    strings, and reject repeated clears.
 
 5. Harden mounted storage behavior.
    - Continue physical block-driver, cache/filter, FMD, utility-DLL,

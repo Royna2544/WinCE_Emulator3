@@ -280,6 +280,34 @@ pub struct ScheduledAppAtEvent {
     pub event: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserNotificationTrigger {
+    pub trigger_type: u32,
+    pub event: u32,
+    pub application: Option<String>,
+    pub arguments: Option<String>,
+    pub start_time: [u16; 8],
+    pub end_time: [u16; 8],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserNotificationAction {
+    pub action_flags: u32,
+    pub dialog_title: Option<String>,
+    pub dialog_text: Option<String>,
+    pub sound: Option<String>,
+    pub max_sound: u32,
+    pub expansion: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserNotificationRecord {
+    pub handle: u32,
+    pub trigger: UserNotificationTrigger,
+    pub action: Option<UserNotificationAction>,
+    pub status: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct CeKernel {
     pub registry: Registry,
@@ -359,6 +387,8 @@ pub struct CeKernel {
     scheduled_apps_at_time: BTreeMap<String, ScheduledAppAtTime>,
     scheduled_apps_at_event: BTreeMap<(u32, String), ScheduledAppAtEvent>,
     handled_app_notifications: BTreeSet<String>,
+    user_notifications: BTreeMap<u32, UserNotificationRecord>,
+    next_user_notification_handle: u32,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
     system_power_state_name: Option<String>,
     system_power_state_flags: u32,
@@ -1219,6 +1249,8 @@ impl CeKernel {
             scheduled_apps_at_time: BTreeMap::new(),
             scheduled_apps_at_event: BTreeMap::new(),
             handled_app_notifications: BTreeSet::new(),
+            user_notifications: BTreeMap::new(),
+            next_user_notification_handle: 0x6e00_0001,
             modal_dialog_results: BTreeMap::new(),
             system_power_state_name: None,
             system_power_state_flags: 0x0001_0000,
@@ -1456,6 +1488,45 @@ impl CeKernel {
     pub fn handled_app_notifications(&self, app_name: &str) -> bool {
         self.handled_app_notifications
             .contains(&app_name.to_ascii_lowercase())
+    }
+
+    pub fn set_user_notification(
+        &mut self,
+        handle: u32,
+        trigger: UserNotificationTrigger,
+        action: Option<UserNotificationAction>,
+    ) -> Option<u32> {
+        let handle = if handle == 0 {
+            let next = self.next_user_notification_handle;
+            self.next_user_notification_handle = self.next_user_notification_handle.wrapping_add(1);
+            next
+        } else if self.user_notifications.contains_key(&handle) {
+            handle
+        } else {
+            return None;
+        };
+        self.user_notifications.insert(
+            handle,
+            UserNotificationRecord {
+                handle,
+                trigger,
+                action,
+                status: 0,
+            },
+        );
+        Some(handle)
+    }
+
+    pub fn clear_user_notification(&mut self, handle: u32) -> bool {
+        self.user_notifications.remove(&handle).is_some()
+    }
+
+    pub fn user_notification(&self, handle: u32) -> Option<&UserNotificationRecord> {
+        self.user_notifications.get(&handle)
+    }
+
+    pub fn user_notification_handles(&self) -> Vec<u32> {
+        self.user_notifications.keys().copied().collect()
     }
 
     pub fn set_system_power_state(&mut self, name: Option<String>, flags: u32) {
