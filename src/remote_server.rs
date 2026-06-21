@@ -528,6 +528,9 @@ impl RemoteServer {
             ("GET", "/api/v1/debug/files-full.txt") => self.latest_debug_text("files-full").into(),
             ("GET", "/api/v1/debug/events.txt") => self.latest_debug_text("events").into(),
             ("GET", "/api/v1/debug/devices.txt") => self.latest_debug_text("devices").into(),
+            ("GET", "/api/v1/debug/display-perf.txt") => {
+                self.latest_debug_text("display-perf").into()
+            }
             ("GET", "/api/v1/debug/timers.txt") => self.latest_debug_text("timers").into(),
             ("GET", "/api/v1/debug/render.txt") => self.latest_debug_text("render").into(),
             ("GET", "/api/v1/debug/controller.txt") => self.latest_debug_text("controller").into(),

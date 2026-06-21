@@ -1857,6 +1857,7 @@ fn publish_remote_endpoint(
         server.publish_debug_text("message-boxes", live_kernel_message_boxes_text(kernel));
         server.publish_debug_text("handles", kernel.handle_debug_text());
         server.publish_debug_text("devices", live_kernel_devices_text(kernel));
+        server.publish_debug_text("display-perf", live_kernel_display_perf_text(kernel));
         server.publish_debug_text("timers", kernel.timers.debug_text());
         if let Some(cpu) = cpu {
             server.publish_debug_text("active", live_active_process_text(cpu, kernel));
@@ -2740,6 +2741,46 @@ fn live_kernel_message_boxes_text(kernel: &CeKernel) -> String {
 fn live_kernel_devices_text(kernel: &CeKernel) -> String {
     let mut out = kernel.device_debug_text();
     push_monitor_records(&mut out, "live device ops", kernel.recent_device_ops());
+    out
+}
+
+fn live_kernel_display_perf_text(kernel: &CeKernel) -> String {
+    const ROW_BYTES: usize = 64;
+    const PARAM_COUNT: usize = 8;
+    let bytes = kernel.display_perf_timing_bytes();
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "  display perf: unhandled={}",
+        kernel.display_perf_unhandled()
+    );
+    let mut rows = 0usize;
+    for (index, row) in bytes.chunks_exact(ROW_BYTES).enumerate() {
+        let read_u32 = |offset: usize| -> u32 {
+            u32::from_le_bytes(row[offset..offset + 4].try_into().unwrap())
+        };
+        let rop = read_u32(0);
+        let c_gpe = read_u32(4);
+        let dw_gpe_time = read_u32(8);
+        let c_emul = read_u32(12);
+        let c_hardware = read_u32(20);
+        let dw_wait_time = read_u32(28);
+        if rop == 0 && c_gpe == 0 && c_emul == 0 && c_hardware == 0 {
+            continue;
+        }
+        let params = (0..PARAM_COUNT)
+            .map(|param| read_u32(32 + param * 4).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let _ = writeln!(
+            out,
+            "    {index}: rop=0x{rop:08x} gpe={c_gpe} gpe_time={dw_gpe_time} emul={c_emul} hardware={c_hardware} wait={dw_wait_time} params=[{params}]"
+        );
+        rows += 1;
+    }
+    if rows == 0 {
+        out.push_str("    none\n");
+    }
     out
 }
 
