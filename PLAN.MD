@@ -1170,6 +1170,14 @@ notes when it is still needed for implementation.
      `SetPixel` as real shims for name-based imports and implementation-status
      planning, matching their existing raw ordinal handlers and coverage.
    - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`, and
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\core_common.def`: coredll
+     now marks the already routed DC transform names `SetViewportOrgEx`,
+     `SetWindowOrgEx`, `GetWindowOrgEx`, `GetWindowExtEx`,
+     `OffsetViewportOrgEx`, `GetViewportOrgEx`, and `GetViewportExtEx` as real
+     shims for name-based imports, matching the raw ordinal handlers and GWE
+     coverage for viewport/window origin and extent queries.
+   - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,
      `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\text.cpp`, and
      `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`: coredll now marks
      the existing raw text/font metric handlers `GetTextExtentExPointW`,

@@ -18,12 +18,14 @@ use wince_emulation_v3::{
             ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_WIDTH32, ORD_GET_CURRENT_OBJECT,
             ORD_GET_DIBCOLOR_TABLE, ORD_GET_MESSAGE_W, ORD_GET_NEAREST_COLOR, ORD_GET_OBJECT_TYPE,
             ORD_GET_STOCK_OBJECT, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_TEXT_EXTENT_EX_POINT_W,
-            ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W, ORD_HYPOT,
+            ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W, ORD_GET_VIEWPORT_EXT_EX,
+            ORD_GET_VIEWPORT_ORG_EX, ORD_GET_WINDOW_EXT_EX, ORD_GET_WINDOW_ORG_EX, ORD_HYPOT,
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_INVERT_RECT, ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP,
-            ORD_LL_DIV, ORD_LOAD_LIBRARY_W, ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W,
-            ORD_POW, ORD_RECT_VISIBLE, ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE,
-            ORD_REMOVE_FONT_MEM_RESOURCE_EX, ORD_REMOVE_FONT_RESOURCE_W, ORD_RESTORE_DC,
-            ORD_ROUND_RECT, ORD_SAVE_DC, ORD_SCROLL_DC, ORD_SET_BK_COLOR, ORD_SET_PIXEL,
+            ORD_LL_DIV, ORD_LOAD_LIBRARY_W, ORD_LONGJMP, ORD_LTD, ORD_NES,
+            ORD_OFFSET_VIEWPORT_ORG_EX, ORD_POST_MESSAGE_W, ORD_POW, ORD_RECT_VISIBLE,
+            ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_REMOVE_FONT_MEM_RESOURCE_EX,
+            ORD_REMOVE_FONT_RESOURCE_W, ORD_RESTORE_DC, ORD_ROUND_RECT, ORD_SAVE_DC, ORD_SCROLL_DC,
+            ORD_SET_BK_COLOR, ORD_SET_PIXEL, ORD_SET_VIEWPORT_ORG_EX, ORD_SET_WINDOW_ORG_EX,
             ORD_SETJMP, ORD_SHELL_EXECUTE_EX, ORD_SLEEP, ORD_SQRT, ORD_ULTODP,
             ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count, lookup,
         },
@@ -122,6 +124,22 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
         assert!(
             export.has_real_shim(),
             "{name} must be treated as an implemented name-based GDI object/drawing shim"
+        );
+    }
+    for (name, ordinal) in [
+        ("SetViewportOrgEx", ORD_SET_VIEWPORT_ORG_EX),
+        ("SetWindowOrgEx", ORD_SET_WINDOW_ORG_EX),
+        ("GetWindowOrgEx", ORD_GET_WINDOW_ORG_EX),
+        ("GetWindowExtEx", ORD_GET_WINDOW_EXT_EX),
+        ("OffsetViewportOrgEx", ORD_OFFSET_VIEWPORT_ORG_EX),
+        ("GetViewportOrgEx", ORD_GET_VIEWPORT_ORG_EX),
+        ("GetViewportExtEx", ORD_GET_VIEWPORT_EXT_EX),
+    ] {
+        let export = table.resolve_name(name).unwrap();
+        assert_eq!(export.ordinal, ordinal);
+        assert!(
+            export.has_real_shim(),
+            "{name} must be treated as an implemented name-based DC transform shim"
         );
     }
     for (name, ordinal) in [
