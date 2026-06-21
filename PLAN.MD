@@ -1154,6 +1154,15 @@ notes when it is still needed for implementation.
      the implemented CE DC attribute names `GetBkColor`, `GetBkMode`, and
      `SetBkColor` as real shims for name-based imports, matching the existing
      raw ordinal support and the neighboring `SetBkMode`/text-color shims.
+   - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`,
+     `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`,
+     `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\pal.cpp`, and
+     `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\specdc.cpp`: coredll now marks
+     the already implemented CE GDI/window names `AdjustWindowRectEx`,
+     `ScrollDC`, `AddFontResourceW`, `RemoveFontResourceW`, `GetObjectType`,
+     `SaveDC`, `RestoreDC`, `GetNearestColor`, `GetDIBColorTable`, and
+     `SetPixel` as real shims for name-based imports and implementation-status
+     planning, matching their existing raw ordinal handlers and coverage.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the

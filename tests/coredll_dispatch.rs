@@ -9,17 +9,20 @@ use wince_emulation_v3::{
             CoredllValue, EventModifyAction,
         },
         coredll_ordinals::{
-            ORD_ATOF, ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W,
-            ORD_CREATE_WINDOW_EX_W, ORD_D_TO_LL, ORD_D_TO_ULL, ORD_DISPATCH_MESSAGE_W, ORD_DPCMP,
-            ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_F_TO_LL, ORD_F_TO_ULL,
-            ORD_FMODF, ORD_FPCMP, ORD_FPMUL, ORD_FPTODP, ORD_FPTOUL, ORD_GED, ORD_GES,
-            ORD_GET_BK_COLOR, ORD_GET_BK_MODE, ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_WIDTH32,
-            ORD_GET_MESSAGE_W, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_HYPOT,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV,
-            ORD_LOAD_LIBRARY_W, ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW,
-            ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SET_BK_COLOR, ORD_SETJMP,
-            ORD_SHELL_EXECUTE_EX, ORD_SLEEP, ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WRITE_FILE, current_static_export_count, lookup,
+            ORD_ADD_FONT_RESOURCE_W, ORD_ADJUST_WINDOW_RECT_EX, ORD_ATOF, ORD_CLOSE_HANDLE,
+            ORD_CREATE_APISET, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W, ORD_D_TO_LL,
+            ORD_D_TO_ULL, ORD_DISPATCH_MESSAGE_W, ORD_DPCMP, ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI,
+            ORD_EVENT_MODIFY, ORD_F_TO_LL, ORD_F_TO_ULL, ORD_FMODF, ORD_FPCMP, ORD_FPMUL,
+            ORD_FPTODP, ORD_FPTOUL, ORD_GED, ORD_GES, ORD_GET_BK_COLOR, ORD_GET_BK_MODE,
+            ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_WIDTH32, ORD_GET_DIBCOLOR_TABLE,
+            ORD_GET_MESSAGE_W, ORD_GET_NEAREST_COLOR, ORD_GET_OBJECT_TYPE,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_HYPOT, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LOAD_LIBRARY_W, ORD_LONGJMP,
+            ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W,
+            ORD_REGISTER_GESTURE, ORD_REMOVE_FONT_RESOURCE_W, ORD_RESTORE_DC, ORD_SAVE_DC,
+            ORD_SCROLL_DC, ORD_SET_BK_COLOR, ORD_SET_PIXEL, ORD_SETJMP, ORD_SHELL_EXECUTE_EX,
+            ORD_SLEEP, ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
+            current_static_export_count, lookup,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -81,6 +84,25 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
         assert!(
             export.has_real_shim(),
             "{name} must be treated as an implemented name-based DC attribute shim"
+        );
+    }
+    for (name, ordinal) in [
+        ("AdjustWindowRectEx", ORD_ADJUST_WINDOW_RECT_EX),
+        ("ScrollDC", ORD_SCROLL_DC),
+        ("AddFontResourceW", ORD_ADD_FONT_RESOURCE_W),
+        ("RemoveFontResourceW", ORD_REMOVE_FONT_RESOURCE_W),
+        ("GetObjectType", ORD_GET_OBJECT_TYPE),
+        ("SaveDC", ORD_SAVE_DC),
+        ("RestoreDC", ORD_RESTORE_DC),
+        ("GetNearestColor", ORD_GET_NEAREST_COLOR),
+        ("GetDIBColorTable", ORD_GET_DIBCOLOR_TABLE),
+        ("SetPixel", ORD_SET_PIXEL),
+    ] {
+        let export = table.resolve_name(name).unwrap();
+        assert_eq!(export.ordinal, ordinal);
+        assert!(
+            export.has_real_shim(),
+            "{name} must be treated as an implemented name-based GDI/window shim"
         );
     }
     assert_eq!(
