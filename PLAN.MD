@@ -1084,6 +1084,12 @@ notes when it is still needed for implementation.
    - Validate `Shell_NotifyIcon` and `SHNotification*` lifetimes, taskbar
      routing, update/remove paths, callback dispatch, stale-handle handling,
      and remove/update races in integrated runtime scenarios.
+   - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\TNOTIFY\tnotify.cpp`,
+     `C:\WINCE600\PUBLIC\COMMON\OAK\INC\notifdev.h`, and the CE notification
+     CETK tests: raw `CeRunAppAtTime`/`PegRunAppAtTime` now validate null app
+     names and absolute `SYSTEMTIME` fields, record one scheduled launch per
+     app name, replace prior requests case-insensitively, and remove an
+     existing request when `pstTime` is null.
 
 5. Harden mounted storage behavior.
    - Continue physical block-driver, cache/filter, FMD, utility-DLL,

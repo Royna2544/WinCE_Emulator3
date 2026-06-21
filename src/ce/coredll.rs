@@ -4055,12 +4055,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_PEG_RUN_APP_AT_TIME | ORD_CE_RUN_APP_AT_TIME => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_PEG_RUN_APP_AT_TIME | ORD_CE_RUN_APP_AT_TIME => Some(CoredllValue::Bool(
+            ce_run_app_at_time_raw(kernel, memory, thread_id, args),
+        )),
         ORD_PEG_RUN_APP_AT_EVENT | ORD_CE_RUN_APP_AT_EVENT => {
             kernel
                 .threads
@@ -22432,6 +22429,71 @@ fn write_current_system_time<M: CoredllGuestMemory>(
         );
     if ok {
         kernel.threads.set_last_error(thread_id, 0);
+    }
+}
+
+fn ce_run_app_at_time_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    const MAX_PATH_CHARS: usize = 260;
+    let app_ptr = raw_arg(args, 0);
+    let time_ptr = raw_arg(args, 1);
+    if app_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(app_name) = read_guest_wide_z(memory, app_ptr, MAX_PATH_CHARS) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if app_name.encode_utf16().count() >= MAX_PATH_CHARS {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if time_ptr == 0 {
+        if kernel.remove_scheduled_app_at_time(&app_name) {
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            true
+        } else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            false
+        }
+    } else {
+        let Some(fields) = read_system_time_fields(kernel, memory, thread_id, time_ptr) else {
+            return false;
+        };
+        if !is_valid_absolute_system_time(fields) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        kernel.schedule_app_at_time(
+            app_name,
+            [
+                fields.year,
+                fields.month,
+                fields.day_of_week,
+                fields.day,
+                fields.hour,
+                fields.minute,
+                fields.second,
+                fields.milliseconds,
+            ],
+        );
+        kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+        true
     }
 }
 

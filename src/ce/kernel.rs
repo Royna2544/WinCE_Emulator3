@@ -268,6 +268,12 @@ pub struct PendingOverlappedSerialRead {
     pub event_handle: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduledAppAtTime {
+    pub app_name: String,
+    pub system_time: [u16; 8],
+}
+
 #[derive(Debug, Clone)]
 pub struct CeKernel {
     pub registry: Registry,
@@ -344,6 +350,7 @@ pub struct CeKernel {
     afs_mounted_fs_notifications: BTreeMap<u32, Vec<u32>>,
     next_fsdmgr_volume_lock: u32,
     file_system_notification_callback: Option<u32>,
+    scheduled_apps_at_time: BTreeMap<String, ScheduledAppAtTime>,
     modal_dialog_results: BTreeMap<(u32, u32), u32>,
     system_power_state_name: Option<String>,
     system_power_state_flags: u32,
@@ -1201,6 +1208,7 @@ impl CeKernel {
             afs_mounted_fs_notifications: BTreeMap::new(),
             next_fsdmgr_volume_lock: 0x6d00_0001,
             file_system_notification_callback: None,
+            scheduled_apps_at_time: BTreeMap::new(),
             modal_dialog_results: BTreeMap::new(),
             system_power_state_name: None,
             system_power_state_flags: 0x0001_0000,
@@ -1374,6 +1382,28 @@ impl CeKernel {
 
     pub fn file_system_notification_callback(&self) -> Option<u32> {
         self.file_system_notification_callback
+    }
+
+    pub fn schedule_app_at_time(&mut self, app_name: String, system_time: [u16; 8]) {
+        let key = app_name.to_ascii_lowercase();
+        self.scheduled_apps_at_time.insert(
+            key,
+            ScheduledAppAtTime {
+                app_name,
+                system_time,
+            },
+        );
+    }
+
+    pub fn remove_scheduled_app_at_time(&mut self, app_name: &str) -> bool {
+        self.scheduled_apps_at_time
+            .remove(&app_name.to_ascii_lowercase())
+            .is_some()
+    }
+
+    pub fn scheduled_app_at_time(&self, app_name: &str) -> Option<&ScheduledAppAtTime> {
+        self.scheduled_apps_at_time
+            .get(&app_name.to_ascii_lowercase())
     }
 
     pub fn set_system_power_state(&mut self, name: Option<String>, flags: u32) {
