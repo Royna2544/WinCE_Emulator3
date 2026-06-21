@@ -6343,60 +6343,6 @@ impl UnicornMips {
             let fast_framebuffer_tick_error = Rc::clone(&framebuffer_tick_error_code_hook);
             let fast_blocked_get_message = Rc::clone(&blocked_get_message);
             let fast_pc_stop = Rc::clone(&pc_stop);
-            if live_pump {
-                let mapped_code = Rc::clone(&fast_mapped_code);
-                let trampoline_ranges = Rc::clone(&fast_trampoline_ranges);
-                let trampoline_jump_index = fast_trampoline_jump_index.clone();
-                let blocked_get_message = Rc::clone(&fast_blocked_get_message);
-                let host_wall_clock_stop = Rc::clone(&fast_host_wall_clock_stop);
-                let previous_pc = Rc::new(Cell::new(None::<u32>));
-                let counter = Rc::new(Cell::new(0u32));
-                uc.add_code_hook(1, 0, move |uc, address, _size| {
-                    let pc = address as u32;
-                    let last_pc = previous_pc.replace(Some(pc));
-                    let index = counter.get().wrapping_add(1);
-                    counter.set(index);
-                    if index & 0x03ff != 0 {
-                        return;
-                    }
-                    let has_pending_remote_control = unsafe { &*kernel_ptr }
-                        .remote_server
-                        .as_ref()
-                        .is_some_and(|server| server.pending_control_count() != 0);
-                    if !has_pending_remote_control {
-                        return;
-                    }
-                    clear_orphaned_live_blocked_get_message(&blocked_get_message, unsafe {
-                        &*kernel_ptr
-                    });
-                    let live_blocked = blocked_get_message.borrow().clone();
-                    let remote_drained = drain_remote_server_control_messages_for_message_target(
-                        unsafe { &mut *kernel_ptr },
-                        live_blocked,
-                    );
-                    if remote_drained == 0 {
-                        return;
-                    }
-                    if let Some(stop_pc) = live_wall_clock_block_stop_pc(
-                        pc,
-                        last_pc,
-                        &trampoline_ranges,
-                        &trampoline_jump_index,
-                        |addr| read_unicorn_code_u32(uc, &mapped_code, addr),
-                    ) {
-                        *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
-                            pc: stop_pc,
-                            ra: read_mips_reg(uc, RegisterMIPS::RA),
-                            sp: read_mips_reg(uc, RegisterMIPS::SP),
-                            instruction: read_unicorn_code_u32(uc, &mapped_code, stop_pc),
-                            elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
-                        });
-                        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(stop_pc));
-                        let _ = uc.emu_stop();
-                    }
-                })
-                .map_err(|err| Error::Backend(format!("install live-pump remote hook: {err:?}")))?;
-            }
             let mut fast_start_sites = fast_start_indirect_transfer_sites(&self.mapped_blobs);
             fast_start_sites.extend(self.trampoline_jumps.iter().map(|jump| jump.origin));
             let fast_start_ranges = fast_start_hook_ranges(&fast_start_sites);
