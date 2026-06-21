@@ -1141,6 +1141,11 @@ notes when it is still needed for implementation.
      flags as `DISP_CHANGE_BADFLAGS`, returning `DISP_CHANGE_BADPARAM` for
      `CDS_VIDEOPARAMETERS`, and treating zero `dmSize` `CDS_TEST` requests as
      `DISP_CHANGE_BADMODE` instead of a successful no-broadcast validation.
+   - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\da.cpp` and
+     `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\global.cpp`: coredll now marks
+     the implemented CE DC attribute names `GetBkColor`, `GetBkMode`, and
+     `SetBkColor` as real shims for name-based imports, matching the existing
+     raw ordinal support and the neighboring `SetBkMode`/text-color shims.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the
