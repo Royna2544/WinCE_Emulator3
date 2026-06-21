@@ -25,9 +25,10 @@ use crate::{
         object::{
             ApiHandleObject, ApiSetObject, CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject,
             FileChangeNotificationObject, FileChangeRecord, FileObject, FindFileObject,
-            HandleTable, KernelObject, MAX_SUSPEND_COUNT, MessageQueueHandleObject, ThreadObject,
-            ThreadResumeResult, ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
-            ce_thread_priority_to_win32, win32_thread_priority_to_ce,
+            HandleTable, KernelObject, MAX_SUSPEND_COUNT, MAX_WIN32_PRIORITY_LEVELS,
+            MessageQueueHandleObject, ThreadObject, ThreadResumeResult, ThreadSuspendResult,
+            VolumeObject, WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
+            win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
@@ -344,6 +345,7 @@ pub struct CeKernel {
     current_process_id: u32,
     current_process_exit_code: u32,
     current_process_signaled: bool,
+    lowest_scheduled_win32_priority: u32,
     thread_priority_overrides: BTreeMap<u32, i32>,
     thread_suspend_counts: BTreeMap<u32, u32>,
     pending_process_launches: Vec<PendingProcessLaunch>,
@@ -1207,6 +1209,7 @@ impl CeKernel {
             current_process_id: 1,
             current_process_exit_code: STILL_ACTIVE,
             current_process_signaled: false,
+            lowest_scheduled_win32_priority: MAX_WIN32_PRIORITY_LEVELS - 1,
             thread_priority_overrides: BTreeMap::new(),
             thread_suspend_counts: BTreeMap::new(),
             pending_process_launches: Vec::new(),
@@ -6797,6 +6800,13 @@ impl CeKernel {
             return false;
         };
         self.set_thread_ce_priority_for_handle(handle, priority, current_thread_id)
+    }
+
+    pub fn set_lowest_scheduled_priority(&mut self, max_priority: u32) -> u32 {
+        let previous = self.lowest_scheduled_win32_priority;
+        self.lowest_scheduled_win32_priority =
+            max_priority.min(MAX_WIN32_PRIORITY_LEVELS.saturating_sub(1));
+        previous
     }
 
     pub fn guest_thread_start(&self, handle: u32) -> Option<(u32, u32, u32)> {

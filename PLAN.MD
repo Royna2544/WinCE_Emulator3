@@ -1385,6 +1385,12 @@ notes when it is still needed for implementation.
      `VERIFY_WRITE_FLAG` as a write probe, preserves the zero-length success
      edge, and `IsBadCodePtr` now follows CE's one-byte execute/read wrapper
      instead of requiring a four-byte allocation.
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+     `kcalls.c`, and `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`: raw
+     `SetLowestScheduledPriority` now mirrors CE's public Win32-priority
+     ceiling contract by returning the previous ceiling, initializing to
+     `THREAD_PRIORITY_IDLE` (`7`), and clamping new ceilings to the supported
+     `0..7` Win32 range instead of always returning zero.
 
 ## Validation Gates
 

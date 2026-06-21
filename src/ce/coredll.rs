@@ -3013,7 +3013,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
             ))
         }
-        ORD_SET_LOWEST_SCHEDULED_PRIORITY | ORD_SET_PROC_PERMISSIONS => {
+        ORD_SET_LOWEST_SCHEDULED_PRIORITY => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(
+                kernel.set_lowest_scheduled_priority(raw_arg(args, 0)),
+            ))
+        }
+        ORD_SET_PROC_PERMISSIONS => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }

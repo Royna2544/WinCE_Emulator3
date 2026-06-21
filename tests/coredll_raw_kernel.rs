@@ -86,9 +86,10 @@ use wince_emulation_v3::{
             ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST, ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD,
             ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
             ORD_SET_COMM_TIMEOUTS, ORD_SET_DAYLIGHT_TIME, ORD_SET_DEVICE_POWER, ORD_SET_EVENT_DATA,
-            ORD_SET_KMODE, ORD_SET_LAST_ERROR, ORD_SET_POWER_REQUIREMENT, ORD_SET_STDIO_PATH_W,
-            ORD_SET_SYSTEM_MEMORY_DIVISION, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_CONTEXT,
-            ORD_SET_THREAD_PRIORITY, ORD_SET_TIME_ZONE_INFORMATION, ORD_SHADD_TO_RECENT_DOCS,
+            ORD_SET_KMODE, ORD_SET_LAST_ERROR, ORD_SET_LOWEST_SCHEDULED_PRIORITY,
+            ORD_SET_POWER_REQUIREMENT, ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_MEMORY_DIVISION,
+            ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_CONTEXT, ORD_SET_THREAD_PRIORITY,
+            ORD_SET_TIME_ZONE_INFORMATION, ORD_SHADD_TO_RECENT_DOCS,
             ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
             ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
             ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
@@ -10895,6 +10896,41 @@ fn coredll_raw_query_instruction_set_reports_ce_mipsii_compatibility() -> Result
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_lowest_scheduled_priority_returns_previous_clamped_ce_value() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 44;
+
+    let mut set_lowest = |kernel: &mut CeKernel, value| -> u32 {
+        match table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_LOWEST_SCHEDULED_PRIORITY,
+            [value],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(previous),
+                ..
+            } => previous,
+            other => panic!("SetLowestScheduledPriority did not return a DWORD: {other:?}"),
+        }
+    };
+
+    assert_eq!(set_lowest(&mut kernel, 2), 7);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(set_lowest(&mut kernel, 0xffff_ffff), 2);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(set_lowest(&mut kernel, 1), 7);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(set_lowest(&mut kernel, 7), 1);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }
