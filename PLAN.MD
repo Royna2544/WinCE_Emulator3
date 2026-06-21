@@ -1106,6 +1106,11 @@ notes when it is still needed for implementation.
     outstanding notification handles, serialize app-visible
     `CE_NOTIFICATION_INFO_HEADER`/trigger/user structures with embedded wide
     strings, and reject repeated clears.
+  - `CeGetUserNotificationPreferences` now follows the CE wrapper/CETK
+    validation path for null or unreadable `CE_USER_NOTIFICATION` pointers,
+    invalid parent windows, missing sound buffers, and too-small sound
+    capacities, then reports a canceled preferences dialog instead of
+    `ERROR_NOT_SUPPORTED` for otherwise valid raw calls.
 
 5. Harden mounted storage behavior.
    - Continue physical block-driver, cache/filter, FMD, utility-DLL,

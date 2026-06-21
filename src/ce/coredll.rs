@@ -4064,10 +4064,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             )))
         }
         ORD_PEG_GET_USER_NOTIFICATION_PREFERENCES | ORD_CE_GET_USER_NOTIFICATION_PREFERENCES => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
+            Some(CoredllValue::Bool(
+                ce_get_user_notification_preferences_raw(kernel, memory, thread_id, args),
+            ))
         }
         ORD_CE_EVENT_HAS_OCCURRED => Some(CoredllValue::Bool(ce_event_has_occurred_raw(
             kernel, memory, thread_id, args,
@@ -23051,6 +23050,75 @@ fn ce_handle_app_notifications_raw<M: CoredllGuestMemory>(
     kernel.record_handled_app_notifications(app_name);
     kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
     true
+}
+
+fn ce_get_user_notification_preferences_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    const MIN_SOUND_CAPACITY_CHARS: u32 = 260;
+    const ERROR_CANCELLED: u32 = 1223;
+
+    let parent = raw_arg(args, 0);
+    let notification_ptr = raw_arg(args, 1);
+    if notification_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if parent != 0 && !kernel.gwe.is_window(parent) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+
+    let Some(_action_flags) = read_guest_u32(kernel, memory, thread_id, notification_ptr) else {
+        return false;
+    };
+    let Some(_title_ptr) =
+        read_guest_u32(kernel, memory, thread_id, notification_ptr.wrapping_add(4))
+    else {
+        return false;
+    };
+    let Some(_text_ptr) =
+        read_guest_u32(kernel, memory, thread_id, notification_ptr.wrapping_add(8))
+    else {
+        return false;
+    };
+    let Some(sound_ptr) =
+        read_guest_u32(kernel, memory, thread_id, notification_ptr.wrapping_add(12))
+    else {
+        return false;
+    };
+    let Some(max_sound) =
+        read_guest_u32(kernel, memory, thread_id, notification_ptr.wrapping_add(16))
+    else {
+        return false;
+    };
+    let Some(_expansion) =
+        read_guest_u32(kernel, memory, thread_id, notification_ptr.wrapping_add(20))
+    else {
+        return false;
+    };
+    if sound_ptr == 0 || max_sound < MIN_SOUND_CAPACITY_CHARS {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if memory.read_u16(sound_ptr).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    kernel.threads.set_last_error(thread_id, ERROR_CANCELLED);
+    false
 }
 
 fn ce_event_has_occurred_raw<M: CoredllGuestMemory>(

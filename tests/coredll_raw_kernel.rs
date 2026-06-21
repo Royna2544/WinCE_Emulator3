@@ -15,32 +15,32 @@ use wince_emulation_v3::{
             ORD_CE_FIND_CLOSE_REG_CHANGE, ORD_CE_FIND_FIRST_REG_CHANGE,
             ORD_CE_FIND_NEXT_REG_CHANGE, ORD_CE_GET_MODULE_INFO, ORD_CE_GET_THREAD_PRIORITY,
             ORD_CE_GET_THREAD_QUANTUM, ORD_CE_GET_USER_NOTIFICATION,
-            ORD_CE_GET_USER_NOTIFICATION_HANDLES, ORD_CE_HANDLE_APP_NOTIFICATIONS,
-            ORD_CE_OPEN_FILE_HANDLE, ORD_CE_RUN_APP_AT_EVENT, ORD_CE_RUN_APP_AT_TIME,
-            ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM, ORD_CE_SET_USER_NOTIFICATION,
-            ORD_CE_SET_USER_NOTIFICATION_EX, ORD_CHECK_REMOTE_DEBUGGER_PRESENT,
-            ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE,
-            ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_APIHANDLE, ORD_CREATE_APISET,
-            ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
-            ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W,
-            ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DEACTIVATE_DEVICE,
-            ORD_DEBUG_ACTIVE_PROCESS, ORD_DEBUG_ACTIVE_PROCESS_STOP, ORD_DELETE_CRITICAL_SECTION,
-            ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE, ORD_DESTROY_CURSOR, ORD_DESTROY_ICON,
-            ORD_DEVICE_POWER_NOTIFY, ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W,
-            ORD_DRAW_ICON_EX, ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION,
-            ORD_ENUM_CLIPBOARD_FORMATS, ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES,
-            ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE,
-            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FIND_CLOSE, ORD_FIND_FIRST_DEVICE,
-            ORD_FIND_NEXT_DEVICE, ORD_FREE_LIBRARY, ORD_GET_APIADDRESS,
-            ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
-            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
-            ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES,
-            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_BY_INDEX,
-            ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE, ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE,
-            ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER, ORD_GET_EVENT_DATA,
-            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_FILE_VERSION_INFO_SIZE_W,
-            ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO,
-            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
+            ORD_CE_GET_USER_NOTIFICATION_HANDLES, ORD_CE_GET_USER_NOTIFICATION_PREFERENCES,
+            ORD_CE_HANDLE_APP_NOTIFICATIONS, ORD_CE_OPEN_FILE_HANDLE, ORD_CE_RUN_APP_AT_EVENT,
+            ORD_CE_RUN_APP_AT_TIME, ORD_CE_SET_THREAD_PRIORITY, ORD_CE_SET_THREAD_QUANTUM,
+            ORD_CE_SET_USER_NOTIFICATION, ORD_CE_SET_USER_NOTIFICATION_EX,
+            ORD_CHECK_REMOTE_DEBUGGER_PRESENT, ORD_CLEAR_COMM_ERROR, ORD_CLOSE_CLIPBOARD,
+            ORD_CLOSE_HANDLE, ORD_CLOSE_MSG_QUEUE, ORD_COUNT_CLIPBOARD_FORMATS,
+            ORD_CREATE_APIHANDLE, ORD_CREATE_APISET, ORD_CREATE_COMPATIBLE_DC,
+            ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W, ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W,
+            ORD_CREATE_MSG_QUEUE, ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
+            ORD_DEACTIVATE_DEVICE, ORD_DEBUG_ACTIVE_PROCESS, ORD_DEBUG_ACTIVE_PROCESS_STOP,
+            ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DEREGISTER_DEVICE,
+            ORD_DESTROY_CURSOR, ORD_DESTROY_ICON, ORD_DEVICE_POWER_NOTIFY,
+            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
+            ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
+            ORD_ENUM_DEVICE_INTERFACES, ORD_ENUM_DEVICES, ORD_ENUM_PNP_IDS, ORD_EVENT_MODIFY,
+            ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE, ORD_FILE_TIME_TO_SYSTEM_TIME,
+            ORD_FIND_CLOSE, ORD_FIND_FIRST_DEVICE, ORD_FIND_NEXT_DEVICE, ORD_FREE_LIBRARY,
+            ORD_GET_APIADDRESS, ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX,
+            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
+            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
+            ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC,
+            ORD_GET_DEVICE_BY_INDEX, ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE,
+            ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE, ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER,
+            ORD_GET_EVENT_DATA, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
+            ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT,
+            ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
             ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_OPEN_FILE_NAME_W,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
@@ -28585,6 +28585,140 @@ fn coredll_raw_user_notifications_store_enumerate_get_and_clear() -> Result<()> 
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_HANDLE
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_user_notification_preferences_validate_and_cancel() -> Result<()> {
+    const PUN_DIALOG: u32 = 0x0000_0004;
+    const ERROR_CANCELLED: u32 = 1223;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 18;
+    let user = 0x7000;
+    let title = 0x7200;
+    let text = 0x7400;
+    let sound = 0x7600;
+    memory.map_halfwords(title, 64);
+    memory.map_halfwords(text, 64);
+    memory.map_halfwords(sound, 260);
+    memory.write_wide_z(title, "CeGetUserNotificationPreferences");
+    memory.write_wide_z(text, "Notification Test Txt");
+    memory.write_wide_z(sound, "stale");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_PREFERENCES,
+            [0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_PREFERENCES,
+            [0, 0xdead],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    write_ce_user_notification(&mut memory, user, PUN_DIALOG, title, text, 0, 260);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_PREFERENCES,
+            [0xdead, user],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_PREFERENCES,
+            [0, user],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    write_ce_user_notification(&mut memory, user, PUN_DIALOG, title, text, sound, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_PREFERENCES,
+            [0, user],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    write_ce_user_notification(&mut memory, user, PUN_DIALOG, title, text, sound, 260);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_USER_NOTIFICATION_PREFERENCES,
+            [0, user],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_CANCELLED);
+    assert_eq!(memory.read_u32(user)?, PUN_DIALOG);
+    assert_eq!(memory.read_wide_z(sound, 64), "stale");
 
     Ok(())
 }
