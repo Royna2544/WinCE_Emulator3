@@ -46,6 +46,11 @@ notes when it is still needed for implementation.
   apply the legacy `IsAPIReady` 16..31 to 80..95 service-set remap.
   Coverage verifies unregistered, invalid, remapped legacy, and registered
   API-set readiness paths.
+- `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`: raw `SetKMode` now tracks
+  CE's thread-local `UTLS_INKMODE` bit and returns the previous mode instead
+  of sharing the generic owner no-op path. Coverage verifies previous-mode
+  returns and per-thread isolation.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\TOOLHELP\toolhelp.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\toolhelp.h`, and

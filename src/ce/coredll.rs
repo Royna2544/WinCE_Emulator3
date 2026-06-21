@@ -3005,7 +3005,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(false))
         }
-        ORD_SET_HANDLE_OWNER | ORD_SET_KMODE | ORD_SET_OBJECT_OWNER => {
+        ORD_SET_KMODE => {
+            let previous = kernel.threads.set_k_mode(thread_id, raw_arg(args, 0) != 0);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(u32::from(previous)))
+        }
+        ORD_SET_HANDLE_OWNER | ORD_SET_OBJECT_OWNER => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }

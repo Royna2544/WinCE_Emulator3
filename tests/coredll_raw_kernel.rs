@@ -81,7 +81,7 @@ use wince_emulation_v3::{
             ORD_RESOURCE_MARK_AS_SHAREABLE, ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST,
             ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
             ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER,
-            ORD_SET_EVENT_DATA, ORD_SET_LAST_ERROR, ORD_SET_POWER_REQUIREMENT,
+            ORD_SET_EVENT_DATA, ORD_SET_KMODE, ORD_SET_LAST_ERROR, ORD_SET_POWER_REQUIREMENT,
             ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_CONTEXT,
             ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I,
             ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
@@ -788,6 +788,50 @@ fn coredll_raw_registry_change_notifications_are_waitable_handles() -> Result<()
             ..
         }
     ));
+
+    assert!(!kernel.threads.is_k_mode(thread_id));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_KMODE,
+            [1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.threads.is_k_mode(thread_id));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_KMODE,
+            [1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(!kernel.threads.is_k_mode(thread_id + 1));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_KMODE,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(!kernel.threads.is_k_mode(thread_id));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

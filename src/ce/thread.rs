@@ -30,6 +30,7 @@ const TLS_RESERVED_SLOTS: u32 = 4;
 #[derive(Debug, Clone, Default)]
 pub struct ThreadSystem {
     last_error_by_thread: BTreeMap<u32, u32>,
+    k_mode_by_thread: BTreeSet<u32>,
     tls_by_thread: BTreeMap<u32, BTreeMap<u32, u32>>,
     allocated_tls_slots: BTreeSet<u32>,
     next_guest_thread_id: u32,
@@ -58,6 +59,20 @@ impl ThreadSystem {
 
     pub fn set_last_error(&mut self, thread_id: u32, error: u32) {
         self.last_error_by_thread.insert(thread_id, error);
+    }
+
+    pub fn is_k_mode(&self, thread_id: u32) -> bool {
+        self.k_mode_by_thread.contains(&thread_id)
+    }
+
+    pub fn set_k_mode(&mut self, thread_id: u32, enabled: bool) -> bool {
+        let was_enabled = self.is_k_mode(thread_id);
+        if enabled {
+            self.k_mode_by_thread.insert(thread_id);
+        } else {
+            self.k_mode_by_thread.remove(&thread_id);
+        }
+        was_enabled
     }
 
     pub fn tls_get_value(&mut self, thread_id: u32, slot: u32) -> Option<u32> {
@@ -158,5 +173,19 @@ mod tests {
         assert_eq!(threads.get_last_error(1), ERROR_INVALID_PARAMETER);
         assert_eq!(threads.tls_call(1, TLS_FUNC_FREE, 4), 0);
         assert_eq!(threads.get_last_error(1), ERROR_INVALID_PARAMETER);
+    }
+
+    #[test]
+    fn set_k_mode_returns_previous_thread_local_mode() {
+        let mut threads = ThreadSystem::default();
+
+        assert!(!threads.is_k_mode(1));
+        assert!(!threads.set_k_mode(1, true));
+        assert!(threads.is_k_mode(1));
+        assert!(threads.set_k_mode(1, true));
+        assert!(threads.set_k_mode(1, false));
+        assert!(!threads.is_k_mode(1));
+
+        assert!(!threads.is_k_mode(2));
     }
 }
