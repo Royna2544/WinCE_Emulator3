@@ -130,6 +130,16 @@ references for historical reconstruction.
   `ce.devices` "not configured" misses before falling back to host storage.
   `CreateFileW` now probes the device namespace only for names present in the
   configured device table; configured CE device names still open normally.
+- Remote GPS is now explicitly routed to configured `COM7:` and live startup
+  reaches that handle again. The 2026-06-21 release sample drained queued NMEA
+  into `COM7:`, accepted `$PUBX` configuration writes, and returned GPS bytes
+  through real guest `ReadFile` calls. The same run opened `MFS1:` and `SMB1:`
+  and issued the dumped sensor IOCTL command values through the virtual devices.
+- Serial `ReadFile` now models pending overlapped reads for empty serial RX:
+  it records the caller buffer, resets/signals the supplied event, reports
+  `ERROR_IO_PENDING`/`ERROR_IO_INCOMPLETE`, and completes through
+  `GetOverlappedResult` once remote serial bytes arrive. Focused kernel and raw
+  coredll tests cover the event wake and byte delivery path.
 
 ## Recent Validation
 
@@ -161,6 +171,12 @@ references for historical reconstruction.
   `CreateFileW`, including CE colon suffixes, `\\.\` prefixes, and ordinary
   mounted file paths. Release build with `--features unicorn` passed with
   existing warnings after cleaning the stale running executable.
+- Focused serial validation covers remote GPS target selection, pending
+  overlapped serial event signaling, and raw coredll
+  `ReadFile`/`GetOverlappedResult` completion after remote NMEA arrives.
+- Release/live driving with `--remote-server 192.168.0.39:8765` confirmed
+  `queuedSerialBytes` dropped to zero after `COM7:` opened, followed by repeated
+  `SerialRemoteDrain` and `ReadFile` records with NMEA payloads.
 - Full `cargo fmt --check` may still report unrelated pre-existing formatting
   drift in older files; treat new non-formatting whitespace findings as
   actionable.

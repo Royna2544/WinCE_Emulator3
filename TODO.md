@@ -4,10 +4,11 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
-- Trace the current iNavi splash/map transition generically through the
-  post-mapdata startup path: the latest fresh run loads mapdata/SearchDB/mapinfo
-  but still does not open `COM7:`, so identify the CE wait, event, message,
-  window state, file result, or readiness condition gating serial startup.
+- Trace the current iNavi splash/map transition generically after `COM7:`,
+  `MFS1:`, and `SMB1:` are open: the latest fresh run drains GPS and reaches
+  map-era child window creation, but the visible framebuffer still shows the
+  splash artwork, so identify the CE wait, event, message, window state, file
+  result, or readiness condition gating final map presentation.
 - Trace why the real splash window keeps receiving repeated touch/key WndProc
   callouts without transitioning to the map UI after iNavi resumes from the
   hidden helper-process slice.
@@ -43,10 +44,9 @@ Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
   unwinding when guest diagnostics require deeper stack fidelity.
 - Decode the SMB380/G-sensor initialization contract from actual dump code or
   real caller traces before adding accelerometer command behavior.
-- Continue live device traces until the app opens `COM7:` in the current
-  startup path. Remote GPS is queued but not drained in the latest sample;
-  keep watching for later `MFS1:`/`SMB1:` opens and validate their dumped-DLL
-  contracts in live traces.
+- Continue live device traces after `COM7:`, `MFS1:`, and `SMB1:` are open.
+  GPS now drains and sensor IOCTLs are visible; keep validating parsed-position
+  consumption and the remaining presentation gate with real traces.
 - Re-run the live startup after the device-information ordinal fix and confirm
   whether guest device probing now reaches `COM7:` earlier or still remains
   blocked behind the splash/readiness path.

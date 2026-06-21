@@ -34,15 +34,17 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
 - Popup/menu/modal behavior still needs broader live nested-modal routing,
   unusual cascade cancellation, timeout edges, and user-driven dispatch
   validation.
-- Sensor emulation remains partial. GPS/NMEA can reach `COM7:` in some live
-  runs and drain into the guest serial RX path, but the latest fresh run still
-  has no open `COM7:` handle and queues remote GPS bytes. Parsed-position
-  consumption, `ReadFile`/`WaitCommEvent` cadence, and later `MFS1:`/`SMB1:`
-  live command contracts still need real trace evidence.
+- Sensor emulation remains partial beyond the basic live paths. GPS/NMEA now
+  reaches `COM7:` in the current live run, drains into guest serial RX, and is
+  returned by real `ReadFile` calls; `MFS1:`/`SMB1:` also open and receive
+  sensor IOCTLs. Parsed-position consumption, broader `WaitCommEvent` cadence,
+  and richer accelerometer/magnetometer sample semantics still need trace
+  evidence.
 - Fresh splash-phase samples still spend time in `UID1:` probing and
   resource/map loading before `COM7:` opens, so sensor data cannot explain the
-  earliest visible splash interval. The current post-mapdata path still has
-  not opened `COM7:`, so the serial-start gate itself remains open.
+  earliest visible splash interval. The current post-COM7 path reaches GPS and
+  sensor devices plus map-era child windows, but final map presentation remains
+  gated while the framebuffer still shows the iNavi splash artwork.
 - Startup profiling still reaches the real `happyway_win.exe+0x7b56c`
   traffic/shared-memory loop, but the live scheduler now resumes iNavi from
   that helper-process slice, prioritizes ready parked waits at live-pump entry,
