@@ -37,46 +37,47 @@ use wince_emulation_v3::{
             ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FORMAT_PARTITION, ORD_FORMAT_PARTITION_EX,
             ORD_FORMAT_STORE, ORD_FPADD, ORD_FPCMP, ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP,
             ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES,
-            ORD_GET_COMM_MODEM_STATUS, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W,
-            ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE,
-            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W, ORD_GET_OVERLAPPED_RESULT,
-            ORD_GET_PARTITION_INFO, ORD_GET_PROCESS_HEAP, ORD_GET_STORE_INFO, ORD_GET_VERSION_EX,
-            ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
-            ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE, ORD_HEAP_VALIDATE, ORD_HYPOT,
-            ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE,
-            ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE,
-            ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT,
-            ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC,
-            ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
-            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
-            ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
-            ORD_MEMMOVE, ORD_MEMSET, ORD_MOUNT_PARTITION, ORD_MOVE_FILE_W, ORD_MSIZE,
-            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES, ORD_OPEN_PARTITION, ORD_OPEN_STORE,
-            ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW,
-            ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW,
-            ORD_PRINTF, ORD_RAND, ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY,
-            ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W,
-            ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W,
-            ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
-            ORD_REGISTER_AFSEX, ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE,
-            ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD,
-            ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC,
-            ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE,
-            ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC,
-            ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W, ORD_RENAME_PARTITION,
-            ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK,
-            ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W,
-            ORD_SET_FILE_TIME, ORD_SET_PARTITION_ATTRIBUTES, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP,
-            ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND,
-            ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
-            ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN,
-            ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM,
-            ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP, ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE,
-            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF,
-            ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP,
-            ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK,
-            ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
-            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_GET_COMM_MODEM_STATUS, ORD_GET_CRT_STORAGE_EX, ORD_GET_DISK_FREE_SPACE_EX_W,
+            ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SECURITY_W,
+            ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W,
+            ORD_GET_OVERLAPPED_RESULT, ORD_GET_PARTITION_INFO, ORD_GET_PROCESS_HEAP,
+            ORD_GET_STORE_INFO, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC,
+            ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE,
+            ORD_HEAP_VALIDATE, ORD_HYPOT, ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE,
+            ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR,
+            ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP,
+            ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT,
+            ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE,
+            ORD_LOCAL_FREE_IN_PROCESS, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
+            ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX, ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC,
+            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET,
+            ORD_MOUNT_PARTITION, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED,
+            ORD_NES, ORD_OPEN_PARTITION, ORD_OPEN_STORE, ORD_OPERATOR_DELETE,
+            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW,
+            ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND,
+            ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
+            ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W,
+            ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W,
+            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_REGISTER_AFSEX,
+            ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD,
+            ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING,
+            ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
+            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC,
+            ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
+            ORD_REMOVE_DIRECTORY_W, ORD_RENAME_PARTITION, ORD_SECURITY_GEN_COOKIE,
+            ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W,
+            ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME,
+            ORD_SET_PARTITION_ATTRIBUTES, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH,
+            ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY,
+            ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK,
+            ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN, ORD_TANH, ORD_TLS_CALL,
+            ORD_TLS_SET_VALUE, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM, ORD_ULL_RSHIFT,
+            ORD_ULTODP, ORD_ULTOFP, ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC,
+            ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP,
+            ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR,
+            ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE,
+            ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         devices::{DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind},
         file::{
@@ -20168,6 +20169,102 @@ fn coredll_raw_crt_atof_iswctype_ll_div_sqrt_pow_and_tls_call() -> Result<()> {
         ),
         "GET_VERSION_EX must return true"
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_crt_storage_ex_reads_runtime_tls_slot() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let first_thread = 11;
+    let second_thread = 12;
+
+    const TLSSLOT_RUNTIME: u32 = 1;
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                first_thread,
+                ORD_GET_CRT_STORAGE_EX,
+                [0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ),
+        "unset runtime TLS slot must produce a null CRT storage pointer"
+    );
+    assert_eq!(kernel.threads.get_last_error(first_thread), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            first_thread,
+            ORD_TLS_SET_VALUE,
+            [TLSSLOT_RUNTIME, 0x1234_5678],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            second_thread,
+            ORD_TLS_SET_VALUE,
+            [TLSSLOT_RUNTIME, 0x8765_4321],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                first_thread,
+                ORD_GET_CRT_STORAGE_EX,
+                [0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0x1234_5678),
+                ..
+            }
+        ),
+        "GetCRTStorageEx must return the caller thread's TLSSLOT_RUNTIME value"
+    );
+    assert_eq!(kernel.threads.get_last_error(first_thread), 0);
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                second_thread,
+                ORD_GET_CRT_STORAGE_EX,
+                [0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0x8765_4321),
+                ..
+            }
+        ),
+        "runtime CRT storage must stay thread-local"
+    );
+    assert_eq!(kernel.threads.get_last_error(second_thread), 0);
 
     Ok(())
 }

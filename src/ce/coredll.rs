@@ -9811,7 +9811,16 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_GET_CRT_STORAGE_EX | ORD_GET_PRIVATE_CALLBACKS => {
+        ORD_GET_CRT_STORAGE_EX => {
+            const TLSSLOT_RUNTIME: u32 = 1;
+            Some(CoredllValue::U32(
+                kernel
+                    .threads
+                    .tls_get_value(thread_id, TLSSLOT_RUNTIME)
+                    .unwrap_or(0),
+            ))
+        }
+        ORD_GET_PRIVATE_CALLBACKS => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }

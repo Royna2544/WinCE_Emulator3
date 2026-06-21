@@ -904,6 +904,14 @@ notes when it is still needed for implementation.
   pointer validation, short-buffer `ERROR_INSUFFICIENT_BUFFER` behavior that
   preserves the caller length, process isolation, and invalid descriptor
   rejection.
+- `C:\WINCE600\PUBLIC\COMMON\OAK\INC\corecrtstorage.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\apicall.c`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c`: raw
+  `GetCRTStorageEx` now returns CE's `TLSSLOT_RUNTIME` value instead of a
+  hard-zero fallback. Coverage verifies unset storage, success last-error
+  behavior, and per-thread runtime TLS isolation while full CRT storage
+  allocation remains tied to broader stack/TLS initialization work.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp`: raw
   `FindResourceW` now preserves CE's split between invalid resource modules
   and valid modules with missing resources, returning `ERROR_INVALID_HANDLE`
