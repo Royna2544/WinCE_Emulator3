@@ -1295,6 +1295,10 @@ notes when it is still needed for implementation.
      (`0409`) from `PUBLIC\COMMON\OAK\FILES\locale.txt` for the same locale
      fields as the Korean table, including string sizing and
      `LOCALE_RETURN_NUMBER`.
+     `GetACP`, default LCID/LangID/UI-language getters, and
+     `ConvertDefaultLocale` now read CE's
+     `HKLM\SOFTWARE\Microsoft\International` `ACP`/`LCID` DWORD values with
+     Korean image fallbacks instead of returning only literals.
 
 ## Validation Gates
 

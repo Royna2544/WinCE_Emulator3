@@ -82,6 +82,8 @@ pub struct CoredllExport {
 }
 
 const CE_ACP_CODE_PAGE: u32 = 949;
+const CE_DEFAULT_LCID: u32 = 0x0412;
+const CE_INTERNATIONAL_REGISTRY_KEY: &str = r"SOFTWARE\Microsoft\International";
 const CP_UTF8_CODE_PAGE: u32 = 65001;
 const CTYPE_UPPER: u32 = 0x0001;
 const CTYPE_LOWER: u32 = 0x0002;
@@ -2022,19 +2024,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             active_conversion_code_page(raw_arg(args, 0)),
             raw_arg(args, 1) as u8,
         ))),
-        ORD_CONVERT_DEFAULT_LOCALE => Some(CoredllValue::U32(convert_default_locale_raw(raw_arg(
-            args, 0,
-        )))),
-        // Korean CE: ANSI code page 949, OEM code page 949
-        ORD_GET_ACP => Some(CoredllValue::U32(949)),
-        ORD_GET_OEMCP => Some(CoredllValue::U32(949)),
-        // Korean CE: system/user locale is ko-KR (0x0412)
-        ORD_GET_SYSTEM_DEFAULT_LCID => Some(CoredllValue::U32(0x0412)),
-        ORD_GET_USER_DEFAULT_LCID => Some(CoredllValue::U32(0x0412)),
-        ORD_GET_SYSTEM_DEFAULT_LANG_ID => Some(CoredllValue::U32(0x0412)),
-        ORD_GET_USER_DEFAULT_LANG_ID => Some(CoredllValue::U32(0x0412)),
-        ORD_GET_SYSTEM_DEFAULT_UILANGUAGE => Some(CoredllValue::U32(0x0412)),
-        ORD_GET_USER_DEFAULT_UILANGUAGE => Some(CoredllValue::U32(0x0412)),
+        ORD_CONVERT_DEFAULT_LOCALE => Some(CoredllValue::U32(convert_default_locale_raw(
+            kernel,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_ACP => Some(CoredllValue::U32(get_acp_raw(kernel))),
+        ORD_GET_OEMCP => Some(CoredllValue::U32(CE_ACP_CODE_PAGE)),
+        ORD_GET_SYSTEM_DEFAULT_LCID | ORD_GET_USER_DEFAULT_LCID => {
+            Some(CoredllValue::U32(default_lcid_raw(kernel)))
+        }
+        ORD_GET_SYSTEM_DEFAULT_LANG_ID
+        | ORD_GET_USER_DEFAULT_LANG_ID
+        | ORD_GET_SYSTEM_DEFAULT_UILANGUAGE
+        | ORD_GET_USER_DEFAULT_UILANGUAGE => {
+            Some(CoredllValue::U32(default_lcid_raw(kernel) & 0xffff))
+        }
         ORD_SET_LOCALE_INFO_W => {
             // SetLocaleInfoW(Locale, LCType, lpLCData) — modify locale setting.
             // Locale customization not supported; return FALSE.
@@ -20878,12 +20882,48 @@ fn is_dbcs_lead_byte_raw(code_page: u32, byte: u8) -> bool {
     }
 }
 
-fn convert_default_locale_raw(locale: u32) -> u32 {
+fn get_acp_raw(kernel: &mut CeKernel) -> u32 {
+    registry_international_dword(kernel, "ACP", CE_ACP_CODE_PAGE)
+}
+
+fn default_lcid_raw(kernel: &mut CeKernel) -> u32 {
+    registry_international_dword(kernel, "LCID", CE_DEFAULT_LCID)
+}
+
+fn registry_international_dword(kernel: &mut CeKernel, value_name: &str, fallback: u32) -> u32 {
+    let open = kernel.registry.reg_open_key_exw(
+        HKEY_LOCAL_MACHINE,
+        Some(CE_INTERNATIONAL_REGISTRY_KEY),
+        0,
+        0,
+    );
+    let Some(hkey) = open.hkey else {
+        return fallback;
+    };
+    let query = kernel
+        .registry
+        .reg_query_value_exw(hkey, Some(value_name), Some(4));
+    let _ = kernel.registry.reg_close_key(hkey);
+    if query.status != ERROR_SUCCESS || query.value_type != Some(REG_DWORD) {
+        return fallback;
+    }
+    let Some(data) = query.data else {
+        return fallback;
+    };
+    let Ok(bytes) = <[u8; 4]>::try_from(data.as_slice()) else {
+        return fallback;
+    };
+    u32::from_le_bytes(bytes)
+}
+
+fn convert_default_locale_raw(kernel: &mut CeKernel, locale: u32) -> u32 {
     const LOCALE_USER_DEFAULT: u32 = 0x0400;
     const LOCALE_SYSTEM_DEFAULT: u32 = 0x0800;
     const LOCALE_CUSTOM_DEFAULT: u32 = 0x0C00;
     match locale {
-        LOCALE_USER_DEFAULT | LOCALE_SYSTEM_DEFAULT | LOCALE_CUSTOM_DEFAULT => 0x0412,
+        LOCALE_USER_DEFAULT | LOCALE_SYSTEM_DEFAULT | LOCALE_CUSTOM_DEFAULT => {
+            default_lcid_raw(kernel)
+        }
         _ => locale,
     }
 }

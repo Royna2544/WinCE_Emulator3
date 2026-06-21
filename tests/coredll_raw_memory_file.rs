@@ -16,9 +16,9 @@ use wince_emulation_v3::{
             ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_MODULE_HEAP_INFO,
             ORD_CE_GET_VOLUME_INFO_W, ORD_CE_REGISTER_FILE_SYSTEM_NOTIFICATION, ORD_CEIL,
             ORD_CHAR_LOWER_BUFF_W, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W,
-            ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS, ORD_COSH,
-            ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W,
-            ORD_CREATE_PARTITION, ORD_CREATE_PARTITION_EX, ORD_D_TO_ULL,
+            ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE, ORD_CONVERT_DEFAULT_LOCALE, ORD_COPY_FILE_W,
+            ORD_COS, ORD_COSH, ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W,
+            ORD_CREATE_FILE_W, ORD_CREATE_PARTITION, ORD_CREATE_PARTITION_EX, ORD_D_TO_ULL,
             ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W, ORD_DELETE_PARTITION,
             ORD_DEREGISTER_AFS, ORD_DEREGISTER_AFSNAME, ORD_DEVICE_IO_CONTROL,
             ORD_DISMOUNT_PARTITION, ORD_DISMOUNT_STORE, ORD_DPA_CLONE, ORD_DPA_CREATE,
@@ -37,13 +37,15 @@ use wince_emulation_v3::{
             ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FORMAT_PARTITION, ORD_FORMAT_PARTITION_EX,
             ORD_FORMAT_STORE, ORD_FPADD, ORD_FPCMP, ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP,
             ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES,
-            ORD_GET_COMM_MODEM_STATUS, ORD_GET_CRT_STORAGE_EX, ORD_GET_DISK_FREE_SPACE_EX_W,
-            ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SECURITY_W,
-            ORD_GET_FILE_SIZE, ORD_GET_LOCALE_INFO_W, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W,
-            ORD_GET_OVERLAPPED_RESULT, ORD_GET_PARTITION_INFO, ORD_GET_PROCESS_HEAP,
-            ORD_GET_STORE_INFO, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC,
-            ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE,
-            ORD_HEAP_VALIDATE, ORD_HYPOT, ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE,
+            ORD_GET_ACP, ORD_GET_COMM_MODEM_STATUS, ORD_GET_CRT_STORAGE_EX,
+            ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W,
+            ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE, ORD_GET_LOCALE_INFO_W,
+            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W, ORD_GET_OVERLAPPED_RESULT,
+            ORD_GET_PARTITION_INFO, ORD_GET_PROCESS_HEAP, ORD_GET_STORE_INFO,
+            ORD_GET_SYSTEM_DEFAULT_LANG_ID, ORD_GET_SYSTEM_DEFAULT_LCID, ORD_GET_USER_DEFAULT_LCID,
+            ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE,
+            ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE, ORD_HEAP_VALIDATE,
+            ORD_HYPOT, ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE,
             ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR,
             ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP,
             ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT,
@@ -92,7 +94,7 @@ use wince_emulation_v3::{
         },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_CURRENT_USER,
-            HKEY_LOCAL_MACHINE, REG_DWORD,
+            HKEY_LOCAL_MACHINE, REG_DWORD, RegistryValue,
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
@@ -263,6 +265,121 @@ fn coredll_raw_is_valid_locale_accepts_korean_and_defaults() -> Result<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ACP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(949),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_DEFAULT_LCID,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0412),
+            ..
+        }
+    ));
+
+    kernel.registry.set_value(
+        r"hklm\SOFTWARE\Microsoft\International",
+        "ACP",
+        RegistryValue::dword(1252),
+    );
+    kernel.registry.set_value(
+        r"hklm\SOFTWARE\Microsoft\International",
+        "LCID",
+        RegistryValue::dword(0x0409),
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ACP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1252),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_DEFAULT_LCID,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0409),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_USER_DEFAULT_LCID,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0409),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_DEFAULT_LANG_ID,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0409),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CONVERT_DEFAULT_LOCALE,
+            [0x0400],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0409),
+            ..
+        }
+    ));
+
     Ok(())
 }
 
