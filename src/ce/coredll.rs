@@ -46018,6 +46018,12 @@ fn map_single_point<M: CoredllGuestMemory>(
     point_ptr: u32,
     kind: PointMapKind,
 ) -> bool {
+    if !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
     let Some(point) = read_guest_point(kernel, memory, thread_id, point_ptr) else {
         return false;
     };
@@ -46028,10 +46034,14 @@ fn map_single_point<M: CoredllGuestMemory>(
     let Some(mapped) = mapped else {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
         return false;
     };
-    write_guest_point(kernel, memory, thread_id, point_ptr, mapped)
+    if !write_guest_point(kernel, memory, thread_id, point_ptr, mapped) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn window_from_point_raw(kernel: &mut CeKernel, thread_id: u32, x: u32, y: u32) -> u32 {
@@ -46172,7 +46182,7 @@ fn map_window_points<M: CoredllGuestMemory>(
     if !kernel.gwe.map_window_points(from, to, &mut points) {
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
         return 0;
     }
     let packed_delta = first_before
@@ -46189,6 +46199,7 @@ fn map_window_points<M: CoredllGuestMemory>(
             return 0;
         }
     }
+    kernel.threads.set_last_error(thread_id, 0);
     packed_delta
 }
 

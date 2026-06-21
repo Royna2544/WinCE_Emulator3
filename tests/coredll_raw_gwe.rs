@@ -26185,6 +26185,94 @@ fn coredll_raw_get_foreground_info_reports_focus_keyboard_and_layout() -> Result
 }
 
 #[test]
+fn coredll_raw_window_point_mapping_validates_ce_window_handles() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "POINTMAP", "point-map", None, 1, 0, 0);
+    let point_ptr = 0x1_0200;
+    memory.write_point(point_ptr, 10, 20);
+
+    // C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp::passNull2Draw
+    // expects these window-coordinate APIs to report ERROR_INVALID_WINDOW_HANDLE.
+    for (ordinal, name) in [
+        (ORD_CLIENT_TO_SCREEN, "ClientToScreen"),
+        (ORD_SCREEN_TO_CLIENT, "ScreenToClient"),
+    ] {
+        for args in [[0, 0], [0, point_ptr], [0x1234_5678, point_ptr]] {
+            assert!(
+                matches!(
+                    table.dispatch_raw_ordinal_with_memory(
+                        &mut kernel,
+                        &mut memory,
+                        thread_id,
+                        ordinal,
+                        args,
+                    ),
+                    CoredllDispatch::Returned {
+                        value: CoredllValue::Bool(false),
+                        ..
+                    }
+                ),
+                "{name} args {args:?} must fail"
+            );
+            assert_eq!(
+                kernel.threads.get_last_error(thread_id),
+                ERROR_INVALID_WINDOW_HANDLE,
+                "{name} args {args:?} last error"
+            );
+        }
+    }
+
+    for args in [
+        [0, 0xffff_ffff, point_ptr, 1],
+        [0x1234_5678, 0, point_ptr, 1],
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_MAP_WINDOW_POINTS,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_WINDOW_HANDLE,
+            "MapWindowPoints args {args:?} last error"
+        );
+    }
+
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MAP_WINDOW_POINTS,
+            [hwnd, 0, point_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

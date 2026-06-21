@@ -1128,6 +1128,11 @@ notes when it is still needed for implementation.
      the CE font-width names `GetCharWidth32` and `GetCharABCWidths` in
      addition to the already routed ordinals, so name-based imports reach the
      existing raw width and ABC metric shims.
+   - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\draw.cpp`: raw
+     `ClientToScreen`, `ScreenToClient`, and `MapWindowPoints` now follow CE's
+     window-coordinate validation order, reporting `ERROR_INVALID_WINDOW_HANDLE`
+     for null/stale HWNDs before touching point buffers and clearing last-error
+     on successful zero-point mapping.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the
