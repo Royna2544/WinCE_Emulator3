@@ -18,17 +18,17 @@ use wince_emulation_v3::{
             ORD_CHAR_LOWER_BUFF_W, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W, ORD_CHAR_UPPER_W,
             ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE, ORD_CONVERT_DEFAULT_LOCALE, ORD_COPY_FILE_W,
             ORD_COS, ORD_COSH, ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W,
-            ORD_CREATE_FILE_W, ORD_CREATE_PARTITION, ORD_CREATE_PARTITION_EX, ORD_D_TO_ULL,
-            ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W, ORD_DELETE_PARTITION,
-            ORD_DEREGISTER_AFS, ORD_DEREGISTER_AFSNAME, ORD_DEVICE_IO_CONTROL,
-            ORD_DISMOUNT_PARTITION, ORD_DISMOUNT_STORE, ORD_DPA_CLONE, ORD_DPA_CREATE,
-            ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK, ORD_DPA_ENUM_CALLBACK, ORD_DPA_GET_PTR,
-            ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL,
-            ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE, ORD_DSA_CREATE,
-            ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK, ORD_DSA_ENUM_CALLBACK, ORD_DSA_GET_ITEM_PTR,
-            ORD_DSA_GROW, ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE, ORD_DUPLICATE_HANDLE, ORD_EQD,
-            ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL, ORD_FABS, ORD_FCLOSE,
-            ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
+            ORD_CREATE_FILE_W, ORD_CREATE_LOCALE_VIEW, ORD_CREATE_PARTITION,
+            ORD_CREATE_PARTITION_EX, ORD_D_TO_ULL, ORD_DELETE_AND_RENAME_FILE, ORD_DELETE_FILE_W,
+            ORD_DELETE_PARTITION, ORD_DEREGISTER_AFS, ORD_DEREGISTER_AFSNAME,
+            ORD_DEVICE_IO_CONTROL, ORD_DISMOUNT_PARTITION, ORD_DISMOUNT_STORE, ORD_DPA_CLONE,
+            ORD_DPA_CREATE, ORD_DPA_DESTROY, ORD_DPA_DESTROY_CALLBACK, ORD_DPA_ENUM_CALLBACK,
+            ORD_DPA_GET_PTR, ORD_DPA_GROW, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV,
+            ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE,
+            ORD_DSA_CREATE, ORD_DSA_DESTROY, ORD_DSA_DESTROY_CALLBACK, ORD_DSA_ENUM_CALLBACK,
+            ORD_DSA_GET_ITEM_PTR, ORD_DSA_GROW, ORD_DSA_INSERT_ITEM, ORD_DSA_SET_RANGE,
+            ORD_DUPLICATE_HANDLE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL,
+            ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
             ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_CLOSE_PARTITION, ORD_FIND_CLOSE_STORE,
             ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W, ORD_FIND_FIRST_PARTITION,
             ORD_FIND_FIRST_STORE, ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W,
@@ -20617,6 +20617,80 @@ fn coredll_raw_mips_soft_float_extended_arithmetic_and_conversions() -> Result<(
             }
         ),
         "NES 3.0!=3.0 must return false"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_create_locale_view_maps_synthetic_nls_view() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let size_ptr = 0x7b00;
+    memory.map_words(size_ptr, 1);
+    memory.write_word(size_ptr, 0xdead_beef);
+
+    let view_ptr = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_LOCALE_VIEW,
+        [size_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("CreateLocaleView did not return a view pointer: {other:?}"),
+    };
+    assert_ne!(view_ptr, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(size_ptr)?, 64);
+    let allocation = kernel
+        .memory
+        .virtual_allocation(view_ptr)
+        .expect("locale view virtual allocation");
+    assert_eq!(allocation.size, 0x1_0000);
+    assert_eq!(allocation.protect, 0x02);
+    assert_eq!(allocation.initial_bytes.len(), 64);
+    assert_eq!(&allocation.initial_bytes[..13], b"WINCEEMU-NLS\0");
+    assert_eq!(
+        u32::from_le_bytes(allocation.initial_bytes[13..17].try_into().unwrap()),
+        949
+    );
+    assert_eq!(
+        u32::from_le_bytes(allocation.initial_bytes[17..21].try_into().unwrap()),
+        949
+    );
+    assert_eq!(
+        u32::from_le_bytes(allocation.initial_bytes[21..25].try_into().unwrap()),
+        0x0412
+    );
+
+    let allocation_count = kernel.memory.virtual_allocations().count();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_LOCALE_VIEW,
+            [0x7c00],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        kernel.memory.virtual_allocations().count(),
+        allocation_count
     );
 
     Ok(())

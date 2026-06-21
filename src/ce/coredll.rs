@@ -4329,12 +4329,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_CREATE_LOCALE_VIEW => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
-        }
+        ORD_CREATE_LOCALE_VIEW => Some(CoredllValue::Handle(create_locale_view_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_LOAD_INT_CHAIN_HANDLER | ORD_FREE_INT_CHAIN_HANDLER => {
             kernel
                 .threads
@@ -10126,6 +10126,49 @@ fn get_system_memory_division_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn create_locale_view_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    view_size_ptr: u32,
+) -> u32 {
+    const PAGE_READONLY: u32 = 0x02;
+
+    let bytes = synthetic_nls_view_bytes(kernel);
+    let view_size = bytes.len() as u32;
+    if !write_guest_u32(kernel, memory, thread_id, view_size_ptr, view_size) {
+        return 0;
+    }
+    let Some(base) =
+        kernel
+            .memory
+            .virtual_alloc(0, view_size, MEM_COMMIT | MEM_RESERVE, PAGE_READONLY)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    };
+    kernel.memory.set_virtual_initial_bytes(base, bytes.clone());
+    try_seed_guest_bytes(memory, base, &bytes);
+    kernel.threads.set_last_error(thread_id, 0);
+    base
+}
+
+fn synthetic_nls_view_bytes(kernel: &mut CeKernel) -> Vec<u8> {
+    let acp = get_acp_raw(kernel);
+    let oemcp = get_oemcp_raw(kernel);
+    let lcid = default_lcid_raw(kernel);
+    let mut bytes = Vec::with_capacity(64);
+    bytes.extend_from_slice(b"WINCEEMU-NLS\0");
+    bytes.extend_from_slice(&acp.to_le_bytes());
+    bytes.extend_from_slice(&oemcp.to_le_bytes());
+    bytes.extend_from_slice(&lcid.to_le_bytes());
+    bytes.extend_from_slice(&(lcid & 0xffff).to_le_bytes());
+    bytes.resize(64, 0);
+    bytes
 }
 
 fn set_system_memory_division_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {

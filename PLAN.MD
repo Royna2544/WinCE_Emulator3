@@ -1367,6 +1367,11 @@ notes when it is still needed for implementation.
      registry area, resets an override when `lpLCData` is null, and
      `GetLocaleInfoW` observes those values unless `LOCALE_NOUSEROVERRIDE`
      requests the image default.
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c` and
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\kwin32.h`: raw
+     `CreateLocaleView` now writes the mapped-view size and returns a
+     read-only synthetic NLS virtual view seeded with active ACP/OEMCP/LCID
+     metadata instead of reporting `ERROR_NOT_SUPPORTED`.
 
 ## Validation Gates
 
