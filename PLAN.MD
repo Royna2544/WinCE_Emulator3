@@ -1285,6 +1285,10 @@ notes when it is still needed for implementation.
      of requiring the active process to be hidden, allowing an idle small active
      surface to yield to a larger runnable parked route surface while preserving
      queued active visible-window work.
+   - Live-pump timeslice hooks now perform the visible-parked-process yield
+     check before the host-wall-clock stop path when no guest return trampolines
+     are pending, so an idle active thread can hand off to visible parked UI
+     work without waiting for the outer wall-clock guard.
 
 8. Close core time and NLS parity gaps.
    - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\time.c` and

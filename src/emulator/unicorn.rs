@@ -7027,6 +7027,29 @@ impl UnicornMips {
                 &trampoline_jump_index_timeslice_hook,
                 |addr| read_unicorn_u32(uc, addr),
             );
+            if live_pump {
+                let no_pending_guest_returns =
+                    pending_wndproc_returns_timeslice_hook.borrow().is_empty()
+                        && pending_qsort_returns_timeslice_hook.borrow().is_empty()
+                        && pending_dll_lifecycle_returns_timeslice_hook
+                            .borrow()
+                            .is_empty();
+                if no_pending_guest_returns && let Some(context_pc) = context_pc {
+                    let active_thread_id = *current_thread_id_timeslice_hook.borrow();
+                    let kernel_ref = unsafe { &*kernel_ptr };
+                    if !Self::thread_has_visible_receiver_work(active_thread_id, kernel_ref)
+                        && Self::live_pump_active_should_yield_to_visible_parked_process(
+                            &parked_child_processes_timeslice_hook.borrow(),
+                            kernel_ref,
+                            active_thread_id,
+                        )
+                    {
+                        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(context_pc));
+                        let _ = uc.emu_stop();
+                        return;
+                    }
+                }
+            }
             if live_pump
                 && host_wall_clock_limit
                     .is_some_and(|limit| host_wall_clock_started.elapsed() >= limit)
