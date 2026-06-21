@@ -82,6 +82,7 @@ pub struct CoredllExport {
 }
 
 const CE_ACP_CODE_PAGE: u32 = 949;
+const CP_OEMCP_CODE_PAGE: u32 = 1;
 const CE_DEFAULT_LCID: u32 = 0x0412;
 const CE_INTERNATIONAL_REGISTRY_KEY: &str = r"SOFTWARE\Microsoft\International";
 const CP_UTF8_CODE_PAGE: u32 = 65001;
@@ -2021,7 +2022,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0) as u8,
         ))),
         ORD_IS_DBCSLEAD_BYTE_EX => Some(CoredllValue::Bool(is_dbcs_lead_byte_raw(
-            active_conversion_code_page(raw_arg(args, 0)),
+            active_conversion_code_page(kernel, raw_arg(args, 0)),
             raw_arg(args, 1) as u8,
         ))),
         ORD_CONVERT_DEFAULT_LOCALE => Some(CoredllValue::U32(convert_default_locale_raw(
@@ -2029,7 +2030,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_GET_ACP => Some(CoredllValue::U32(get_acp_raw(kernel))),
-        ORD_GET_OEMCP => Some(CoredllValue::U32(CE_ACP_CODE_PAGE)),
+        ORD_GET_OEMCP => Some(CoredllValue::U32(get_oemcp_raw(kernel))),
         ORD_GET_SYSTEM_DEFAULT_LCID | ORD_GET_USER_DEFAULT_LCID => {
             Some(CoredllValue::U32(default_lcid_raw(kernel)))
         }
@@ -3256,10 +3257,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_SET_OEMCP => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_SET_OEMCP => Some(CoredllValue::Bool(set_oemcp_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_DBCANONICALIZE => {
             kernel
                 .threads
@@ -11840,7 +11842,7 @@ fn multi_byte_to_wide_char_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let code_page = active_conversion_code_page(raw_arg(args, 0));
+    let code_page = active_conversion_code_page(kernel, raw_arg(args, 0));
     let flags = raw_arg(args, 1);
     let input_ptr = raw_arg(args, 2);
     let input_len = raw_arg(args, 3) as i32;
@@ -11912,11 +11914,11 @@ fn mbstowcs_raw<M: CoredllGuestMemory>(
         .min(u32::MAX as usize) as u32
 }
 
-fn active_conversion_code_page(code_page: u32) -> u32 {
-    if code_page == 0 {
-        CE_ACP_CODE_PAGE
-    } else {
-        code_page
+fn active_conversion_code_page(kernel: &mut CeKernel, code_page: u32) -> u32 {
+    match code_page {
+        0 => get_acp_raw(kernel),
+        CP_OEMCP_CODE_PAGE => get_oemcp_raw(kernel),
+        _ => code_page,
     }
 }
 
@@ -11957,7 +11959,7 @@ fn wide_char_to_multi_byte_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let code_page = active_conversion_code_page(raw_arg(args, 0));
+    let code_page = active_conversion_code_page(kernel, raw_arg(args, 0));
     let flags = raw_arg(args, 1);
     let input_ptr = raw_arg(args, 2);
     let input_len = raw_arg(args, 3) as i32;
@@ -20785,7 +20787,7 @@ fn get_cpinfo_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> bool {
-    let cp = active_conversion_code_page(raw_arg(args, 0));
+    let cp = active_conversion_code_page(kernel, raw_arg(args, 0));
     let out_ptr = raw_arg(args, 1);
     if out_ptr == 0 {
         kernel
@@ -20907,6 +20909,31 @@ fn set_acp_raw(kernel: &mut CeKernel, thread_id: u32, code_page: u32) -> bool {
     set_registry_international_dword(kernel, "ACP", code_page);
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn get_oemcp_raw(kernel: &mut CeKernel) -> u32 {
+    let fallback = default_oem_code_page_for_lcid(default_lcid_raw(kernel));
+    registry_international_dword(kernel, "OEMCP", fallback)
+}
+
+fn set_oemcp_raw(kernel: &mut CeKernel, thread_id: u32, code_page: u32) -> bool {
+    if !is_valid_code_page_raw(code_page) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    set_registry_international_dword(kernel, "OEMCP", code_page);
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn default_oem_code_page_for_lcid(lcid: u32) -> u32 {
+    match lcid & 0xffff {
+        0x0409 => 437,
+        0x0412 => 949,
+        _ => CE_ACP_CODE_PAGE,
+    }
 }
 
 fn default_lcid_raw(kernel: &mut CeKernel) -> u32 {

@@ -37,10 +37,10 @@ use wince_emulation_v3::{
             ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FORMAT_PARTITION, ORD_FORMAT_PARTITION_EX,
             ORD_FORMAT_STORE, ORD_FPADD, ORD_FPCMP, ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP,
             ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES,
-            ORD_GET_ACP, ORD_GET_COMM_MODEM_STATUS, ORD_GET_CRT_STORAGE_EX,
+            ORD_GET_ACP, ORD_GET_COMM_MODEM_STATUS, ORD_GET_CPINFO, ORD_GET_CRT_STORAGE_EX,
             ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W,
             ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE, ORD_GET_LOCALE_INFO_W,
-            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W, ORD_GET_OVERLAPPED_RESULT,
+            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W, ORD_GET_OEMCP, ORD_GET_OVERLAPPED_RESULT,
             ORD_GET_PARTITION_INFO, ORD_GET_PROCESS_HEAP, ORD_GET_STORE_INFO,
             ORD_GET_SYSTEM_DEFAULT_LANG_ID, ORD_GET_SYSTEM_DEFAULT_LCID, ORD_GET_USER_DEFAULT_LCID,
             ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE,
@@ -68,7 +68,7 @@ use wince_emulation_v3::{
             ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
             ORD_REMOVE_DIRECTORY_W, ORD_RENAME_PARTITION, ORD_SECURITY_GEN_COOKIE,
             ORD_SECURITY_GEN_COOKIE2, ORD_SET_ACP, ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W,
-            ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME,
+            ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME, ORD_SET_OEMCP,
             ORD_SET_PARTITION_ATTRIBUTES, ORD_SET_SYSTEM_DEFAULT_LCID, ORD_SET_USER_DEFAULT_LCID,
             ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF,
             ORD_SPRINTF, ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W,
@@ -276,7 +276,11 @@ fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> 
     let mut memory = TestGuestMemory::default();
     let thread_id = 11;
     let buffer = 0x7100;
+    let cpinfo = 0x7300;
     memory.map_bytes(buffer, 128);
+    memory.map_bytes(cpinfo, 18);
+    memory.map_words(cpinfo, 1);
+    memory.map_halfwords(cpinfo + 4, 1);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -402,6 +406,34 @@ fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> 
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_GET_OEMCP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(437),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CPINFO,
+            [1, cpinfo],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(cpinfo)?, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_SET_ACP,
             [65001],
         ),
@@ -457,6 +489,20 @@ fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> 
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_GET_OEMCP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(949),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_SET_USER_DEFAULT_LCID,
             [0x0409],
         ),
@@ -479,6 +525,48 @@ fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> 
         }
     ));
     assert_eq!(read_wide_z_from_bytes(&memory, buffer, 64), "0409");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_OEMCP,
+            [932],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OEMCP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(932),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CPINFO,
+            [1, cpinfo],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(cpinfo)?, 2);
+    assert_eq!(&memory.read_bytes(cpinfo + 6, 4), &[0x81, 0x9F, 0xE0, 0xFC]);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

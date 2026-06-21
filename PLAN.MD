@@ -1307,6 +1307,10 @@ notes when it is still needed for implementation.
      the same `International` registry DWORDs with basic CE table validation,
      so the default code page/locale getters and locale-info queries observe
      successful updates while invalid LCIDs leave the prior default intact.
+     `GetOEMCP` and `CP_OEMCP` resolution now use CE's high-word OEM-code-page
+     model from `KINX_NLS_CP`, falling back through the active locale table
+     (`0409` -> 437, `0412` -> 949) and honoring a `SetOEMCP` override for
+     raw conversion/`GetCPInfo` callers.
 
 ## Validation Gates
 
