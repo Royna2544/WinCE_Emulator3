@@ -2996,10 +2996,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_GET_FSHEAP_INFO => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(fs_heap_info_raw(kernel)))
         }
         ORD_PREPARE_THREAD_EXIT => {
             // KillAllOtherThreads() — CE internal; terminate other threads. No-op in emulation.
@@ -10202,6 +10200,18 @@ fn set_system_memory_division_raw(kernel: &mut CeKernel, thread_id: u32, args: &
 fn system_memory_store_pages(kernel: &CeKernel) -> u32 {
     let object_store = kernel.files.object_store();
     (object_store.total_bytes / u64::from(CE_SYSTEM_PAGE_SIZE)).min(u32::MAX as u64) as u32
+}
+
+fn fs_heap_info_raw(kernel: &CeKernel) -> u32 {
+    let object_store = kernel.files.object_store();
+    let page_size = u64::from(CE_SYSTEM_PAGE_SIZE);
+    let aligned_bytes = object_store
+        .total_bytes
+        .saturating_add(page_size - 1)
+        .saturating_div(page_size)
+        .saturating_mul(page_size);
+    let max_aligned_u32 = u64::from(u32::MAX) & !(page_size - 1);
+    aligned_bytes.min(max_aligned_u32) as u32
 }
 
 fn page_out_module_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {

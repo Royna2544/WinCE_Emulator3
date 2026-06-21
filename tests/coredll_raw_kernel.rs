@@ -39,10 +39,10 @@ use wince_emulation_v3::{
             ORD_GET_DEVICE_BY_INDEX, ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE,
             ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE, ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER,
             ORD_GET_EVENT_DATA, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_HEAP_SNAPSHOT,
-            ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_FILE_NAME_W,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO,
-            ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_OPEN_FILE_NAME_W,
+            ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_FSHEAP_INFO,
+            ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION,
+            ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_OPEN_FILE_NAME_W,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
             ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROC_NAME,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
@@ -5494,6 +5494,22 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(memory.read_u32(page_size_ptr)?, 4096);
     assert_eq!(memory.read_u32(store_pages_ptr)?, store_size / 4096);
     assert_eq!(memory.read_u32(ram_pages_ptr)?, 16 * 1024);
+
+    let expected_fs_heap = memory.read_u32(store_pages_ptr)? * memory.read_u32(page_size_ptr)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FSHEAP_INFO,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } if value == expected_fs_heap
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     const SYSMEM_CHANGED: u32 = 0;
     const SYSMEM_FAILED: u32 = 3;

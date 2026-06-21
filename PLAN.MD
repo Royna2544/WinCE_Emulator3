@@ -352,6 +352,13 @@ notes when it is still needed for implementation.
   synthetic object-store split and `SYSMEM_FAILED`/`ERROR_INVALID_PARAMETER`
   for unsupported repartitions instead of reporting `ERROR_NOT_SUPPORTED`.
   Coverage verifies the no-change success and failed repartition paths.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kwin32.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`: raw `GetFSHeapInfo` now
+  follows CE's kernel-mode `DWORD GetFSHeapInfo(void)` shape instead of
+  reporting unsupported. The emulator returns the page-aligned synthetic
+  object-store reservation that backs the existing memory-division model, and
+  coverage verifies it against the reported store pages and page size.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`, and
