@@ -1123,6 +1123,11 @@ notes when it is still needed for implementation.
      patterns in `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\text.cpp`/`draw.cpp`:
      raw `GetFontData` and `GetOutlineTextMetricsW` now validate null/bad HDCs
      before falling back to their unsupported/no-outline valid-DC paths.
+   - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
+     `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`: coredll now exports
+     the CE font-width names `GetCharWidth32` and `GetCharABCWidths` in
+     addition to the already routed ordinals, so name-based imports reach the
+     existing raw width and ABC metric shims.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the

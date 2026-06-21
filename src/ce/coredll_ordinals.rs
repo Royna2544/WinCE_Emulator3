@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 132] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 134] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -14271,6 +14271,14 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 132] = &[
     CoredllOrdinalDef {
         name: "GetCharABCWidthsI",
         ordinal: ORD_GET_CHAR_ABCWIDTHS_I,
+    },
+    CoredllOrdinalDef {
+        name: "GetCharWidth32",
+        ordinal: ORD_GET_CHAR_WIDTH32,
+    },
+    CoredllOrdinalDef {
+        name: "GetCharABCWidths",
+        ordinal: ORD_GET_CHAR_ABCWIDTHS,
     },
     CoredllOrdinalDef {
         name: "GetFontData",

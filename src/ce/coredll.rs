@@ -66446,6 +66446,8 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "EnumFontFamiliesExW",
     "GetFontData",
     "GetOutlineTextMetricsW",
+    "GetCharWidth32",
+    "GetCharABCWidths",
     "GetCharABCWidthsI",
     // Process/thread utilities
     "OpenThread",
