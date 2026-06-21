@@ -2832,6 +2832,7 @@ mod tests {
     #[test]
     fn fsdmgr_file_security_imports_route_mounted_no_security_manager_path() {
         const ERROR_NOT_SUPPORTED: u32 = 50;
+        const ERROR_INVALID_PARAMETER: u32 = 87;
         const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
         const OWNER_SECURITY_INFORMATION: u32 = 0x0000_0001;
 
@@ -2930,6 +2931,30 @@ mod tests {
                 &mut kernel,
                 &mut memory,
                 11,
+                IMPORT_TRAP_BASE,
+                [
+                    0,
+                    OWNER_SECURITY_INFORMATION,
+                    0x1234_5000,
+                    16,
+                    length_needed,
+                ],
+            ),
+            Some(0)
+        );
+        assert_eq!(kernel.threads.get_last_error(11), ERROR_INVALID_PARAMETER);
+        assert_eq!(
+            memory.word(length_needed),
+            0xfeed_cafe,
+            "FSINT_GetFileSecurityW canonicalizes and rejects the path before touching output buffers"
+        );
+
+        memory.map_word(length_needed, 0xfeed_cafe);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
                 IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE,
                 [
                     missing_path,
@@ -2955,6 +2980,22 @@ mod tests {
             Some(0)
         );
         assert_eq!(kernel.threads.get_last_error(11), ERROR_NOT_SUPPORTED);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                11,
+                IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2,
+                [0, OWNER_SECURITY_INFORMATION, 0, 16],
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(11),
+            ERROR_INVALID_PARAMETER,
+            "FSINT_SetFileSecurityW rejects a bad path before duplicating the descriptor"
+        );
 
         assert_eq!(
             table.dispatch_trap(

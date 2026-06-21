@@ -1135,6 +1135,13 @@ notes when it is still needed for implementation.
     before writing any optional 64-bit output values. Coverage preserves the
     existing null-path object-store query while verifying failed explicit paths
     leave caller output buffers untouched.
+  - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp`:
+    FSDMGR `FSINT_GetFileSecurityW`/`FSINT_SetFileSecurityW` imports now keep
+    CE's internal ordering by canonicalizing and routing the path before
+    touching caller security-descriptor buffers, while public `FSEXT_*` and
+    coredll wrappers retain their duplicate-buffer behavior. Coverage verifies
+    bad internal paths leave output length buffers unchanged and reject before
+    descriptor duplication.
 
 6. Expand input, text, GDI, and drawing fidelity.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph

@@ -3503,6 +3503,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 2),
             raw_arg(args, 3),
             raw_arg(args, 4),
+            false,
         ))),
         ORD_AFS_GET_FILE_SECURITY_W => Some(CoredllValue::Bool(get_file_security_w_raw(
             kernel,
@@ -3512,6 +3513,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 3),
             raw_arg(args, 4),
             raw_arg(args, 5),
+            false,
         ))),
         ORD_SET_FILE_SECURITY_W => Some(CoredllValue::Bool(set_file_security_w_raw(
             kernel,
@@ -3520,6 +3522,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 2),
             raw_arg(args, 3),
+            false,
         ))),
         ORD_AFS_SET_FILE_SECURITY_W => Some(CoredllValue::Bool(set_file_security_w_raw(
             kernel,
@@ -3528,6 +3531,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 3),
             raw_arg(args, 4),
+            false,
         ))),
         ORD_LOAD_FSD => Some(CoredllValue::Bool(load_fsd_raw(
             kernel,
@@ -14541,27 +14545,44 @@ pub(crate) fn dispatch_fsdmgr_import_raw<M: CoredllGuestMemory>(
         FsdmgrImport::FsextGetFileNotificationInfoW => u32::from(
             ce_get_file_notification_info_raw_impl(kernel, memory, thread_id, args, false),
         ),
-        FsdmgrImport::FsintGetFileSecurityW | FsdmgrImport::FsextGetFileSecurityW => {
-            u32::from(get_file_security_w_raw(
-                kernel,
-                memory,
-                thread_id,
-                raw_arg(args, 0),
-                raw_arg(args, 2),
-                raw_arg(args, 3),
-                raw_arg(args, 4),
-            ))
-        }
-        FsdmgrImport::FsintSetFileSecurityW | FsdmgrImport::FsextSetFileSecurityW => {
-            u32::from(set_file_security_w_raw(
-                kernel,
-                memory,
-                thread_id,
-                raw_arg(args, 0),
-                raw_arg(args, 2),
-                raw_arg(args, 3),
-            ))
-        }
+        FsdmgrImport::FsintGetFileSecurityW => u32::from(get_file_security_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+            raw_arg(args, 4),
+            true,
+        )),
+        FsdmgrImport::FsextGetFileSecurityW => u32::from(get_file_security_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+            raw_arg(args, 4),
+            false,
+        )),
+        FsdmgrImport::FsintSetFileSecurityW => u32::from(set_file_security_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+            true,
+        )),
+        FsdmgrImport::FsextSetFileSecurityW => u32::from(set_file_security_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+            false,
+        )),
     };
     Some(result)
 }
@@ -20568,6 +20589,7 @@ fn get_file_security_w_raw<M: CoredllGuestMemory>(
     security_descriptor_ptr: u32,
     length: u32,
     length_needed_ptr: u32,
+    internal_path_first: bool,
 ) -> bool {
     let path = read_guest_wide_arg(memory, path_ptr);
     let result = match path {
@@ -20579,6 +20601,9 @@ fn get_file_security_w_raw<M: CoredllGuestMemory>(
             false
         }
     };
+    if internal_path_first && !result {
+        return false;
+    }
     if security_descriptor_ptr != 0
         && length != 0
         && read_guest_bytes(kernel, memory, thread_id, security_descriptor_ptr, length).is_none()
@@ -20604,7 +20629,19 @@ fn set_file_security_w_raw<M: CoredllGuestMemory>(
     path_ptr: u32,
     security_descriptor_ptr: u32,
     length: u32,
+    internal_path_first: bool,
 ) -> bool {
+    if internal_path_first {
+        let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        if !validate_file_security_path(kernel, thread_id, &path) {
+            return false;
+        }
+    }
     if length != 0
         && (security_descriptor_ptr == 0
             || read_guest_bytes(kernel, memory, thread_id, security_descriptor_ptr, length)
@@ -20615,14 +20652,16 @@ fn set_file_security_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
         return false;
     }
-    let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    };
-    if !validate_file_security_path(kernel, thread_id, &path) {
-        return false;
+    if !internal_path_first {
+        let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        if !validate_file_security_path(kernel, thread_id, &path) {
+            return false;
+        }
     }
     kernel
         .threads
