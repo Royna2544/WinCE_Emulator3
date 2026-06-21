@@ -803,6 +803,11 @@ notes when it is still needed for implementation.
   with the same source cursor succeed as CE no-ops, even when the hotspot
   arguments differ. Coverage verifies the helper state and raw ordinal path
   keep the existing merged drag image instead of replacing it.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\CONTROLS\IMGCTL\imagelist.cpp`:
+  raw `ImageList_SetBkColor`/`ImageList_GetBkColor` now have CE-backed
+  ordinal coverage for default `CLR_NONE`, previous-color returns, unchanged
+  color early-return behavior, and invalid image-list handles returning
+  `CLR_NONE` with `ERROR_INVALID_HANDLE`.
 - `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\TASKBAR\taskbar.cpp`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\WTL\INCLUDE\atlframe.h`, and
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\resource.cpp`: raw
@@ -844,9 +849,12 @@ notes when it is still needed for implementation.
   active child processes with pending window-targeted messages are no longer
   treated as terminal exits before those messages are pumped, preserving the CE
   wait/message transition instead of handing control back to the parked parent
-  too early. Return-stub handoffs now also preserve active processes that still
-  own visible windows or receiver work, so child image launches cannot strand
-  the parent route UI while rotating into the parked child process. Remote live
+  too early. Hidden queued receiver work is now also deferred when another
+  runnable parked process owns visible windows, so generic receiver rotation
+  cannot outrank visible route UI progress. Return-stub handoffs now also
+  preserve active processes that still own visible windows or receiver work, so
+  child image launches cannot strand the parent route UI while rotating into
+  the parked child process. Remote live
   pump idling now only sleeps when there is no saved guest context to resume,
   keeping remote route UI progress moving between host wall-clock slices. The
   saved-context idle rotation now also requires no active running guest thread

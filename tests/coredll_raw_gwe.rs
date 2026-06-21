@@ -62,8 +62,9 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
             ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
             ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
-            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
-            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_REPLACE_ICON,
+            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
+            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
             ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
             ORD_IMM_ASSOCIATE_CONTEXT, ORD_IMM_CREATE_CONTEXT, ORD_IMM_CREATE_IMCC,
             ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DESTROY_IMCC, ORD_IMM_DISABLE_IME, ORD_IMM_ENABLE_IME,
@@ -56236,6 +56237,137 @@ fn coredll_raw_image_list_all_white_overlay_is_zero_sized() -> Result<()> {
     assert_eq!(memory.read_i32(draw_params + 24)?, 0);
     assert_eq!(memory.read_i32(draw_params + 28)?, 0);
     assert_eq!(memory.read_u32(draw_params + 48)?, ILD_TRANSPARENT);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_image_list_bk_color_follows_ce_return_contract() -> Result<()> {
+    const CLR_NONE: u32 = 0xffff_ffff;
+    const ILC_COLOR16: u32 = 0x0010;
+    const GREEN: u32 = 0x0000_ff00;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 177_u32;
+
+    let list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_COLOR16, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(bk color) failed: {other:?}"),
+    };
+    assert_ne!(list, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_BK_COLOR,
+            [list],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(CLR_NONE),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_BK_COLOR,
+            [list, GREEN],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(CLR_NONE),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_BK_COLOR,
+            [list],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(GREEN),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_BK_COLOR,
+            [list, GREEN],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(GREEN),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.resources.image_list(list).map(|list| list.bk_color),
+        Some(GREEN),
+        "CE ImageList_SetBkColor returns early without changing state when the color is unchanged"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_BK_COLOR,
+            [0xdead_beef],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(CLR_NONE),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_BK_COLOR,
+            [0xdead_beef, GREEN],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(CLR_NONE),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
 
     Ok(())
 }
