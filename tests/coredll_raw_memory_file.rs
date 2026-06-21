@@ -46,30 +46,30 @@ use wince_emulation_v3::{
             ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE,
             ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE, ORD_HEAP_VALIDATE,
             ORD_HYPOT, ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE,
-            ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR,
-            ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP,
-            ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT,
-            ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE,
-            ORD_LOCAL_FREE_IN_PROCESS, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
-            ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX, ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC,
-            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET,
-            ORD_MOUNT_PARTITION, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED,
-            ORD_NES, ORD_OPEN_PARTITION, ORD_OPEN_STORE, ORD_OPERATOR_DELETE,
-            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW,
-            ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND,
-            ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
-            ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W,
-            ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W,
-            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_REGISTER_AFSEX,
-            ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD,
-            ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING,
-            ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
-            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC,
-            ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
-            ORD_REMOVE_DIRECTORY_W, ORD_RENAME_PARTITION, ORD_SECURITY_GEN_COOKIE,
-            ORD_SECURITY_GEN_COOKIE2, ORD_SET_ACP, ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W,
-            ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME,
-            ORD_SET_LOCALE_INFO_W, ORD_SET_OEMCP, ORD_SET_PARTITION_ATTRIBUTES,
+            ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_CODE_PTR, ORD_IS_BAD_PTR,
+            ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE,
+            ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT,
+            ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC,
+            ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
+            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
+            ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
+            ORD_MEMMOVE, ORD_MEMSET, ORD_MOUNT_PARTITION, ORD_MOVE_FILE_W, ORD_MSIZE,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES, ORD_OPEN_PARTITION, ORD_OPEN_STORE,
+            ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW,
+            ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW,
+            ORD_PRINTF, ORD_RAND, ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY,
+            ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W,
+            ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W,
+            ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
+            ORD_REGISTER_AFSEX, ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE,
+            ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD,
+            ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC,
+            ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE,
+            ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC,
+            ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W, ORD_RENAME_PARTITION,
+            ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2, ORD_SET_ACP, ORD_SET_COMM_BREAK,
+            ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W,
+            ORD_SET_FILE_TIME, ORD_SET_LOCALE_INFO_W, ORD_SET_OEMCP, ORD_SET_PARTITION_ATTRIBUTES,
             ORD_SET_SYSTEM_DEFAULT_LCID, ORD_SET_USER_DEFAULT_LCID, ORD_SETUP_COMM,
             ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF,
             ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
@@ -4666,6 +4666,104 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_is_bad_ptr_uses_ce_flag_pointer_length_shape() -> Result<()> {
+    const VERIFY_READ_FLAG: u32 = 0;
+    const VERIFY_EXECUTE_FLAG: u32 = 0;
+    const VERIFY_WRITE_FLAG: u32 = 1;
+
+    fn call_probe(
+        table: &CoredllExportTable,
+        kernel: &mut CeKernel,
+        memory: &mut TestGuestMemory,
+        thread_id: u32,
+        ordinal: u32,
+        args: impl IntoIterator<Item = u32>,
+    ) -> bool {
+        match table.dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ordinal, args) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(value),
+                ..
+            } => value,
+            other => panic!("pointer probe did not return bool: {other:?}"),
+        }
+    }
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let ptr = 0x3000_1000;
+    let one_byte_code = 0x3000_2000;
+    memory.map_bytes(ptr, 4);
+    memory.map_bytes(one_byte_code, 1);
+
+    assert!(!call_probe(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IS_BAD_PTR,
+        [VERIFY_READ_FLAG, ptr, 4],
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(!call_probe(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IS_BAD_PTR,
+        [VERIFY_WRITE_FLAG, ptr, 4],
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(!call_probe(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IS_BAD_PTR,
+        [VERIFY_READ_FLAG, 0, 0],
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(call_probe(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IS_BAD_PTR,
+        [VERIFY_READ_FLAG, 0, 1],
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(!call_probe(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IS_BAD_CODE_PTR,
+        [one_byte_code],
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(!call_probe(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IS_BAD_PTR,
+        [VERIFY_EXECUTE_FLAG, one_byte_code, 1],
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }

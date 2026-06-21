@@ -2658,21 +2658,22 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 raw_arg(args, 0),
             )))
         }
-        ORD_IS_BAD_PTR => {
-            // IsBadPtr(lp, ucb) — TRUE if range is not accessible (legacy CE ordinal).
-            let lp = raw_arg(args, 0);
-            let ucb = raw_arg(args, 1);
-            let is_bad = lp == 0 || (ucb != 0 && !kernel.memory.contains_allocated_range(lp, ucb));
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(is_bad))
-        }
-        ORD_IS_BAD_CODE_PTR => {
-            // IsBadCodePtr(lpfn) — TRUE if lpfn is not a valid executable address.
-            let lpfn = raw_arg(args, 0);
-            let is_bad = lpfn == 0 || !kernel.memory.contains_allocated_range(lpfn, 4);
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(is_bad))
-        }
+        ORD_IS_BAD_PTR => Some(CoredllValue::Bool(is_bad_ptr_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            is_bad_ptr_probe_from_ce_flag(raw_arg(args, 0)),
+        ))),
+        ORD_IS_BAD_CODE_PTR => Some(CoredllValue::Bool(is_bad_ptr_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            1,
+            PointerProbe::Read,
+        ))),
         ORD_CACHE_SYNC | ORD_CACHE_RANGE_FLUSH => {
             // CacheSync/CacheRangeFlush — cache management; no-op in software emulation.
             kernel.threads.set_last_error(thread_id, 0);
@@ -29416,6 +29417,16 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
 enum PointerProbe {
     Read,
     Write,
+}
+
+const CE_VERIFY_WRITE_FLAG: u32 = 1;
+
+fn is_bad_ptr_probe_from_ce_flag(flag: u32) -> PointerProbe {
+    if flag == CE_VERIFY_WRITE_FLAG {
+        PointerProbe::Write
+    } else {
+        PointerProbe::Read
+    }
 }
 
 fn is_bad_ptr_raw<M: CoredllGuestMemory>(

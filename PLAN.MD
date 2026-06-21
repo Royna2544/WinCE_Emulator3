@@ -1378,6 +1378,13 @@ notes when it is still needed for implementation.
      table refresh at the emulator's unified-default level by updating
      ACP, OEMCP, and the exposed default LCID from the raw arguments instead
      of staying no-op.
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+     `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`, and
+     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\kfuncs.h`: raw `IsBadPtr` now
+     decodes CE's `(flags, ptr, length)` syscall shape, treats only
+     `VERIFY_WRITE_FLAG` as a write probe, preserves the zero-length success
+     edge, and `IsBadCodePtr` now follows CE's one-byte execute/read wrapper
+     instead of requiring a four-byte allocation.
 
 ## Validation Gates
 
