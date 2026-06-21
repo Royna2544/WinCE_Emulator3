@@ -4448,7 +4448,9 @@ impl UnicornMips {
         active_thread_id: u32,
     ) -> bool {
         let active_process_id = kernel.current_process_id();
-        if Self::process_has_live_window_message_work(kernel, active_process_id) {
+        if Self::process_has_visible_windows(kernel, active_process_id)
+            && Self::process_has_live_window_message_work(kernel, active_process_id)
+        {
             return false;
         }
         let active_area = Self::process_visible_window_area(kernel, active_process_id);
