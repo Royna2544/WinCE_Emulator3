@@ -1053,6 +1053,11 @@ notes when it is still needed for implementation.
      stronger than raw coverage.
    - Keep dependency attach/detach ordering, forwarder failure modes,
      datafile/no-resolve loads, and invalid image edges source-backed.
+   - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\loader.cpp`: coredll now
+     marks the already routed raw loader exports `GetModuleHandleW`,
+     `LoadLibraryW`, `LoadLibraryExW`, `FreeLibrary`, `GetProcAddressA`, and
+     `GetProcAddressW` as real name-based shims, matching CE's public loader
+     wrappers and the existing raw module/refcount/proc-address coverage.
 
 2. Finish shell rendering parity.
    - Extend `ExtractIconExW`, `KernExtractIcons`, `DrawIconEx`, and image-list
