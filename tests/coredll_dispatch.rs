@@ -16,13 +16,14 @@ use wince_emulation_v3::{
             ORD_FPTODP, ORD_FPTOUL, ORD_GED, ORD_GES, ORD_GET_BK_COLOR, ORD_GET_BK_MODE,
             ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_WIDTH32, ORD_GET_DIBCOLOR_TABLE,
             ORD_GET_MESSAGE_W, ORD_GET_NEAREST_COLOR, ORD_GET_OBJECT_TYPE,
-            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_HYPOT, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LOAD_LIBRARY_W, ORD_LONGJMP,
-            ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W,
-            ORD_REGISTER_GESTURE, ORD_REMOVE_FONT_RESOURCE_W, ORD_RESTORE_DC, ORD_SAVE_DC,
-            ORD_SCROLL_DC, ORD_SET_BK_COLOR, ORD_SET_PIXEL, ORD_SETJMP, ORD_SHELL_EXECUTE_EX,
-            ORD_SLEEP, ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
-            current_static_export_count, lookup,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
+            ORD_GET_TEXT_METRICS_W, ORD_HYPOT, ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE,
+            ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LOAD_LIBRARY_W, ORD_LONGJMP, ORD_LTD, ORD_NES,
+            ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE,
+            ORD_REMOVE_FONT_RESOURCE_W, ORD_RESTORE_DC, ORD_SAVE_DC, ORD_SCROLL_DC,
+            ORD_SET_BK_COLOR, ORD_SET_PIXEL, ORD_SETJMP, ORD_SHELL_EXECUTE_EX, ORD_SLEEP, ORD_SQRT,
+            ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
+            lookup,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -103,6 +104,18 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
         assert!(
             export.has_real_shim(),
             "{name} must be treated as an implemented name-based GDI/window shim"
+        );
+    }
+    for (name, ordinal) in [
+        ("GetTextExtentExPointW", ORD_GET_TEXT_EXTENT_EX_POINT_W),
+        ("GetTextMetricsW", ORD_GET_TEXT_METRICS_W),
+        ("GetTextFaceW", ORD_GET_TEXT_FACE_W),
+    ] {
+        let export = table.resolve_name(name).unwrap();
+        assert_eq!(export.ordinal, ordinal);
+        assert!(
+            export.has_real_shim(),
+            "{name} must be treated as an implemented name-based text/font shim"
         );
     }
     assert_eq!(

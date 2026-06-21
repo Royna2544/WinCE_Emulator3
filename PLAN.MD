@@ -1169,6 +1169,13 @@ notes when it is still needed for implementation.
      `SaveDC`, `RestoreDC`, `GetNearestColor`, `GetDIBColorTable`, and
      `SetPixel` as real shims for name-based imports and implementation-status
      planning, matching their existing raw ordinal handlers and coverage.
+   - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,
+     `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\text.cpp`, and
+     `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\font.cpp`: coredll now marks
+     the existing raw text/font metric handlers `GetTextExtentExPointW`,
+     `GetTextMetricsW`, and `GetTextFaceW` as real shims, so name-based
+     imports match the routed CE ordinal behavior already covered by raw GWE
+     tests.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the
