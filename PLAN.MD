@@ -1181,6 +1181,15 @@ notes when it is still needed for implementation.
      now marks the already routed raw handlers `GetCurrentObject`,
      `GetStockObject`, `CreatePenIndirect`, `DrawFocusRect`, `InvertRect`,
      `RoundRect`, and `RectVisible` as real shims for name-based imports.
+   - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`, and
+     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\core_common.def`: raw
+     `AddFontMemResourceEx` now validates readable non-empty font data and a
+     writable `pcFonts` output before returning a tracked memory-font handle,
+     and `RemoveFontMemResourceEx` now consumes only live memory-font handles
+     instead of succeeding for stale values. Coverage verifies valid TrueType
+     signatures, invalid data, zero-byte requests, count output preservation,
+     and stale-handle rejection.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the

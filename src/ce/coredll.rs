@@ -6110,23 +6110,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CREATE_DIBSECTION => Some(CoredllValue::Handle(create_dib_section_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_ADD_FONT_MEM_RESOURCE_EX => {
-            // AddFontMemResourceEx(pbFont, cbFont, pdv, pcFonts) — load font from memory.
-            // Write font count = 1 and return a pseudo handle.
-            let pc_fonts = raw_arg(args, 3);
-            if pc_fonts != 0 {
-                let _ = memory.write_u32(pc_fonts, 1);
-            }
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Handle(
-                kernel.font_mem_resource_pseudo_handle(),
-            ))
-        }
-        ORD_REMOVE_FONT_MEM_RESOURCE_EX => {
-            // RemoveFontMemResourceEx(h) — remove previously loaded memory font.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_ADD_FONT_MEM_RESOURCE_EX => Some(CoredllValue::Handle(add_font_mem_resource_ex_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REMOVE_FONT_MEM_RESOURCE_EX => Some(CoredllValue::Bool(
+            remove_font_mem_resource_ex_raw(kernel, thread_id, raw_arg(args, 0)),
+        )),
         ORD_ADD_FONT_RESOURCE_W => Some(CoredllValue::U32(add_font_resource_w_raw(
             kernel,
             memory,
@@ -48346,6 +48335,46 @@ fn is_supported_font_resource_bytes(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"MZ")
 }
 
+fn add_font_mem_resource_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let font_ptr = raw_arg(args, 0);
+    let font_len = raw_arg(args, 1);
+    let count_ptr = raw_arg(args, 3);
+    if font_ptr == 0 || font_len == 0 || count_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, font_ptr, font_len) else {
+        return 0;
+    };
+    if !is_supported_font_resource_bytes(&bytes) {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_DATA);
+        return 0;
+    }
+    if !write_guest_u32(kernel, memory, thread_id, count_ptr, 1) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.add_font_mem_resource_handle()
+}
+
+fn remove_font_mem_resource_ex_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    if handle == 0 || !kernel.remove_font_mem_resource_handle(handle) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn remove_font_resource_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -66632,6 +66661,8 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "EnumFontsW",
     "EnumFontFamiliesW",
     "EnumFontFamiliesExW",
+    "AddFontMemResourceEx",
+    "RemoveFontMemResourceEx",
     "GetTextExtentExPointW",
     "GetTextMetricsW",
     "GetTextFaceW",

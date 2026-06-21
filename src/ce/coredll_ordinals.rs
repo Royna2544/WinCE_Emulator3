@@ -13782,7 +13782,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 134] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 136] = &[
     // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
@@ -14287,6 +14287,14 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 134] = &[
     CoredllOrdinalDef {
         name: "GetOutlineTextMetricsW",
         ordinal: ORD_GET_OUTLINE_TEXT_METRICS_W,
+    },
+    CoredllOrdinalDef {
+        name: "AddFontMemResourceEx",
+        ordinal: ORD_ADD_FONT_MEM_RESOURCE_EX,
+    },
+    CoredllOrdinalDef {
+        name: "RemoveFontMemResourceEx",
+        ordinal: ORD_REMOVE_FONT_MEM_RESOURCE_EX,
     },
     // Process/thread utilities
     CoredllOrdinalDef {

@@ -278,6 +278,7 @@ pub struct CeKernel {
     loaded_modules: BTreeMap<String, LoadedModule>,
     next_loaded_module_order: u64,
     next_font_mem_resource_handle: u32,
+    live_font_mem_resources: BTreeSet<u32>,
     font_resource_counts: BTreeMap<String, u32>,
     crt_rand_state: u32,
     crt_strtok_next_by_thread: BTreeMap<u32, u32>,
@@ -1132,6 +1133,7 @@ impl CeKernel {
             loaded_modules: BTreeMap::new(),
             next_loaded_module_order: 0,
             next_font_mem_resource_handle: 0x5f00_0001,
+            live_font_mem_resources: BTreeSet::new(),
             font_resource_counts: BTreeMap::new(),
             crt_rand_state: 1,
             crt_strtok_next_by_thread: BTreeMap::new(),
@@ -2469,10 +2471,15 @@ impl CeKernel {
         &self.font_families
     }
 
-    pub fn font_mem_resource_pseudo_handle(&mut self) -> u32 {
+    pub fn add_font_mem_resource_handle(&mut self) -> u32 {
         let handle = self.next_font_mem_resource_handle;
         self.next_font_mem_resource_handle = self.next_font_mem_resource_handle.wrapping_add(1);
+        self.live_font_mem_resources.insert(handle);
         handle
+    }
+
+    pub fn remove_font_mem_resource_handle(&mut self, handle: u32) -> bool {
+        self.live_font_mem_resources.remove(&handle)
     }
 
     pub fn add_font_resource_ref(&mut self, path: &str) {

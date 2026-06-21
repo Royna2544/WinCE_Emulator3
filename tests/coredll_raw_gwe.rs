@@ -5,9 +5,9 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_ABORT_DOC, ORD_ACTIVATE_KEYBOARD_LAYOUT, ORD_ADD_FONT_RESOURCE_W,
-            ORD_ADJUST_WINDOW_RECT_EX, ORD_ALPHA_BLEND, ORD_APPEND_MENU_W, ORD_BEGIN_PAINT,
-            ORD_BIT_BLT, ORD_BRING_WINDOW_TO_TOP, ORD_CHANGE_DISPLAY_SETTINGS_EX,
+            ORD_ABORT_DOC, ORD_ACTIVATE_KEYBOARD_LAYOUT, ORD_ADD_FONT_MEM_RESOURCE_EX,
+            ORD_ADD_FONT_RESOURCE_W, ORD_ADJUST_WINDOW_RECT_EX, ORD_ALPHA_BLEND, ORD_APPEND_MENU_W,
+            ORD_BEGIN_PAINT, ORD_BIT_BLT, ORD_BRING_WINDOW_TO_TOP, ORD_CHANGE_DISPLAY_SETTINGS_EX,
             ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM, ORD_CHECK_RADIO_BUTTON,
             ORD_CHILD_WINDOW_FROM_POINT, ORD_CLIENT_TO_SCREEN, ORD_CLOSE_HANDLE, ORD_COMBINE_RGN,
             ORD_COPY_RECT, ORD_CREATE_BITMAP, ORD_CREATE_BITMAP_FROM_POINTER, ORD_CREATE_CARET,
@@ -100,9 +100,9 @@ use wince_emulation_v3::{
             ORD_RECT_IN_REGION, ORD_RECT_VISIBLE, ORD_RECTANGLE, ORD_REDRAW_WINDOW,
             ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_REGISTER_HOT_KEY, ORD_REGISTER_SIPANEL,
             ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
-            ORD_REMOVE_FONT_RESOURCE_W, ORD_REMOVE_MENU, ORD_RESTORE_DC, ORD_ROUND_RECT,
-            ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SCROLL_DC, ORD_SCROLL_WINDOW_EX,
-            ORD_SELECT_CLIP_RGN, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
+            ORD_REMOVE_FONT_MEM_RESOURCE_EX, ORD_REMOVE_FONT_RESOURCE_W, ORD_REMOVE_MENU,
+            ORD_RESTORE_DC, ORD_ROUND_RECT, ORD_SAVE_DC, ORD_SCREEN_TO_CLIENT, ORD_SCROLL_DC,
+            ORD_SCROLL_WINDOW_EX, ORD_SELECT_CLIP_RGN, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
             ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W,
             ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ABORT_PROC, ORD_SET_ACTIVE_WINDOW,
             ORD_SET_ASSOCIATED_MENU, ORD_SET_BITMAP_BITS, ORD_SET_BK_COLOR, ORD_SET_BK_MODE,
@@ -22935,6 +22935,112 @@ fn coredll_raw_add_font_resource_uses_guest_file_mounts() -> Result<()> {
     );
 
     let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_font_mem_resources_validate_bytes_and_handles() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let font_ptr = 0x1_4000;
+    let count_ptr = 0x1_5000;
+    memory.write_bytes(font_ptr, MINIMAL_TRUETYPE_FONT_BYTES);
+    memory.map_words(count_ptr, 1);
+    memory.write_word(count_ptr, 0xfeed_beef);
+
+    let handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_ADD_FONT_MEM_RESOURCE_EX,
+        [
+            font_ptr,
+            MINIMAL_TRUETYPE_FONT_BYTES.len() as u32,
+            0,
+            count_ptr,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("AddFontMemResourceEx returned unexpected result: {other:?}"),
+    };
+    assert_ne!(handle, 0);
+    assert_eq!(memory.read_u32(count_ptr)?, 1);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REMOVE_FONT_MEM_RESOURCE_EX,
+            [handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REMOVE_FONT_MEM_RESOURCE_EX,
+            [handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+
+    memory.write_bytes(font_ptr, b"not-font");
+    memory.write_word(count_ptr, 0xabcd_1234);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ADD_FONT_MEM_RESOURCE_EX,
+            [font_ptr, 8, 0, count_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 0xabcd_1234);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_DATA);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ADD_FONT_MEM_RESOURCE_EX,
+            [font_ptr, 0, 0, count_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
     Ok(())
 }
 
