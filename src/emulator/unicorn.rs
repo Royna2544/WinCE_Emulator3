@@ -4462,6 +4462,15 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    pub fn active_should_yield_to_visible_parked_process(&self, kernel: &CeKernel) -> bool {
+        Self::live_pump_active_should_yield_to_visible_parked_process(
+            &self.parked_child_processes,
+            kernel,
+            self.current_thread_id,
+        )
+    }
+
+    #[cfg(feature = "unicorn")]
     fn process_visible_window_area(kernel: &CeKernel, process_id: u32) -> i64 {
         kernel
             .gwe

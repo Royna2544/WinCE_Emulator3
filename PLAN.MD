@@ -1314,6 +1314,10 @@ notes when it is still needed for implementation.
     in front of a smaller idle visible parked child instead of rotating merely
     because the active thread is idle, while still allowing larger visible
     parked UI work to take over.
+  - Live-pump host-wall-clock stops now reuse that visible-parked-process
+    yield predicate before receiver-only rotation, so an idle active surface
+    can hand control to larger runnable route UI without waiting for another
+    timeslice hook.
 
 8. Close core time and NLS parity gaps.
    - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\time.c` and

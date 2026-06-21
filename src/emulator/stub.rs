@@ -136,6 +136,10 @@ impl UnicornMips {
         false
     }
 
+    pub fn active_should_yield_to_visible_parked_process(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
     pub fn parked_child_process_count_for_kernel(&self, _kernel: &CeKernel) -> usize {
         0
     }

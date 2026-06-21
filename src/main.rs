@@ -1020,6 +1020,10 @@ fn run_cpu_loop(
                 }
             }
             if live_pump_slice && host_wall_clock_stop {
+                if rotate_idle_active_to_visible_parked(cpu, kernel, desktop) {
+                    reported_blocked_message_wait = false;
+                    continue;
+                }
                 if !cpu.active_process_has_visible_receiver_work(kernel)
                     && cpu.rotate_to_receiver_parked_process_with_framebuffer(
                         kernel,
@@ -1093,6 +1097,9 @@ fn rotate_idle_active_to_visible_parked(
     desktop: &mut DesktopRuntime,
 ) -> bool {
     if cpu.active_process_has_receiver_work(kernel) {
+        return false;
+    }
+    if !cpu.active_should_yield_to_visible_parked_process(kernel) {
         return false;
     }
     if cpu.rotate_to_visible_window_parked_process(kernel)
