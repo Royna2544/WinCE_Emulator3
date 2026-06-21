@@ -10,20 +10,21 @@ use wince_emulation_v3::{
         },
         coredll_ordinals::{
             ORD_ADD_FONT_RESOURCE_W, ORD_ADJUST_WINDOW_RECT_EX, ORD_ATOF, ORD_CLOSE_HANDLE,
-            ORD_CREATE_APISET, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W, ORD_D_TO_LL,
-            ORD_D_TO_ULL, ORD_DISPATCH_MESSAGE_W, ORD_DPCMP, ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI,
-            ORD_EVENT_MODIFY, ORD_F_TO_LL, ORD_F_TO_ULL, ORD_FMODF, ORD_FPCMP, ORD_FPMUL,
-            ORD_FPTODP, ORD_FPTOUL, ORD_GED, ORD_GES, ORD_GET_BK_COLOR, ORD_GET_BK_MODE,
-            ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_WIDTH32, ORD_GET_DIBCOLOR_TABLE,
-            ORD_GET_MESSAGE_W, ORD_GET_NEAREST_COLOR, ORD_GET_OBJECT_TYPE,
+            ORD_CREATE_APISET, ORD_CREATE_FILE_W, ORD_CREATE_PEN_INDIRECT, ORD_CREATE_WINDOW_EX_W,
+            ORD_D_TO_LL, ORD_D_TO_ULL, ORD_DISPATCH_MESSAGE_W, ORD_DPCMP, ORD_DPMUL, ORD_DPTOFP,
+            ORD_DPTOLI, ORD_DRAW_FOCUS_RECT, ORD_EVENT_MODIFY, ORD_F_TO_LL, ORD_F_TO_ULL,
+            ORD_FMODF, ORD_FPCMP, ORD_FPMUL, ORD_FPTODP, ORD_FPTOUL, ORD_GED, ORD_GES,
+            ORD_GET_BK_COLOR, ORD_GET_BK_MODE, ORD_GET_CHAR_ABCWIDTHS, ORD_GET_CHAR_WIDTH32,
+            ORD_GET_CURRENT_OBJECT, ORD_GET_DIBCOLOR_TABLE, ORD_GET_MESSAGE_W,
+            ORD_GET_NEAREST_COLOR, ORD_GET_OBJECT_TYPE, ORD_GET_STOCK_OBJECT,
             ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
-            ORD_GET_TEXT_METRICS_W, ORD_HYPOT, ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE,
-            ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LOAD_LIBRARY_W, ORD_LONGJMP, ORD_LTD, ORD_NES,
-            ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE,
-            ORD_REMOVE_FONT_RESOURCE_W, ORD_RESTORE_DC, ORD_SAVE_DC, ORD_SCROLL_DC,
-            ORD_SET_BK_COLOR, ORD_SET_PIXEL, ORD_SETJMP, ORD_SHELL_EXECUTE_EX, ORD_SLEEP, ORD_SQRT,
-            ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
-            lookup,
+            ORD_GET_TEXT_METRICS_W, ORD_HYPOT, ORD_INITIALIZE_CRITICAL_SECTION, ORD_INVERT_RECT,
+            ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LOAD_LIBRARY_W, ORD_LONGJMP,
+            ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW, ORD_RECT_VISIBLE, ORD_REG_OPEN_KEY_EX_W,
+            ORD_REGISTER_GESTURE, ORD_REMOVE_FONT_RESOURCE_W, ORD_RESTORE_DC, ORD_ROUND_RECT,
+            ORD_SAVE_DC, ORD_SCROLL_DC, ORD_SET_BK_COLOR, ORD_SET_PIXEL, ORD_SETJMP,
+            ORD_SHELL_EXECUTE_EX, ORD_SLEEP, ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_WRITE_FILE, current_static_export_count, lookup,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -104,6 +105,22 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
         assert!(
             export.has_real_shim(),
             "{name} must be treated as an implemented name-based GDI/window shim"
+        );
+    }
+    for (name, ordinal) in [
+        ("GetCurrentObject", ORD_GET_CURRENT_OBJECT),
+        ("GetStockObject", ORD_GET_STOCK_OBJECT),
+        ("CreatePenIndirect", ORD_CREATE_PEN_INDIRECT),
+        ("DrawFocusRect", ORD_DRAW_FOCUS_RECT),
+        ("InvertRect", ORD_INVERT_RECT),
+        ("RoundRect", ORD_ROUND_RECT),
+        ("RectVisible", ORD_RECT_VISIBLE),
+    ] {
+        let export = table.resolve_name(name).unwrap();
+        assert_eq!(export.ordinal, ordinal);
+        assert!(
+            export.has_real_shim(),
+            "{name} must be treated as an implemented name-based GDI object/drawing shim"
         );
     }
     for (name, ordinal) in [

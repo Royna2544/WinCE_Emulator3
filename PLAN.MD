@@ -1176,6 +1176,11 @@ notes when it is still needed for implementation.
      `GetTextMetricsW`, and `GetTextFaceW` as real shims, so name-based
      imports match the routed CE ordinal behavior already covered by raw GWE
      tests.
+   - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and CE GDIAPI
+     object/drawing coverage in `brush.cpp`, `do.cpp`, and `draw.cpp`: coredll
+     now marks the already routed raw handlers `GetCurrentObject`,
+     `GetStockObject`, `CreatePenIndirect`, `DrawFocusRect`, `InvertRect`,
+     `RoundRect`, and `RectVisible` as real shims for name-based imports.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the
