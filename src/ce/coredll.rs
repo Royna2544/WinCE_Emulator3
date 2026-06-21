@@ -21018,10 +21018,11 @@ fn get_locale_info_w_raw<M: CoredllGuestMemory>(
     let buf_ptr = raw_arg(args, 2);
     let cch = raw_arg(args, 3) as usize;
 
-    // Accept USER_DEFAULT, SYSTEM_DEFAULT, and the Korean LCID 0x0412
+    // Accept default LCIDs plus locales advertised by the CE image's locale list.
     let lcid = match locale {
         LOCALE_USER_DEFAULT | LOCALE_SYSTEM_DEFAULT => 0x0412u32,
         0x0412 => 0x0412,
+        0x0409 => 0x0409,
         _ => {
             kernel
                 .threads
@@ -21029,109 +21030,211 @@ fn get_locale_info_w_raw<M: CoredllGuestMemory>(
             return 0;
         }
     };
-    let _ = lcid;
 
     let return_number = lctype_raw & LOCALE_RETURN_NUMBER != 0;
     let lctype = lctype_raw & !(LOCALE_NOUSEROVERRIDE | LOCALE_RETURN_NUMBER);
 
-    let value: &str = match lctype {
-        0x0001 => "0412",                      // LOCALE_ILANGUAGE
-        0x0002 => "한국어",                    // LOCALE_SLANGUAGE
-        0x0003 => "KOR",                       // LOCALE_SABBREVLANGNAME
-        0x0004 => "한국어",                    // LOCALE_SNATIVELANGNAME
-        0x0005 => "82",                        // LOCALE_ICOUNTRY
-        0x0006 => "대한민국",                  // LOCALE_SCOUNTRY
-        0x0007 => "KOR",                       // LOCALE_SABBREVCTRYNAME
-        0x0008 => "대한민국",                  // LOCALE_SNATIVECTRYNAME
-        0x0009 => "0412",                      // LOCALE_IDEFAULTLANGUAGE
-        0x000A => "82",                        // LOCALE_IDEFAULTCOUNTRY
-        0x000B => "949",                       // LOCALE_IDEFAULTCODEPAGE (OEM)
-        0x000C => ",",                         // LOCALE_SLIST
-        0x000D => "0",                         // LOCALE_IMEASURE (0 = metric)
-        0x000E => ".",                         // LOCALE_SDECIMAL
-        0x000F => ",",                         // LOCALE_STHOUSAND
-        0x0010 => "3;0",                       // LOCALE_SGROUPING
-        0x0011 => "2",                         // LOCALE_IDIGITS
-        0x0012 => "1",                         // LOCALE_ILZERO
-        0x0013 => "0123456789",                // LOCALE_SNATIVEDIGITS
-        0x0014 => "₩",                         // LOCALE_SCURRENCY
-        0x0015 => "KRW",                       // LOCALE_SINTLSYMBOL
-        0x0016 => ".",                         // LOCALE_SMONDECIMALSEP
-        0x0017 => ",",                         // LOCALE_SMONTHOUSANDSEP
-        0x0018 => "3;0",                       // LOCALE_SMONGROUPING
-        0x0019 => "0",                         // LOCALE_ICURRDIGITS
-        0x001A => "0",                         // LOCALE_IINTLCURRDIGITS
-        0x001B => "0",                         // LOCALE_ICURRENCY
-        0x001C => "1",                         // LOCALE_INEGCURR
-        0x001D => "-",                         // LOCALE_SDATE
-        0x001E => ":",                         // LOCALE_STIME
-        0x001F => "yyyy-MM-dd",                // LOCALE_SSHORTDATE
-        0x0020 => "yyyy'년' M'월' d'일' dddd", // LOCALE_SLONGDATE
-        0x0021 => "2",                         // LOCALE_IDATE (year-month-day)
-        0x0022 => "2",                         // LOCALE_ILDATE
-        0x0023 => "0",                         // LOCALE_ITIME (0 = 12 hour)
-        0x0024 => "0",                         // LOCALE_ICENTURY
-        0x0025 => "0",                         // LOCALE_ITLZERO
-        0x0026 => "0",                         // LOCALE_IDAYLZERO
-        0x0027 => "0",                         // LOCALE_IMONLZERO
-        0x0028 => "오전",                      // LOCALE_S1159 (AM)
-        0x0029 => "오후",                      // LOCALE_S2359 (PM)
-        0x002A => "월요일",                    // LOCALE_SDAYNAME1 (Monday)
-        0x002B => "화요일",                    // LOCALE_SDAYNAME2
-        0x002C => "수요일",                    // LOCALE_SDAYNAME3
-        0x002D => "목요일",                    // LOCALE_SDAYNAME4
-        0x002E => "금요일",                    // LOCALE_SDAYNAME5
-        0x002F => "토요일",                    // LOCALE_SDAYNAME6
-        0x0030 => "일요일",                    // LOCALE_SDAYNAME7 (Sunday)
-        0x0031 => "월",                        // LOCALE_SABBREVDAYNAME1
-        0x0032 => "화",                        // LOCALE_SABBREVDAYNAME2
-        0x0033 => "수",                        // LOCALE_SABBREVDAYNAME3
-        0x0034 => "목",                        // LOCALE_SABBREVDAYNAME4
-        0x0035 => "금",                        // LOCALE_SABBREVDAYNAME5
-        0x0036 => "토",                        // LOCALE_SABBREVDAYNAME6
-        0x0037 => "일",                        // LOCALE_SABBREVDAYNAME7
-        0x0038 => "1월",                       // LOCALE_SMONTHNAME1
-        0x0039 => "2월",
-        0x003A => "3월",
-        0x003B => "4월",
-        0x003C => "5월",
-        0x003D => "6월",
-        0x003E => "7월",
-        0x003F => "8월",
-        0x0040 => "9월",
-        0x0041 => "10월",
-        0x0042 => "11월",
-        0x0043 => "12월",
-        0x0044 => "1월", // LOCALE_SABBREVMONTHNAME1
-        0x0045 => "2월",
-        0x0046 => "3월",
-        0x0047 => "4월",
-        0x0048 => "5월",
-        0x0049 => "6월",
-        0x004A => "7월",
-        0x004B => "8월",
-        0x004C => "9월",
-        0x004D => "10월",
-        0x004E => "11월",
-        0x004F => "12월",
-        0x0050 => "",           // LOCALE_SPOSITIVESIGN
-        0x0051 => "-",          // LOCALE_SNEGATIVESIGN
-        0x1001 => "Korean",     // LOCALE_SENGLANGUAGE
-        0x1002 => "Korea",      // LOCALE_SENGCOUNTRY
-        0x1003 => "tt h:mm:ss", // LOCALE_STIMEFORMAT
-        0x1004 => "949",        // LOCALE_IDEFAULTANSICODEPAGE
-        0x1005 => "0",          // LOCALE_ITIMEMARKPOSN
-        0x1009 => "1",          // LOCALE_ICALENDARTYPE (Gregorian)
-        0x100B => "0",          // LOCALE_IOPTIONALCALENDAR
-        0x100C => "6",          // LOCALE_IFIRSTDAYOFWEEK (0=Mon..6=Sun)
-        0x100D => "0",          // LOCALE_IFIRSTWEEKOFYEAR
-        0x1010 => "0",          // LOCALE_INEGNUMBER
-        0x1011 => "949",        // LOCALE_IDEFAULTOEMCODEPAGE
-        _ => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_FLAGS_LOCAL);
-            return 0;
+    let value: &str = if lcid == 0x0409 {
+        match lctype {
+            0x0001 => "0409",                // LOCALE_ILANGUAGE
+            0x0002 => "English",             // LOCALE_SLANGUAGE
+            0x0003 => "ENU",                 // LOCALE_SABBREVLANGNAME
+            0x0004 => "English",             // LOCALE_SNATIVELANGNAME
+            0x0005 => "1",                   // LOCALE_ICOUNTRY
+            0x0006 => "United States",       // LOCALE_SCOUNTRY
+            0x0007 => "USA",                 // LOCALE_SABBREVCTRYNAME
+            0x0008 => "United States",       // LOCALE_SNATIVECTRYNAME
+            0x0009 => "0409",                // LOCALE_IDEFAULTLANGUAGE
+            0x000A => "1",                   // LOCALE_IDEFAULTCOUNTRY
+            0x000B => "437",                 // LOCALE_IDEFAULTCODEPAGE (OEM)
+            0x000C => ",",                   // LOCALE_SLIST
+            0x000D => "1",                   // LOCALE_IMEASURE (1 = U.S.)
+            0x000E => ".",                   // LOCALE_SDECIMAL
+            0x000F => ",",                   // LOCALE_STHOUSAND
+            0x0010 => "3;0",                 // LOCALE_SGROUPING
+            0x0011 => "2",                   // LOCALE_IDIGITS
+            0x0012 => "1",                   // LOCALE_ILZERO
+            0x0013 => "0123456789",          // LOCALE_SNATIVEDIGITS
+            0x0014 => "$",                   // LOCALE_SCURRENCY
+            0x0015 => "USD",                 // LOCALE_SINTLSYMBOL
+            0x0016 => ".",                   // LOCALE_SMONDECIMALSEP
+            0x0017 => ",",                   // LOCALE_SMONTHOUSANDSEP
+            0x0018 => "3;0",                 // LOCALE_SMONGROUPING
+            0x0019 => "2",                   // LOCALE_ICURRDIGITS
+            0x001A => "2",                   // LOCALE_IINTLCURRDIGITS
+            0x001B => "0",                   // LOCALE_ICURRENCY
+            0x001C => "0",                   // LOCALE_INEGCURR
+            0x001D => "/",                   // LOCALE_SDATE
+            0x001E => ":",                   // LOCALE_STIME
+            0x001F => "M/d/yyyy",            // LOCALE_SSHORTDATE
+            0x0020 => "dddd, MMMM dd, yyyy", // LOCALE_SLONGDATE
+            0x0021 => "0",                   // LOCALE_IDATE
+            0x0022 => "0",                   // LOCALE_ILDATE
+            0x0023 => "0",                   // LOCALE_ITIME
+            0x0024 => "1",                   // LOCALE_ICENTURY
+            0x0025 => "0",                   // LOCALE_ITLZERO
+            0x0026 => "0",                   // LOCALE_IDAYLZERO
+            0x0027 => "0",                   // LOCALE_IMONLZERO
+            0x0028 => "AM",                  // LOCALE_S1159
+            0x0029 => "PM",                  // LOCALE_S2359
+            0x002A => "Monday",              // LOCALE_SDAYNAME1
+            0x002B => "Tuesday",
+            0x002C => "Wednesday",
+            0x002D => "Thursday",
+            0x002E => "Friday",
+            0x002F => "Saturday",
+            0x0030 => "Sunday",
+            0x0031 => "Mon", // LOCALE_SABBREVDAYNAME1
+            0x0032 => "Tue",
+            0x0033 => "Wed",
+            0x0034 => "Thu",
+            0x0035 => "Fri",
+            0x0036 => "Sat",
+            0x0037 => "Sun",
+            0x0038 => "January", // LOCALE_SMONTHNAME1
+            0x0039 => "February",
+            0x003A => "March",
+            0x003B => "April",
+            0x003C => "May",
+            0x003D => "June",
+            0x003E => "July",
+            0x003F => "August",
+            0x0040 => "September",
+            0x0041 => "October",
+            0x0042 => "November",
+            0x0043 => "December",
+            0x0044 => "Jan", // LOCALE_SABBREVMONTHNAME1
+            0x0045 => "Feb",
+            0x0046 => "Mar",
+            0x0047 => "Apr",
+            0x0048 => "May",
+            0x0049 => "Jun",
+            0x004A => "Jul",
+            0x004B => "Aug",
+            0x004C => "Sep",
+            0x004D => "Oct",
+            0x004E => "Nov",
+            0x004F => "Dec",
+            0x0050 => "",              // LOCALE_SPOSITIVESIGN
+            0x0051 => "-",             // LOCALE_SNEGATIVESIGN
+            0x1001 => "English",       // LOCALE_SENGLANGUAGE
+            0x1002 => "United States", // LOCALE_SENGCOUNTRY
+            0x1003 => "h:mm:ss tt",    // LOCALE_STIMEFORMAT
+            0x1004 => "1252",          // LOCALE_IDEFAULTANSICODEPAGE
+            0x1005 => "0",             // LOCALE_ITIMEMARKPOSN
+            0x1009 => "1",             // LOCALE_ICALENDARTYPE
+            0x100B => "0",             // LOCALE_IOPTIONALCALENDAR
+            0x100C => "6",             // LOCALE_IFIRSTDAYOFWEEK
+            0x100D => "0",             // LOCALE_IFIRSTWEEKOFYEAR
+            0x1010 => "1",             // LOCALE_INEGNUMBER
+            0x1011 => "437",           // LOCALE_IDEFAULTOEMCODEPAGE
+            _ => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_FLAGS_LOCAL);
+                return 0;
+            }
+        }
+    } else {
+        match lctype {
+            0x0001 => "0412",                      // LOCALE_ILANGUAGE
+            0x0002 => "한국어",                    // LOCALE_SLANGUAGE
+            0x0003 => "KOR",                       // LOCALE_SABBREVLANGNAME
+            0x0004 => "한국어",                    // LOCALE_SNATIVELANGNAME
+            0x0005 => "82",                        // LOCALE_ICOUNTRY
+            0x0006 => "대한민국",                  // LOCALE_SCOUNTRY
+            0x0007 => "KOR",                       // LOCALE_SABBREVCTRYNAME
+            0x0008 => "대한민국",                  // LOCALE_SNATIVECTRYNAME
+            0x0009 => "0412",                      // LOCALE_IDEFAULTLANGUAGE
+            0x000A => "82",                        // LOCALE_IDEFAULTCOUNTRY
+            0x000B => "949",                       // LOCALE_IDEFAULTCODEPAGE (OEM)
+            0x000C => ",",                         // LOCALE_SLIST
+            0x000D => "0",                         // LOCALE_IMEASURE (0 = metric)
+            0x000E => ".",                         // LOCALE_SDECIMAL
+            0x000F => ",",                         // LOCALE_STHOUSAND
+            0x0010 => "3;0",                       // LOCALE_SGROUPING
+            0x0011 => "2",                         // LOCALE_IDIGITS
+            0x0012 => "1",                         // LOCALE_ILZERO
+            0x0013 => "0123456789",                // LOCALE_SNATIVEDIGITS
+            0x0014 => "₩",                         // LOCALE_SCURRENCY
+            0x0015 => "KRW",                       // LOCALE_SINTLSYMBOL
+            0x0016 => ".",                         // LOCALE_SMONDECIMALSEP
+            0x0017 => ",",                         // LOCALE_SMONTHOUSANDSEP
+            0x0018 => "3;0",                       // LOCALE_SMONGROUPING
+            0x0019 => "0",                         // LOCALE_ICURRDIGITS
+            0x001A => "0",                         // LOCALE_IINTLCURRDIGITS
+            0x001B => "0",                         // LOCALE_ICURRENCY
+            0x001C => "1",                         // LOCALE_INEGCURR
+            0x001D => "-",                         // LOCALE_SDATE
+            0x001E => ":",                         // LOCALE_STIME
+            0x001F => "yyyy-MM-dd",                // LOCALE_SSHORTDATE
+            0x0020 => "yyyy'년' M'월' d'일' dddd", // LOCALE_SLONGDATE
+            0x0021 => "2",                         // LOCALE_IDATE (year-month-day)
+            0x0022 => "2",                         // LOCALE_ILDATE
+            0x0023 => "0",                         // LOCALE_ITIME (0 = 12 hour)
+            0x0024 => "0",                         // LOCALE_ICENTURY
+            0x0025 => "0",                         // LOCALE_ITLZERO
+            0x0026 => "0",                         // LOCALE_IDAYLZERO
+            0x0027 => "0",                         // LOCALE_IMONLZERO
+            0x0028 => "오전",                      // LOCALE_S1159 (AM)
+            0x0029 => "오후",                      // LOCALE_S2359 (PM)
+            0x002A => "월요일",                    // LOCALE_SDAYNAME1 (Monday)
+            0x002B => "화요일",                    // LOCALE_SDAYNAME2
+            0x002C => "수요일",                    // LOCALE_SDAYNAME3
+            0x002D => "목요일",                    // LOCALE_SDAYNAME4
+            0x002E => "금요일",                    // LOCALE_SDAYNAME5
+            0x002F => "토요일",                    // LOCALE_SDAYNAME6
+            0x0030 => "일요일",                    // LOCALE_SDAYNAME7 (Sunday)
+            0x0031 => "월",                        // LOCALE_SABBREVDAYNAME1
+            0x0032 => "화",                        // LOCALE_SABBREVDAYNAME2
+            0x0033 => "수",                        // LOCALE_SABBREVDAYNAME3
+            0x0034 => "목",                        // LOCALE_SABBREVDAYNAME4
+            0x0035 => "금",                        // LOCALE_SABBREVDAYNAME5
+            0x0036 => "토",                        // LOCALE_SABBREVDAYNAME6
+            0x0037 => "일",                        // LOCALE_SABBREVDAYNAME7
+            0x0038 => "1월",                       // LOCALE_SMONTHNAME1
+            0x0039 => "2월",
+            0x003A => "3월",
+            0x003B => "4월",
+            0x003C => "5월",
+            0x003D => "6월",
+            0x003E => "7월",
+            0x003F => "8월",
+            0x0040 => "9월",
+            0x0041 => "10월",
+            0x0042 => "11월",
+            0x0043 => "12월",
+            0x0044 => "1월", // LOCALE_SABBREVMONTHNAME1
+            0x0045 => "2월",
+            0x0046 => "3월",
+            0x0047 => "4월",
+            0x0048 => "5월",
+            0x0049 => "6월",
+            0x004A => "7월",
+            0x004B => "8월",
+            0x004C => "9월",
+            0x004D => "10월",
+            0x004E => "11월",
+            0x004F => "12월",
+            0x0050 => "",           // LOCALE_SPOSITIVESIGN
+            0x0051 => "-",          // LOCALE_SNEGATIVESIGN
+            0x1001 => "Korean",     // LOCALE_SENGLANGUAGE
+            0x1002 => "Korea",      // LOCALE_SENGCOUNTRY
+            0x1003 => "tt h:mm:ss", // LOCALE_STIMEFORMAT
+            0x1004 => "949",        // LOCALE_IDEFAULTANSICODEPAGE
+            0x1005 => "0",          // LOCALE_ITIMEMARKPOSN
+            0x1009 => "1",          // LOCALE_ICALENDARTYPE (Gregorian)
+            0x100B => "0",          // LOCALE_IOPTIONALCALENDAR
+            0x100C => "6",          // LOCALE_IFIRSTDAYOFWEEK (0=Mon..6=Sun)
+            0x100D => "0",          // LOCALE_IFIRSTWEEKOFYEAR
+            0x1010 => "0",          // LOCALE_INEGNUMBER
+            0x1011 => "949",        // LOCALE_IDEFAULTOEMCODEPAGE
+            _ => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_FLAGS_LOCAL);
+                return 0;
+            }
         }
     };
 

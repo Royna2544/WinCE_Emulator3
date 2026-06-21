@@ -1291,6 +1291,10 @@ notes when it is still needed for implementation.
      `TimeZoneInformation` binary blob when present and falls back to CE's
      Pacific default layout when absent, while still returning
      `TIME_ZONE_ID_UNKNOWN` until `UserKInfo[KINX_TIMEZONEBIAS]` is modeled.
+     `GetLocaleInfoW` now accepts the advertised English United States LCID
+     (`0409`) from `PUBLIC\COMMON\OAK\FILES\locale.txt` for the same locale
+     fields as the Korean table, including string sizing and
+     `LOCALE_RETURN_NUMBER`.
 
 ## Validation Gates
 

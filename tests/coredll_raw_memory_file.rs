@@ -39,7 +39,7 @@ use wince_emulation_v3::{
             ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES,
             ORD_GET_COMM_MODEM_STATUS, ORD_GET_CRT_STORAGE_EX, ORD_GET_DISK_FREE_SPACE_EX_W,
             ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SECURITY_W,
-            ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W,
+            ORD_GET_FILE_SIZE, ORD_GET_LOCALE_INFO_W, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W,
             ORD_GET_OVERLAPPED_RESULT, ORD_GET_PARTITION_INFO, ORD_GET_PROCESS_HEAP,
             ORD_GET_STORE_INFO, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC,
             ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE,
@@ -109,6 +109,19 @@ use support::{TestGuestMemory, unique_test_root};
 
 const ERROR_PATH_NOT_FOUND: u32 = 3;
 const ERROR_DIRECTORY: u32 = 267;
+
+fn read_wide_z_from_bytes(memory: &TestGuestMemory, addr: u32, max_chars: usize) -> String {
+    let bytes = memory.read_bytes(addr, max_chars * 2);
+    let mut units = Vec::new();
+    for chunk in bytes.chunks_exact(2) {
+        let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+    }
+    String::from_utf16_lossy(&units)
+}
 
 #[test]
 fn coredll_raw_string_conversion_ordinals_round_trip_ascii() -> Result<()> {
@@ -250,6 +263,86 @@ fn coredll_raw_is_valid_locale_accepts_korean_and_defaults() -> Result<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_locale_info_accepts_advertised_english_locale() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let buffer = 0x7100;
+    let number = 0x7200;
+    memory.map_bytes(buffer, 128);
+    memory.map_words(number, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LOCALE_INFO_W,
+            [0x0409, 0x0002, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(8),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LOCALE_INFO_W,
+            [0x0409, 0x0006, buffer, 64],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(14),
+            ..
+        }
+    ));
+    assert_eq!(read_wide_z_from_bytes(&memory, buffer, 64), "United States");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LOCALE_INFO_W,
+            [0x0409, 0x2000_1004, number, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(4),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(number)?, 1252);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LOCALE_INFO_W,
+            [0x1234, 0x0002, buffer, 64],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
     Ok(())
 }
 
