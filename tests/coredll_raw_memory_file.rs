@@ -39,44 +39,46 @@ use wince_emulation_v3::{
             ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES,
             ORD_GET_COMM_MODEM_STATUS, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W,
             ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SECURITY_W, ORD_GET_FILE_SIZE,
-            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W, ORD_GET_PARTITION_INFO,
-            ORD_GET_PROCESS_HEAP, ORD_GET_STORE_INFO, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS,
-            ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC,
-            ORD_HEAP_SIZE, ORD_HEAP_VALIDATE, ORD_HYPOT, ORD_INTERLOCKED_DECREMENT,
-            ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR,
-            ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED,
-            ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM,
-            ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS,
-            ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
-            ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX, ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC,
-            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET,
-            ORD_MOUNT_PARTITION, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED,
-            ORD_NES, ORD_OPEN_PARTITION, ORD_OPEN_STORE, ORD_OPERATOR_DELETE,
-            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW,
-            ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW, ORD_PRINTF, ORD_RAND,
-            ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
-            ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W,
-            ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W,
-            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_REGISTER_AFSEX,
-            ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD,
-            ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING,
-            ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
-            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC,
-            ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE,
-            ORD_REMOVE_DIRECTORY_W, ORD_RENAME_PARTITION, ORD_SECURITY_GEN_COOKIE,
-            ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W,
-            ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W, ORD_SET_FILE_TIME,
-            ORD_SET_PARTITION_ATTRIBUTES, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH,
-            ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY,
-            ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK,
-            ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN, ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER,
-            ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM, ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP,
-            ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE,
-            ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
-            ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_OBJECT_W, ORD_GET_OVERLAPPED_RESULT,
+            ORD_GET_PARTITION_INFO, ORD_GET_PROCESS_HEAP, ORD_GET_STORE_INFO, ORD_GET_VERSION_EX,
+            ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
+            ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE, ORD_HEAP_VALIDATE, ORD_HYPOT,
+            ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE,
+            ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE,
+            ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT,
+            ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC,
+            ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
+            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
+            ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
+            ORD_MEMMOVE, ORD_MEMSET, ORD_MOUNT_PARTITION, ORD_MOVE_FILE_W, ORD_MSIZE,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES, ORD_OPEN_PARTITION, ORD_OPEN_STORE,
+            ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW,
+            ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW,
+            ORD_PRINTF, ORD_RAND, ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY,
+            ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W,
+            ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W,
+            ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
+            ORD_REGISTER_AFSEX, ORD_REGISTER_AFSNAME, ORD_REGISTRY_DELETE_VALUE,
+            ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD,
+            ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD, ORD_REMOTE_HEAP_ALLOC,
+            ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE,
+            ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_RE_ALLOC,
+            ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W, ORD_RENAME_PARTITION,
+            ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK,
+            ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_SECURITY_W,
+            ORD_SET_FILE_TIME, ORD_SET_PARTITION_ATTRIBUTES, ORD_SETUP_COMM, ORD_SHLOAD_DIBITMAP,
+            ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SQRT, ORD_SRAND,
+            ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
+            ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN,
+            ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM,
+            ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP, ORD_UNLOCK_FILE_EX, ORD_UNMAP_VIEW_OF_FILE,
+            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF,
+            ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP,
+            ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK,
+            ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
+        devices::{DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind},
         file::{
             CREATE_ALWAYS, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
             FILE_ATTRIBUTE_SYSTEM, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_ALWAYS,
@@ -18280,6 +18282,166 @@ fn coredll_raw_serial_comm_control_ordinals_accept_valid_device_handle() -> Resu
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CLOSE_HANDLE,
+        [com],
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_overlapped_serial_read_completes_after_remote_bytes() -> Result<()> {
+    const ERROR_IO_INCOMPLETE: u32 = 996;
+    const ERROR_IO_PENDING: u32 = 997;
+
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.devices = DeviceConfigFile {
+        version: 1,
+        defaults: DeviceDefaults::default(),
+        devices: vec![DeviceConfig {
+            guest: "COM7:".to_owned(),
+            kind: DeviceKind::Serial,
+            backend: DeviceBackend::Stub,
+            host: None,
+            remote_gps: true,
+            enabled: true,
+            note: None,
+        }],
+    };
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11_u32;
+
+    let com_path = 0x2_1000_u32;
+    let buffer = 0x2_1100_u32;
+    let read_count = 0x2_1200_u32;
+    let result_count = 0x2_1210_u32;
+    let overlapped = 0x2_1300_u32;
+    memory.write_wide_z(com_path, "COM7:");
+    memory.map_bytes(buffer, 64);
+    memory.map_words(read_count, 1);
+    memory.map_words(result_count, 1);
+    memory.map_words(overlapped, 5);
+
+    let com = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            com_path,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("CreateFileW(COM7:) failed: {other:?}"),
+    };
+    let event = kernel.create_event_w(None, false, true);
+    memory.write_u32(overlapped + 16, event)?;
+
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_READ_FILE,
+                [com, buffer, 32, read_count, overlapped],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ),
+        "overlapped serial ReadFile without buffered bytes must pend"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_IO_PENDING);
+    assert_eq!(memory.read_u32(read_count)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [event, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OVERLAPPED_RESULT,
+            [com, overlapped, result_count, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_IO_INCOMPLETE
+    );
+    assert_eq!(memory.read_u32(result_count)?, 0);
+
+    let response = kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "nmea",
+        "sentences": ["$GPRMC,overlapped*00"]
+    }));
+    assert_eq!(response["accepted"], 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [event, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OVERLAPPED_RESULT,
+            [com, overlapped, result_count, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let transferred = memory.read_u32(result_count)?;
+    assert_eq!(memory.read_u32(read_count)?, transferred);
+    assert_eq!(memory.read_u32(overlapped + 4)?, transferred);
+    let delivered = memory.read_bytes(buffer, transferred as usize);
+    assert!(String::from_utf8_lossy(&delivered).starts_with("$GPRMC"));
+    assert!(!kernel.serial_read_ready(com));
 
     table.dispatch_raw_ordinal_with_memory(
         &mut kernel,

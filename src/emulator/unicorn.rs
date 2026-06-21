@@ -17981,6 +17981,10 @@ fn try_block_serial_read_file<D>(
     let buffer = args.get(1).copied().unwrap_or(0);
     let requested = args.get(2).copied().unwrap_or(0);
     let transferred_ptr = args.get(3).copied().unwrap_or(0);
+    let overlapped_ptr = args.get(4).copied().unwrap_or(0);
+    if overlapped_ptr != 0 {
+        return false;
+    }
     kernel.poll_host_serial_to_handle(handle, requested as usize);
     if requested == 0
         || buffer == 0

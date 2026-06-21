@@ -28,7 +28,8 @@ use crate::{
         kernel::{
             CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
             MessageQueueOptions, MessageQueueReadStatus, MessageQueueWriteStatus,
-            ToolhelpModuleSnapshot, ToolhelpProcessSnapshot, ToolhelpThreadSnapshot,
+            PendingOverlappedSerialRead, ToolhelpModuleSnapshot, ToolhelpProcessSnapshot,
+            ToolhelpThreadSnapshot,
         },
         keybd::{
             KBDI_AUTOREPEAT_INFO_ID, KBDI_AUTOREPEAT_SELECTIONS_INFO_ID, KBDI_KEYBOARD_STATUS_ID,
@@ -92,6 +93,8 @@ const CTYPE_BLANK: u32 = 0x0040;
 const CTYPE_HEX: u32 = 0x0080;
 const CTYPE_ALPHA: u32 = 0x0100;
 const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+const ERROR_IO_INCOMPLETE: u32 = 996;
+const ERROR_IO_PENDING: u32 = 997;
 const CREATE_SUSPENDED: u32 = 0x0000_0004;
 const STACK_SIZE_PARAM_IS_A_RESERVATION: u32 = 0x0001_0000;
 const POWER_NAME: u32 = 0x0000_0001;
@@ -4906,8 +4909,89 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_GET_OVERLAPPED_RESULT => {
             // GetOverlappedResult(hFile, lpOverlapped, lpBytesTransferred, bWait)
-            // No async I/O in emulator; report 0 bytes and return TRUE.
+            let handle = raw_arg(args, 0);
+            let overlapped_ptr = raw_arg(args, 1);
             let bytes_ptr = raw_arg(args, 2);
+            if overlapped_ptr != 0
+                && kernel
+                    .pending_overlapped_serial_read(handle, overlapped_ptr)
+                    .is_some()
+            {
+                if !kernel.serial_read_ready(handle) {
+                    if bytes_ptr != 0 {
+                        write_guest_u32(kernel, memory, thread_id, bytes_ptr, 0);
+                    }
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_IO_INCOMPLETE);
+                    return Some(CoredllValue::Bool(false));
+                }
+                let mut cursor = kernel
+                    .pending_overlapped_serial_read(handle, overlapped_ptr)
+                    .map(|read| read.buffer)
+                    .unwrap_or(0);
+                let mut write_failed = false;
+                let completed =
+                    kernel.complete_overlapped_serial_read_into(handle, overlapped_ptr, |chunk| {
+                        if memory.write_bytes(cursor, chunk).is_err() {
+                            write_failed = true;
+                            return Err(Error::InvalidArgument(
+                                "overlapped ReadFile guest buffer is not writable".to_owned(),
+                            ));
+                        }
+                        cursor = cursor.wrapping_add(chunk.len() as u32);
+                        Ok(())
+                    });
+                match completed {
+                    Ok(Some((read, transferred))) => {
+                        if bytes_ptr != 0 {
+                            write_guest_u32(kernel, memory, thread_id, bytes_ptr, transferred);
+                        }
+                        if read.transferred_ptr != 0 {
+                            write_guest_u32(
+                                kernel,
+                                memory,
+                                thread_id,
+                                read.transferred_ptr,
+                                transferred,
+                            );
+                        }
+                        write_guest_u32(
+                            kernel,
+                            memory,
+                            thread_id,
+                            overlapped_ptr.wrapping_add(4),
+                            transferred,
+                        );
+                        kernel.threads.set_last_error(thread_id, 0);
+                        return Some(CoredllValue::Bool(true));
+                    }
+                    Ok(None) => {
+                        if bytes_ptr != 0 {
+                            write_guest_u32(kernel, memory, thread_id, bytes_ptr, 0);
+                        }
+                        kernel
+                            .threads
+                            .set_last_error(thread_id, ERROR_IO_INCOMPLETE);
+                        return Some(CoredllValue::Bool(false));
+                    }
+                    Err(_) => {
+                        if bytes_ptr != 0 {
+                            write_guest_u32(kernel, memory, thread_id, bytes_ptr, 0);
+                        }
+                        kernel.threads.set_last_error(
+                            thread_id,
+                            if write_failed {
+                                ERROR_INVALID_PARAMETER
+                            } else {
+                                ERROR_INVALID_HANDLE
+                            },
+                        );
+                        return Some(CoredllValue::Bool(false));
+                    }
+                }
+            }
+            // Other async I/O is not modeled yet; keep the previous benign fallback.
             if bytes_ptr != 0 {
                 write_guest_u32(kernel, memory, thread_id, bytes_ptr, 0);
             }
@@ -24203,12 +24287,51 @@ fn read_file_raw<M: CoredllGuestMemory>(
     let buffer = raw_arg(args, 1);
     let requested = raw_arg(args, 2);
     let transferred_ptr = raw_arg(args, 3);
+    let overlapped_ptr = raw_arg(args, 4);
     if requested != 0 && buffer == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         write_optional_count(kernel, memory, thread_id, transferred_ptr, 0);
         return false;
+    }
+    if overlapped_ptr != 0
+        && requested != 0
+        && kernel.is_serial_device_handle(handle)
+        && !kernel.serial_read_ready(handle)
+    {
+        let event_handle = memory
+            .read_u32(overlapped_ptr.wrapping_add(16))
+            .unwrap_or(0);
+        if event_handle != 0 {
+            let _ = kernel.reset_event(event_handle);
+            kernel.register_overlapped_serial_read(
+                overlapped_ptr,
+                PendingOverlappedSerialRead {
+                    handle,
+                    buffer,
+                    requested,
+                    transferred_ptr,
+                    event_handle,
+                },
+            );
+            write_optional_count(kernel, memory, thread_id, transferred_ptr, 0);
+            kernel.threads.set_last_error(thread_id, ERROR_IO_PENDING);
+            kernel.record_comm_trace(
+                "ReadFileOverlappedPending",
+                handle,
+                requested,
+                None,
+                requested,
+                false,
+                0,
+                None,
+                Some(format!(
+                    "overlapped=0x{overlapped_ptr:08x}/event=0x{event_handle:08x}"
+                )),
+            );
+            return false;
+        }
     }
     let mut write_failed = false;
     let mut cursor = buffer;

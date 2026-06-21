@@ -229,6 +229,15 @@ struct MessageQueueState {
     writers: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingOverlappedSerialRead {
+    pub handle: u32,
+    pub buffer: u32,
+    pub requested: u32,
+    pub transferred_ptr: u32,
+    pub event_handle: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct CeKernel {
     pub registry: Registry,
@@ -309,6 +318,7 @@ pub struct CeKernel {
     runtime_loader_stats: RuntimeLoaderStats,
     pulsed_wait_handles: BTreeMap<u64, u32>,
     comm_event_mask_changed_waits: BTreeSet<u64>,
+    pending_overlapped_serial_reads: BTreeMap<u32, PendingOverlappedSerialRead>,
     font_families: Vec<CeFontFamily>,
     fsdmgr_caches: Vec<Option<FsdmgrCacheEntry>>,
     iorm_resource_domains: BTreeMap<u32, IormResourceDomain>,
@@ -1161,6 +1171,7 @@ impl CeKernel {
             runtime_loader_stats: RuntimeLoaderStats::default(),
             pulsed_wait_handles: BTreeMap::new(),
             comm_event_mask_changed_waits: BTreeSet::new(),
+            pending_overlapped_serial_reads: BTreeMap::new(),
             font_families: ce_system_font_families(),
             fsdmgr_caches: Vec::new(),
             iorm_resource_domains: BTreeMap::new(),
@@ -4596,6 +4607,65 @@ impl CeKernel {
                 && self.remote.serial_byte_count() != 0)
     }
 
+    pub fn register_overlapped_serial_read(
+        &mut self,
+        overlapped_ptr: u32,
+        read: PendingOverlappedSerialRead,
+    ) {
+        self.pending_overlapped_serial_reads
+            .insert(overlapped_ptr, read);
+    }
+
+    pub fn pending_overlapped_serial_read(
+        &self,
+        handle: u32,
+        overlapped_ptr: u32,
+    ) -> Option<PendingOverlappedSerialRead> {
+        self.pending_overlapped_serial_reads
+            .get(&overlapped_ptr)
+            .copied()
+            .filter(|read| read.handle == handle)
+    }
+
+    pub fn complete_overlapped_serial_read_into<F>(
+        &mut self,
+        handle: u32,
+        overlapped_ptr: u32,
+        mut write: F,
+    ) -> Result<Option<(PendingOverlappedSerialRead, u32)>>
+    where
+        F: FnMut(&[u8]) -> Result<()>,
+    {
+        let Some(read) = self.pending_overlapped_serial_read(handle, overlapped_ptr) else {
+            return Ok(None);
+        };
+        let transferred = self.read_file_into(read.handle, read.requested, |bytes| write(bytes))?;
+        if transferred == 0 {
+            return Ok(None);
+        }
+        self.pending_overlapped_serial_reads.remove(&overlapped_ptr);
+        Ok(Some((read, transferred)))
+    }
+
+    fn signal_pending_overlapped_serial_reads(&mut self, handle: u32) -> usize {
+        if !self.serial_read_ready(handle) {
+            return 0;
+        }
+        let event_handles = self
+            .pending_overlapped_serial_reads
+            .values()
+            .filter(|read| read.handle == handle)
+            .map(|read| read.event_handle)
+            .collect::<Vec<_>>();
+        let mut signaled = 0;
+        for event_handle in event_handles {
+            if self.set_event(event_handle) {
+                signaled += 1;
+            }
+        }
+        signaled
+    }
+
     pub fn serial_empty_read_timeout_ms(&self, handle: u32, requested: u32) -> Option<u32> {
         match self.handles.get(handle) {
             Ok(KernelObject::Device(device)) => device.empty_read_timeout_ms(requested),
@@ -4735,6 +4805,7 @@ impl CeKernel {
         if let Ok(KernelObject::Device(device)) = self.handles.get_mut(handle) {
             device.enqueue_rx(&bytes);
         }
+        self.signal_pending_overlapped_serial_reads(handle);
         self.record_comm_trace(
             "SerialRemoteDrain",
             handle,
@@ -5953,6 +6024,8 @@ impl CeKernel {
     pub fn close_handle(&mut self, handle: u32) -> Result<bool> {
         let object = self.handles.get(handle)?.clone();
         let detail = self.describe_handle(handle);
+        self.pending_overlapped_serial_reads
+            .retain(|_, read| read.handle != handle && read.event_handle != handle);
         let name = match &object {
             KernelObject::Event(event) => event.name.clone(),
             KernelObject::Mutex(mutex) => mutex.name.clone(),
@@ -10174,12 +10247,100 @@ fn make_lparam_i16(low: i32, high: i32) -> u32 {
 mod tests {
     use super::*;
     use crate::{
-        ce::gwe::{
-            BS_DEFPUSHBUTTON, WM_ACTIVATE, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_SETFOCUS,
-            WS_CHILD, WS_VISIBLE,
+        ce::{
+            devices::{DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind},
+            gwe::{
+                BS_DEFPUSHBUTTON, WM_ACTIVATE, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_SETFOCUS, WS_CHILD, WS_VISIBLE,
+            },
+            registry::RegistryDump,
         },
-        config::RuntimeConfig,
+        config::{ObjectStoreConfig, RootConfig, RuntimeConfig, StorageConfig},
     };
+    use std::path::PathBuf;
+
+    fn runtime_config_with_com7() -> RuntimeConfig {
+        RuntimeConfig {
+            registry: RegistryDump {
+                version: 1,
+                source: None,
+                keys: BTreeMap::new(),
+            },
+            devices: DeviceConfigFile {
+                version: 1,
+                defaults: DeviceDefaults::default(),
+                devices: vec![DeviceConfig {
+                    guest: "COM7:".to_owned(),
+                    kind: DeviceKind::Serial,
+                    backend: DeviceBackend::Stub,
+                    host: None,
+                    remote_gps: true,
+                    enabled: true,
+                    note: None,
+                }],
+            },
+            storage: StorageConfig {
+                root: RootConfig {
+                    host_root: PathBuf::from("."),
+                },
+                object_store: ObjectStoreConfig {
+                    total_mbytes: 64,
+                    free_mbytes: 32,
+                },
+                mounts: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn remote_serial_arrival_signals_pending_overlapped_read_event() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let handle = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING)?;
+        let event_handle = kernel.create_event_w(None, false, false);
+        let overlapped_ptr = 0x1000_0100;
+        let buffer = 0x1000_0200;
+        let transferred_ptr = 0x1000_0300;
+
+        kernel.register_overlapped_serial_read(
+            overlapped_ptr,
+            PendingOverlappedSerialRead {
+                handle,
+                buffer,
+                requested: 256,
+                transferred_ptr,
+                event_handle,
+            },
+        );
+        assert_eq!(kernel.is_wait_ready(event_handle, 1), Some(false));
+
+        assert_eq!(
+            kernel.remote.inject_nmea_sentences([
+                "$GPRMC,170236.000,A,3733.9900,N,12658.6800,E,0.0,0.0,200626,,,A*69"
+            ]),
+            1
+        );
+        assert_ne!(kernel.drain_remote_serial_to_matching_open_device(), 0);
+        assert_eq!(kernel.is_wait_ready(event_handle, 1), Some(true));
+
+        let mut delivered = Vec::new();
+        let completed = kernel
+            .complete_overlapped_serial_read_into(handle, overlapped_ptr, |bytes| {
+                delivered.extend_from_slice(bytes);
+                Ok(())
+            })?
+            .expect("pending overlapped read completes");
+
+        assert_eq!(completed.0.buffer, buffer);
+        assert_eq!(completed.0.transferred_ptr, transferred_ptr);
+        assert_eq!(completed.1 as usize, delivered.len());
+        assert!(String::from_utf8_lossy(&delivered).starts_with("$GPRMC"));
+        assert!(
+            kernel
+                .pending_overlapped_serial_read(handle, overlapped_ptr)
+                .is_none()
+        );
+        Ok(())
+    }
 
     #[test]
     fn loaded_module_export_snapshots_skip_unload_pending_modules() -> Result<()> {

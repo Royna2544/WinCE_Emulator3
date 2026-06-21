@@ -1156,6 +1156,12 @@ notes when it is still needed for implementation.
    - Trace the actual CE wait/event/message or app readiness transition that
      should hide, destroy, or demote the owned splash popup.
    - Keep runtime policy generic; do not add app-specific shortcuts.
+   - `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c` and
+     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winerror.h`: serial `ReadFile` on an
+     empty remote GPS stream now supports a guest `OVERLAPPED` event path,
+     returning `ERROR_IO_PENDING`, resetting/signaling the event when remote
+     bytes arrive, and letting `GetOverlappedResult` report
+     `ERROR_IO_INCOMPLETE` until it copies the completed bytes and counts.
 
 ## Validation Gates
 
