@@ -76,11 +76,12 @@ use wince_emulation_v3::{
             ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN,
             ORD_TANH, ORD_TLS_CALL, ORD_TLS_SET_VALUE, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV,
             ORD_ULL_REM, ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP, ORD_UNLOCK_FILE_EX,
-            ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF,
-            ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR,
-            ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
-            ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_UNMAP_VIEW_OF_FILE, ORD_UPDATE_NLSINFO, ORD_UPDATE_NLSINFO_EX, ORD_VIRTUAL_ALLOC,
+            ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP,
+            ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR,
+            ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE,
+            ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         devices::{DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind},
         file::{
@@ -575,6 +576,128 @@ fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> 
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_UPDATE_NLSINFO,
+            [437, 1252, 0x0409],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ACP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1252),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OEMCP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(437),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_USER_DEFAULT_LCID,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0409),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UPDATE_NLSINFO_EX,
+            [949, 65001, 0x0409, 0x0412],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ACP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(65001),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OEMCP,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(949),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_USER_DEFAULT_LCID,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0412),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LOCALE_INFO_W,
+            [0x0400, 0x0001, buffer, 64],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(5),
+            ..
+        }
+    ));
+    assert_eq!(read_wide_z_from_bytes(&memory, buffer, 64), "0412");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_SET_USER_DEFAULT_LCID,
             [0x1234],
         ),
@@ -596,7 +719,7 @@ fn coredll_raw_default_nls_values_follow_international_registry() -> Result<()> 
             [],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(0x0409),
+            value: CoredllValue::U32(0x0412),
             ..
         }
     ));

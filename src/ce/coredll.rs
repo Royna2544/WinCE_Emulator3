@@ -4298,6 +4298,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(true))
         }
         ORD_UPDATE_NLSINFO => {
+            update_nls_info_raw(kernel, raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2));
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
@@ -4722,6 +4723,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_UPDATE_NLSINFO_EX => {
+            update_nls_info_raw(kernel, raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 3));
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
@@ -20998,6 +21000,17 @@ fn set_default_lcid_raw(kernel: &mut CeKernel, thread_id: u32, locale: u32) -> b
     set_registry_international_dword(kernel, "LCID", locale);
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn update_nls_info_raw(
+    kernel: &mut CeKernel,
+    oem_code_page: u32,
+    ansi_code_page: u32,
+    locale: u32,
+) {
+    set_registry_international_dword(kernel, "OEMCP", oem_code_page & 0xffff);
+    set_registry_international_dword(kernel, "ACP", ansi_code_page & 0xffff);
+    set_registry_international_dword(kernel, "LCID", locale);
 }
 
 fn registry_international_dword(kernel: &mut CeKernel, value_name: &str, fallback: u32) -> u32 {

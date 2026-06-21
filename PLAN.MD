@@ -1372,6 +1372,10 @@ notes when it is still needed for implementation.
      `CreateLocaleView` now writes the mapped-view size and returns a
      read-only synthetic NLS virtual view seeded with active ACP/OEMCP/LCID
      metadata instead of reporting `ERROR_NOT_SUPPORTED`.
+     `UpdateNLSInfo`/`UpdateNLSInfoEx` now mirror CE's `NKUpdateNLSInfo`
+     table refresh at the emulator's unified-default level by updating
+     ACP, OEMCP, and the exposed default LCID from the raw arguments instead
+     of staying no-op.
 
 ## Validation Gates
 
