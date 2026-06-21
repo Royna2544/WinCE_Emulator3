@@ -345,6 +345,11 @@ notes when it is still needed for implementation.
   page-size outputs instead of reporting unsupported. Coverage verifies the
   object-store page count against `GetStoreInformation`, the emulator RAM/page
   constants, null output rejection, and unmapped output failure.
+- `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwindbas.h`: raw
+  `SetSystemMemoryDivision` now returns CE's `SYSMEM_CHANGED` for the current
+  synthetic object-store split and `SYSMEM_FAILED`/`ERROR_INVALID_PARAMETER`
+  for unsupported repartitions instead of reporting `ERROR_NOT_SUPPORTED`.
+  Coverage verifies the no-change success and failed repartition paths.
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`, and

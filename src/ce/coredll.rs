@@ -4122,12 +4122,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_SYSTEM_MEMORY_DIVISION => Some(CoredllValue::Bool(get_system_memory_division_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_SET_SYSTEM_MEMORY_DIVISION => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
-        }
+        ORD_SET_SYSTEM_MEMORY_DIVISION => Some(CoredllValue::U32(set_system_memory_division_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_DUMP_FILE_SYSTEM_HEAP => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -10113,9 +10110,7 @@ fn get_system_memory_division_raw<M: CoredllGuestMemory>(
         return false;
     }
 
-    let object_store = kernel.files.object_store();
-    let store_pages =
-        (object_store.total_bytes / u64::from(CE_SYSTEM_PAGE_SIZE)).min(u32::MAX as u64) as u32;
+    let store_pages = system_memory_store_pages(kernel);
     let ram_pages = (CE_SYSTEM_RAM_BYTES / u64::from(CE_SYSTEM_PAGE_SIZE)) as u32;
     if !write_guest_u32(kernel, memory, thread_id, store_pages_ptr, store_pages)
         || !write_guest_u32(kernel, memory, thread_id, ram_pages_ptr, ram_pages)
@@ -10131,6 +10126,27 @@ fn get_system_memory_division_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn set_system_memory_division_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    const SYSMEM_CHANGED: u32 = 0;
+    const SYSMEM_FAILED: u32 = 3;
+
+    let requested_store_pages = raw_arg(args, 0);
+    if requested_store_pages == system_memory_store_pages(kernel) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return SYSMEM_CHANGED;
+    }
+
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    SYSMEM_FAILED
+}
+
+fn system_memory_store_pages(kernel: &CeKernel) -> u32 {
+    let object_store = kernel.files.object_store();
+    (object_store.total_bytes / u64::from(CE_SYSTEM_PAGE_SIZE)).min(u32::MAX as u64) as u32
 }
 
 fn page_out_module_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {

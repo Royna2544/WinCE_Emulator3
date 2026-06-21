@@ -86,21 +86,22 @@ use wince_emulation_v3::{
             ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
             ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_DAYLIGHT_TIME,
             ORD_SET_DEVICE_POWER, ORD_SET_EVENT_DATA, ORD_SET_KMODE, ORD_SET_LAST_ERROR,
-            ORD_SET_POWER_REQUIREMENT, ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_POWER_STATE,
-            ORD_SET_THREAD_CONTEXT, ORD_SET_THREAD_PRIORITY, ORD_SET_TIME_ZONE_INFORMATION,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
-            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
-            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
-            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
-            ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS, ORD_STRING_COMPRESS,
-            ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
-            ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_VER_QUERY_VALUE_W, ORD_VERIFY_APIHANDLE,
-            ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_APIREADY, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
-            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
-            ORD_WRITE_MSG_QUEUE, ORD_WRITE_PROCESS_MEMORY,
+            ORD_SET_POWER_REQUIREMENT, ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_MEMORY_DIVISION,
+            ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_CONTEXT, ORD_SET_THREAD_PRIORITY,
+            ORD_SET_TIME_ZONE_INFORMATION, ORD_SHADD_TO_RECENT_DOCS,
+            ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
+            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I,
+            ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
+            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
+            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
+            ORD_SLEEP_TILL_TICK, ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS,
+            ORD_STRING_COMPRESS, ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD,
+            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_THCREATE_SNAPSHOT,
+            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
+            ORD_VER_QUERY_VALUE_W, ORD_VERIFY_APIHANDLE, ORD_WAIT_COMM_EVENT,
+            ORD_WAIT_FOR_APIREADY, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_MSG_QUEUE,
+            ORD_WRITE_PROCESS_MEMORY,
         },
         devices::{
             CommDcb, DeviceBackend, DeviceConfig, DeviceConfigFile, DeviceDefaults, DeviceKind,
@@ -5492,6 +5493,42 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(memory.read_u32(page_size_ptr)?, 4096);
     assert_eq!(memory.read_u32(store_pages_ptr)?, store_size / 4096);
     assert_eq!(memory.read_u32(ram_pages_ptr)?, 16 * 1024);
+
+    const SYSMEM_CHANGED: u32 = 0;
+    const SYSMEM_FAILED: u32 = 3;
+    let current_store_pages = memory.read_u32(store_pages_ptr)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_SYSTEM_MEMORY_DIVISION,
+            [current_store_pages],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SYSMEM_CHANGED),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_SYSTEM_MEMORY_DIVISION,
+            [current_store_pages.saturating_add(1)],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SYSMEM_FAILED),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
