@@ -1270,6 +1270,10 @@ notes when it is still needed for implementation.
      executing, including inline `WaitForSingleObject`, message-queue, and
      `Sleep` timeouts, so remote touch/key input is not left pending across long
      host-wall-clock slices.
+   - Live-pump timeslice stops now compare visible-window surface area instead
+     of requiring the active process to be hidden, allowing an idle small active
+     surface to yield to a larger runnable parked route surface while preserving
+     queued active visible-window work.
 
 ## Validation Gates
 

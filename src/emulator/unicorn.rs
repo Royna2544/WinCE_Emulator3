@@ -4433,19 +4433,41 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn live_pump_hidden_active_has_visible_runnable_parked_process(
+    fn live_pump_active_should_yield_to_visible_parked_process(
         parked_processes: &VecDeque<ParkedProcess>,
         kernel: &CeKernel,
         active_thread_id: u32,
     ) -> bool {
         let active_process_id = kernel.current_process_id();
-        !Self::process_has_visible_windows(kernel, active_process_id)
-            && parked_processes.iter().any(|process| {
-                process.process_state.process_id != active_process_id
-                    && process.thread_id != active_thread_id
-                    && Self::parked_process_can_run(process, kernel)
-                    && Self::parked_process_has_visible_windows(process, kernel)
+        if Self::process_has_live_window_message_work(kernel, active_process_id) {
+            return false;
+        }
+        let active_area = Self::process_visible_window_area(kernel, active_process_id);
+        parked_processes.iter().any(|process| {
+            process.process_state.process_id != active_process_id
+                && process.thread_id != active_thread_id
+                && Self::parked_process_can_run(process, kernel)
+                && Self::process_visible_window_area(kernel, process.process_state.process_id)
+                    > active_area
+        })
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn process_visible_window_area(kernel: &CeKernel, process_id: u32) -> i64 {
+        kernel
+            .gwe
+            .windows_snapshot()
+            .into_iter()
+            .filter(|window| {
+                window.process_id == process_id
+                    && window.visible
+                    && !window.destroyed
+                    && window.rect.width() > 0
+                    && window.rect.height() > 0
             })
+            .map(|window| i64::from(window.rect.width()) * i64::from(window.rect.height()))
+            .max()
+            .unwrap_or(0)
     }
 
     #[cfg(feature = "unicorn")]
@@ -6321,6 +6343,60 @@ impl UnicornMips {
             let fast_framebuffer_tick_error = Rc::clone(&framebuffer_tick_error_code_hook);
             let fast_blocked_get_message = Rc::clone(&blocked_get_message);
             let fast_pc_stop = Rc::clone(&pc_stop);
+            if live_pump {
+                let mapped_code = Rc::clone(&fast_mapped_code);
+                let trampoline_ranges = Rc::clone(&fast_trampoline_ranges);
+                let trampoline_jump_index = fast_trampoline_jump_index.clone();
+                let blocked_get_message = Rc::clone(&fast_blocked_get_message);
+                let host_wall_clock_stop = Rc::clone(&fast_host_wall_clock_stop);
+                let previous_pc = Rc::new(Cell::new(None::<u32>));
+                let counter = Rc::new(Cell::new(0u32));
+                uc.add_code_hook(1, 0, move |uc, address, _size| {
+                    let pc = address as u32;
+                    let last_pc = previous_pc.replace(Some(pc));
+                    let index = counter.get().wrapping_add(1);
+                    counter.set(index);
+                    if index & 0x03ff != 0 {
+                        return;
+                    }
+                    let has_pending_remote_control = unsafe { &*kernel_ptr }
+                        .remote_server
+                        .as_ref()
+                        .is_some_and(|server| server.pending_control_count() != 0);
+                    if !has_pending_remote_control {
+                        return;
+                    }
+                    clear_orphaned_live_blocked_get_message(&blocked_get_message, unsafe {
+                        &*kernel_ptr
+                    });
+                    let live_blocked = blocked_get_message.borrow().clone();
+                    let remote_drained = drain_remote_server_control_messages_for_message_target(
+                        unsafe { &mut *kernel_ptr },
+                        live_blocked,
+                    );
+                    if remote_drained == 0 {
+                        return;
+                    }
+                    if let Some(stop_pc) = live_wall_clock_block_stop_pc(
+                        pc,
+                        last_pc,
+                        &trampoline_ranges,
+                        &trampoline_jump_index,
+                        |addr| read_unicorn_code_u32(uc, &mapped_code, addr),
+                    ) {
+                        *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
+                            pc: stop_pc,
+                            ra: read_mips_reg(uc, RegisterMIPS::RA),
+                            sp: read_mips_reg(uc, RegisterMIPS::SP),
+                            instruction: read_unicorn_code_u32(uc, &mapped_code, stop_pc),
+                            elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                        });
+                        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(stop_pc));
+                        let _ = uc.emu_stop();
+                    }
+                })
+                .map_err(|err| Error::Backend(format!("install live-pump remote hook: {err:?}")))?;
+            }
             let mut fast_start_sites = fast_start_indirect_transfer_sites(&self.mapped_blobs);
             fast_start_sites.extend(self.trampoline_jumps.iter().map(|jump| jump.origin));
             let fast_start_ranges = fast_start_hook_ranges(&fast_start_sites);
@@ -6978,8 +7054,11 @@ impl UnicornMips {
                 {
                     scheduler_timeslice_pending_hook.set(true);
                 }
-                if live_pump && !scheduler_timeslice_pending_hook.get() {
-                    if Self::live_pump_hidden_active_has_visible_runnable_parked_process(
+                if live_pump
+                    && !scheduler_timeslice_pending_hook.get()
+                    && !Self::thread_has_visible_receiver_work(active_thread_id, kernel_ref)
+                {
+                    if Self::live_pump_active_should_yield_to_visible_parked_process(
                         &parked_child_processes_timeslice_hook.borrow(),
                         kernel_ref,
                         active_thread_id,
@@ -7072,11 +7151,13 @@ impl UnicornMips {
                             .is_empty();
                 if no_pending_guest_returns {
                     let kernel_ref = unsafe { &*kernel_ptr };
-                    if Self::live_pump_hidden_active_has_visible_runnable_parked_process(
-                        &parked_child_processes_timeslice_hook.borrow(),
-                        kernel_ref,
-                        active_thread_id,
-                    ) {
+                    if !Self::thread_has_visible_receiver_work(active_thread_id, kernel_ref)
+                        && Self::live_pump_active_should_yield_to_visible_parked_process(
+                            &parked_child_processes_timeslice_hook.borrow(),
+                            kernel_ref,
+                            active_thread_id,
+                        )
+                    {
                         let _ = uc.reg_write(RegisterMIPS::PC, u64::from(pc));
                         let _ = uc.emu_stop();
                         return;
@@ -32232,7 +32313,7 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
-    fn live_pump_hidden_active_visible_parked_predicate_requires_hidden_active() -> Result<()> {
+    fn live_pump_visible_parked_predicate_uses_larger_idle_visible_surface() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let active_thread = 1;
@@ -32256,7 +32337,7 @@ mod guest_thread_stack_tests {
             exit_code: crate::ce::kernel::STILL_ACTIVE,
             signaled: false,
         });
-        let parked_hwnd = kernel.create_window_ex_w(
+        let parked_hwnd = kernel.create_window_ex_w_with_rect(
             parked_thread,
             "parked_visible",
             "",
@@ -32264,6 +32345,7 @@ mod guest_thread_stack_tests {
             0,
             crate::ce::gwe::WS_VISIBLE,
             0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 800, 480),
         );
         kernel.set_current_process_state(active_state);
         assert!(kernel.gwe.is_window(parked_hwnd));
@@ -32290,15 +32372,15 @@ mod guest_thread_stack_tests {
         });
 
         assert!(
-            UnicornMips::live_pump_hidden_active_has_visible_runnable_parked_process(
+            UnicornMips::live_pump_active_should_yield_to_visible_parked_process(
                 &parked,
                 &kernel,
                 active_thread
             ),
-            "hidden active process should yield to a runnable visible parked process"
+            "active process with no visible surface should yield to a runnable visible parked process"
         );
 
-        let active_hwnd = kernel.create_window_ex_w(
+        let active_hwnd = kernel.create_window_ex_w_with_rect(
             active_thread,
             "active_visible",
             "",
@@ -32306,15 +32388,31 @@ mod guest_thread_stack_tests {
             0,
             crate::ce::gwe::WS_VISIBLE,
             0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 150, 50),
         );
         assert!(kernel.gwe.is_window(active_hwnd));
+        assert!(kernel.gwe.validate_window(active_hwnd));
+        for _ in 0..16 {
+            if kernel.gwe.get_message(active_thread).is_none() {
+                break;
+            }
+        }
         assert!(
-            !UnicornMips::live_pump_hidden_active_has_visible_runnable_parked_process(
+            UnicornMips::live_pump_active_should_yield_to_visible_parked_process(
                 &parked,
                 &kernel,
                 active_thread
             ),
-            "visible active process should not trigger the hidden-active live-pump stop"
+            "small idle visible process should yield to a larger runnable visible parked process"
+        );
+        assert!(kernel.post_message_w(active_hwnd, crate::ce::gwe::WM_USER, 0, 0));
+        assert!(
+            !UnicornMips::live_pump_active_should_yield_to_visible_parked_process(
+                &parked,
+                &kernel,
+                active_thread
+            ),
+            "queued active visible-window work should run before yielding to a larger parked surface"
         );
 
         Ok(())
