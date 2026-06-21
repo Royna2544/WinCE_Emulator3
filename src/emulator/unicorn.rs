@@ -2299,8 +2299,7 @@ impl UnicornMips {
         {
             return;
         }
-        if live_pump
-            && self.running_guest_thread.is_none()
+        if self.running_guest_thread.is_none()
             && !active_has_receiver
             && !active_has_visible_queued_receiver
             && self.rotate_to_visible_window_parked_process(kernel)
@@ -5745,8 +5744,7 @@ impl UnicornMips {
         {
             return Ok(());
         }
-        if limits.live_pump
-            && self.running_guest_thread.is_none()
+        if self.running_guest_thread.is_none()
             && !active_has_receiver
             && !active_has_visible_queued_receiver
             && self.rotate_to_visible_window_parked_process(kernel)
@@ -32372,6 +32370,95 @@ mod guest_thread_stack_tests {
                 active_thread
             ),
             "queued active visible-window work should run before yielding to a larger parked surface"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn idle_visible_helper_handoff_runs_visible_parked_process_without_live_pump() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let helper_thread = 3;
+        scheduler.set_initial_thread_id(helper_thread);
+        scheduler.current_thread_id = helper_thread;
+        scheduler.running_guest_thread = None;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0045_7490,
+            regs: MipsGuestContext::zero(),
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let helper_hwnd = kernel.create_window_ex_w_with_rect(
+            helper_thread,
+            "helper_visible",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 150, 50),
+        );
+        assert!(kernel.gwe.validate_window(helper_hwnd));
+        while kernel.gwe.get_message(helper_thread).is_some() {}
+        assert!(!scheduler.active_process_has_receiver_work(&kernel));
+        assert!(!scheduler.active_process_has_visible_queued_receiver_work(&kernel));
+
+        let ui_thread = 1;
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let ui_hwnd = kernel.create_window_ex_w_with_rect(
+            ui_thread,
+            "full_screen_ui",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert!(kernel.gwe.validate_window(ui_hwnd));
+        while kernel.gwe.get_message(ui_thread).is_some() {}
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: ui_thread,
+            cpu: Box::new(resumable_cpu(ui_thread, 0x0010_2000)?),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+
+        scheduler.rotate_after_run_slice_handoff(&mut kernel, false);
+
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(scheduler.current_thread_id, ui_thread);
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 67)
         );
 
         Ok(())

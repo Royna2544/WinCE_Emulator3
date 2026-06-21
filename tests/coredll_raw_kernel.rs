@@ -80,14 +80,15 @@ use wince_emulation_v3::{
             ORD_REQUEST_POWER_NOTIFICATIONS, ORD_RESOURCE_CREATE_LIST, ORD_RESOURCE_DESTROY_LIST,
             ORD_RESOURCE_MARK_AS_SHAREABLE, ORD_RESOURCE_RELEASE, ORD_RESOURCE_REQUEST,
             ORD_RESOURCE_REQUEST_EX, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
-            ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_DEVICE_POWER,
-            ORD_SET_EVENT_DATA, ORD_SET_KMODE, ORD_SET_LAST_ERROR, ORD_SET_POWER_REQUIREMENT,
-            ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_POWER_STATE, ORD_SET_THREAD_CONTEXT,
-            ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I,
-            ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
-            ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I,
-            ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH,
-            ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_DAYLIGHT_TIME,
+            ORD_SET_DEVICE_POWER, ORD_SET_EVENT_DATA, ORD_SET_KMODE, ORD_SET_LAST_ERROR,
+            ORD_SET_POWER_REQUIREMENT, ORD_SET_STDIO_PATH_W, ORD_SET_SYSTEM_POWER_STATE,
+            ORD_SET_THREAD_CONTEXT, ORD_SET_THREAD_PRIORITY, ORD_SET_TIME_ZONE_INFORMATION,
+            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
+            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
+            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
+            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
+            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
             ORD_STOP_DEVICE_NOTIFICATIONS, ORD_STOP_POWER_NOTIFICATIONS, ORD_STRING_COMPRESS,
             ORD_STRING_DECOMPRESS, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
@@ -27778,7 +27779,7 @@ fn coredll_raw_get_time_zone_information_falls_back_to_ce_default() -> Result<()
             [time_zone],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(0),
+            value: CoredllValue::U32(1),
             ..
         }
     ));
@@ -27804,6 +27805,140 @@ fn coredll_raw_get_time_zone_information_falls_back_to_ce_default() -> Result<()
     assert_eq!(memory.read_u16(time_zone + 158)?, 1);
     assert_eq!(memory.read_u16(time_zone + 160)?, 2);
     assert_eq!(memory.read_i32(time_zone + 168)?, -60);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DAYLIGHT_TIME,
+            [1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_TIME_ZONE_INFORMATION,
+            [time_zone],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+fn write_tzi_i32(memory: &mut TestGuestMemory, ptr: u32, value: i32) {
+    memory.write_word(ptr, value as u32);
+    memory.write_bytes(ptr, &value.to_le_bytes());
+}
+
+fn write_tzi_system_time(
+    memory: &mut TestGuestMemory,
+    ptr: u32,
+    year: u16,
+    month: u16,
+    day_of_week: u16,
+    day: u16,
+) {
+    for (index, value) in [year, month, day_of_week, day, 2, 0, 0, 0]
+        .into_iter()
+        .enumerate()
+    {
+        let addr = ptr + (index as u32) * 2;
+        memory.write_halfword(addr, value);
+        memory.write_bytes(addr, &value.to_le_bytes());
+    }
+}
+
+#[test]
+fn coredll_raw_set_time_zone_information_persists_bias_state() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 18;
+    let time_zone = 0x7200;
+    let out = 0x7300;
+    memory.map_bytes(time_zone, 172);
+    memory.map_halfwords(time_zone, 86);
+    memory.map_words(time_zone, 43);
+    memory.map_bytes(out, 172);
+    memory.map_halfwords(out, 86);
+    memory.map_words(out, 43);
+    write_tzi_i32(&mut memory, time_zone, 60);
+    write_tzi_system_time(&mut memory, time_zone + 68, 0, 10, 0, 5);
+    write_tzi_i32(&mut memory, time_zone + 84, 0);
+    write_tzi_system_time(&mut memory, time_zone + 152, 0, 4, 0, 1);
+    write_tzi_i32(&mut memory, time_zone + 168, -30);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_TIME_ZONE_INFORMATION,
+            [time_zone],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_TIME_ZONE_INFORMATION,
+            [out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(out)?, 60);
+    assert_eq!(memory.read_i32(out + 168)?, -30);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DAYLIGHT_TIME,
+            [1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_TIME_ZONE_INFORMATION,
+            [out],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(out)?, 60);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())

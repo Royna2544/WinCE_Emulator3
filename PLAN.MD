@@ -1287,10 +1287,13 @@ notes when it is still needed for implementation.
      before reporting success, accepting disabled or recurring DST transition
      dates and rejecting malformed recurring or absolute `SYSTEMTIME` fields
      with `ERROR_INVALID_PARAMETER`.
-     `GetTimeZoneInformation` now copies the CE `HKLM\Time`
-     `TimeZoneInformation` binary blob when present and falls back to CE's
-     Pacific default layout when absent, while still returning
-     `TIME_ZONE_ID_UNKNOWN` until `UserKInfo[KINX_TIMEZONEBIAS]` is modeled.
+     `SetTimeZoneInformation` also persists the CE `HKLM\Time`
+     `TimeZoneInformation` binary blob and updates the kernel's normal and
+     daylight timezone-bias candidates. `SetDaylightTime` selects the active
+     candidate, `SetTimeZoneBias` can replace both candidates directly, and
+     `GetTimeZoneInformation` returns CE's standard/daylight/unknown ID by
+     comparing the copied blob against that active bias, falling back to CE's
+     Pacific default layout when no registry blob is present.
      `GetLocaleInfoW` now accepts the advertised English United States LCID
      (`0409`) from `PUBLIC\COMMON\OAK\FILES\locale.txt` for the same locale
      fields as the Korean table, including string sizing and

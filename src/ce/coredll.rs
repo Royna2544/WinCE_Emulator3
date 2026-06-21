@@ -2872,7 +2872,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_SET_DAYLIGHT_TIME | ORD_SET_TIME_ZONE_BIAS => {
+        ORD_SET_DAYLIGHT_TIME => {
+            kernel.set_daylight_time(raw_arg(args, 0) != 0);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Bool(true))
+        }
+        ORD_SET_TIME_ZONE_BIAS => {
+            kernel.set_time_zone_biases(raw_arg(args, 0) as i32, raw_arg(args, 1) as i32);
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
@@ -20753,6 +20759,8 @@ const TIME_ZONE_DAYLIGHT_DATE_OFFSET: usize = 152;
 const TIME_ZONE_DAYLIGHT_BIAS_OFFSET: usize = 168;
 const TIME_ZONE_NAME_CHARS: usize = 32;
 const TIME_ZONE_ID_UNKNOWN: u32 = 0;
+const TIME_ZONE_ID_STANDARD: u32 = 1;
+const TIME_ZONE_ID_DAYLIGHT: u32 = 2;
 const TIME_ZONE_ID_INVALID: u32 = u32::MAX;
 const OEM_DEBUG_READ_NODATA: u32 = u32::MAX;
 
@@ -22823,7 +22831,7 @@ fn write_time_zone_information<M: CoredllGuestMemory>(
     }
     mirror_time_zone_information_typed_fields(memory, time_zone_information_ptr, &bytes);
     kernel.threads.set_last_error(thread_id, 0);
-    TIME_ZONE_ID_UNKNOWN
+    time_zone_id_for_active_bias(kernel, &bytes)
 }
 
 fn time_zone_information_from_registry(kernel: &mut CeKernel) -> Option<Vec<u8>> {
@@ -22892,6 +22900,24 @@ fn default_time_zone_information() -> Vec<u8> {
 
 fn write_tzi_i32(bytes: &mut [u8], offset: usize, value: i32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn read_tzi_i32(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn time_zone_id_for_active_bias(kernel: &CeKernel, bytes: &[u8]) -> u32 {
+    let bias = read_tzi_i32(bytes, TIME_ZONE_BIAS_OFFSET);
+    let standard_bias = read_tzi_i32(bytes, TIME_ZONE_STANDARD_BIAS_OFFSET);
+    let daylight_bias = read_tzi_i32(bytes, TIME_ZONE_DAYLIGHT_BIAS_OFFSET);
+    let active_bias = kernel.active_time_zone_bias();
+    if bias.saturating_add(standard_bias) == active_bias {
+        TIME_ZONE_ID_STANDARD
+    } else if bias.saturating_add(daylight_bias) == active_bias {
+        TIME_ZONE_ID_DAYLIGHT
+    } else {
+        TIME_ZONE_ID_UNKNOWN
+    }
 }
 
 fn write_tzi_u16(bytes: &mut [u8], offset: usize, value: u16) {
@@ -23069,6 +23095,30 @@ fn set_time_zone_information_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
+    let Some(bytes) = read_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        time_zone_information_ptr,
+        TIME_ZONE_INFORMATION_SIZE as u32,
+    ) else {
+        return false;
+    };
+    let bias = read_tzi_i32(&bytes, TIME_ZONE_BIAS_OFFSET);
+    let standard_bias = read_tzi_i32(&bytes, TIME_ZONE_STANDARD_BIAS_OFFSET);
+    let daylight_bias = read_tzi_i32(&bytes, TIME_ZONE_DAYLIGHT_BIAS_OFFSET);
+    kernel.set_time_zone_biases(
+        bias.saturating_add(standard_bias),
+        bias.saturating_add(daylight_bias),
+    );
+    kernel.registry.set_value(
+        "hklm\\time",
+        "TimeZoneInformation",
+        RegistryValue {
+            ty: RegistryType::RegBinary,
+            data: RegistryData::Binary(bytes),
+        },
+    );
     kernel.threads.set_last_error(thread_id, 0);
     true
 }

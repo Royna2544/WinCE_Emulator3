@@ -45198,14 +45198,14 @@ fn write_system_time_fields(
     day_of_week: u16,
     day: u16,
 ) -> Result<()> {
-    memory.write_u16(ptr, year)?;
-    memory.write_u16(ptr + 2, month)?;
-    memory.write_u16(ptr + 4, day_of_week)?;
-    memory.write_u16(ptr + 6, day)?;
-    memory.write_u16(ptr + 8, 2)?;
-    memory.write_u16(ptr + 10, 0)?;
-    memory.write_u16(ptr + 12, 0)?;
-    memory.write_u16(ptr + 14, 0)?;
+    for (index, value) in [year, month, day_of_week, day, 2, 0, 0, 0]
+        .into_iter()
+        .enumerate()
+    {
+        let addr = ptr + (index as u32) * 2;
+        memory.write_u16(addr, value)?;
+        memory.write_bytes(addr, &value.to_le_bytes());
+    }
     Ok(())
 }
 
@@ -45221,6 +45221,7 @@ fn coredll_raw_set_time_zone_information_validates_transition_dates() -> Result<
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
+    memory.map_bytes(TZI_PTR, 172);
     memory.map_words(TZI_PTR, 43);
     memory.map_halfwords(STANDARD_DATE, 8);
     memory.map_halfwords(DAYLIGHT_DATE, 8);

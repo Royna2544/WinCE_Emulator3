@@ -298,6 +298,9 @@ pub struct CeKernel {
     process_current_directory: Option<String>,
     process_stdio_paths: BTreeMap<(u32, u32), String>,
     process_show_cmd: u32,
+    time_zone_normal_bias: i32,
+    time_zone_daylight_bias: i32,
+    time_zone_in_daylight: bool,
     current_process_id: u32,
     current_process_exit_code: u32,
     current_process_signaled: bool,
@@ -1153,6 +1156,9 @@ impl CeKernel {
             process_current_directory: None,
             process_stdio_paths: BTreeMap::new(),
             process_show_cmd: SW_SHOWNORMAL,
+            time_zone_normal_bias: 480,
+            time_zone_daylight_bias: 420,
+            time_zone_in_daylight: false,
             current_process_id: 1,
             current_process_exit_code: STILL_ACTIVE,
             current_process_signaled: false,
@@ -1222,6 +1228,23 @@ impl CeKernel {
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
         self.runtime_loader_stats
+    }
+
+    pub fn set_time_zone_biases(&mut self, normal_bias: i32, daylight_bias: i32) {
+        self.time_zone_normal_bias = normal_bias;
+        self.time_zone_daylight_bias = daylight_bias;
+    }
+
+    pub fn set_daylight_time(&mut self, in_daylight: bool) {
+        self.time_zone_in_daylight = in_daylight;
+    }
+
+    pub fn active_time_zone_bias(&self) -> i32 {
+        if self.time_zone_in_daylight {
+            self.time_zone_daylight_bias
+        } else {
+            self.time_zone_normal_bias
+        }
     }
 
     pub fn create_api_set(
