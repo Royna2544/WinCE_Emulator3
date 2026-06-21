@@ -58,9 +58,9 @@ Refreshed on 2026-06-20. This file lists unresolved behavior only.
   live startup; the current completed `happyway_win` send result is retained for
   sender observation without blocking receiver state.
 - Remote-server control input no longer remains stuck in `pendingControlMessages`
-  while live-pump CPU execution stays inside block-hook-visible guest work or
-  inline wait timeout completions; the current live run drains the queue and
-  posts touch messages to the real splash window.
+  while live-pump CPU execution stays inside import-heavy guest work,
+  block-hook-visible guest work, or inline wait timeout completions; the current
+  live run drains the queue and posts touch messages to the real splash window.
 
 ## Build And Validation Risks
 

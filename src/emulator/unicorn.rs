@@ -7279,6 +7279,23 @@ impl UnicornMips {
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
             move |uc, address, _size| {
                 let address = address as u32;
+                if live_pump {
+                    let has_pending_remote_control = unsafe { &*kernel_ptr }
+                        .remote_server
+                        .as_ref()
+                        .is_some_and(|server| server.pending_control_count() != 0);
+                    if has_pending_remote_control {
+                        clear_orphaned_live_blocked_get_message(
+                            &blocked_get_message_hook,
+                            unsafe { &*kernel_ptr },
+                        );
+                        let live_blocked = blocked_get_message_hook.borrow().clone();
+                        let _ = drain_remote_server_control_messages_for_message_target(
+                            unsafe { &mut *kernel_ptr },
+                            live_blocked,
+                        );
+                    }
+                }
                 if address == THREAD_EXIT_STUB_ADDR {
                     let active_thread_id = *current_thread_id_hook.borrow();
                     let no_running_thread = running_guest_thread_hook.borrow().is_none();

@@ -1261,10 +1261,10 @@ notes when it is still needed for implementation.
      targeted visible/ready/runnable parked-thread rotation path so remote
      touches and keys can wake the owning route UI thread without adding
      app-specific scheduling shortcuts.
-   - Live-pump scheduler block hooks and timeout completion paths now drain
-     queued remote-server control messages while the guest keeps executing,
-     including inline `WaitForSingleObject`, message-queue, and `Sleep`
-     timeouts, so remote touch/key input is not left pending across long
+   - Live-pump import traps, scheduler block hooks, and timeout completion paths
+     now drain queued remote-server control messages while the guest keeps
+     executing, including inline `WaitForSingleObject`, message-queue, and
+     `Sleep` timeouts, so remote touch/key input is not left pending across long
      host-wall-clock slices.
 
 ## Validation Gates
