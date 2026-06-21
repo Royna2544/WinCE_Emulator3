@@ -12341,6 +12341,7 @@ fn convert_ascii_wide_case(unit: u16, mode: WideCaseMode) -> u16 {
 }
 
 // DEVMODEW field offsets used by ChangeDisplaySettingsEx
+const DEVMODEW_SIZE_OFFSET: u32 = 68;
 const DEVMODEW_FIELDS_OFFSET: u32 = 72;
 const DEVMODEW_BITSPERPEL_OFFSET: u32 = 168;
 const DEVMODEW_PELSWIDTH_OFFSET: u32 = 172;
@@ -12349,7 +12350,13 @@ const DM_BITSPERPEL: u32 = 0x0004_0000;
 const DM_PELSWIDTH: u32 = 0x0008_0000;
 const DM_PELSHEIGHT: u32 = 0x0010_0000;
 const CDS_TEST: u32 = 0x0000_0002;
+const CDS_VIDEOPARAMETERS: u32 = 0x0000_0020;
+const CDS_RESET: u32 = 0x4000_0000;
+const CHANGE_DISPLAY_SETTINGS_KNOWN_FLAGS: u32 = CDS_TEST | CDS_VIDEOPARAMETERS | CDS_RESET;
 const DISP_CHANGE_SUCCESSFUL: u32 = 0;
+const DISP_CHANGE_BADMODE: u32 = (-2i32) as u32;
+const DISP_CHANGE_BADFLAGS: u32 = (-4i32) as u32;
+const DISP_CHANGE_BADPARAM: u32 = (-5i32) as u32;
 
 fn change_display_settings_ex_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -12360,6 +12367,24 @@ fn change_display_settings_ex_raw<M: CoredllGuestMemory>(
     // args: lpszDeviceName, lpDevMode, hwnd (unused in CE), dwflags, lParam
     let lp_dev_mode = raw_arg(args, 1);
     let dw_flags = raw_arg(args, 3);
+
+    if dw_flags & !CHANGE_DISPLAY_SETTINGS_KNOWN_FLAGS != 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return DISP_CHANGE_BADFLAGS;
+    }
+    if dw_flags & CDS_VIDEOPARAMETERS != 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return DISP_CHANGE_BADPARAM;
+    }
+    if lp_dev_mode != 0
+        && memory
+            .read_u16(lp_dev_mode + DEVMODEW_SIZE_OFFSET)
+            .unwrap_or(0)
+            == 0
+    {
+        kernel.threads.set_last_error(thread_id, 0);
+        return DISP_CHANGE_BADMODE;
+    }
 
     // CDS_TEST: validate only, do not apply or broadcast.
     if dw_flags & CDS_TEST != 0 {

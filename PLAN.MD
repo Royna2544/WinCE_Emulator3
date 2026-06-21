@@ -1133,6 +1133,14 @@ notes when it is still needed for implementation.
      window-coordinate validation order, reporting `ERROR_INVALID_WINDOW_HANDLE`
      for null/stale HWNDs before touching point buffers and clearing last-error
      on successful zero-point mapping.
+   - `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\gdi.cpp`,
+     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`, and
+     `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`: raw
+     `ChangeDisplaySettingsEx` now matches CE's pass-null display-setting
+     edges, accepting `CDS_RESET` with a null `DEVMODE`, rejecting unknown
+     flags as `DISP_CHANGE_BADFLAGS`, returning `DISP_CHANGE_BADPARAM` for
+     `CDS_VIDEOPARAMETERS`, and treating zero `dmSize` `CDS_TEST` requests as
+     `DISP_CHANGE_BADMODE` instead of a successful no-broadcast validation.
 
 7. Advance the iNavi route/runtime frontier.
    - Continue from the current real splash/resource-loading state toward the

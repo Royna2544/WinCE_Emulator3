@@ -45981,6 +45981,93 @@ fn coredll_raw_def_window_proc_nccreate_returns_true() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_change_display_settings_ex_matches_ce_gdi_pass_null_edges() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 101_u32;
+
+    const DEVMODEW_SIZE_OFFSET: u32 = 68;
+    const DEVMODEW_FIELDS_OFFSET: u32 = 72;
+    const DM_DISPLAYQUERYORIENTATION: u32 = 0x0100_0000;
+    const CDS_TEST: u32 = 0x0000_0002;
+    const CDS_VIDEOPARAMETERS: u32 = 0x0000_0020;
+    const CDS_RESET: u32 = 0x4000_0000;
+    const DISP_CHANGE_SUCCESSFUL: u32 = 0;
+    const DISP_CHANGE_BADMODE: u32 = (-2i32) as u32;
+    const DISP_CHANGE_BADFLAGS: u32 = (-4i32) as u32;
+    const DISP_CHANGE_BADPARAM: u32 = (-5i32) as u32;
+
+    let devmode_ptr = 0xdf00_u32;
+    memory.map_words(devmode_ptr, 50);
+    memory.map_halfwords(devmode_ptr, 100);
+    // CE's GDI pass-null test initializes dmSize and DM_DISPLAYQUERYORIENTATION.
+    memory.write_u16(devmode_ptr + DEVMODEW_SIZE_OFFSET, 188)?;
+    memory.write_u32(
+        devmode_ptr + DEVMODEW_FIELDS_OFFSET,
+        DM_DISPLAYQUERYORIENTATION,
+    )?;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHANGE_DISPLAY_SETTINGS_EX,
+            [0u32, 0, 0, CDS_RESET, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(DISP_CHANGE_SUCCESSFUL),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHANGE_DISPLAY_SETTINGS_EX,
+            [0u32, devmode_ptr, 0, 0xBAD, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(DISP_CHANGE_BADFLAGS),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHANGE_DISPLAY_SETTINGS_EX,
+            [0u32, devmode_ptr, 0, CDS_VIDEOPARAMETERS, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(DISP_CHANGE_BADPARAM),
+            ..
+        }
+    ));
+
+    memory.write_u16(devmode_ptr + DEVMODEW_SIZE_OFFSET, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHANGE_DISPLAY_SETTINGS_EX,
+            [0u32, devmode_ptr, 0, CDS_TEST, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(DISP_CHANGE_BADMODE),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_change_display_settings_ex_broadcasts_wm_displaychange() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -45996,9 +46083,11 @@ fn coredll_raw_change_display_settings_ex_broadcasts_wm_displaychange() -> Resul
     let hwnd = kernel.create_window_ex_w(receiver_thread, "DispWnd", "w", None, 0, 0, 0);
 
     // Build a DEVMODEW in guest memory with dmPelsWidth=640, dmPelsHeight=480, dmBitsPerPel=16.
-    // DEVMODEW offsets: dmFields=72, dmBitsPerPel=168, dmPelsWidth=172, dmPelsHeight=176
+    // DEVMODEW offsets: dmSize=68, dmFields=72, dmBitsPerPel=168, dmPelsWidth=172, dmPelsHeight=176
     let devmode_ptr = 0xe000_u32;
     memory.map_words(devmode_ptr, 50); // 50 × 4 = 200 bytes ≥ struct size
+    memory.map_halfwords(devmode_ptr, 100);
+    memory.write_u16(devmode_ptr + 68, 188)?; // dmSize
     memory.write_u32(devmode_ptr + 72, 0x0004_0000 | 0x0008_0000 | 0x0010_0000)?; // DM_BITSPERPEL|DM_PELSWIDTH|DM_PELSHEIGHT
     memory.write_u32(devmode_ptr + 168, 16)?; // dmBitsPerPel
     memory.write_u32(devmode_ptr + 172, 640)?; // dmPelsWidth
