@@ -3565,6 +3565,61 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     assert_eq!(memory.read_u32(bytes_returned_ptr)?, CE_VOLUME_INFO_SIZE);
     assert_sdmmc_volume_info(&memory);
 
+    memory.write_bytes(volume_info_ptr, &[0x7d; CE_VOLUME_INFO_SIZE as usize]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                sdmmc_file,
+                FSCTL_GET_VOLUME_INFO,
+                info_level_ptr,
+                4,
+                volume_info_ptr,
+                CE_VOLUME_INFO_SIZE,
+                0x7000_1000,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_sdmmc_volume_info(&memory);
+
+    memory.write_word(bytes_returned_ptr, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                sdmmc_file,
+                FSCTL_GET_VOLUME_INFO,
+                info_level_ptr,
+                4,
+                0x7000_2000,
+                CE_VOLUME_INFO_SIZE,
+                bytes_returned_ptr,
+                0,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, CE_VOLUME_INFO_SIZE);
+
     memory.write_bytes(volume_info_ptr, &[0x7c; CE_VOLUME_INFO_SIZE as usize]);
     memory.write_word(bytes_returned_ptr, 0x1234_abcd);
     assert!(matches!(

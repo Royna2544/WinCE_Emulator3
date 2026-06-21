@@ -10409,15 +10409,8 @@ fn fs_io_control_volume_info_raw<M: CoredllGuestMemory>(
                 return false;
             }
             let info = kernel.files.volume_info_for_path(root_path);
-            if !write_ce_volume_info(kernel, memory, thread_id, out_ptr, &info)
-                || !write_optional_count(
-                    kernel,
-                    memory,
-                    thread_id,
-                    bytes_returned_ptr,
-                    CE_VOLUME_INFO_SIZE,
-                )
-            {
+            write_ce_volume_info_byte_count(memory, bytes_returned_ptr);
+            if !write_ce_volume_info(kernel, memory, thread_id, out_ptr, &info) {
                 return false;
             }
             kernel.threads.set_last_error(thread_id, 0);
@@ -25844,13 +25837,18 @@ fn file_handle_get_volume_info_raw<M: CoredllGuestMemory>(
         return false;
     };
     let info = kernel.files.volume_info_for_path(Some(&path));
-    if !write_ce_volume_info(kernel, memory, thread_id, output_ptr, &info)
-        || !write_optional_count(kernel, memory, thread_id, returned_ptr, CE_VOLUME_INFO_SIZE)
-    {
+    write_ce_volume_info_byte_count(memory, returned_ptr);
+    if !write_ce_volume_info(kernel, memory, thread_id, output_ptr, &info) {
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn write_ce_volume_info_byte_count<M: CoredllGuestMemory>(memory: &mut M, returned_ptr: u32) {
+    if returned_ptr != 0 {
+        let _ = memory.write_u32(returned_ptr, CE_VOLUME_INFO_SIZE);
+    }
 }
 
 fn file_handle_get_stream_information_raw<M: CoredllGuestMemory>(

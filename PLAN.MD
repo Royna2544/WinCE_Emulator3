@@ -1107,6 +1107,13 @@ notes when it is still needed for implementation.
     packets, oversized SG counts, unmapped embedded buffers, representative
     CD-ROM query/media pass-through, byte-count preservation on validation
     failure, and untouched read buffers.
+  - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`:
+    `FSCTL_GET_VOLUME_INFO` on file and volume handles now follows CE's
+    `FSDMGR_GetVolumeInfo` result ordering by attempting to report
+    `sizeof(CE_VOLUME_INFO)` before copying the output structure and ignoring
+    byte-count pointer faults. Coverage verifies bad byte-count pointers do not
+    fail otherwise valid calls, while bad output buffers still fail after the
+    CE-sized count is written.
 
 6. Expand input, text, GDI, and drawing fidelity.
    - Add coverage for IME UI callbacks, caret timing, font fallback, glyph
