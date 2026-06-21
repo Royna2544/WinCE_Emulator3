@@ -408,6 +408,7 @@ fn run_cpu_loop(
         }
         if args.remote_server.is_some()
             && !cpu.active_process_has_visible_receiver_work(kernel)
+            && cpu.active_should_yield_to_visible_parked_process(kernel)
             && cpu.rotate_to_visible_window_parked_process(kernel)
         {
             reported_blocked_message_wait = false;
@@ -743,6 +744,7 @@ fn run_cpu_loop(
                 cpu.active_process_has_visible_queued_receiver_work(kernel),
                 cpu.has_runnable_parked_process(kernel),
             )
+            && cpu.active_should_yield_to_visible_parked_process(kernel)
             && cpu.rotate_to_next_parked_process(kernel)
         {
             reported_blocked_message_wait = false;
@@ -1939,13 +1941,14 @@ fn live_active_process_text(cpu: &UnicornMips, kernel: &CeKernel) -> String {
         .map(|snapshot| snapshot.summary())
         .unwrap_or_else(|| "none".to_owned());
     let mut out = format!(
-        "  active: pid={} tid={} active_threads=[{}] saved_context={} visible_receiver_work={} receiver_work={} parked_processes={}\n  saved_context_detail: {}\n  active_last_stop_snapshot: {}\n",
+        "  active: pid={} tid={} active_threads=[{}] saved_context={} visible_receiver_work={} receiver_work={} yield_visible_parked={} parked_processes={}\n  saved_context_detail: {}\n  active_last_stop_snapshot: {}\n",
         state.process_id,
         cpu.current_thread_id(),
         active_thread_text,
         cpu.has_saved_context(),
         cpu.active_process_has_visible_receiver_work(kernel),
         cpu.active_process_has_receiver_work(kernel),
+        cpu.active_should_yield_to_visible_parked_process(kernel),
         cpu.parked_child_process_count_for_kernel(kernel),
         cpu.saved_context_debug_text(),
         last_stop

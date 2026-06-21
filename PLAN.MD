@@ -1323,6 +1323,10 @@ notes when it is still needed for implementation.
     yield predicate before receiver-only rotation, so an idle active surface
     can hand control to larger runnable route UI without waiting for another
     timeslice hook.
+  - Remote-server and idle parked-process rotations now also require the
+    visible-parked yield predicate before switching away from the active
+    process, and monitor output reports the predicate state alongside active
+    receiver-work flags.
 
 8. Close core time and NLS parity gaps.
    - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\time.c` and
