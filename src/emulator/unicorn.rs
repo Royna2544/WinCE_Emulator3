@@ -6131,7 +6131,7 @@ impl UnicornMips {
                 sentinel_target_in_trampoline,
                 direct_jump_trampoline_origin,
                 current_trampoline_origin,
-                trampoline_ranges_for_patch,
+                pc_in_trampoline_ranges,
             ) = {
                 let trampoline_state = live_trampoline_state_code_hook.borrow();
                 let direct_jump_target_in_trampoline =
@@ -6161,7 +6161,7 @@ impl UnicornMips {
                     sentinel_target_in_trampoline,
                     direct_jump_trampoline_origin,
                     current_trampoline_origin,
-                    trampoline_state.ranges.clone(),
+                    trampoline_state.target_in_ranges(pc),
                 )
             };
             if let (Some(instruction), Some(target)) = (instruction, direct_jump_target) {
@@ -6187,7 +6187,7 @@ impl UnicornMips {
                     return;
                 }
             }
-            if target_in_ranges(pc, &trampoline_ranges_for_patch)
+            if pc_in_trampoline_ranges
                 && let Some(instruction) = instruction
                 && let (Some(next_instruction), Some(jump_instruction), Some(delay_slot)) = (
                     read_unicorn_code_u32(uc, &mapped_code, pc.wrapping_add(4)),
@@ -6340,12 +6340,16 @@ impl UnicornMips {
                     .and_then(|_| read_unicorn_code_u32(uc, &mapped_code, pc.wrapping_add(4))),
                 direct_jump_target,
             ) {
-                if is_patched_trampoline_jump(
-                    instruction,
-                    next_instruction,
-                    target,
-                    &trampoline_ranges_for_patch,
-                ) {
+                let patched_trampoline_jump = {
+                    let trampoline_state = live_trampoline_state_code_hook.borrow();
+                    is_patched_trampoline_jump(
+                        instruction,
+                        next_instruction,
+                        target,
+                        &trampoline_state.ranges,
+                    )
+                };
+                if patched_trampoline_jump {
                     let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
                     return;
                 }
