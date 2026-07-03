@@ -33,17 +33,18 @@ use wince_emulation_v3::{
             ORD_EXTRACT_ICON_EX_W, ORD_EXTRACT_RESOURCE, ORD_FILE_TIME_TO_SYSTEM_TIME,
             ORD_FIND_CLOSE, ORD_FIND_FIRST_DEVICE, ORD_FIND_NEXT_DEVICE, ORD_FREE_LIBRARY,
             ORD_GET_APIADDRESS, ORD_GET_CALL_STACK_SNAPSHOT, ORD_GET_CALLER_PROCESS_INDEX,
-            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
-            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_MODEM_STATUS,
-            ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC,
-            ORD_GET_DEVICE_BY_INDEX, ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE,
-            ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE, ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER,
+            ORD_GET_CALLER_VMPROCESS_ID, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
+            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
+            ORD_GET_COMM_MODEM_STATUS, ORD_GET_COMM_PROPERTIES, ORD_GET_COMM_STATE,
+            ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_DEVICE_BY_INDEX,
+            ORD_GET_DEVICE_INFORMATION_BY_DEVICE_HANDLE, ORD_GET_DEVICE_INFORMATION_BY_FILE_HANDLE,
+            ORD_GET_DEVICE_KEYS, ORD_GET_DEVICE_POWER, ORD_GET_DIRECT_CALLER_PROCESS_ID,
             ORD_GET_EVENT_DATA, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
             ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_FSHEAP_INFO,
             ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
             ORD_GET_MODULE_FILE_NAME_W, ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION,
             ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_OPEN_FILE_NAME_W,
-            ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
+            ORD_GET_OWNER_PROCESS, ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
             ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROC_NAME,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_SAVE_FILE_NAME_W, ORD_GET_STDIO_PATH_W,
@@ -7658,6 +7659,42 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         } if index == launch_process_index
     ));
+    for expected_process_id in [launch.process_id, 1] {
+        kernel.set_current_process_id(expected_process_id);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_OWNER_PROCESS,
+                [],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(owner),
+                ..
+            } if owner == expected_process_id
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+        for ordinal in [
+            ORD_GET_CALLER_VMPROCESS_ID,
+            ORD_GET_DIRECT_CALLER_PROCESS_ID,
+        ] {
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ordinal,
+                    [],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::U32(process_id),
+                    ..
+                } if process_id == expected_process_id
+            ));
+            assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+        }
+    }
     kernel.set_current_process_id(1);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

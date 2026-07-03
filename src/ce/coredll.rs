@@ -3005,11 +3005,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_GET_OWNER_PROCESS => {
-            // GetOwnerProcess() — returns process handle. Return current process pseudo-handle.
             kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Handle(
-                crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
-            ))
+            Some(CoredllValue::Handle(kernel.current_process_id()))
+        }
+        ORD_GET_CALLER_VMPROCESS_ID | ORD_GET_DIRECT_CALLER_PROCESS_ID => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(kernel.current_process_id()))
         }
         ORD_SET_LOWEST_SCHEDULED_PRIORITY => {
             kernel.threads.set_last_error(thread_id, 0);

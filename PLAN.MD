@@ -347,6 +347,14 @@ notes when it is still needed for implementation.
   unsupported debugger fallback. Coverage verifies write, read/write, null
   address, and unfiltered flag combinations all clear last error and return
   `TRUE`.
+- `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kwin32.c`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mkfuncs.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\psyscall.h`: raw `GetOwnerProcess`,
+  `GetCallerVMProcessId`, and `GetDirectCallerProcessId` now return the
+  current CE process ID instead of a pseudo-process handle or missing ordinal
+  fallback. Coverage verifies both the root process and a launched child when
+  selected as the active process.
 - `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pwindbas.h`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwindbas.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\OOMUI\oomui.cpp`: raw
