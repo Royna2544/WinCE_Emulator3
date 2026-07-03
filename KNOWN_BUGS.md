@@ -1,15 +1,25 @@
 # Known Bugs And Risks
 
-Refreshed on 2026-06-20. This file lists unresolved behavior only.
+Refreshed on 2026-07-04. This file lists unresolved behavior only.
 
 ## Open Issues
 
 - iNavi route-flow completion remains open beyond process startup, shell
   readiness, real splash rendering, remote input delivery, and initial mapdata
-  loading. The latest live sample reaches mapdata/SearchDB/mapinfo file work
-  and accepts touch/key WndProc callouts on the real splash window, but the
-  splash artwork still remains visible, so the missing behavior is likely a CE
-  wait/event/message/window transition, file result, or app readiness signal.
+  loading. After removing the stale zero-byte SD-image probe artifacts, the
+  2026-07-04 live run paints the full splash artwork in ~90 s and continues
+  into MRData route-table loading, but the map presentation gate after the
+  mapdata phase is still unconfirmed; keep tracing the CE
+  wait/event/message/window transition or app readiness signal from this
+  faster baseline.
+- Watch for re-created zero-byte probe artifacts on the SD image
+  (`INavi\traffictest.txt`, `INavi\routetest.txt`, `mapdata\soap.bin`,
+  `mapdata\searchdb\oildata.dat`). `happyway_win.exe` embeds
+  `traffictest`/`routetest` strings and boots dramatically slower when the
+  marker files exist, so a returning zero-byte file means an emulator path is
+  still materializing files on read-only existence probes. The 2026-07-04
+  no-marker run did not re-create them through the splash and mapdata phases.
+  Originals are preserved in `D:\INAVI_Emulator\_zero_byte_probe_artifacts_backup`.
 - Scheduler/message semantics are not complete for every reentrant wait,
   cancellation, nested send, abort-if-hung, modal-loop, and cross-thread
   result-delivery combination.

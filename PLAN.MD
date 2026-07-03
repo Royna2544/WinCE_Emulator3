@@ -1355,6 +1355,23 @@ notes when it is still needed for implementation.
     the last cross-process-send yield marker when the parked child no longer
     carries an explicit wait record, preserving generic sender/receiver
     rotation without app-specific shortcuts.
+  - Live-pump handoff now applies CE quantum rotation
+    (`C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c` round-robin of
+    same-priority ready threads at quantum expiry): an active process that
+    consumed its full host wall-clock slice rotates to a CPU-runnable parked
+    process even while it holds dirty visible windows, so a visible readiness
+    or paint loop no longer starves runnable hidden helpers. Coverage models
+    the dirty-splash-versus-runnable-helper split in both directions.
+  - Boot-time environment fact: zero-byte SD-image marker files
+    (`traffictest.txt`, `routetest.txt`, `soap.bin`, `oildata.dat`) enable
+    `happyway_win.exe` test modes and multiply boot cost ~30x; they were
+    created by a since-fixed probe-materialization path and are backed up in
+    `D:\INAVI_Emulator\_zero_byte_probe_artifacts_backup`. Keep watching for
+    re-creation during route/traffic phases.
+  - Per-slice engine rebuild is measured at ~1.5% of live-pump slice time
+    (`ce.slice_profile` debug target); the dominant boot cost is genuine guest
+    pixel-format conversion executed through the per-instruction code hook,
+    so region-scoped code hooks remain the next throughput lever.
 
 8. Close core time and NLS parity gaps.
    - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\time.c` and

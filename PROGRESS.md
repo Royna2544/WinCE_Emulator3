@@ -1,8 +1,41 @@
 # Progress
 
-Refreshed on 2026-06-20. This file records confirmed current facts only.
+Refreshed on 2026-07-04. This file records confirmed current facts only.
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
+
+## 2026-07-04 Session Facts
+
+- Raw `GetOwnerProcess` now returns the current CE process id, and
+  `GetCallerVMProcessId`/`GetDirectCallerProcessId` resolve through coredll
+  ordinals with the same value (`c59d08ad`).
+- Boot-time regression root cause: zero-byte marker files created on the SD
+  image between 2026-06-11 and 2026-06-17 (`traffictest.txt`, `routetest.txt`,
+  `soap.bin`, `oildata.dat`) enabled `happyway_win.exe` test modes
+  (`traffictest`/`routetest` strings are embedded in that binary) and slowed
+  boot from ~30 s to 20+ minutes in both single-shot and live-pump modes.
+  Removing them restored full splash paint in ~90 s of a live run. Current
+  builds do not re-create the files through splash/mapdata phases, so the
+  probe-materialization bug that produced them appears already fixed.
+- Slice profiling (`RUST_LOG=ce.slice_profile=debug`) shows the per-slice
+  Unicorn engine rebuild is NOT the live-pump bottleneck: setup ~4 ms,
+  hook install ~6 ms, blob read-back ~1 ms against ~1010 ms of guest
+  execution per slice, with 25 blobs totalling ~43 MB. The dominant boot cost
+  is genuine guest work: the hot PCs around `0x00339c00-0x00339da8` are a
+  pixel-format conversion loop (RGB565/555 packing with `0xf81f`/`0x7c1f`
+  transparency keys plus an alpha-plane pass), not a readiness spin.
+- Live-pump handoff now applies CE quantum rotation: an active process that
+  consumed its full host wall-clock slice rotates to a CPU-runnable parked
+  process even while it keeps dirty visible windows, matching NK same-priority
+  round-robin (`73bff641`). Previously a visible process with a dirty window
+  and a runnable hidden helper starved the helper indefinitely (measured
+  175:2 slice split over three minutes).
+- The per-instruction code hook no longer clones the trampoline range vector
+  on every executed instruction (`58ccb04d`).
+- Debug snapshots published to the remote server can be minutes stale while
+  the same process keeps the CPU, because publication happens on scheduler
+  changes; use the run log or `ce.slice_profile`/`ce.quantum` debug targets
+  for live-state truth.
 
 ## Current Snapshot
 

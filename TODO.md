@@ -1,20 +1,26 @@
 # TODO
 
-Refreshed on 2026-06-20. This file is limited to active, plan-aligned work.
+Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
-- Trace the current iNavi splash/map transition generically after the visible
-  UI process regains slices from the helper process: identify the CE wait,
-  event, message, window state, file result, device open, or readiness
-  condition gating final map presentation.
-- Continue live driving after the scheduler handoff fix and confirm whether
-  `COM7:`, `MFS1:`, and `SMB1:` open again before the final map presentation
-  gate; queued GPS still cannot drain until the guest opens `COM7:`.
-- Disassemble/sample the current hot guest PCs around `0x0030f54c`,
-  `0x00339c8c`/`0x00339d90`, and later mapdata loaders against the real
-  `iNavi.exe` to separate normal resource/image work from a repeated readiness
-  wait.
+- Re-drive the live splash/map transition from the post-marker-removal
+  baseline (full splash in ~90 s): identify the CE wait, event, message,
+  window state, file result, device open, or readiness condition gating final
+  map presentation after the MRData route-table loads.
+- Watch the SD image for re-created zero-byte probe artifacts during longer
+  live runs (route/traffic phases); if any reappear, find and fix the
+  emulator path that materializes files on read-only existence probes.
+- Continue live driving after the quantum-rotation handoff fix and confirm
+  whether `COM7:`, `MFS1:`, and `SMB1:` open again before the final map
+  presentation gate; queued GPS still cannot drain until the guest opens
+  `COM7:`.
+- The hot guest PCs around `0x00339c00-0x00339da8` are confirmed pixel-format
+  conversion work (RGB565/555 + alpha planes), not a readiness wait. If boot
+  needs to go faster, the next perf lever is region-scoped code hooks
+  (trampoline ranges + import-trap region only) so QEMU can build multi-
+  instruction translation blocks for such loops; keep trampoline dispatch
+  load-bearing per the fast-start lesson.
 - Extend `SendMessageTimeout` and message-wait coverage for broader reentrant
   waits, nested sends, timeout cleanup, `ReplyMessage`, abort-if-hung behavior,
   and live modal-loop interaction.
