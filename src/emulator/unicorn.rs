@@ -2272,6 +2272,21 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn rotate_after_run_slice_handoff(&mut self, kernel: &mut CeKernel, live_pump: bool) {
+        tracing::debug!(
+            target: "ce.quantum",
+            active_process_id = kernel.current_process_id(),
+            live_pump,
+            running = self.running_guest_thread.is_some(),
+            visible_receiver = self.active_process_has_visible_receiver_work(kernel),
+            queued_receiver = self.active_process_has_visible_queued_receiver_work(kernel),
+            wall_stop = self
+                .last_debug
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.host_wall_clock_stop.is_some()),
+            blocked_state = self.has_active_blocked_state(kernel),
+            runnable_parked = self.has_runnable_parked_process(kernel),
+            "handoff gates"
+        );
         if self.complete_active_send_wait_with_unavailable_receiver(kernel) {
             return;
         }
@@ -2372,7 +2387,13 @@ impl UnicornMips {
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.host_wall_clock_stop.is_some())
         {
-            let _ = self.rotate_to_any_runnable_parked_process(kernel);
+            let rotated = self.rotate_to_any_runnable_parked_process(kernel);
+            tracing::debug!(
+                target: "ce.quantum",
+                rotated,
+                incoming_process_id = kernel.current_process_id(),
+                "quantum handoff rotation"
+            );
         }
     }
 
@@ -5839,6 +5860,7 @@ impl UnicornMips {
             "virtual framebuffer attached"
         );
 
+        let slice_profile = Instant::now();
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|err| Error::Backend(format!("{err:?}")))?;
         let mut startup_mapped_ranges = Vec::new();
@@ -5861,6 +5883,7 @@ impl UnicornMips {
         // Refresh shared file-mapping views from their canonical mapping data so
         // this process observes writes other processes made since its last slice.
         let _ = sync_file_mapping_views_to_unicorn(&mut uc, kernel);
+        let slice_setup_elapsed = slice_profile.elapsed();
         let restoring_saved_context = self.saved_context.is_some();
         let mut start_pc = if let Some(saved) = self.saved_context.as_ref() {
             restore_mips_gprs(&mut uc, &saved.regs);
@@ -9418,6 +9441,7 @@ impl UnicornMips {
         .map_err(|err| Error::Backend(format!("install invalid-instruction probe: {err:?}")))?;
 
         // ── Run ───────────────────────────────────────────────────────────────────
+        let slice_hooks_elapsed = slice_profile.elapsed();
         let native_timeout_us = if limits.live_pump {
             live_pump_native_timeout_us()
         } else {
@@ -9429,6 +9453,7 @@ impl UnicornMips {
             native_timeout_us,
             limits.instruction_limit,
         );
+        let slice_run_elapsed = slice_profile.elapsed();
         let unicorn_native_timeout = native_timeout_us != 0
             && uc
                 .ctl_get_timeout()
@@ -9613,6 +9638,7 @@ impl UnicornMips {
         }
         self.orphaned_wndproc_returns = last_wndproc_returns.borrow().clone();
         self.saved_context = Some(snapshot_context);
+        let slice_snapshot_elapsed = slice_profile.elapsed();
         if let Err(err) = sync_mapped_blobs_from_unicorn(&uc, &mut self.mapped_blobs) {
             self.last_debug = Some(snapshot);
             self.persist_run_state(&run_state, kernel);
@@ -9620,6 +9646,34 @@ impl UnicornMips {
             return Err(err);
         }
         self.last_debug = Some(snapshot);
+        tracing::debug!(
+            target: "ce.slice_profile",
+            setup_ms = slice_setup_elapsed.as_millis() as u64,
+            hooks_ms = slice_hooks_elapsed
+                .saturating_sub(slice_setup_elapsed)
+                .as_millis() as u64,
+            run_ms = slice_run_elapsed
+                .saturating_sub(slice_hooks_elapsed)
+                .as_millis() as u64,
+            snapshot_ms = slice_snapshot_elapsed
+                .saturating_sub(slice_run_elapsed)
+                .as_millis() as u64,
+            sync_out_ms = slice_profile
+                .elapsed()
+                .saturating_sub(slice_snapshot_elapsed)
+                .as_millis() as u64,
+            blobs = self.mapped_blobs.len(),
+            blob_mb = (self
+                .mapped_blobs
+                .iter()
+                .map(|blob| blob.bytes.len())
+                .sum::<usize>()
+                / (1024 * 1024)) as u64,
+            process_id = kernel.current_process_id(),
+            thread_id = *current_thread_id.borrow(),
+            start_pc = format_args!("0x{start_pc:08x}"),
+            "slice profile"
+        );
         if let Some(err) = framebuffer_tick_error.borrow_mut().take() {
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
