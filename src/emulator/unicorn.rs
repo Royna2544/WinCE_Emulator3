@@ -2344,18 +2344,35 @@ impl UnicornMips {
             && self.rotate_to_live_pump_runnable_parked_process(kernel)
         {
             return;
-        } else if live_pump
+        }
+        if live_pump
             && active_has_visible_receiver
             && !active_has_visible_queued_receiver
             && !active_has_visible_windows
             && self.rotate_to_live_pump_cpu_runnable_parked_process(kernel)
         {
             return;
-        } else if self.has_active_blocked_state(kernel)
+        }
+        if self.has_active_blocked_state(kernel)
             && !active_has_visible_receiver
             && self.has_runnable_parked_process(kernel)
         {
             let _ = self.rotate_to_next_parked_process(kernel);
+            return;
+        }
+        // CE quantum rotation: NK round-robins same-priority ready threads at
+        // quantum expiry, so an active process that consumed its full host
+        // wall-clock slice while other processes stayed CPU-runnable must share
+        // the CPU instead of monopolizing it. Without this a visible readiness
+        // poll starves the hidden helper whose output it is polling for.
+        if live_pump
+            && !active_has_visible_queued_receiver
+            && self
+                .last_debug
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.host_wall_clock_stop.is_some())
+        {
+            let _ = self.rotate_to_any_runnable_parked_process(kernel);
         }
     }
 
@@ -32708,6 +32725,130 @@ mod guest_thread_stack_tests {
                 .parked_child_processes
                 .iter()
                 .any(|process| process.process_state.process_id == 1)
+        );
+
+        Ok(())
+    }
+
+    fn quantum_rotation_scheduler_and_kernel() -> Result<(UnicornMips, CeKernel)> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let active_thread = 1;
+        scheduler.set_initial_thread_id(active_thread);
+        scheduler.current_thread_id = active_thread;
+        scheduler.running_guest_thread = Some((active_thread, 0x41));
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: 0x0010_2000,
+            regs: MipsGuestContext::zero(),
+        });
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_base(0x0010_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+        let active_hwnd = kernel.create_window_ex_w(
+            active_thread,
+            "route_ui",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert!(kernel.gwe.validate_window(active_hwnd));
+
+        let parked_thread = 3;
+        let parked_cpu = resumable_cpu(parked_thread, 0x0040_2000)?;
+        let parked_hwnd = kernel.create_window_ex_w(
+            parked_thread,
+            "helper_ui",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        assert!(kernel.gwe.validate_window(parked_hwnd));
+        while kernel.gwe.get_message(parked_thread).is_some() {}
+        while kernel.gwe.get_message(active_thread).is_some() {}
+        // Model the live splash state: the route UI window stays dirty (visible
+        // receiver work) while nothing is queued, and the helper is CPU-runnable
+        // with no receiver work of its own.
+        assert!(kernel.gwe.invalidate_window(active_hwnd, None, true));
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            process_handle: None,
+            thread_handle: Some(0x358),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 67,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: parked_thread,
+            cpu: Box::new(parked_cpu),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+        assert!(scheduler.active_process_has_visible_receiver_work(&kernel));
+        assert!(!scheduler.active_process_has_visible_queued_receiver_work(&kernel));
+        Ok((scheduler, kernel))
+    }
+
+    #[test]
+    fn live_pump_handoff_quantum_rotates_to_cpu_runnable_parked_process() -> Result<()> {
+        let (mut scheduler, mut kernel) = quantum_rotation_scheduler_and_kernel()?;
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: 0x0010_2000,
+            host_wall_clock_stop: Some(UnicornHostWallClockStop {
+                pc: 0x0010_2000,
+                ra: 0x0010_2004,
+                sp: 0x7ffd_0000,
+                instruction: Some(0),
+                elapsed_ms: 1000,
+            }),
+            ..Default::default()
+        });
+
+        scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
+
+        assert_eq!(kernel.current_process_id(), 67);
+        assert_eq!(scheduler.current_thread_id, 3);
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 1)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn live_pump_handoff_quantum_rotation_requires_wall_clock_stop() -> Result<()> {
+        let (mut scheduler, mut kernel) = quantum_rotation_scheduler_and_kernel()?;
+        scheduler.last_debug = None;
+
+        scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
+
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(scheduler.current_thread_id, 1);
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 67)
         );
 
         Ok(())
