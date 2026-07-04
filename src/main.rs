@@ -395,14 +395,17 @@ fn run_cpu_loop(
             }
         }
         if cpu.complete_escaped_saved_get_message_sent_callout(kernel) {
+            tracing::debug!(target: "ce.gwe", "completed escaped saved GetMessage sent callout at main-loop head");
             reported_blocked_message_wait = false;
             continue;
         }
         if cpu.complete_escaped_direct_send_message_callout(kernel) {
+            tracing::debug!(target: "ce.gwe", "completed escaped direct send callout at main-loop head");
             reported_blocked_message_wait = false;
             continue;
         }
         if cpu.clear_escaped_visible_message_callouts(kernel) {
+            tracing::debug!(target: "ce.gwe", "escaped visible-message callout cleared at main-loop head");
             reported_blocked_message_wait = false;
             continue;
         }

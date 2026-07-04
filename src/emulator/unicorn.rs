@@ -1853,7 +1853,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn prepare_cross_thread_visible_message_callout(&mut self, kernel: &mut CeKernel) -> bool {
-        let _ = self.clear_escaped_visible_message_callouts(kernel);
+        if self.clear_escaped_visible_message_callouts(kernel) {
+            tracing::debug!(target: "ce.gwe", "escaped visible-message callout cleared at cross-thread prepare");
+        }
         if self.pending_wndproc_returns_block_visible_message_callout(kernel)
             || self.blocked_modal_message_box.is_some()
             || self.blocked_popup_menu_modal.is_some()
@@ -4060,7 +4062,9 @@ impl UnicornMips {
         self.guest_thread_stack_slots =
             std::mem::take(&mut *state.guest_thread_stack_slots.borrow_mut());
         self.clear_orphaned_blocked_get_message_state(kernel);
-        let _ = self.clear_escaped_visible_message_callouts(kernel);
+        if self.clear_escaped_visible_message_callouts(kernel) {
+            tracing::debug!(target: "ce.gwe", "escaped visible-message callout cleared at persist-run-state");
+        }
         let _ = self.clear_orphaned_direct_send_callouts(kernel);
         self.prune_active_process_from_parked_readonly_with_thread_duplicates(kernel, true);
     }
@@ -5851,6 +5855,7 @@ impl UnicornMips {
             && self.has_ready_parked_wait_unblock(kernel)
             && self.rotate_to_ready_parked_wait(kernel)
         {
+            tracing::debug!(target: "ce.gwe", "run entry rotated to ready parked wait");
             return Ok(());
         }
         if self.running_guest_thread.is_none()
@@ -5864,6 +5869,7 @@ impl UnicornMips {
                 ))
             && self.rotate_to_visible_window_parked_process(kernel)
         {
+            tracing::debug!(target: "ce.gwe", "run entry rotated idle active to visible parked process");
             return Ok(());
         }
         if limits.live_pump
@@ -5871,6 +5877,7 @@ impl UnicornMips {
             && !active_has_visible_windows
             && self.rotate_to_visible_window_parked_process(kernel)
         {
+            tracing::debug!(target: "ce.gwe", "run entry rotated hidden active to visible parked process");
             return Ok(());
         }
         if self.running_guest_thread.is_none()
@@ -5879,6 +5886,7 @@ impl UnicornMips {
             && self.has_runnable_parked_process(kernel)
             && self.rotate_to_next_parked_process(kernel)
         {
+            tracing::debug!(target: "ce.gwe", "run entry rotated to next runnable parked process");
             return Ok(());
         }
 
@@ -9782,7 +9790,9 @@ impl UnicornMips {
         self.clear_orphaned_blocked_get_message_state(kernel);
         let _ = self.complete_escaped_saved_get_message_sent_callout(kernel);
         let _ = self.complete_escaped_direct_send_message_callout(kernel);
-        let _ = self.clear_escaped_visible_message_callouts(kernel);
+        if self.clear_escaped_visible_message_callouts(kernel) {
+            tracing::debug!(target: "ce.gwe", "escaped visible-message callout cleared at slice end");
+        }
         let _ = self.clear_orphaned_direct_send_callouts(kernel);
         let _ = self.clear_orphaned_send_depths(kernel);
         self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
