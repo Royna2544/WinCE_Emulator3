@@ -82,6 +82,9 @@ pub struct UnicornMips {
     /// Set when the slice-end handoff rotated processes; consumed by the main
     /// loop so priority rotations do not immediately reverse that decision.
     slice_end_rotation_pending: bool,
+    /// Per-blob jr/jalr site scan results for scoped code hooks, keyed by
+    /// (base, byte length). Derivable state; reset on park.
+    fast_start_site_cache: HashMap<(u32, usize), Vec<u32>>,
     parked_child_processes: VecDeque<ParkedProcess>,
     #[cfg(feature = "unicorn")]
     current_thread_id: u32,
@@ -1147,6 +1150,7 @@ impl UnicornMips {
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
+            fast_start_site_cache: HashMap::new(),
             parked_child_processes: VecDeque::new(),
             #[cfg(feature = "unicorn")]
             current_thread_id: MAIN_GUEST_THREAD_ID,
@@ -5519,6 +5523,7 @@ impl UnicornMips {
                 run_slice_generation: self.run_slice_generation,
                 visible_callout_push_generation: self.visible_callout_push_generation,
                 slice_end_rotation_pending: false,
+                fast_start_site_cache: HashMap::new(),
                 parked_child_processes: VecDeque::new(),
                 #[cfg(feature = "unicorn")]
                 current_thread_id: self.current_thread_id,
@@ -6080,8 +6085,10 @@ impl UnicornMips {
             .and_then(|value| parse_optional_u32(&value))
             .filter(|value| *value != 0)
             .unwrap_or(4);
-        let fast_start_enabled = std::env::var_os("WINCE_EMU_FAST_START").is_some()
-            && (!live_pump || std::env::var_os("WINCE_EMU_FAST_START_LIVE").is_some());
+        let scoped_hooks_enabled = std::env::var_os("WINCE_EMU_SCOPED_HOOKS").is_some();
+        let fast_start_enabled = scoped_hooks_enabled
+            || (std::env::var_os("WINCE_EMU_FAST_START").is_some()
+                && (!live_pump || std::env::var_os("WINCE_EMU_FAST_START_LIVE").is_some()));
         let stop_pc = limits.stop_pc;
         let pc_stop = Rc::new(RefCell::new(None));
         let pc_stop_hook = Rc::clone(&pc_stop);
@@ -6554,7 +6561,12 @@ impl UnicornMips {
             let fast_framebuffer_tick_error = Rc::clone(&framebuffer_tick_error_code_hook);
             let fast_blocked_get_message = Rc::clone(&blocked_get_message);
             let fast_pc_stop = Rc::clone(&pc_stop);
-            let mut fast_start_sites = fast_start_indirect_transfer_sites(&self.mapped_blobs);
+            let mut fast_start_site_cache = std::mem::take(&mut self.fast_start_site_cache);
+            let mut fast_start_sites = cached_fast_start_indirect_transfer_sites(
+                &mut fast_start_site_cache,
+                &self.mapped_blobs,
+            );
+            self.fast_start_site_cache = fast_start_site_cache;
             fast_start_sites.extend(self.trampoline_jumps.iter().map(|jump| jump.origin));
             let fast_start_ranges = fast_start_hook_ranges(&fast_start_sites);
             for (start, end) in fast_start_ranges {
@@ -9026,6 +9038,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
+                let blob_count_before_loader = unsafe { &*mapped_blobs_ptr }.len();
                 if let Some(result) = trap.as_ref().and_then(|trap| {
                     try_handle_runtime_loader_import(
                         memory.uc,
@@ -9046,9 +9059,22 @@ impl UnicornMips {
                         &pending_dll_lifecycle_returns_hook,
                     )
                 }) {
+                    // Scoped code hooks cannot cover a module mapped mid-slice:
+                    // its jr/jalr pages have no hooks until the next engine
+                    // build rescans the blobs. End the slice at a safe pc so
+                    // the freshly loaded code never executes unhooked (this
+                    // was the historical fast-start stall inside runtime
+                    // loaded mfcce400).
+                    let runtime_blob_added = scoped_hooks_enabled
+                        && unsafe { &*mapped_blobs_ptr }.len() > blob_count_before_loader;
                     let result = match result {
                         RuntimeLoaderImportResult::Complete(result) => result,
-                        RuntimeLoaderImportResult::EnteredLifecycle => return,
+                        RuntimeLoaderImportResult::EnteredLifecycle => {
+                            if runtime_blob_added {
+                                let _ = memory.uc.emu_stop();
+                            }
+                            return;
+                        }
                     };
                     let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
                     if let Some(import) = last_imports_hook
@@ -9058,6 +9084,13 @@ impl UnicornMips {
                         .find(|import| import.pc == address && import.result.is_none())
                     {
                         import.result = Some(result);
+                    }
+                    if runtime_blob_added {
+                        let return_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+                        let _ = memory
+                            .uc
+                            .reg_write(RegisterMIPS::PC, u64::from(return_pc));
+                        let _ = memory.uc.emu_stop();
                     }
                     return;
                 }
@@ -9963,6 +9996,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
+            fast_start_site_cache: HashMap::new(),
             parked_child_processes: VecDeque::new(),
             current_thread_id: MAIN_GUEST_THREAD_ID,
             pending_guest_thread_returns: Vec::new(),
@@ -10280,29 +10314,61 @@ fn update_user_kdata_current_ids<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn fast_start_blob_indirect_transfer_sites(blob: &MappedBlob) -> Vec<u32> {
+    let mut sites = Vec::new();
+    if !(blob.name.starts_with("image:") || blob.name.starts_with("dll:")) {
+        return sites;
+    }
+    for (index, bytes) in blob.bytes.chunks_exact(4).enumerate() {
+        let instruction = u32::from_le_bytes(bytes.try_into().unwrap());
+        if decode_jr_register(instruction).is_none() && decode_jalr_register(instruction).is_none()
+        {
+            continue;
+        }
+        let Some(offset) = u32::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(4))
+        else {
+            continue;
+        };
+        if let Some(address) = blob.base.checked_add(offset) {
+            sites.push(address);
+        }
+    }
+    sites
+}
+
+#[cfg(feature = "unicorn")]
 fn fast_start_indirect_transfer_sites(blobs: &[MappedBlob]) -> Vec<u32> {
+    let mut sites = Vec::new();
+    for blob in blobs {
+        sites.extend(fast_start_blob_indirect_transfer_sites(blob));
+    }
+    sites.sort_unstable();
+    sites.dedup();
+    sites
+}
+
+/// Scanning ~40 MB of code blobs for jr/jalr sites costs tens of
+/// milliseconds; live-pump rebuilds the engine every slice, so the per-blob
+/// scan results are cached by (base, length) — code blob bytes are immutable
+/// once mapped apart from the import-trap page, which contains no guest
+/// indirect transfers.
+#[cfg(feature = "unicorn")]
+fn cached_fast_start_indirect_transfer_sites(
+    cache: &mut HashMap<(u32, usize), Vec<u32>>,
+    blobs: &[MappedBlob],
+) -> Vec<u32> {
     let mut sites = Vec::new();
     for blob in blobs {
         if !(blob.name.starts_with("image:") || blob.name.starts_with("dll:")) {
             continue;
         }
-        for (index, bytes) in blob.bytes.chunks_exact(4).enumerate() {
-            let instruction = u32::from_le_bytes(bytes.try_into().unwrap());
-            if decode_jr_register(instruction).is_none()
-                && decode_jalr_register(instruction).is_none()
-            {
-                continue;
-            }
-            let Some(offset) = u32::try_from(index)
-                .ok()
-                .and_then(|index| index.checked_mul(4))
-            else {
-                continue;
-            };
-            if let Some(address) = blob.base.checked_add(offset) {
-                sites.push(address);
-            }
-        }
+        let key = (blob.base, blob.bytes.len());
+        let blob_sites = cache
+            .entry(key)
+            .or_insert_with(|| fast_start_blob_indirect_transfer_sites(blob));
+        sites.extend_from_slice(blob_sites);
     }
     sites.sort_unstable();
     sites.dedup();
