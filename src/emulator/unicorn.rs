@@ -74,6 +74,11 @@ pub struct UnicornMips {
     trampoline_jumps: Vec<MipsTrampolineJump>,
     last_debug: Option<UnicornDebugSnapshot>,
     last_wall_clock_debug: Option<UnicornDebugSnapshot>,
+    /// Count of completed guest run slices; used to reject escaped-callout
+    /// recovery based on stop evidence captured before the callout was pushed.
+    run_slice_generation: u64,
+    /// `run_slice_generation` value at the newest visible-message callout push.
+    visible_callout_push_generation: u64,
     parked_child_processes: VecDeque<ParkedProcess>,
     #[cfg(feature = "unicorn")]
     current_thread_id: u32,
@@ -1136,6 +1141,8 @@ impl UnicornMips {
             trampoline_jumps: Vec::new(),
             last_debug: None,
             last_wall_clock_debug: None,
+            run_slice_generation: 0,
+            visible_callout_push_generation: 0,
             parked_child_processes: VecDeque::new(),
             #[cfg(feature = "unicorn")]
             current_thread_id: MAIN_GUEST_THREAD_ID,
@@ -2038,6 +2045,10 @@ impl UnicornMips {
                     crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
                 ))
             });
+        // The callout was derived from the current stop context, so that same
+        // stop snapshot must not count as escape evidence: require at least one
+        // completed run slice before escaped-callout recovery may consume it.
+        self.visible_callout_push_generation = self.run_slice_generation;
         tracing::debug!(
             target: "ce.gwe",
             hwnd = format_args!("0x{:08x}", message.hwnd),
@@ -2597,6 +2608,17 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn clear_escaped_visible_message_callouts(&mut self, kernel: &mut CeKernel) -> bool {
+        // A freshly pushed callout inherits its return pc from the very stop
+        // snapshot the candidates below still describe. Until a run slice has
+        // completed after the newest push, that snapshot is pre-callout
+        // evidence and must not be treated as an escaped return.
+        if self.run_slice_generation == self.visible_callout_push_generation
+            && self.pending_wndproc_returns.iter().any(|pending| {
+                pending.source == "OrphanedVisibleMessage" && pending.resume_import.is_some()
+            })
+        {
+            return false;
+        }
         let candidates = [
             self.saved_context
                 .as_ref()
@@ -5414,6 +5436,8 @@ impl UnicornMips {
                 trampoline_jumps: std::mem::take(&mut self.trampoline_jumps),
                 last_debug: self.last_debug.take(),
                 last_wall_clock_debug: self.last_wall_clock_debug.take(),
+                run_slice_generation: self.run_slice_generation,
+                visible_callout_push_generation: self.visible_callout_push_generation,
                 parked_child_processes: VecDeque::new(),
                 #[cfg(feature = "unicorn")]
                 current_thread_id: self.current_thread_id,
@@ -5812,8 +5836,18 @@ impl UnicornMips {
             self.active_process_has_visible_queued_receiver_work(kernel);
         let active_has_receiver = self.active_process_has_receiver_work(kernel);
         let active_has_visible_windows = self.active_process_has_visible_windows(kernel);
+        // A prepared WNDPROC callout with a running context is staged guest
+        // work; rotating away at run entry would ping-pong between processes
+        // without ever executing the callout slice.
+        let active_has_staged_callout = self.running_guest_thread.is_some()
+            && !self.pending_wndproc_returns.is_empty()
+            && self
+                .saved_context
+                .as_ref()
+                .is_some_and(Self::saved_cpu_context_is_resumable);
         if limits.live_pump
             && !active_has_visible_queued_receiver
+            && !active_has_staged_callout
             && self.has_ready_parked_wait_unblock(kernel)
             && self.rotate_to_ready_parked_wait(kernel)
         {
@@ -9454,6 +9488,7 @@ impl UnicornMips {
             limits.instruction_limit,
         );
         let slice_run_elapsed = slice_profile.elapsed();
+        self.run_slice_generation = self.run_slice_generation.wrapping_add(1);
         let unicorn_native_timeout = native_timeout_us != 0
             && uc
                 .ctl_get_timeout()
@@ -9835,6 +9870,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             trampoline_jumps: Vec::new(),
             last_debug: None,
             last_wall_clock_debug: None,
+            run_slice_generation: 0,
+            visible_callout_push_generation: 0,
             parked_child_processes: VecDeque::new(),
             current_thread_id: MAIN_GUEST_THREAD_ID,
             pending_guest_thread_returns: Vec::new(),
@@ -26186,6 +26223,9 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: super::MipsGuestContext::zero(),
         });
+        // The stop at the resume pc only counts as escape evidence once a run
+        // slice has completed after the callout push.
+        scheduler.run_slice_generation = scheduler.run_slice_generation.wrapping_add(1);
         assert!(scheduler.clear_escaped_visible_message_callouts(&mut kernel));
         assert!(scheduler.pending_wndproc_returns.is_empty());
         assert!(scheduler.orphaned_wndproc_returns.is_empty());
@@ -26333,6 +26373,9 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: super::MipsGuestContext::zero(),
         });
+        // The stop at the resume pc only counts as escape evidence once a run
+        // slice has completed after the callout push.
+        scheduler.run_slice_generation = scheduler.run_slice_generation.wrapping_add(1);
         assert!(scheduler.clear_escaped_visible_message_callouts(&mut kernel));
         assert_eq!(scheduler.current_thread_id(), active_thread_id);
         assert_eq!(
@@ -26492,6 +26535,9 @@ mod wait_scheduler_tests {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new().unwrap();
+        // Model a run slice completing after the callout was pushed so the
+        // stop-snapshot candidates count as post-push escape evidence.
+        scheduler.run_slice_generation = 1;
         let active_thread_id = super::MAIN_GUEST_THREAD_ID;
         let stale_wndproc = 0x0001_2570;
         let return_pc = 0x6001_f888;
@@ -26787,6 +26833,9 @@ mod wait_scheduler_tests {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new().unwrap();
+        // Model a run slice completing after the callout was pushed so the
+        // stop-snapshot candidates count as post-push escape evidence.
+        scheduler.run_slice_generation = 1;
         let active_thread_id = 7;
         let active_pc = 0x0031_cf80;
         let return_sp = 0x7ffb_f5f8;
@@ -26920,6 +26969,9 @@ mod wait_scheduler_tests {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new().unwrap();
+        // Model a run slice completing after the callout was pushed so the
+        // stop-snapshot candidates count as post-push escape evidence.
+        scheduler.run_slice_generation = 1;
         let active_thread_id = 16;
         let return_pc = crate::emulator::imports::IMPORT_TRAP_BASE
             + crate::emulator::imports::IMPORT_TRAP_STRIDE;
@@ -26973,6 +27025,82 @@ mod wait_scheduler_tests {
         let restored = scheduler.saved_context.as_ref().unwrap();
         assert_eq!(restored.pc, return_pc);
         assert_eq!(restored.regs.regs[2], 0);
+    }
+
+    #[test]
+    fn freshly_pushed_visible_callout_survives_pre_push_stop_snapshot() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let return_pc = 0x0030_f560;
+        let wndproc = 0x6004_f0f4;
+        let return_sp = 0x7ffd_ef80;
+        let hwnd = kernel.create_window_ex_w(
+            active_thread_id,
+            "route_ui",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+
+        scheduler.current_thread_id = active_thread_id;
+        // The wall-clock stop snapshot the callout was derived from: its pc is
+        // the callout's return pc by construction and carries no trap markers.
+        scheduler.last_debug = Some(super::UnicornDebugSnapshot {
+            pc: return_pc,
+            ..Default::default()
+        });
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: wndproc,
+            regs: super::MipsGuestContext::zero(),
+        });
+        scheduler
+            .pending_wndproc_returns
+            .push(super::PendingWndProcReturn {
+                source: "OrphanedVisibleMessage",
+                hwnd,
+                msg: crate::ce::gwe::WM_WINDOWPOSCHANGED,
+                wparam: 0,
+                lparam: 0,
+                wndproc,
+                return_pc,
+                return_sp,
+                caller_regs: None,
+                class_name: Some("route_ui".to_owned()),
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: None,
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: Some(super::ResumeImportAfterWndProc {
+                    thread_id: active_thread_id,
+                    running_thread: Some((active_thread_id, 0x41)),
+                    regs: super::MipsGuestContext::zero(),
+                    import_pc: return_pc,
+                }),
+                clear_focus_after_return: None,
+            });
+        // No run slice has completed since the push: the pre-push stop
+        // snapshot must not be treated as escape evidence.
+        scheduler.visible_callout_push_generation = scheduler.run_slice_generation;
+
+        assert!(!scheduler.clear_escaped_visible_message_callouts(&mut kernel));
+        assert_eq!(scheduler.pending_wndproc_returns.len(), 1);
+        assert_eq!(scheduler.saved_context.as_ref().unwrap().pc, wndproc);
+
+        // Once a slice has actually run after the push, the same stop evidence
+        // legitimately completes the escaped callout.
+        scheduler.run_slice_generation = scheduler.run_slice_generation.wrapping_add(1);
+        assert!(scheduler.clear_escaped_visible_message_callouts(&mut kernel));
+        assert!(scheduler.pending_wndproc_returns.is_empty());
+        assert_eq!(scheduler.saved_context.as_ref().unwrap().pc, return_pc);
     }
 
     #[test]
