@@ -31,6 +31,18 @@ Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
      2-minute single-shot boot proves the decode runs several times faster
      and the live loop stays correct, then flip the default and remove the
      gate.
+  A/B RESULT (2026-07-04): page-granular scoping is a NEGATIVE — the live
+  scoped run was 2-3x slower to the window cascade than the fair baseline.
+  Root cause is structural: hot compute loops share their 4 KB page with
+  their own `jr $ra` epilogue, so the page stays hooked and the loop still
+  executes as 1-instruction blocks, while thousands of per-page
+  `add_code_hook` registrations add per-slice setup cost. The
+  runtime-load slice-restart fix is still valid (the old
+  `WINCE_EMU_FAST_START` mfcce400 stall no longer reproduces; a gated
+  2-minute single-shot completed normally). Next design ideas for the real
+  win: per-site hook boundaries (one hook per jr/jalr word, needs unicorn
+  registration-count/overhead measurement), or patching jr sites into
+  trap-page thunks so no code hook is needed at all outside trampolines.
 - Investigate the 2026-07-04 silent desktop-run exit at 13:22:22Z (log ended
   mid-operation, no WER record; stderr was not captured for that run — the
   relaunched run captures both streams).
