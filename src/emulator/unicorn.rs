@@ -2300,8 +2300,8 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    pub fn take_slice_end_rotation(&mut self) -> bool {
-        std::mem::take(&mut self.slice_end_rotation_pending)
+    pub fn slice_end_rotation_pending(&self) -> bool {
+        self.slice_end_rotation_pending
     }
 
     #[cfg(feature = "unicorn")]
@@ -5913,6 +5913,9 @@ impl UnicornMips {
             unicorn_const::{Arch, HookType, Mode},
         };
 
+        // A run attempt for the process chosen by the last slice-end handoff is
+        // starting; the round-robin decision has been honored.
+        self.slice_end_rotation_pending = false;
         let active_has_visible_queued_receiver =
             self.active_process_has_visible_queued_receiver_work(kernel);
         let active_has_receiver = self.active_process_has_receiver_work(kernel);

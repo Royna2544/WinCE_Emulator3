@@ -172,7 +172,7 @@ impl UnicornMips {
         false
     }
 
-    pub fn take_slice_end_rotation(&mut self) -> bool {
+    pub fn slice_end_rotation_pending(&self) -> bool {
         false
     }
 

@@ -410,6 +410,7 @@ fn run_cpu_loop(
             continue;
         }
         if args.remote_server.is_some()
+            && !cpu.slice_end_rotation_pending()
             && !cpu.active_process_has_visible_receiver_work(kernel)
             && cpu.active_should_yield_to_visible_parked_process(kernel)
             && cpu.rotate_to_visible_window_parked_process(kernel)
@@ -420,6 +421,7 @@ fn run_cpu_loop(
             continue;
         }
         if args.remote_server.is_some()
+            && !cpu.slice_end_rotation_pending()
             && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
         {
             tracing::debug!(target: "ce.quantum", "main loop rotated idle active to visible parked process");
@@ -749,6 +751,7 @@ fn run_cpu_loop(
             continue;
         }
         if args.remote_server.is_some()
+            && !cpu.slice_end_rotation_pending()
             && should_rotate_idle_nonrunning_runnable_parked_process(
                 cpu.has_running_guest_thread(),
                 cpu.active_process_has_visible_queued_receiver_work(kernel),
@@ -757,6 +760,7 @@ fn run_cpu_loop(
             && cpu.active_should_yield_to_visible_parked_process(kernel)
             && cpu.rotate_to_next_parked_process(kernel)
         {
+            tracing::debug!(target: "ce.quantum", "main loop rotated idle nonrunning active to next parked");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -874,7 +878,7 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if !cpu.take_slice_end_rotation()
+        if !cpu.slice_end_rotation_pending()
             && !kernel_has_unreturned_parked_process(kernel)
             && cpu.rotate_to_ready_parked_wait_with_framebuffer(
                 kernel,
@@ -970,17 +974,23 @@ fn run_cpu_loop(
             continue;
         }
         if live_pump_slice
+            && !cpu.slice_end_rotation_pending()
             && should_rotate_live_pump_priority_parked_process(
                 cpu.active_process_has_visible_queued_receiver_work(kernel),
                 cpu.has_live_pump_priority_parked_process(kernel),
             )
             && cpu.rotate_to_next_parked_process(kernel)
         {
+            tracing::debug!(target: "ce.quantum", "pre-run rotated for live-pump priority parked process");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if live_pump_slice && rotate_idle_active_to_visible_parked(cpu, kernel, desktop) {
+        if live_pump_slice
+            && !cpu.slice_end_rotation_pending()
+            && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
+        {
+            tracing::debug!(target: "ce.quantum", "pre-run rotated idle active to visible parked");
             reported_blocked_message_wait = false;
             continue;
         }
@@ -1004,7 +1014,11 @@ fn run_cpu_loop(
                 live_pump_slice,
                 wall_clock_limit_ms == HOST_IDLE_MESSAGE_POLL_SLICE_MS,
             );
-            if should_rotate_process && cpu.rotate_to_next_parked_process(kernel) {
+            if should_rotate_process
+                && !cpu.slice_end_rotation_pending()
+                && cpu.rotate_to_next_parked_process(kernel)
+            {
+                tracing::debug!(target: "ce.quantum", "pre-run rotated on wall-stop snapshot state");
                 reported_blocked_message_wait = false;
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
