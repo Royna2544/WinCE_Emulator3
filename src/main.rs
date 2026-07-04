@@ -874,7 +874,8 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if !kernel_has_unreturned_parked_process(kernel)
+        if !cpu.take_slice_end_rotation()
+            && !kernel_has_unreturned_parked_process(kernel)
             && cpu.rotate_to_ready_parked_wait_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),

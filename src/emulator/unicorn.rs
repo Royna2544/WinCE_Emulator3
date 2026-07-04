@@ -79,6 +79,9 @@ pub struct UnicornMips {
     run_slice_generation: u64,
     /// `run_slice_generation` value at the newest visible-message callout push.
     visible_callout_push_generation: u64,
+    /// Set when the slice-end handoff rotated processes; consumed by the main
+    /// loop so priority rotations do not immediately reverse that decision.
+    slice_end_rotation_pending: bool,
     parked_child_processes: VecDeque<ParkedProcess>,
     #[cfg(feature = "unicorn")]
     current_thread_id: u32,
@@ -1143,6 +1146,7 @@ impl UnicornMips {
             last_wall_clock_debug: None,
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
+            slice_end_rotation_pending: false,
             parked_child_processes: VecDeque::new(),
             #[cfg(feature = "unicorn")]
             current_thread_id: MAIN_GUEST_THREAD_ID,
@@ -2285,6 +2289,23 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn rotate_after_run_slice_handoff(&mut self, kernel: &mut CeKernel, live_pump: bool) {
+        let outgoing_process_id = kernel.current_process_id();
+        self.rotate_after_run_slice_handoff_inner(kernel, live_pump);
+        if kernel.current_process_id() != outgoing_process_id {
+            // Record that the slice-end handoff already chose the next
+            // process so follow-up main-loop priority rotations do not
+            // immediately reverse the round-robin decision.
+            self.slice_end_rotation_pending = true;
+        }
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn take_slice_end_rotation(&mut self) -> bool {
+        std::mem::take(&mut self.slice_end_rotation_pending)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn rotate_after_run_slice_handoff_inner(&mut self, kernel: &mut CeKernel, live_pump: bool) {
         tracing::debug!(
             target: "ce.quantum",
             active_process_id = kernel.current_process_id(),
@@ -5497,6 +5518,7 @@ impl UnicornMips {
                 last_wall_clock_debug: self.last_wall_clock_debug.take(),
                 run_slice_generation: self.run_slice_generation,
                 visible_callout_push_generation: self.visible_callout_push_generation,
+                slice_end_rotation_pending: false,
                 parked_child_processes: VecDeque::new(),
                 #[cfg(feature = "unicorn")]
                 current_thread_id: self.current_thread_id,
@@ -9937,6 +9959,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             last_wall_clock_debug: None,
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
+            slice_end_rotation_pending: false,
             parked_child_processes: VecDeque::new(),
             current_thread_id: MAIN_GUEST_THREAD_ID,
             pending_guest_thread_returns: Vec::new(),

@@ -172,6 +172,10 @@ impl UnicornMips {
         false
     }
 
+    pub fn take_slice_end_rotation(&mut self) -> bool {
+        false
+    }
+
     pub fn clear_orphaned_send_depths(&mut self, _kernel: &mut CeKernel) -> bool {
         false
     }
