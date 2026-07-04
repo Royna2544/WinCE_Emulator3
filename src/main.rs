@@ -414,6 +414,7 @@ fn run_cpu_loop(
             && cpu.active_should_yield_to_visible_parked_process(kernel)
             && cpu.rotate_to_visible_window_parked_process(kernel)
         {
+            tracing::debug!(target: "ce.quantum", "main loop yielded active to visible parked process");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -421,6 +422,7 @@ fn run_cpu_loop(
         if args.remote_server.is_some()
             && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
         {
+            tracing::debug!(target: "ce.quantum", "main loop rotated idle active to visible parked process");
             reported_blocked_message_wait = false;
             continue;
         }
@@ -461,10 +463,12 @@ fn run_cpu_loop(
             continue;
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
+            tracing::debug!(target: "ce.quantum", "main loop rotated to cross-process send target");
             reported_blocked_message_wait = false;
             continue;
         }
         if cpu.reconcile_active_visible_window_thread(kernel) {
+            tracing::debug!(target: "ce.quantum", "main loop reconciled active visible window thread");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -524,6 +528,7 @@ fn run_cpu_loop(
             && cpu.active_process_has_receiver_work(kernel)
             && cpu.rotate_to_active_receiver_thread(kernel, &[])
         {
+            tracing::debug!(target: "ce.quantum", "main loop rotated to active receiver thread");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -683,10 +688,12 @@ fn run_cpu_loop(
             continue;
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
+            tracing::debug!(target: "ce.quantum", "main loop rotated to cross-process send target");
             reported_blocked_message_wait = false;
             continue;
         }
         if cpu.reconcile_active_visible_window_thread(kernel) {
+            tracing::debug!(target: "ce.quantum", "main loop reconciled active visible window thread");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -862,6 +869,7 @@ fn run_cpu_loop(
             continue;
         }
         if rotate_to_same_process_visible_receiver_thread(cpu, kernel) {
+            tracing::debug!(target: "ce.quantum", "post-run rotated to same-process visible receiver thread");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -872,6 +880,7 @@ fn run_cpu_loop(
                 Some(desktop.framebuffer_mut()),
             )
         {
+            tracing::debug!(target: "ce.quantum", "post-run rotated to ready parked wait");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -881,6 +890,7 @@ fn run_cpu_loop(
             && cpu.has_runnable_parked_process(kernel)
             && cpu.rotate_to_next_parked_process(kernel)
         {
+            tracing::debug!(target: "ce.quantum", "post-run rotated for pending parked create process");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -892,6 +902,7 @@ fn run_cpu_loop(
                 Some(desktop.framebuffer_mut()),
             )
         {
+            tracing::debug!(target: "ce.quantum", "post-run rotated hidden active to receiver parked process");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -932,10 +943,12 @@ fn run_cpu_loop(
             break;
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
+            tracing::debug!(target: "ce.quantum", "main loop rotated to cross-process send target");
             reported_blocked_message_wait = false;
             continue;
         }
         if cpu.reconcile_active_visible_window_thread(kernel) {
+            tracing::debug!(target: "ce.quantum", "main loop reconciled active visible window thread");
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
