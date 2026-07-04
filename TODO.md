@@ -31,6 +31,20 @@ Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
      2-minute single-shot boot proves the decode runs several times faster
      and the live loop stays correct, then flip the default and remove the
      gate.
+  IMPLEMENTED (2026-07-05, `69fa4633`): patched origins now carry a direct
+  architectural `j stub; nop` whenever the stub shares the origin's 256 MB
+  region (per-region stub windows make this true for boot DLLs too), and
+  `WINCE_EMU_SCOPED_HOOKS=1` activates a hookless mode (verified via the
+  "hookless trampoline mode" debug line): no per-instruction/per-page code
+  hooks, import-trap page keeps the single remaining code hook, block hook
+  carries wall-clock stops, framebuffer ticks, and host-input drains.
+  A/B INTERIM: hookless boots correctly, but the skin-decode wall time at
+  the 14-minute checkpoint matches the global-hook baseline — the
+  per-instruction hook is NOT the decode bottleneck (consistent with June's
+  30-second boots having run WITH the global hook). Next diagnostic:
+  measure instructions-per-slice hookless vs global to compare execution
+  efficiency directly, and host-profile a decode-phase slice (flamegraph)
+  to find where the ~1 s of run time actually goes.
   A/B RESULT (2026-07-04): page-granular scoping is a NEGATIVE — the live
   scoped run was 2-3x slower to the window cascade than the fair baseline.
   Root cause is structural: hot compute loops share their 4 KB page with
