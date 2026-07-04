@@ -2907,6 +2907,9 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         let Some(index) = self.parked_child_processes.iter().position(|process| {
             !self.parked_process_matches_current_active(process, kernel)
                 && Self::parked_process_has_priority_ready_work(process, kernel)
@@ -3026,12 +3029,41 @@ impl UnicornMips {
             || active_receiver_work
     }
 
+    /// A cross-thread visible-message callout that has been staged but has not
+    /// yet received a run slice must execute before the active process rotates
+    /// away; otherwise rotation churn can starve the callout indefinitely. The
+    /// veto lifts as soon as one slice runs (the generations diverge), so
+    /// ordinary quantum preemption of a long-running handler is unaffected.
+    #[cfg(feature = "unicorn")]
+    fn active_has_unrun_staged_visible_callout(&self) -> bool {
+        self.visible_callout_push_generation == self.run_slice_generation
+            && self.running_guest_thread.is_some()
+            && self
+                .saved_context
+                .as_ref()
+                .is_some_and(Self::saved_cpu_context_is_resumable)
+            && self.pending_wndproc_returns.iter().any(|pending| {
+                pending.source == "OrphanedVisibleMessage" && pending.resume_import.is_some()
+            })
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    fn active_has_unrun_staged_visible_callout(&self) -> bool {
+        false
+    }
+
     pub fn rotate_to_next_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         self.switch_to_next_parked_process(kernel, true)
     }
 
     #[cfg(feature = "unicorn")]
     pub fn rotate_to_visible_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         let Some(index) = self.parked_child_processes.iter().position(|process| {
             !self.parked_process_matches_current_active(process, kernel)
                 && Self::parked_process_can_run(process, kernel)
@@ -3048,6 +3080,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn rotate_to_visible_window_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         let Some(index) = self.parked_child_processes.iter().position(|process| {
             !self.parked_process_matches_current_active(process, kernel)
                 && Self::parked_process_can_run(process, kernel)
@@ -3073,6 +3108,9 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         let has_runnable_visible_window_process =
             self.parked_child_processes.iter().any(|process| {
                 !self.parked_process_matches_current_active(process, kernel)
@@ -3107,6 +3145,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn rotate_to_live_pump_resumable_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         let index = self
             .parked_child_processes
             .iter()
@@ -3131,6 +3172,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn rotate_to_live_pump_runnable_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         let index = self.parked_child_processes.iter().position(|process| {
             !self.parked_process_matches_current_active(process, kernel)
                 && Self::parked_process_has_resumable_context(process)
@@ -3147,6 +3191,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn rotate_to_live_pump_cpu_runnable_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         let Some(index) = self.parked_child_processes.iter().position(|process| {
             !self.parked_process_matches_current_active(process, kernel)
                 && Self::parked_process_has_cpu_runnable_work(process, kernel)
@@ -3162,6 +3209,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn rotate_to_any_runnable_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        if self.active_has_unrun_staged_visible_callout() {
+            return false;
+        }
         let Some(index) = self.parked_child_processes.iter().position(|process| {
             !self.parked_process_matches_current_active(process, kernel)
                 && Self::parked_process_can_run(process, kernel)
