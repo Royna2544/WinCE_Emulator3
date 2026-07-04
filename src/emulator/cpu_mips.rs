@@ -308,18 +308,28 @@ pub(crate) fn patch_mips_unicorn_trampolines(
                 jal_stub_words(patch.pc, target, delay_slot, stub_pc)?
             }
         };
-        write_mapped_word(
-            mapped,
-            patch.rva,
-            encode_mips_lui(26, stub_pc >> 16),
-            &image.path,
-        )?;
-        write_mapped_word(
-            mapped,
-            patch.rva + 4,
-            encode_mips_ori(26, 26, stub_pc & 0xffff),
-            &image.path,
-        )?;
+        // A stub reachable by a direct MIPS jump gets an architecturally
+        // self-contained `j stub; nop` at the patched site: it executes
+        // correctly with no code-hook interpretation (the stub replays the
+        // original delay-slot word itself). The lui/ori $k0 sentinel remains
+        // only for cross-region stubs, which still need hook interpretation.
+        if let Ok(jump_word) = encode_mips_jump(patch.pc, stub_pc) {
+            write_mapped_word(mapped, patch.rva, jump_word, &image.path)?;
+            write_mapped_word(mapped, patch.rva + 4, MIPS_NOP, &image.path)?;
+        } else {
+            write_mapped_word(
+                mapped,
+                patch.rva,
+                encode_mips_lui(26, stub_pc >> 16),
+                &image.path,
+            )?;
+            write_mapped_word(
+                mapped,
+                patch.rva + 4,
+                encode_mips_ori(26, 26, stub_pc & 0xffff),
+                &image.path,
+            )?;
+        }
         let stub_offset = stub_rva as usize;
         let stub_end = stub_offset
             .checked_add(stub_words.len() * 4)

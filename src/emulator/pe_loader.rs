@@ -116,6 +116,11 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
     let mut trampoline_blobs: Vec<(String, u32, Vec<u8>)> = Vec::new();
     #[cfg(feature = "unicorn")]
     let mut next_trampoline_base = EXTERNAL_TRAMPOLINE_BASE;
+    // Per-256MB-region stub windows: a stub in the same region as its origin
+    // lets the patcher emit an architecturally self-contained `j stub` at the
+    // patched site instead of the hook-interpreted lui/ori sentinel.
+    #[cfg(feature = "unicorn")]
+    let mut trampoline_base_by_region: HashMap<u32, u32> = HashMap::new();
     #[cfg(feature = "unicorn")]
     {
         let _ =
@@ -144,11 +149,29 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
             )?;
             #[cfg(feature = "unicorn")]
             let trampoline_patch = {
-                let trampoline_base = allocate_relocated_dll_base(
+                let region = load_base & 0xf000_0000;
+                let region_cursor = trampoline_base_by_region.entry(region).or_insert(
+                    if region == EXTERNAL_TRAMPOLINE_BASE & 0xf000_0000 {
+                        EXTERNAL_TRAMPOLINE_BASE
+                    } else {
+                        region | 0x0f00_0000
+                    },
+                );
+                let mut trampoline_base = allocate_relocated_dll_base(
                     0x0010_0000,
                     &occupied_image_ranges,
-                    &mut next_trampoline_base,
+                    region_cursor,
                 )?;
+                if trampoline_base & 0xf000_0000 != region {
+                    // The region-local window is exhausted; fall back to the
+                    // legacy external window. Those sites keep the
+                    // hook-interpreted sentinel form.
+                    trampoline_base = allocate_relocated_dll_base(
+                        0x0010_0000,
+                        &occupied_image_ranges,
+                        &mut next_trampoline_base,
+                    )?;
+                }
                 Some(patch_mips_unicorn_trampolines(
                     dll,
                     load_base,

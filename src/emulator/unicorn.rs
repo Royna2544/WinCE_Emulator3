@@ -85,6 +85,9 @@ pub struct UnicornMips {
     /// Per-blob jr/jalr site scan results for scoped code hooks, keyed by
     /// (base, byte length). Derivable state; reset on park.
     fast_start_site_cache: HashMap<(u32, usize), Vec<u32>>,
+    /// Cached result of the all-origins-are-direct-jumps check, keyed by the
+    /// trampoline jump count it was computed for. Derivable; reset on park.
+    hookless_origins_direct_cache: Option<(usize, bool)>,
     parked_child_processes: VecDeque<ParkedProcess>,
     #[cfg(feature = "unicorn")]
     current_thread_id: u32,
@@ -1151,6 +1154,7 @@ impl UnicornMips {
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
             fast_start_site_cache: HashMap::new(),
+            hookless_origins_direct_cache: None,
             parked_child_processes: VecDeque::new(),
             #[cfg(feature = "unicorn")]
             current_thread_id: MAIN_GUEST_THREAD_ID,
@@ -5524,6 +5528,7 @@ impl UnicornMips {
                 visible_callout_push_generation: self.visible_callout_push_generation,
                 slice_end_rotation_pending: false,
                 fast_start_site_cache: HashMap::new(),
+                hookless_origins_direct_cache: None,
                 parked_child_processes: VecDeque::new(),
                 #[cfg(feature = "unicorn")]
                 current_thread_id: self.current_thread_id,
@@ -6173,8 +6178,27 @@ impl UnicornMips {
         let current_thread_id_hook = Rc::clone(&current_thread_id);
         let current_thread_id_code_hook = Rc::clone(&current_thread_id);
         let current_thread_id_fast_code_hook = Rc::clone(&current_thread_id);
+        // Hookless trampoline mode: every patched origin carries a direct
+        // `j stub` and stubs are architecturally self-contained, so no
+        // per-instruction or per-page code hook is installed at all — the
+        // import-trap page keeps its own hook, and wall-clock, framebuffer,
+        // and host-input services run from the scheduler block hook. Any
+        // per-instruction diagnostic request falls back to the global hook.
+        let hookless_trampolines_enabled = scoped_hooks_enabled
+            && !crash_code_trace_enabled
+            && !full_trace_enabled
+            && !resource_trace_enabled
+            && !inavi_slot_trace_enabled
+            && stop_pc.is_none()
+            && progress_file.is_none()
+            && self.trampoline_origins_all_direct();
         // ── Code hook: per-instruction trampoline dispatch, call tracing, indirect-call probe ──
-        if !fast_start_enabled || crash_code_trace_enabled {
+        if hookless_trampolines_enabled {
+            tracing::debug!(
+                target: "ce.slice_profile",
+                "hookless trampoline mode: no per-instruction code hooks installed"
+            );
+        } else if !fast_start_enabled || crash_code_trace_enabled {
             uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
             let previous_pc = code_hook_previous_pc_hook.replace(Some(pc));
@@ -7161,13 +7185,30 @@ impl UnicornMips {
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
         let trampoline_jump_index_timeslice_hook = trampoline_jump_index.clone();
         let host_wall_clock_stop_timeslice_hook = Rc::clone(&host_wall_clock_stop);
+        let framebuffer_tick_error_timeslice_hook = Rc::clone(&framebuffer_tick_error);
         uc.add_block_hook(1, 0, move |uc, address, _size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
             scheduler_timeslice_counter_hook.set(counter);
+            // In hookless trampoline mode no code hook exists to run the
+            // framebuffer tick and host-input drain; carry them per-block.
+            if hookless_trampolines_enabled && counter & 0x3f == 0 {
+                if let Err(err) = unsafe { (&mut *framebuffer_timeslice_hook).emulator_tick() } {
+                    *framebuffer_tick_error_timeslice_hook.borrow_mut() = Some(err);
+                    let _ = uc.emu_stop();
+                    return;
+                }
+                if let Err(err) =
+                    drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
+                {
+                    *framebuffer_tick_error_timeslice_hook.borrow_mut() = Some(err);
+                    let _ = uc.emu_stop();
+                    return;
+                }
+            }
             if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL == 0 {
                 scheduler_timeslice_pending_hook.set(true);
             }
-            if live_pump
+            if (live_pump || hookless_trampolines_enabled)
                 && host_wall_budget_has_expired(host_wall_clock_started, host_wall_clock_limit)
             {
                 scheduler_timeslice_pending_hook.set(true);
@@ -7271,7 +7312,7 @@ impl UnicornMips {
                     }
                 }
             }
-            if live_pump
+            if (live_pump || hookless_trampolines_enabled)
                 && host_wall_clock_limit
                     .is_some_and(|limit| host_wall_clock_started.elapsed() >= limit)
                 && pending_wndproc_returns_timeslice_hook.borrow().is_empty()
@@ -9961,6 +10002,24 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    /// True when every patched trampoline origin carries the architecturally
+    /// self-contained direct `j stub` form, so no code hook is required to
+    /// interpret patched sites. Cached by trampoline jump count.
+    fn trampoline_origins_all_direct(&mut self) -> bool {
+        let jumps_len = self.trampoline_jumps.len();
+        if let Some((cached_len, cached)) = self.hookless_origins_direct_cache
+            && cached_len == jumps_len
+        {
+            return cached;
+        }
+        let all_direct = self.trampoline_jumps.iter().all(|jump| {
+            self.read_mapped_u32(jump.origin)
+                .is_some_and(|word| word >> 26 == 0x02)
+        });
+        self.hookless_origins_direct_cache = Some((jumps_len, all_direct));
+        all_direct
+    }
+
     fn read_mapped_u32(&self, address: u32) -> Option<u32> {
         for blob in &self.mapped_blobs {
             let Some(offset) = address.checked_sub(blob.base).map(|offset| offset as usize) else {
@@ -9997,6 +10056,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
             fast_start_site_cache: HashMap::new(),
+            hookless_origins_direct_cache: None,
             parked_child_processes: VecDeque::new(),
             current_thread_id: MAIN_GUEST_THREAD_ID,
             pending_guest_thread_returns: Vec::new(),
