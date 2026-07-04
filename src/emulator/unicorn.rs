@@ -4855,12 +4855,16 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn parked_process_has_priority_ready_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        // Priority handoff is reserved for genuine wake events: a completed
+        // synchronous send or a signaled/timed-out wait. A pending posted
+        // message is ordinary runnable work in CE and must ride round-robin;
+        // treating it as priority let a process that never consumes its queue
+        // (happyway_win's eternal WM_ACTIVATE) leapfrog every quantum rotation
+        // and starve the visible UI process indefinitely.
         parked
             .blocked_send_id
             .is_some_and(|send_id| kernel.sent_message_result_ready(send_id))
             || Self::parked_process_ready_wait_id(parked, kernel).is_some()
-            || (Self::parked_process_has_resumable_context(parked)
-                && Self::parked_process_has_visible_receiver_work(parked, kernel))
     }
 
     #[cfg(feature = "unicorn")]
