@@ -5,9 +5,15 @@ Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
 ## Immediate Engineering Queue
 
 - Continue the live launch loop past `resmapi_800x480.bin` map-skin decode
-  with real visible-message delivery (post `2fcc365f`/`dbaf4791`): confirm
-  the map screen presents, then re-validate `COM7:`/`MFS1:`/`SMB1:` opens,
-  GPS drain, and touch-driven map navigation on this baseline.
+  with real visible-message delivery (post `2fcc365f`/`dbaf4791`/`265e751a`):
+  confirm the map screen presents, then re-validate `COM7:`/`MFS1:`/`SMB1:`
+  opens, GPS drain, and touch-driven map navigation on this baseline.
+- Identify the completion condition iNavi's command-flag loop
+  (`iNavi.exe+0x2f7298..0x2f8338`, slot flags 0x4000/0x2000/0x100/0x80)
+  waits on before switching splash to map: sample the flag word writers,
+  correlate with `happyway_win`'s ~1 s retry cycle (self-posted msg 0x405,
+  import called with 0x3e8 — likely Sleep/timer), and check whether the
+  retry is waiting on a device/file/socket the emulator leaves unavailable.
 - Watch the SD image for re-created zero-byte probe artifacts during longer
   live runs (route/traffic phases); if any reappear, find and fix the
   emulator path that materializes files on read-only existence probes.

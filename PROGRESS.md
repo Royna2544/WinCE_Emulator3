@@ -27,6 +27,20 @@ references for historical reconstruction.
   `res\resmapi_800x480.bin` map-skin streaming (past the old
   InaviMainConfig.bin plateau). Post-fix runs show 0 escapes and 90+ genuine
   WNDPROC stub completions.
+- Rotation churn could still starve a freshly staged visible callout (one
+  hot core of silent main-loop rotation, no slices); all parked-process
+  rotations now refuse to switch while a staged callout has not yet received
+  a run slice (`265e751a`). With that veto, iNavi's 43-message child cascade
+  drains completely and the skin decode advances past the prior stop
+  (`resmapi` last_pos 1343058 -> 1415371+).
+- Steady state after the cascade: iNavi executes a command-flag dispatch
+  loop around `iNavi.exe+0x2f7298..0x2f8338` (bitfield checks 0x4000/0x2000/
+  0x100/0x80 over per-slot entries — real work, not a readiness spin);
+  `happyway_win` runs a designed ~1 s retry cycle inside its wndproc
+  (indirect import call with arg 0x3e8 then a self-post of msg 0x405), which
+  also leaves one posted WM_ACTIVATE permanently queued because its pump
+  only services sends while inside that cycle. These are app-level states;
+  the remaining splash->map condition lives in iNavi's command loop.
 
 - Raw `GetOwnerProcess` now returns the current CE process id, and
   `GetCallerVMProcessId`/`GetDirectCallerProcessId` resolve through coredll
