@@ -6,6 +6,28 @@ references for historical reconstruction.
 
 ## 2026-07-04 Session Facts
 
+- Map-gate root cause: escaped-callout recovery false-positived on the
+  pre-push stop snapshot (a cross-thread visible-message callout copies its
+  return pc from that same stop), so every host-delivered WM_SHOWWINDOW /
+  WM_WINDOWPOSCHANGED / WM_ACTIVATE / WM_PAINT was consumed host-side ~1 ms
+  after push without running the guest wndproc (`ce.gwe=debug` showed
+  back-to-back push/escape pairs; 115+ per run). Fixed by gating recovery on
+  a run slice completing after the newest push (`2fcc365f`); the same commit
+  keeps staged callouts ahead of the run-entry ready-parked-wait rotation,
+  which otherwise ping-pongs processes every ~2.6 ms without executing the
+  staged slice.
+- Quantum rotation is now unconditional at wall-clock quantum expiry
+  (`dbaf4791`): the previous empty-receiver-queue gate let `happyway_win`
+  busy-wait inside its WM_ACTIVATE handler (pc cycling `+0x28f8..0x2a18`,
+  heap/message counters frozen) with one queued message it could not consume,
+  pinning the CPU while iNavi's 43-message layout cascade starved.
+- With real visible-message delivery, startup takes a different shape: the
+  afxwnd42u children are created through actual dispatched messages, the
+  splash progress bar advances to full width, and the run proceeds into
+  `res\resmapi_800x480.bin` map-skin streaming (past the old
+  InaviMainConfig.bin plateau). Post-fix runs show 0 escapes and 90+ genuine
+  WNDPROC stub completions.
+
 - Raw `GetOwnerProcess` now returns the current CE process id, and
   `GetCallerVMProcessId`/`GetDirectCallerProcessId` resolve through coredll
   ordinals with the same value (`c59d08ad`).

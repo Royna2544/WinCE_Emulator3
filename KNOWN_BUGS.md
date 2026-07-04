@@ -6,12 +6,18 @@ Refreshed on 2026-07-04. This file lists unresolved behavior only.
 
 - iNavi route-flow completion remains open beyond process startup, shell
   readiness, real splash rendering, remote input delivery, and initial mapdata
-  loading. After removing the stale zero-byte SD-image probe artifacts, the
-  2026-07-04 live run paints the full splash artwork in ~90 s and continues
-  into MRData route-table loading, but the map presentation gate after the
-  mapdata phase is still unconfirmed; keep tracing the CE
-  wait/event/message/window transition or app readiness signal from this
-  faster baseline.
+  loading. The former "map presentation gate" was the emulator swallowing all
+  host-delivered visible messages via escaped-callout false positives (fixed
+  2026-07-04, `2fcc365f`/`dbaf4791`); post-fix runs advance into
+  `resmapi_800x480.bin` map-skin streaming with the splash progress bar at
+  full width. The remaining frontier is the map screen actually presenting
+  after skin decode plus the `COM7:`/`MFS1:`/`SMB1:` device-open sequence;
+  keep validating with live runs.
+- `happyway_win.exe` busy-waits inside its WM_ACTIVATE handler
+  (`happyway_win.exe+0x28f8..0x2a18`) polling for cross-process state; it
+  coexists with iNavi only because quantum rotation is unconditional. If
+  startup ever wedges with happyway active and frozen counters, check that
+  rotation still reaches iNavi.
 - Watch for re-created zero-byte probe artifacts on the SD image
   (`INavi\traffictest.txt`, `INavi\routetest.txt`, `mapdata\soap.bin`,
   `mapdata\searchdb\oildata.dat`). `happyway_win.exe` embeds

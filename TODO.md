@@ -4,10 +4,10 @@ Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
-- Re-drive the live splash/map transition from the post-marker-removal
-  baseline (full splash in ~90 s): identify the CE wait, event, message,
-  window state, file result, device open, or readiness condition gating final
-  map presentation after the MRData route-table loads.
+- Continue the live launch loop past `resmapi_800x480.bin` map-skin decode
+  with real visible-message delivery (post `2fcc365f`/`dbaf4791`): confirm
+  the map screen presents, then re-validate `COM7:`/`MFS1:`/`SMB1:` opens,
+  GPS drain, and touch-driven map navigation on this baseline.
 - Watch the SD image for re-created zero-byte probe artifacts during longer
   live runs (route/traffic phases); if any reappear, find and fix the
   emulator path that materializes files on read-only existence probes.
