@@ -9,15 +9,28 @@ Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
   confirm the map screen presents, then re-validate `COM7:`/`MFS1:`/`SMB1:`
   opens, GPS drain, and touch-driven map navigation on this baseline.
 - Scope the per-instruction code hook (the boot-speed lever, ~25 min skin
-  decode today): first move wall-clock stop checks, framebuffer tick, and
-  remote drain into the global block hook (safe while the code hook stays
-  global); then hook only 4 KB pages containing jr/jalr/sentinel sites plus
-  trampoline ranges and the import-trap page (reuse
-  `fast_start_indirect_transfer_sites`/`fast_start_hook_ranges`); fix the
-  fast-start stall by also hooking pages of runtime-loaded modules inside
-  `runtime_load_guest_dll_from_path` (it holds `&mut uc`); block-hook
-  wall-clock stops must defer when the block start lies inside a trampoline
-  range. Validate with a 2-minute single-shot boot and the live loop.
+  decode today). Settled design:
+  1. Move wall-clock stop checks, framebuffer tick, and remote drain into
+     the scheduler timeslice BLOCK hook (it already captures
+     `host_wall_clock_stop_timeslice_hook`, limits, and kernel); gate by the
+     existing block counter. Block-boundary stops are delay-slot safe by TB
+     construction — only defer when the block-start pc lies inside a
+     trampoline range or the import-trap page.
+  2. Install the code hook per-range instead of globally: trampoline ranges
+     + import-trap page + 4 KB pages containing jr/jalr/sentinel sites
+     (reuse `fast_start_indirect_transfer_sites`/`fast_start_hook_ranges`).
+     Cache the per-blob site scan on `UnicornMips` keyed by blob name+len —
+     scanning 43 MB every slice would cost tens of ms.
+  3. Runtime DLL loads mid-slice: instead of adding hooks from inside the
+     import hook, set the host wall-clock stop pending flag after a
+     successful `runtime_load_guest_dll_from_path`; the slice ends at a safe
+     pc and the next slice's fresh engine scans and hooks the new module's
+     pages. This is the fix for the historical `WINCE_EMU_FAST_START`
+     mfcce400 stall (its site enumeration never covered runtime loads).
+  4. Gate the scoped mode behind `WINCE_EMU_SCOPED_HOOKS=1` for A/B until a
+     2-minute single-shot boot proves the decode runs several times faster
+     and the live loop stays correct, then flip the default and remove the
+     gate.
 - Investigate the 2026-07-04 silent desktop-run exit at 13:22:22Z (log ended
   mid-operation, no WER record; stderr was not captured for that run — the
   relaunched run captures both streams).
