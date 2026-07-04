@@ -607,6 +607,17 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_CLOSE | WM_DESTROY => {
+            let reason = if msg == WM_CLOSE {
+                "WM_CLOSE"
+            } else {
+                "WM_DESTROY"
+            };
+            tracing::warn!(
+                target: "ce.desktop",
+                reason,
+                "host desktop window closing; exiting emulator"
+            );
+            eprintln!("host desktop window received {reason}; exiting emulator");
             std::process::exit(0);
         }
         windows::Win32::UI::WindowsAndMessaging::WM_PAINT => {
