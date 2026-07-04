@@ -2389,12 +2389,13 @@ impl UnicornMips {
             return;
         }
         // CE quantum rotation: NK round-robins same-priority ready threads at
-        // quantum expiry, so an active process that consumed its full host
-        // wall-clock slice while other processes stayed CPU-runnable must share
-        // the CPU instead of monopolizing it. Without this a visible readiness
-        // poll starves the hidden helper whose output it is polling for.
+        // quantum expiry unconditionally, so an active process that consumed
+        // its full host wall-clock slice while other processes stayed
+        // CPU-runnable must share the CPU. This also covers an active thread
+        // spinning inside a window-procedure callout with its own queued
+        // messages: it cannot consume them until the handler returns, and the
+        // producer it polls for lives in another process.
         if live_pump
-            && !active_has_visible_queued_receiver
             && self
                 .last_debug
                 .as_ref()
