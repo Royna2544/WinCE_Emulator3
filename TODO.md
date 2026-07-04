@@ -8,6 +8,19 @@ Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
   with real visible-message delivery (post `2fcc365f`/`dbaf4791`/`265e751a`):
   confirm the map screen presents, then re-validate `COM7:`/`MFS1:`/`SMB1:`
   opens, GPS drain, and touch-driven map navigation on this baseline.
+- Scope the per-instruction code hook (the boot-speed lever, ~25 min skin
+  decode today): first move wall-clock stop checks, framebuffer tick, and
+  remote drain into the global block hook (safe while the code hook stays
+  global); then hook only 4 KB pages containing jr/jalr/sentinel sites plus
+  trampoline ranges and the import-trap page (reuse
+  `fast_start_indirect_transfer_sites`/`fast_start_hook_ranges`); fix the
+  fast-start stall by also hooking pages of runtime-loaded modules inside
+  `runtime_load_guest_dll_from_path` (it holds `&mut uc`); block-hook
+  wall-clock stops must defer when the block start lies inside a trampoline
+  range. Validate with a 2-minute single-shot boot and the live loop.
+- Investigate the 2026-07-04 silent desktop-run exit at 13:22:22Z (log ended
+  mid-operation, no WER record; stderr was not captured for that run — the
+  relaunched run captures both streams).
 - Identify the completion condition iNavi's command-flag loop
   (`iNavi.exe+0x2f7298..0x2f8338`, slot flags 0x4000/0x2000/0x100/0x80)
   waits on before switching splash to map: sample the flag word writers,
