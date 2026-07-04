@@ -36,11 +36,21 @@ references for historical reconstruction.
 - Steady state after the cascade: iNavi executes a command-flag dispatch
   loop around `iNavi.exe+0x2f7298..0x2f8338` (bitfield checks 0x4000/0x2000/
   0x100/0x80 over per-slot entries — real work, not a readiness spin);
-  `happyway_win` runs a designed ~1 s retry cycle inside its wndproc
-  (indirect import call with arg 0x3e8 then a self-post of msg 0x405), which
-  also leaves one posted WM_ACTIVATE permanently queued because its pump
-  only services sends while inside that cycle. These are app-level states;
-  the remaining splash->map condition lives in iNavi's command loop.
+  `happyway_win` runs a designed ~1 s retry cycle inside its wndproc: it
+  polls `FindWindowW(NULL, "utis_parser")` (no such binary exists on the
+  device image, so the poll fails forever on real hardware too), then
+  self-posts msg 0x405 and Sleeps 1000 ms. Its permanently queued
+  WM_ACTIVATE plus that cycle made every "pending message = priority"
+  scheduler heuristic hand it the CPU.
+- Scheduler fairness completed in three further fixes: priority parked
+  handoff now requires a genuine wake event — completed send or signaled/
+  timed-out wait — instead of any pending posted message (`814a6605`);
+  the slice-end handoff records its rotation and every pre-run rotation
+  branch defers to that decision until the chosen process actually starts a
+  run attempt (`eb7065e1`, `c6f0552d`). Live verification: process slices
+  went from 4700:37 (happyway:iNavi) to an exact 150:150 round-robin, and
+  `resmapi_800x480.bin` decode advanced past 3.0 MB (previous best 1.4 MB)
+  while the splash stays fully painted.
 
 - Raw `GetOwnerProcess` now returns the current CE process id, and
   `GetCallerVMProcessId`/`GetDirectCallerProcessId` resolve through coredll
