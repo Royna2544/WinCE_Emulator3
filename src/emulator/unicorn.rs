@@ -7159,6 +7159,10 @@ impl UnicornMips {
         // ── Scheduler timeslice hook: context-switch at safe MIPS branch boundaries ──
         let scheduler_timeslice_counter = Rc::new(Cell::new(0u32));
         let scheduler_timeslice_counter_hook = Rc::clone(&scheduler_timeslice_counter);
+        // Bytes of translated guest code executed this slice (sum of block
+        // sizes); /4 is the guest instruction count reported by slice_profile.
+        let guest_code_bytes = Rc::new(Cell::new(0u64));
+        let guest_code_bytes_hook = Rc::clone(&guest_code_bytes);
         let scheduler_timeslice_pending = Rc::new(Cell::new(false));
         let scheduler_timeslice_pending_hook = Rc::clone(&scheduler_timeslice_pending);
         let scheduler_timeslice_last_pc = Rc::new(Cell::new(None::<u32>));
@@ -7186,9 +7190,10 @@ impl UnicornMips {
         let trampoline_jump_index_timeslice_hook = trampoline_jump_index.clone();
         let host_wall_clock_stop_timeslice_hook = Rc::clone(&host_wall_clock_stop);
         let framebuffer_tick_error_timeslice_hook = Rc::clone(&framebuffer_tick_error);
-        uc.add_block_hook(1, 0, move |uc, address, _size| {
+        uc.add_block_hook(1, 0, move |uc, address, size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
             scheduler_timeslice_counter_hook.set(counter);
+            guest_code_bytes_hook.set(guest_code_bytes_hook.get() + u64::from(size));
             // In hookless trampoline mode no code hook exists to run the
             // framebuffer tick and host-input drain; carry them per-block.
             if hookless_trampolines_enabled && counter & 0x3f == 0 {
@@ -9859,6 +9864,17 @@ impl UnicornMips {
                 .elapsed()
                 .saturating_sub(slice_snapshot_elapsed)
                 .as_millis() as u64,
+            blocks = scheduler_timeslice_counter.get(),
+            guest_insns = guest_code_bytes.get() / 4,
+            mips = format_args!(
+                "{:.1}",
+                (guest_code_bytes.get() / 4) as f64
+                    / slice_run_elapsed
+                        .saturating_sub(slice_hooks_elapsed)
+                        .as_secs_f64()
+                        .max(1e-6)
+                    / 1e6
+            ),
             blobs = self.mapped_blobs.len(),
             blob_mb = (self
                 .mapped_blobs
