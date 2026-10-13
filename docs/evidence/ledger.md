@@ -1002,7 +1002,44 @@ real-MIPS [query-adapter error controls](../../evidence/e28-run-outcome-20261014
 passed after the real native query returned; their one-shot Rust substitution
 is not a C `uc_query` failure or nested-start proof. Genuine C query failure,
 competing hooks, full fallible-tail/partial-effect validation, Task/Frame
-authority, Stage 2 and a bounded app run remain open.
+authority and Stage 2 remain open. A subsequent bounded app run is E-29;
+it is not runtime acceptance.
+
+## E-29 third bounded iNavi run after detached-report validation (2026-10-14 analysis)
+
+The third user-authorized original-mount read/write run is retained under
+`evidence/e22-live-20261013T211230Z/` with a
+[binary-identified analysis receipt](../../evidence/e22-live-20261013T211230Z/analysis.receipt.md).
+Its release executable SHA-256 was `8A8B9C7E07C5DF4B40281A4B882CBCA0FA212DD7A04B9183EE93457AFB3E094A`;
+the manifest lacks a complete source-tree digest. It exited 0 at the 330 s
+host cap after 330.3949337 s, with no 2,048 MiB RSS-monitor trip or stderr
+text. This is bounded host survival, not guest completion.
+
+The observer captured genuine iNavi SE splash by input-ready +2.970 s; its
+settled splash image repeated for 151 successful polls from +28.946 through
++329.030 s, without an observed map. Sixteen raw-NMEA posts and a +153 s
+tap received HTTP 200. The final retained guest file trace has ten positive
+`COM7:` `ReadFile` transfers totaling 2,784 B with injected `$GPRMC`
+previews. The tap's down/up messages were dequeued by PID 1/TID 1 with
+WNDPROC returns by roughly +160 s. These do not prove parsed position or
+touch-driven navigation.
+
+Among 160 host samples, peak RSS/private were 1,601,482,752 /
+1,615,622,144 B (1,527.3/1,540.8 MiB); last sampled CPU was 255.3125 s.
+The nominally similar E-27 330 s run had 1,489.2/1,503.5 MiB peaks and
+223.375 s sampled CPU. Different executable hashes, uncontrolled host load,
+and lack of an established exact historical NMEA match preclude attribution
+of those differences. E-29 logged 655 orphaned return-stub warnings ending
+near +94 s, versus E-27's 2,518 through its cap; warning count is not a
+callback count or root-cause proof. E-29's service counters plateaued by
+about +120 s while host CPU rose, but E-27 also plateaued by about +100 s.
+The visible full-screen splash overlay and a blocked TID 10 wait with one
+signaled component warrant an identity-bound trace; the wait-any/all mode is
+not saved. The mounted inventory remained at 3,689 entries, with only four
+timestamp changes and unchanged hashes/lengths for both touched files. The
+[pre-run current-state ZIP manifest](../../evidence/pre-live-mount-backup-20261013T210234Z/manifest.json)
+records three adjacent verified archives. O-P1, Stage 2, S3-A and map
+acceptance remain open.
 
 ## Chat-project validation notes (not in this repository)
 
