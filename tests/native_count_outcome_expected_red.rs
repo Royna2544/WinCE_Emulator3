@@ -3,6 +3,12 @@
 #![cfg(feature = "unicorn")]
 
 use std::path::PathBuf;
+use std::{cell::Cell, rc::Rc};
+
+use unicorn_engine::{
+    RegisterARM, Unicorn,
+    unicorn_const::{Arch, Mode, Prot, Query, uc_error},
+};
 
 use wince_emulation_v3::{
     Result,
@@ -141,4 +147,88 @@ fn native_two_instruction_limit_has_typed_count_outcome() -> Result<()> {
         "the typed outcome must be tied to this finite native attempt",
     );
     Ok(())
+}
+
+fn raw_mips_count_loop() -> Unicorn<'static, ()> {
+    let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+    uc.mem_map(0x1000, 0x1000, Prot::ALL).unwrap();
+    for (offset, word) in [0x2610_0001u32, 0x0800_0400, 0].into_iter().enumerate() {
+        uc.mem_write(0x1000 + (offset * 4) as u64, &word.to_le_bytes())
+            .unwrap();
+    }
+    for (offset, word) in [0x2611_0001u32, 0x0800_0440, 0].into_iter().enumerate() {
+        uc.mem_write(0x1100 + (offset * 4) as u64, &word.to_le_bytes())
+            .unwrap();
+    }
+    uc
+}
+
+#[test]
+fn native_nested_same_handle_start_is_ambiguous_until_next_clean_start() {
+    let mut uc = raw_mips_count_loop();
+    let nested_called = Rc::new(Cell::new(false));
+    let nested_ok = Rc::new(Cell::new(false));
+    let called_in_hook = Rc::clone(&nested_called);
+    let ok_in_hook = Rc::clone(&nested_ok);
+    uc.add_code_hook(0x1000, 0x1000, move |uc, _, _| {
+        if !called_in_hook.replace(true) {
+            ok_in_hook.set(uc.emu_start(0x1100, 0, 500_000, 1).is_ok());
+            let _ = uc.emu_stop();
+        }
+    })
+    .unwrap();
+
+    uc.emu_start(0x1000, 0, 500_000, 1).unwrap();
+    assert!(
+        nested_called.get(),
+        "the nested start must actually execute"
+    );
+    assert!(
+        nested_ok.get(),
+        "the nested MIPS start must complete cleanly"
+    );
+    assert_eq!(
+        uc.query(Query::COUNT_STOP),
+        Err(uc_error::RESOURCE),
+        "the single native count bit cannot identify either nested frame"
+    );
+
+    // A fresh top-level attempt on the same handle must clear the ambiguity.
+    uc.emu_start(0x1100, 0, 500_000, 1).unwrap();
+    assert_eq!(uc.query(Query::COUNT_STOP), Ok(1));
+    assert_eq!(uc.query(Query::TIMEOUT), Ok(0));
+}
+
+#[test]
+fn native_thumb_it_block_reverts_a_count_stop_before_the_exit() {
+    let mut uc = Unicorn::new(Arch::ARM, Mode::THUMB | Mode::LITTLE_ENDIAN).unwrap();
+    uc.mem_map(0x1000, 0x1000, Prot::ALL).unwrap();
+    uc.mem_write(
+        0x1000,
+        &[
+            0x00, 0x28, // cmp r0, #0: Z=1
+            0x08, 0xbf, // it eq: the following instruction is in an IT block
+            0x01, 0x21, // movs r1, #1: count hook requests stop, IT reverts it
+            0x00, 0xbf, // nop: outside the IT block; until points here
+        ],
+    )
+    .unwrap();
+    uc.reg_write(RegisterARM::R0, 0).unwrap();
+
+    uc.emu_start(0x1001, 0x1006, 500_000, 2).unwrap();
+    assert_eq!(uc.reg_read(RegisterARM::R1).unwrap(), 1);
+    assert_eq!(uc.query(Query::TIMEOUT), Ok(0));
+    assert_eq!(
+        uc.query(Query::COUNT_STOP),
+        Ok(0),
+        "the reverted request is not a completed count stop"
+    );
+
+    // Continuing one more instruction on a fresh attempt makes the count
+    // hook request a non-IT stop, so this is not a missing/disabled hook.
+    uc.reg_write(RegisterARM::R1, 0).unwrap();
+    uc.emu_start(0x1001, 0x1008, 500_000, 2).unwrap();
+    assert_eq!(uc.reg_read(RegisterARM::R1).unwrap(), 1);
+    assert_eq!(uc.query(Query::TIMEOUT), Ok(0));
+    assert_eq!(uc.query(Query::COUNT_STOP), Ok(1));
 }

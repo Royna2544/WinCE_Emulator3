@@ -55318,6 +55318,100 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn slice_end_finish_failure_stays_with_outgoing_parent() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("finish-writer.exe")?;
+        let mapping_handle = kernel.handles.create_file_mapping(None, 4, 4, None);
+        kernel.handles.file_mapping_mut(mapping_handle)?.views.push(
+            crate::ce::object::FileMappingView {
+                base: PHASE1_COUNTER_ADDRESS,
+                size: 4,
+                offset: 0,
+                process_id: 1,
+            },
+        );
+        let mut active = phase1_counter_cpu(0x3000, "finish-writer.exe")?;
+        // The prior handoff selected this parent. Its native attempt must run
+        // before the preflight runnable-child gate can rotate again.
+        active.slice_end_rotation_pending = true;
+        active.native_engine.arm_finish_failure_once_for_test();
+
+        let launch = kernel.queue_process_launch(Some("\\Test\\finish-reader.exe".to_owned()), None);
+        assert!(kernel
+            .take_pending_process_launches()
+            .iter()
+            .any(|queued| queued.process_id == launch.process_id));
+        let mut child = phase1_counter_cpu(0x4000, "finish-reader.exe")?;
+        child.set_initial_thread_id(launch.thread_id);
+        let mut child_regs = super::MipsGuestContext::zero();
+        child_regs.regs[29] = child.stack_top.unwrap() - 0x100;
+        child.saved_context = Some(super::SavedCpuContext {
+            pc: child.entry.unwrap(),
+            regs: child_regs,
+        });
+        active.parked_child_processes.push_back(super::ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: launch.process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: launch.thread_id,
+            cpu: Box::new(child),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\Test\\finish-reader.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from("finish-reader.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let error = active
+            .run_until_import_trap_with_framebuffer_limits(
+                &mut kernel,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 20,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: None,
+                    live_pump: true,
+                },
+            )
+            .expect_err("injected checked-finish failure must reach the caller");
+        assert!(
+            format!("{error:#}").contains("release native slice hooks"),
+            "{error:#}"
+        );
+        assert_eq!(kernel.current_process_id(), 1, "failed parent cannot hand off");
+        assert_eq!(phase1_counter(&active), 0x3006);
+        assert_eq!(
+            &kernel.handles.file_mapping(mapping_handle)?.data[..4],
+            &0x3006u32.to_le_bytes(),
+            "outgoing native view readback must precede checked finish"
+        );
+        assert_eq!(
+            active.last_native_slice_outcome(),
+            super::NativeSliceOutcome::BackendError,
+            "finish failure belongs to the outgoing parent"
+        );
+        assert!(!active.slice_end_rotation_pending());
+        assert!(active.native_engine_identity_for_test().is_none());
+        let parked_child = active
+            .parked_child_processes
+            .iter()
+            .find(|parked| parked.process_state.process_id == launch.process_id)
+            .expect("child must remain parked after failed parent finish");
+        assert_eq!(
+            parked_child.cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::NoAttempt
+        );
+        assert!(parked_child.cpu.native_engine_identity_for_test().is_none());
+        Ok(())
+    }
+
+    #[test]
     fn native_two_process_same_va_distinct_file_views_keep_mapping_owners() -> crate::Result<()> {
         const PARENT_BYTES: u32 = 0x1122_3344;
         const CHILD_BYTES: u32 = 0x5566_7788;

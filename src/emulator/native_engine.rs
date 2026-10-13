@@ -33,6 +33,8 @@ struct NativeSlot<K, P> {
     metadata: Option<P>,
     mapping_pins: Option<NativeMappingPins>,
     leased: bool,
+    #[cfg(test)]
+    fail_next_finish_after_hook_cleanup: bool,
 }
 
 /// Strong backing references tied to one native owner, independently of the
@@ -141,6 +143,8 @@ impl<K, P> Clone for ProcessNativeEngine<K, P> {
                 metadata: None,
                 mapping_pins: None,
                 leased: false,
+                #[cfg(test)]
+                fail_next_finish_after_hook_cleanup: false,
             })),
         }
     }
@@ -158,6 +162,8 @@ impl<K, P> ProcessNativeEngine<K, P> {
                 metadata: None,
                 mapping_pins: None,
                 leased: false,
+                #[cfg(test)]
+                fail_next_finish_after_hook_cleanup: false,
             })),
         }
     }
@@ -224,6 +230,15 @@ impl<K, P> ProcessNativeEngine<K, P> {
             .engine
             .as_ref()
             .map(|engine| engine.get_handle() as usize)
+    }
+
+    /// Exercise the checked-finish failure boundary without corrupting an FFI
+    /// hook identifier. The one-shot flag belongs only to this native slot.
+    #[cfg(test)]
+    pub(crate) fn arm_finish_failure_once_for_test(&self) {
+        let mut slot = self.slot.borrow_mut();
+        assert!(!slot.leased, "arm only before the native attempt");
+        slot.fail_next_finish_after_hook_cleanup = true;
     }
 
     /// Observe a completed owner's RAM without creating a diagnostic lease.
@@ -453,6 +468,14 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
         if commit && self.metadata.is_none() && failure.is_none() {
             failure = Some(uc_error::ARG);
         }
+        #[cfg(test)]
+        if commit && failure.is_none() {
+            // Remove real hooks and check the ledger first; then make this
+            // owner fail exactly once through the ordinary discard path.
+            if std::mem::take(&mut self.slot.borrow_mut().fail_next_finish_after_hook_cleanup) {
+                failure = Some(uc_error::RESOURCE);
+            }
+        }
         if commit && failure.is_none() {
             // Native hooks are deleted before freeing the borrowed wrapper.
             // Only then may the owning handle and matching ledger be reused.
@@ -478,6 +501,10 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
             slot.metadata = None;
             slot.mapping_pins = None;
             slot.leased = false;
+            #[cfg(test)]
+            {
+                slot.fail_next_finish_after_hook_cleanup = false;
+            }
         }
         self.closed = true;
         match failure {
