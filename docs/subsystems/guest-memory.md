@@ -85,10 +85,27 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
 - A read-only source audit found `sync_mapped_blobs_from_unicorn` at the slice
   end, but no corresponding readback of ordinary guest-written `VirtualAlloc`
   pages; their `initial_bytes` are only seeded into native memory on mapping.
-  Closing a fresh owner may therefore lose private guest writes between
-  slices. This is an unexecuted O-M1 hypothesis, not a demonstrated failure;
-  require a two-slice MIPS write/read test and a bounded per-process backing
-  contract before enabling fresh by default.
+  The ignored E-18 two-slice MIPS control now demonstrates that loss for an
+  internal `MemorySystem::virtual_alloc` page: the first owner's native RAM
+  held guest-written `0x11223345`, but after `cfg(test)` idle-owner closure the
+  fresh owner's load returned the unchanged `initial_bytes` seed
+  `0x11223344`. Both slice PCs, normal stops and no-fault checks passed.
+  This is an expected-red private-byte boundary, not a Context failure or a
+  production fresh-default change ([ledger E-18](../evidence/ledger.md),
+  local `evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`).
+  Establish checked outgoing readback and owner-qualified canonical private
+  backing before fresh becomes default; public COREDLL `VirtualAlloc` and
+  cross-process private isolation still require separate controls.
+- Read-only E-18 production audit: `MemorySystem` allocations/lazy seeds are
+  global and base-keyed, mixing private `VirtualAlloc` and file-view backing;
+  the native page ledger is VA-only. A safe readback gate needs captured owner,
+  backing kind and allocation incarnation, exact mapped-page bytes before
+  owner finish/rotation, and staged failure handling. Mapping any page can
+  currently reseed the entire `initial_bytes` range, risking overwrite of a
+  guest-written page; free/reallocation at the same VA can retain old native
+  bytes. `self.saved_context` is published before byte synchronization, so
+  context/byte commit ordering must become transactional. These are source-
+  audit hazards and design requirements, not executed fixes or new failures.
 - The historical E-14 two-PID, two-native-slice red showed foreign-view
   seeding and base-only readback at one injected guest VA. The narrow E-16
   source captures the native attempt's process owner for view seeding and
@@ -159,9 +176,65 @@ cross-file byte changes, including lazy fault repair and outgoing readback.
 Separate controls must prove same-mapping alias visibility, flush and unmap
 while a mapping handle is closed but its view remains live, owner-specific
 `VirtualQueryEx`, and a foreign view not overwriting private RAM at the same VA.
-A fresh-owner two-slice guest-written
-private `VirtualAlloc` round-trip remains a separate required O-M1 gate; these
-view controls alone cannot establish it.
+A fresh-owner two-slice guest-written private `VirtualAlloc` round-trip is now
+an executed expected-red gate under E-18. It must turn green with authoritative
+byte backing; the E-16 view controls alone cannot establish it.
+
+## O-M1 backing recommendation: host-owned slabs via `mem_map_ptr` (supervisor, 22:15)
+
+Source facts (working tree, 2026-10-13):
+
+- **Two writable truths.** Guest bytes reach a native engine by copy-in
+  (`uc.mem_map` plus writes from blobs or `initial_bytes`). They leave by
+  copy-back (`sync_mapped_blobs_from_unicorn`,
+  `sync_file_mapping_views_from_unicorn`). For the length of a slice, host
+  blobs and native RAM are both writable copies of the same guest page,
+  which anchor A4 says to avoid.
+- **E-18 is that gap.** Private `VirtualAlloc` pages have no copy-back, so a
+  fresh owner reseeds from `initial_bytes`.
+- **Copy-back is expensive.** Pinned Unicorn 2.1.5 has no dirty-page API, so
+  copy-back has to rescan every mapped page per slice or add write hooks.
+  Write hooks are the per-instruction cost Phase 0 removed (ledger E-9).
+- **Slabs already work.** The ignored diagnostic
+  `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner`
+  (`native_engine.rs`) shows that a fixed host slab mapped with `mem_map_ptr`
+  takes guest stores directly. It also survives a `mem_protect` split and is
+  visible to a fresh owner with no copy.
+
+Recommendation: decide O-M1 as **host-owned, page-aligned, address-stable
+backing mapped with `mem_map_ptr`**, with the AddressSpace as its only owner.
+
+- One truth per page. Native code and host shims read and write the same
+  bytes. A fresh engine per slice maps the existing slabs, so nothing is
+  reseeded and nothing is read back. E-18 closes structurally.
+- Shared file views map the *same* slab into each process that has a view
+  of it. Private pages map per-process slabs. Same-VA isolation follows from
+  which slab is mapped, not from copy ordering (E-14 and E-16).
+- Per-slice cost becomes mapping calls instead of copying the mapped
+  footprint (hundreds of MiB for iNavi). That also makes the fresh lifetime
+  (O-P4) cheaper.
+- The `unsafe` stays in one module, with these invariants:
+  - a slab never moves or resizes (`Box<[u8]>` or a page arena, never a
+    growing `Vec`);
+  - every engine that maps a slab is dropped or unmapped before the slab;
+  - host access happens only while no `emu_start` is running, or from hooks
+    through the existing bounded lease;
+  - protection changes go through `mem_protect` on the mapping, never through
+    a re-seed.
+- Migrate in one connected change per backing family:
+  1. Private `VirtualAlloc`: E-18 must turn green.
+  2. File views: E-14 and E-16 must stay green.
+  3. Image/heap blobs.
+
+  Delete the matching copy-in and copy-back paths in the same change, so the
+  old paths never linger beside the new ones.
+- Promote the slab diagnostic to a normal test, because it is the
+  foundation. Add the same-VA and fresh-owner controls on real Kernel
+  allocations.
+
+Prefer this to adding "checked outgoing private-byte readback before owner
+finish". Readback keeps two truths and adds per-slice copy cost and failure
+staging, all of which the slab design removes.
 
 ## Telemetry and executable migration gates
 

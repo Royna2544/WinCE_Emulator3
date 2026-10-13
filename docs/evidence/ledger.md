@@ -489,6 +489,52 @@ actual native count-exhaustion witness and typed restart-PC repair remain
 open. O-P1 is incomplete, as are O-P4, public same-VA/lazy/private O-M1,
 Stage 2 and bounded live-app acceptance.
 
+## E-18 Private virtual bytes across fresh owner (2026-10-13, expected red)
+
+The ignored `native_private_virtual_write_survives_closed_owner_next_slice`
+fixture uses the internal `MemorySystem::virtual_alloc` API to reserve and
+commit one private page, seeded with `0x11223344`. Five real MIPS instructions
+load, increment and store the word. The first saved PC, T1=`0x11223345`,
+normal native stop and no memory fault passed; a read-only test helper also
+verified `0x11223345` in the retained native owner's RAM. A separate
+`cfg(test)` helper then closed that idle owner and its blank context/ledger,
+retaining the CPU snapshot only. This simulates one fresh-owner boundary for
+the fixture; production still retains its idle owner by default.
+
+One real MIPS load on the new native owner advanced the expected PC with
+`UnknownNormalStop` and no fault, but read `0x11223344` instead of the guest-
+written `0x11223345`. The explicitly run ignored release test exited 101 at
+this final byte assertion (one expected failure, 697 filtered), not during
+setup, native Context restore or PC handling. The new owner was seeded from
+unchanged private `VirtualAllocation.initial_bytes`; a CPU-only Context
+cannot carry the missing RAM bytes. Frozen test-only source SHA-256:
+`native_engine.rs` `32339A6C…106FC`, `unicorn.rs` `9027D0DC…45E53`;
+raw final log SHA-256 `68D7DB5A…64EBB`. Exact command, full hashes,
+observations and limits are in local
+`evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`
+(receipt SHA-256 `B9657C08…691D7`). This source is later than E-17; its
+default full release suite subsequently passed **1,632 passed, 0 failed,
+4 ignored** (raw log SHA-256 `50310507…D622`). The fourth ignored control
+is E-18 itself; the explicit expected-red result is not counted as a pass.
+This is a distinct later test-only source from E-17's 1,632/0/3 result.
+Unicorn-only and Unicorn+desktop/no-trace release checks exited 0 (logs
+`check-unicorn-final.log` SHA-256 `C419E2C8…605C3` and
+`check-unicorn-win32-final.log` `6035F983…A107`). The no-feature suite passed
+**1,239 passed, 0 failed, 1 ignored** (log
+`default-no-feature-suite-final.log` SHA-256 `28075D1B…8506C`). These logs
+are local beside the E-18 receipt. The ignored E-18 control remains expected
+red when run explicitly; these green default/profile results do not accept
+fresh-owner private-byte coherence or Stage 2. Final-source identity, exact
+commands, full hashes and format/diff checks are in local
+`evidence/stage2-o-m1-private-fresh-20261013/post-e18-validation.receipt.md`
+(receipt SHA-256 `EA66CA0F…7F630`).
+
+The fixture does not call public COREDLL `VirtualAlloc`, prove cross-process
+same-VA isolation or shared views, or enable the fresh-owner production
+policy. O-M1 private-page readback/authoritative backing, O-P4 closed-owner
+default, Stage 2 and a bounded live app remain open. Retaining the old owner
+or suppressing failed native reads would not satisfy this control.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
