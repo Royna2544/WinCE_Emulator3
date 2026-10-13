@@ -1071,6 +1071,15 @@ These controls do not close
 Task/Frame authority, O-P1, Stage 2, S3-A, or live-app map readiness. E-29
 used an earlier executable and cannot validate them.
 
+On the final source with the ready GetMessage fixture, the
+[locked broad validation](../../evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)
+passed release **1,691/0/16 ignored** and no-feature **1,263/0/14 ignored**,
+plus both Unicorn no-trace checks, format, and scoped diff checks. The
+binary-target live-wait guard test passed within the release main suite.
+The no-feature/dev check logs note denied incremental-cache finalization,
+but both commands exited 0. These tests do not qualify the observational
+`LegacyUnbound` report as canonical scheduler authority or update E-29.
+
 ## E-29 third bounded iNavi run after detached-report validation (2026-10-14 analysis)
 
 The third user-authorized original-mount read/write run is retained under

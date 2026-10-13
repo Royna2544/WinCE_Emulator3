@@ -5,8 +5,9 @@ result is claimed here.
 
 ## Two distinct consumers
 
-`main.rs::host_idle_message_poll_slice` gives the host desktop a 100 ms
-idle-message slice when the last CPU snapshot *looks* like only a GetMessage
+`main.rs::host_idle_message_poll_slice` caps the host desktop's idle-message
+slice at 100 ms (or a shorter explicit limit) when the last CPU snapshot
+*looks* like only a GetMessage
 wait and no CPU context is saved. It does not inspect the live Kernel wait ID.
 The separate `should_idle_host_message_pump` already checks a snapshot wait
 ID against `CeKernel`. A stale snapshot can therefore still select the
