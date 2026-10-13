@@ -37,15 +37,15 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      closed-owner control remains expected red at the final owner-closure
      assertion. Resolve O-P4 closed-owner Context transfer and O-M1
      private/shared guest-byte coherence here.
-  1a. Use the executed, ignored E-14 native same-VA control as the O-M1
-      expected-red baseline: all-view seeding supplied the parent with the
-      child's word, then base-only readback wrote the child's store into the
-      parent mapping after two native slices. Qualify native synchronization
-      by captured owner and exact view/mapping identity, then pursue the
-      broader per-address-space allocator and public `MapViewOfFile` gate.
-      The injected-view fixture does not cover private `VirtualAlloc` or
-      fresh-owner persistence (ledger E-14; local
-      `evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md`).
+  1a. The E-14 injected same-VA native-view expected red is now an unignored
+      passing default regression after owner-qualified seeding and exact-view
+      readback (ledger E-16). Two focused closed-live/ambiguous-lazy controls
+      and outgoing-before-rotation passed. Continue O-M1 with per-address-space
+      allocation/lazy ownership, public same-VA `MapViewOfFile`, private
+      guest-written `VirtualAlloc` persistence across fresh owner closure,
+      alias/flush/unmap and remote query controls. The narrow E-16 green does
+      not close any of those gates. Add end-to-end immediate CreateProcess
+      sync-error fault injection; its error latch is source-reviewed only.
   2. The narrow O-P1 slice now reports `UnknownNormalStop` for unproven
      successful stops and `HookStop(HostWallBudget)` from one checked scheduler
      block-hook path; seven focused release controls passed on its first
@@ -61,8 +61,9 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      and the no-feature suite passed 1,239 tests (0 failed, 1 ignored). The
      source/hash/command receipt is local
      `evidence/op1-stop-taxonomy-20261013/post-op1-validation.receipt.md`.
-     The bounded live gate remains, and later O-M1 source changes need their
-     own validation. The earlier 1,626-pass suite predates O-P1.
+     The bounded live gate remains. Later O-M1 source was validated separately
+     under E-16; subsequent edits still need their own validation. The
+     earlier 1,626-pass suite predates O-P1.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR
@@ -70,12 +71,12 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      exact raw continuations; writing a synthesized PC into it can retain
      stale branch `hflags`. Closed-owner exact-key Context transfer, guest
      `VirtualAlloc` coherence and the broader Stage 2 gates remain open.
-  3. The O-P1 final-source full release suite passed (1,628/0/4 ignored).
-     Both applicable no-trace release checks and the no-feature suite passed.
+  3. The later O-M1 source passed the full release suite (1,631/0/3 ignored),
+     both applicable no-trace release checks and the no-feature suite (E-16).
      After remaining source fixes, repeat the applicable profiles, then one
      bounded 330 s live run against BED2.
      Record any newly exposed native errors in KNOWN_BUGS; neither the latest
-     1,628-pass O-P1 dirty-source suite nor the decorative splash closes
+     1,631-pass O-M1 dirty-source suite nor the decorative splash closes
      Stage 2.
 - Parallel Stage 8 native lane (diagnostic only, never gates Stages 2-6):
   the evidence is in ledger E-3 to E-6. Before any production budget change,

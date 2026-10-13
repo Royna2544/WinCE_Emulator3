@@ -80,6 +80,20 @@ references for historical reconstruction.
   those edits require separate validation. Typed restart-PC repair,
   complete O-P1 classification, fresh-owner/VM Stage 2 and live acceptance
   remain open. The 1,626-pass suite above predates this slice.
+- On the later O-M1 source, the E-14 injected two-PID same-VA native-view
+  control was unignored and passed after the owner-qualified seeding and
+  exact-view readback change. The final source also passed two closed-live
+  readback/ambiguous-lazy controls and the outgoing-before-rotation control.
+  Its full release suite passed **1,631 passed, 0 failed, 3 ignored**;
+  Unicorn-only and Unicorn+desktop/no-trace release checks exited 0, and the
+  no-feature suite passed **1,239 passed, 0 failed, 1 ignored**. Frozen
+  `unicorn.rs` SHA-256 `0467E73E…F8D89`, exact logs and limits are in local
+  `evidence/stage2-o-m1-same-va-20261013/owner-qualified-native-view.receipt.md`
+  (ledger E-16). This narrows the historical E-14 failure; it does not prove
+  public same-VA `MapViewOfFile`, lazy native fault repair, private guest
+  `VirtualAlloc` bytes across fresh owner closure, O-P4, Stage 2 or live
+  readiness. Immediate CreateProcess sync-error handling is source-reviewed
+  but lacks end-to-end fault injection. Later source edits need new validation.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial
