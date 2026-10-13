@@ -1,7 +1,7 @@
 # E26 scheduler-core design record: one task, wait and continuation authority
 
-Status: **plan for review only** (2026-10-14). No scheduler migration, test
-result, persistent-engine acceptance or splash diagnosis is claimed. The user
+Status: **plan for review only** (2026-10-14). No scheduler migration,
+persistent-engine acceptance or splash diagnosis is claimed. The user
 authorized beginning the rewrite, not bypassing the dependency gates in
 [Architecture A1-A5](../ARCHITECTURE.md), [PLAN Stages 2-6 and 8](../PLAN.md)
 and [D-003](../DECISIONS.md). This record names the connected production
@@ -113,10 +113,13 @@ slice it asserts one `WM_ACTIVATE` return, the real `jalr` continuation,
 opportunity checks only owner-qualified child pending state, continuation PC
 and `s1`; it does not prove another child instruction ran or that later
 deliveries cannot repeat a callback. Three compiled earlier revisions failed
-on superseded secondary assertions; the final test-only edit has **not** been
-rerun, so no green result is claimed. Migration must replace the pending
-vector and parked copy as authorities only when every import/stub, escaped
-callout, send, GetMessage, modal and debugger consumer reads the same frame.
+on superseded secondary assertions; the final test-only edit passed in the
+E25 corrected-source full release suite (1,664 passed, 0 failed, 4 ignored;
+[receipt](../../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
+This is a bounded fixture result, not Stage 4 or live-app acceptance. Migration
+must replace the pending vector and parked copy as authorities only when every
+import/stub, escaped callout, send, GetMessage, modal and debugger consumer
+reads the same frame.
 The return-stub commit must match creator birth, task, frame generation and
 validated return address/stack; an SP-only match or orphan repair is not
 authority. A mismatch leaves the unrelated frame/pending return untouched and
@@ -199,9 +202,9 @@ reports a typed failure rather than borrowing another task's continuation.
    send/reply and WNDPROC callback families with nested frames. Run genuine
    MIPS wait→callback→resume/exit with FPU/HI/LO/branch state, cancellation,
    repeated same-TID waits, wrong-frame rejection and debugger exactness.
-   First execute the child `DispatchMessageW` park/resume fixture after its
-   final test-only edit, then keep its first-resumed-slice exact-one return and
-   owner-qualified later-state assertions green. No orphan-repair
+   Keep the E25-passing child `DispatchMessageW` park/resume fixture's
+   first-resumed-slice exact-one return and owner-qualified later-state
+   assertions green as migration proceeds. No orphan-repair
    fallback is accepted as proof of correct ownership.
 4. Stage 5 replaces **both** `main.rs` rotation heuristics and the
    `UnicornMips` parked-deque runnable scans with one derived ready policy.

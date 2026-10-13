@@ -44,7 +44,7 @@ and the durable status files.
 | --- | --- | --- | --- |
 | 0 Recovery/evidence | Crash ledger, preserved 650/BED2, scoped cleanup manifest | Diagnostic-only probes/fixtures; no architecture policy change | Exact crash symbol/source recorded in the ledger; clean fallback intact |
 | 1 Common boundaries | Anchor + subsystem ownership/interface/error pages, dependency review | Named interfaces only when they replace actual consumers | No duplicate state authority; no unresolved identity/time semantics hidden in defaults |
-| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | Connected process-alias/private-page authority and checked native mapping/failure boundary first, then exact shared-view families and fresh-default owner policy | E-7 stop/error controls remain green; E-18 private stale-byte red turns green under a fresh owner; public same-VA private/view, stale-key clone, free/reuse, protect/decommit, failure and closed-owner Context controls pass; native errors hard-fail |
+| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | Connected process-alias/private-page authority and checked native mapping/failure boundary first, then exact shared-view families and fresh-default owner policy | E-7 stop/error and the E-18 test-only slab/fresh-owner controls remain green; public same-VA private/view, stale-key clone, free/reuse, protect/decommit, failure and closed-owner Context controls pass; native errors hard-fail |
 | 3 Task/object authority | Extend the Stage 2 canonical process-birth directory with Task/object execution/alias/wait pins | Migrate task, alias and lifecycle consumers to that same authority; do not re-mint boot/child identities | Ledger E-8 reds turn green; alias coherence, durable PID/primary identity, close/exit/wait lifetime, independent checkpoint clones |
 | 4 Continuation ownership | Raw-native vs synthesized frames; nested callback/wait state | One complete continuation family, removing old duplicate authority | Native wait→callback→resume/exit, FPU/HI/LO/branch correctness, cancellation and debugger exactness |
 | 5 Outcomes and scheduler | Explicit count/yield/deadline/error, ready indexes, CE6 priorities/quantum | Replace false timeout inference and policy heuristics together | Native errors hard-fail, equal-priority RR, higher-priority preemption, blocked/suspended eligibility; no starvation |
@@ -61,10 +61,13 @@ proof. Full task-context transfer waits for Stage 3 canonical identity and
 Stage 4 continuation ownership.
 
 D-008 permits a narrow private-slab E-18 diagnostic before public owner/clone
-acceptance; it does not move the Stage 2 finish line or enable O-P4 fresh
-default. Fresh default before private/shared outgoing bytes are coherent would
-reproduce the observed E-18 stale read. The full process birth authority needed
-for public two-process VM is then extended, not recreated, in Stage 3.
+acceptance. E25 reached that diagnostic milestone on the corrected source
+([receipt](../evidence/e25-private-slab-20261014/broad-validation.receipt.md));
+public `VirtualAlloc` still uses `LegacySeed`. This does not move the Stage 2
+finish line or enable O-P4 fresh default. Fresh default before unmigrated
+private/shared outgoing bytes are coherent could reproduce the original E-18
+stale read on the public path. The full process birth authority needed for
+public two-process VM is then extended, not recreated, in Stage 3.
 
 ### Parallel lanes (never gate a stage)
 
@@ -89,9 +92,12 @@ Executed controls are recorded in the ledger; none of them is a stage pass.
   release suite (1,634/0/4 ignored); the remaining O-P1 causes and count
   witness are open. In-slice native FPU wait→resume→exit remains unexecuted.
 - VM coherence: E-16's injected same-VA view control is green on its frozen
-  source; E-18's private fresh-owner guest-write control remains expected red
-  on the later E-19 source. D-008 selects a backing design, not Stage 2
-  acceptance or a demonstrated footprint/timing improvement.
+  source. E-18's private fresh-owner guest-write control was an expected red
+  on the frozen E-19 source; its updated test-only slab control is green on
+  the corrected E25 source
+  ([receipt](../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
+  D-008's backing design is not Stage 2 acceptance or a demonstrated
+  footprint/timing improvement.
 - Native owner/arena: six Stage 0 owner controls, the pre-init budget
   differential and the commit-tail repair controls (E-4 to E-6) are isolated and
   diagnostic; they feed Stage 8 only.

@@ -768,7 +768,7 @@ Unmap. Native VA backing remains global, and no fresh-default, memory
 improvement, Stage 2 or app/map acceptance is claimed; the E-22 live run
 predates this source.
 
-## E-25 internal private-slab fresh-owner diagnostic (2026-10-14, focused green)
+## E-25 internal private-slab fresh-owner diagnostic (2026-10-14, bounded validation)
 
 The source-bound focused receipt for the earlier source is local
 [`evidence/e25-private-slab-20261014/README.md`](../../evidence/e25-private-slab-20261014/README.md)
@@ -798,8 +798,30 @@ initial=0x11223344`. The historical E-18 red used the legacy internal
 `virtual_alloc` path on an older frozen source; this is not a red-to-green
 comparison of an unchanged fixture and source.
 
-The **full release suite, no-feature suite and alternate-feature checks are
-pending on this source**. Public `VirtualAlloc` remains `LegacySeed`; this
+The first locked full release run on that focused source exposed a regression:
+the synthetic-PID `slice_end_selected_hidden_helper_executes_before_visible_parent_preflight`
+fixture failed with `native attempt has no live process birth for pid 67`
+(726 passed, 1 failed, 3 ignored; raw `full-release.log` SHA-256
+`FA3735B87FE84B56D277FF09F8883445137D4B67FB034FAD8F5F8A15102001CF`).
+The corrected source limits that birth precondition to diagnostic slabs;
+the separate focused birth-fix controls both passed 1/1, and the rerun of
+`cargo test --locked -j1 --release --features unicorn,trace,win32-desktop`
+passed **1,664/0/4 ignored** across targets (raw `full-release-final.log`
+SHA-256 `3FA9DC90FAADA1F75B01221B75D07A9BDBC729786B97E7141C24283E53573B9F`).
+The corrected `unicorn.rs` SHA-256 is `2D698B1DDA6FCC0CD891A71FE04819476F46C0719DFED8905830B0FCFED9C660`;
+source/config hashes and both attempts are kept separately in the
+[broad-validation receipt](../../evidence/e25-private-slab-20261014/broad-validation.receipt.md)
+(SHA-256 `3488E8DCA2FB5040F99B7E143D47DA15452CC4BE6D4E3DC25F4068067DA1F1A5`).
+On that corrected source, the locked no-feature suite passed **1,258/0/2
+ignored** (raw `no-feature-final.log` SHA-256
+`DF1D7DB0C2D1CB9520836BA62BDC230386B70820509D6FD1E577A609E7492194`),
+the no-trace Unicorn+desktop release check exited 0 (raw
+`alternate-no-trace-check.log` SHA-256
+`2283096CBA5A9841002A65ACC5EF893FCE93D8AC15BC7F44A10BB1134E4484F2`),
+and the final format check exited 0. These are bounded build/test results,
+not a live application run.
+
+Public `VirtualAlloc` remains `LegacySeed`; this
 internal diagnostic does not establish public private-VA semantics, E-20
 two-process same-VA isolation, shared-view coherence, checked native close,
 independent checkpoint clone/relineage, O-P4 fresh-default ownership,

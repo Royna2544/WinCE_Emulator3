@@ -72,7 +72,7 @@ Legacy nonprivate read/query visibility remains, and a same-PID DIB view
 without VA metadata may Flush but is conservatively refused by Unmap. Native
 VA-only backing and the fresh-owner byte gap are unchanged on E-24 source.
 
-### E-25 internal private-slab diagnostic (2026-10-14, focused only)
+### E-25 internal private-slab diagnostic (2026-10-14, bounded validation)
 
 The internal `cfg(test)` slab opt-in now has a source-bound focused release
 receipt: an unignored real-MIPS control stored `0x11223345` in canonical
@@ -83,10 +83,14 @@ pin control also passed ([E-25 focused receipt](../../evidence/e25-private-slab-
 [ledger E-25](../evidence/ledger.md)). This is not the historical unchanged
 E-18 fixture: its earlier red used legacy internal `virtual_alloc`, whereas
 E-25 opts into a test-only slab. Public `VirtualAlloc` still selects
-`LegacySeed`; full release/no-feature/alternate checks on E-25 source are
-pending, as are public same-VA, shared-view, clone/relineage, checked-close,
-hook-failure and bounded pin-retention gates. No O-M1/O-P4 or Stage 2
-acceptance follows from this focused diagnostic.
+`LegacySeed`. The first full release run caught a synthetic-PID compatibility
+regression (726/1/3 ignored); after its narrow birth-precondition fix, the
+corrected source passed full release **1,664/0/4 ignored**, no-feature
+**1,258/0/2 ignored**, a no-trace Unicorn+desktop release check and final
+format check ([separate broad receipt](../../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
+Public same-VA, shared-view, clone/relineage, checked-close, hook-failure and
+bounded pin-retention gates remain open. No O-M1/O-P4, Stage 2 or live-app
+acceptance follows from these tests.
 
 ## Target authority and permitted interfaces
 
@@ -268,8 +272,9 @@ byte backing, which the E-16 view controls alone cannot establish.
 
 ## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
-**Design selected; an internal E-25 diagnostic is focused green, while public
-implementation and Stage 2 acceptance remain open.** Per anchor A4, each
+**Design selected; the internal E-25 diagnostic and bounded suites are green
+on corrected source, while public implementation and Stage 2 acceptance
+remain open.** Per anchor A4, each
 migrated page has one writable byte authority: stable host backing mapped into
 the selected native engine with `mem_map_ptr`. An `AddressSpace` owns private
 slabs and its view records; a canonical VM/file-mapping object owns shared
@@ -289,7 +294,8 @@ range for the mapping lifetime. The diagnostic did not exercise production
 Kernel allocation, concurrent host access, clone, failed native calls or app
 memory. E-18 was still red on the historical E-19 source
 ([ledger E-18/E-19](../evidence/ledger.md)); the changed E-25 internal opt-in
-has only the focused result above.
+has the focused and corrected-source broad results above, not public backing
+acceptance.
 
 The local CE6 kernel source at
 `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c` directly confirms the
