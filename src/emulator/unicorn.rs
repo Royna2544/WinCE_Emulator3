@@ -6072,12 +6072,11 @@ impl UnicornMips {
         let mut report = NativeAttemptReport::no_attempt(limits);
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
         if self.private_slab_attempt_poisoned {
-            report.failure_operation = Some("private native-attempt preflight");
+            report.failure_operation = Some("poisoned native-attempt preflight");
             return AttemptExecution {
                 report,
                 result: Err(Error::Backend(
-                    "private slab native attempt is poisoned; a fresh machine is required"
-                        .to_owned(),
+                    "native attempt is poisoned; a fresh machine is required".to_owned(),
                 )),
             };
         }
@@ -6219,6 +6218,14 @@ impl UnicornMips {
                         },
                     );
                 }
+                // Native execution may already have changed guest bytes or
+                // machine state. An error anywhere after entry makes the
+                // provisional continuation unsafe to restore on a fresh
+                // owner, even when a checked tail reports a BackendError.
+                // Error paths never rotate, so this still poisons the
+                // outgoing process CPU rather than an incoming child.
+                self.private_slab_attempt_poisoned = true;
+                self.saved_context = None;
             }
         }
         // Do not overwrite the native ending owner with an incoming child.
@@ -55730,7 +55737,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: E-28 ordinary checked-finish failure must quarantine its continuation"]
     fn ordinary_finish_failure_rejects_retry_before_another_native_attempt() -> crate::Result<()> {
         let mut kernel = phase1_kernel("finish-retry.exe")?;
         let mut cpu = phase1_counter_cpu(0x3000, "finish-retry.exe")?;
@@ -55748,7 +55754,10 @@ mod unicorn_tests {
             &mut framebuffer,
             limits,
         );
-        assert!(first.result.is_err(), "the checked finish injection must fire");
+        assert!(
+            first.result.is_err(),
+            "the checked finish injection must fire"
+        );
         assert!(first.report.attempt_id().is_some(), "real MIPS ran");
         assert_eq!(
             first.report.final_outcome(),
@@ -55767,14 +55776,22 @@ mod unicorn_tests {
             &mut framebuffer,
             limits,
         );
-        assert!(retry.result.is_err(), "uncertain continuation must fail closed");
+        let counter_after_retry = phase1_counter(&cpu);
         assert_eq!(
             retry.report.attempt_id(),
             None,
-            "a rejected retry must not enter the native MIPS engine"
+            "a rejected retry must not enter native MIPS: result_ok={} counter_before=0x{counter_after_failure:08x} counter_after=0x{counter_after_retry:08x}",
+            retry.result.is_ok()
         );
-        assert_eq!(retry.report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
-        assert_eq!(phase1_counter(&cpu), counter_after_failure);
+        assert!(
+            retry.result.is_err(),
+            "uncertain continuation must fail closed"
+        );
+        assert_eq!(
+            retry.report.final_outcome(),
+            super::NativeSliceOutcome::NoAttempt
+        );
+        assert_eq!(counter_after_retry, counter_after_failure);
         assert_eq!(kernel.current_process_id(), 1);
         Ok(())
     }
