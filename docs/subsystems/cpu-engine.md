@@ -96,8 +96,9 @@ E-6) and full-backend controls (E-7). Design consequences:
   Two actual-backend controls executed as expected red in the historical E-7
   mirror baseline (a counted stop fabricated a host-wall record; a nonzero
   unmapped fault returned Ok under a positive timeout). The current D: source
-  has preliminary focused passes for both corrections, but final hardening,
-  stop taxonomy and full Stage 2 gates remain open. Do not substitute a
+  passes focused controls and the post-E-12 full release suite for both
+  corrections, but final hardening, stop taxonomy and full Stage 2 gates
+  remain open. Do not substitute a
   one-line query swap or change the scheduling tick.
 
 ## Stage 2 source map (historical fault and current handoff)
@@ -198,9 +199,13 @@ live-run result):
   the same final executable: FCSR `0x1005` round-tripped and enabled pending
   cause `0x1080` returned `UC_ERR_EXCEPTION`. Exact source/executable hashes,
   commands and limits are in local
-  `evidence/e12-repaired-pc-20261013.receipt.md` (ledger E-13). This does not
-  prove closed-owner exact-key native Context portability, `VirtualAlloc`
-  byte coherence, callback/o32 float returns, full suites or app readiness.
+  `evidence/e12-repaired-pc-20261013.receipt.md` (ledger E-13). Subsequent
+  serial validation passed the full release suite (1,626 passed, 0 failed,
+  3 ignored), Unicorn-only and Unicorn+desktop/no-trace release checks, the
+  no-feature suite (1,239 passed, 0 failed, 1 ignored), and fmt/diff checks;
+  see the E-13 post-E-12 receipt. Neither focused nor suite success proves
+  closed-owner exact-key native Context portability, `VirtualAlloc` byte
+  coherence, callback/o32 float returns or app readiness.
 
   Follow-ups, from the source:
   - **Two helpers for one job.** The legacy `capture_mips_gprs` and

@@ -139,9 +139,13 @@ The 22-page reviewed docs bundle describes target contracts and staged gates,
 not completed architecture. The earlier experimental persistent-owner freeze
 passed 1,618 tests, but executable 650 host-crashed at 129.108 s with
 `0xC0000005` and 1,662.59 MiB RSS. The later dirty-source post-order full
-release suite passed 1,623 tests (0 failed, 3 ignored); its separately run
-closed-owner fixture is expected red at owner closure. Neither result accepts
-the fresh-engine default or the live app. Exact failed binary/symbols/evidence
+release suite passed 1,623 tests (0 failed, 3 ignored) before E-12. After the
+repaired-PC change, the same dirty checkout passed 1,626 release tests
+(0 failed, 3 ignored), both specified no-trace release checks and 1,239
+no-feature tests (0 failed, 1 ignored). Its separately run closed-owner
+fixture remains expected red at owner closure. None of these results accepts
+the fresh-engine default, O-P1/O-P4/O-M1, Stage 2 or the live app. Exact failed
+binary/symbols/evidence
 are preserved; installed BED2 was restored and remains splash-only. Rebuilding
 current source does NOT reproduce BED2.
 Native crash/cache measurement is a diagnostic lane (decision D-003: it no longer

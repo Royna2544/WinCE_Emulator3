@@ -309,7 +309,22 @@ fresh-owner fixture, not closed-owner exact-key native Context portability,
 guest `VirtualAlloc` byte coherence, callback/o32 floating returns,
 CP0_STATUS FP-mode transfer, full scheduler behavior or iNavi readiness.
 Legacy in-hook register helpers still suppress some read/write errors. Full
-release/feature suites and bounded app runs remain separate gates.
+release/feature suites and bounded app runs were separate gates at that point.
+
+Post-E-12 serial validation on the same source and final focused-test
+executable passed the full `unicorn,trace,win32-desktop` release suite
+(**1,626 passed, 0 failed, 3 ignored**), Unicorn-only and
+Unicorn+desktop/no-trace release checks, and the no-feature suite
+(**1,239 passed, 0 failed, 1 ignored**). All exited 0; `cargo fmt --all --
+--check` and `git diff --check` also passed. Full-suite log SHA-256
+`BC8FF5FB…FEBDA2`; no-feature log `2C2CEFC2…3F0F7C`.
+The exact commands, full hashes and logs are in local
+`evidence/e12-repaired-pc-green-20261013/post-e12-validation.receipt.md`.
+These results validate those profiles on dirty persistent-owner source, not
+fresh-engine default ownership, closed-owner exact-key native Context,
+O-M1 private/shared byte coherence, complete O-P1 classification, Stage 2/3,
+bounded live application stability or map/input readiness. The isolated
+ignored closed-owner/pointer probes were not part of the default suite.
 
 ## Chat-project validation notes (not in this repository)
 
