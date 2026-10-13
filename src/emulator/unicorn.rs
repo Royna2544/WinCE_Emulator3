@@ -57254,6 +57254,8 @@ mod unicorn_tests {
             .begin_native_execution()
             .expect("hold the page fence through pre-entry validation");
         let mut cpu = phase1_counter_cpu(0x1000, "private-pre-entry-fence-wait.exe")?;
+        let orphaned_return = archived_test_record();
+        cpu.orphaned_wndproc_returns.push(orphaned_return.clone());
         let wait_id = phase1_seed_executed_thread_sleep_wait(&mut kernel, &mut cpu);
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
 
@@ -57284,6 +57286,109 @@ mod unicorn_tests {
                 .iter()
                 .any(|wait| wait.wait_id == wait_id),
             "pre-entry failure must not lose the CPU-side wait moved into run-state handles"
+        );
+        assert_eq!(
+            cpu.orphaned_wndproc_returns.as_slice(),
+            &[orphaned_return],
+            "pre-entry failure must restore the orphaned WNDPROC return moved into its Rc handle"
+        );
+        drop(held_guard);
+        Ok(())
+    }
+
+    #[test]
+    fn private_pre_entry_fence_failure_must_not_consume_ready_worker_wait() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("private-pre-entry-ready-wait.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let private_base = kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("enable diagnostic private native path");
+        let private_pin = kernel
+            .memory
+            .private_page_pin(owner, private_base)
+            .expect("committed private page");
+        let held_guard = private_pin
+            .begin_native_execution()
+            .expect("hold the page fence through pre-entry validation");
+
+        let mut cpu = phase1_counter_cpu(0x1000, "private-pre-entry-ready-wait.exe")?;
+        let main_thread_id = cpu.current_thread_id();
+        let entry = cpu.entry.expect("loaded guest entry");
+        let resume_pc = entry + 0x20;
+        let (worker_handle, worker_thread_id) = kernel.create_guest_thread(entry, 0, false);
+        assert_ne!(worker_thread_id, main_thread_id);
+        let ready_event = kernel.create_event_w(None, true, true);
+        let wait_started_ms = kernel.timers.tick_count();
+        let wait_id = kernel.register_blocked_waiter(
+            worker_thread_id,
+            worker_handle,
+            vec![ready_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            wait_started_ms,
+            crate::ce::timer::INFINITE,
+        );
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[16] = 0x1357_2468;
+        regs.regs[29] = cpu.stack_top.expect("loaded guest stack") - 0x200;
+        cpu.blocked_wait_threads.push(super::BlockedWaitThread {
+            wait_id,
+            thread_id: worker_thread_id,
+            thread_handle: worker_handle,
+            wait_handles: vec![ready_event],
+            kind: super::BlockedWaitKind::Kernel,
+            wait_started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs,
+            return_pc: resume_pc,
+        });
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(main_thread_id, wait_started_ms, |wait, kernel| {
+                super::scheduler_blocked_wait_is_ready(wait, kernel)
+            }),
+            Some(wait_id),
+            "the ready worker must be selectable before the fence failure"
+        );
+        let counter_before = phase1_counter(&cpu);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 20,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        let report = execution.report;
+        let err = execution
+            .result
+            .expect_err("held page fence must reject pre-entry setup");
+        assert!(format!("{err:#}").contains("fence private slab page"));
+        assert_eq!(report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
+        assert_eq!(report.attempt_id(), None);
+        assert!(matches!(
+            report.native_result(),
+            super::AttemptObservation::Uncollected
+        ));
+        assert_eq!(phase1_counter(&cpu), counter_before);
+
+        let kernel_wait_survived = kernel.blocked_waiter(wait_id).is_some();
+        let cpu_wait_survived = cpu
+            .blocked_wait_threads
+            .iter()
+            .any(|wait| wait.wait_id == wait_id);
+        assert!(
+            kernel_wait_survived && cpu_wait_survived && cpu.current_thread_id() == main_thread_id,
+            "rejected pre-entry resume consumed a ready wait or switched threads: \
+             kernel_wait={kernel_wait_survived} cpu_wait={cpu_wait_survived} \
+             current_tid={} main_tid={main_thread_id} saved_pc={:?} discarded_resume_pc=0x{resume_pc:08x}",
+            cpu.current_thread_id(),
+            cpu.saved_context_pc(),
         );
         drop(held_guard);
         Ok(())
