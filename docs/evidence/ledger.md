@@ -837,6 +837,73 @@ not proven. The isolated pointer-map diagnostic
 `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner` remains
 ignored/unrun on this E-25 receipt, not a promoted production control.
 
+## E-26 D-checkout Stage 3 expected-red baseline (2026-10-14, executed)
+
+Under D-007, the thirteen historical E-8/E-11 Task controls were ported from
+the read-only ChatGPT project validation fixtures into this sole D: source
+checkout. Only headers and expected-red `#[ignore]` annotations changed;
+assertions were preserved, and the existing `tests/support/mod.rs` was
+reused. The earlier E-8/E-11 receipts remain **private-mirror historical
+evidence**; this is a separate current D-source run, with exact fixture and
+raw-log hashes in the two local receipts.
+
+The focused no-feature default test-target commands and format check exited
+0: **1 active duplicate-close pass, 12 ignored, 0 failed**. Three separate
+`--ignored --nocapture` commands then each exited 1 after successful
+compilation: seven ownership, two raw-API identity and three execution-pin
+controls all failed at their intended assertions (**0 passed, 12 failed**);
+no expected-red case unexpectedly passed or failed from setup/compile.
+The active positive control was filtered out of those explicit-red runs.
+See the [port-and-compile receipt](../../evidence/e26-stage3-red-20261014/port-and-compile.receipt.md)
+(SHA-256 `4033964DF4EC994390E430AF7E4587B4DFF8B60E104A9E8580E514E233134A69`)
+and [executed-red receipt](../../evidence/e26-stage3-red-20261014/executed-red.receipt.md)
+(SHA-256 `CFB251900ED5D0B7F9AA65A8D4B5B0BEB663FA298CBEDC33E9675CED9C2EF75F`).
+No production scheduler source changed, no full suite was rerun for this
+port, and these red boundaries do not pass S3-A or establish Stage 3
+acceptance.
+
+## E-27 second bounded iNavi run on corrected E-25 runtime source (2026-10-14 analysis)
+
+The second user-authorized bounded run used the original read/write mounts
+with adjacent pre-live ZIP backups. Its 2026-10-13 UTC harness directory is
+local `evidence/e22-live-20261013T182442Z/`; the source-bound
+[`analysis.receipt.md`](../../evidence/e22-live-20261013T182442Z/analysis.receipt.md)
+has SHA-256 `A74FBE7FE81366DD67831511D13081351A8152B714744B85FAC7B71CC5D96053`.
+The harness built a release executable SHA-256
+`90A944B949A166171ADFB5EB28414038790144CB51868CC1F97C57160E3A6F4F`
+from the D: checkout after E-25 corrected validation, without intervening
+runtime-source edits. The three key source hashes checked during analysis
+match E-25's corrected receipt. The run manifest did not capture a full
+source-tree digest or Git commit, so the executable and checked key files
+are the supported source boundary, not full-tree forensic proof.
+
+`result.json` records normal exit 0 after 330.4300087 s at its configured
+330 s limit, no RSS monitor trip and empty stderr. The 420 s observer
+completed and saved three changed frames. Genuine splash appeared by
+input-ready +2.978 s; the last splash JPEG hash began at +28.987 s and
+repeated for 151 successful polls through +328.974 s, without an observed
+map transition. Sixteen raw-NMEA HTTP posts and one +153 s tap were accepted.
+The retained guest `COM7:` trace has three positive `ReadFile` transfers of
+174/348/174 B (696 B total) with previews matching injected `$GPRMC` payloads;
+the tap down/up reached PID 1/TID 1 window `0x00020008` and has WNDPROC
+return records by the +159.00 s capture. This proves input transfer and
+message delivery, not parsed GPS, exact touch-handler latency or navigation.
+
+Raw stdout contains 2,518 orphaned return-stub warning occurrences for child
+TID 3 and the same call SP. Their archived global `last_return` reports a
+`DispatchMessageW`/`WM_ACTIVATE` return, but is not identity-matched to each
+encounter; this is not a count of distinct callbacks or proof of the splash
+cause. E-25's narrow real-MIPS child park/resume fixture passed separately
+but did not reproduce live warning churn. Among 160 host-memory samples,
+working set peaked at **1,561,530,368 B (1,489.2 MiB)** and private bytes
+at **1,576,525,824 B (1,503.5 MiB)**. Those are still large and their
+small difference from the earlier E-22 run is not a measured improvement
+from unmatched runs. The mounted inventory stayed at 3,689 entries; four
+entries changed timestamps only, with both affected files retaining length
+and SHA-256 and no reported additions/removals. E-25's test-only slab did
+not become public `VirtualAlloc`, fresh-default ownership, Stage 2 or
+splash/map acceptance because this app run survived its limit.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

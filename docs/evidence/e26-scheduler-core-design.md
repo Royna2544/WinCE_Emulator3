@@ -7,6 +7,25 @@ authorized beginning the rewrite, not bypassing the dependency gates in
 and [D-003](../DECISIONS.md). This record names the connected production
 slice to review **before** editing scheduler policy.
 
+## Current-source pre-code control status
+
+The historical E-8/E-11 fixtures are now ported to the D-007 sole source
+checkout. Focused no-feature default runs compiled them and passed the one
+active duplicate-close control with twelve expected-red controls ignored.
+Three explicit `--ignored --nocapture` runs then failed all twelve at their
+intended ownership, raw-API identity and execution-pin assertions; none
+unexpectedly passed. The [port/compile receipt](../../evidence/e26-stage3-red-20261014/port-and-compile.receipt.md)
+and [executed-red receipt](../../evidence/e26-stage3-red-20261014/executed-red.receipt.md)
+retain the test/support hashes, full outputs and exit codes. Earlier
+[E-8/E-11](ledger.md) results were private-mirror runs, not this D-source
+baseline. This satisfies only the historical expected-red execution part of
+the pre-code review gate: the additional controls below, Stage 2 outcome and
+VM-owner contracts, independent review and rollback plan still matter. No
+production scheduler migration or Stage 3 acceptance follows.
+The separate [E28 outcome-contract design](e28-run-outcome-contract-design.md)
+defines the pre-S3-A sealed-attempt and count-witness work; it is not yet
+implemented or accepted.
+
 ## Existing authorities and the conflict to remove
 
 | Current owner/consumer | Observed source boundary |

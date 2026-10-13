@@ -4,6 +4,11 @@ Status: design-first subsystem contract; implementation and evidence are disting
 Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan](../PLAN.md).
 This page cannot independently redefine the shared contracts or mark Phase 1 complete.
 
+The [E28 run-outcome design](../evidence/e28-run-outcome-contract-design.md)
+scopes the remaining immutable-attempt/count-witness prerequisite for E26
+S3-A. It is a plan only; current `NativeSliceOutcome` is not the anchored
+task-facing `RunOutcome`, and O-P1 remains open.
+
 ## Current implementation
 
 - [unicorn.rs](../../src/emulator/unicorn.rs) combines CPU execution, hooks, imports,
