@@ -368,6 +368,8 @@ struct uc_struct {
 
     size_t emu_counter; // current counter of uc_emu_start()
     size_t emu_count;   // save counter of uc_emu_start()
+    bool count_stop_requested; // count hook successfully requested uc_emu_stop()
+    bool count_stop_ambiguous; // same-handle nested start invalidated the bit
 
     int size_recur_mem; // size for mem access when in a recursive call
 
@@ -546,6 +548,7 @@ static inline uc_err break_translation_loop(uc_engine *uc)
 static inline void revert_uc_emu_stop(uc_engine *uc)
 {
     uc->stop_request = 0;
+    uc->count_stop_requested = false;
     uc->cpu->exit_request = 0;
     uc->cpu->tcg_exit_req = 0;
     uc->cpu->icount_decr_ptr->u16.high = 0;

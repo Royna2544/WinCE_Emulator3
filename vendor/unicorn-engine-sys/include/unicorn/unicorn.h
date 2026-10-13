@@ -498,6 +498,11 @@ typedef enum uc_query_type {
     UC_QUERY_ARCH, // query architecture of engine (for ARM to query Thumb mode)
     UC_QUERY_TIMEOUT, // query if emulation stops due to timeout (indicated if
                       // result = True)
+    UC_QUERY_COUNT_STOP, // query whether the count hook requested a stop in the
+                         // latest non-nested uc_emu_start. Not an exclusive
+                         // stop cause or a retired-instruction count. Returns
+                         // UC_ERR_RESOURCE if a same-handle nested start made
+                         // this per-start fact ambiguous.
 } uc_query_type;
 
 // The implementation of uc_ctl is like what Linux ioctl does but slightly

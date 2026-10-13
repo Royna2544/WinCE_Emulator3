@@ -1049,7 +1049,9 @@ static void hook_count_cb(struct uc_struct *uc, uint64_t address, uint32_t size,
 
     if (uc->emu_counter > uc->emu_count) {
         // printf(":: emu counter = %u, stop emulation\n", uc->emu_counter);
-        uc_emu_stop(uc);
+        if (uc_emu_stop(uc) == UC_ERR_OK) {
+            uc->count_stop_requested = true;
+        }
     }
 }
 
@@ -1078,7 +1080,11 @@ uc_err uc_emu_start(uc_engine *uc, uint64_t begin, uint64_t until,
 {
     uc_err err;
 
-    // reset the counter
+    // Reset every per-start fact before UC_INIT, nesting, or hook setup can
+    // return early. A nested run also invalidates the outer attempt's single
+    // counter/stop record; uc_query reports that ambiguity instead of guessing.
+    uc->count_stop_ambiguous = uc->nested_level != 0;
+    uc->count_stop_requested = false;
     uc->emu_counter = 0;
     uc->invalid_error = UC_ERR_OK;
     uc->emulation_done = false;
@@ -2223,6 +2229,14 @@ uc_err uc_query(uc_engine *uc, uc_query_type type, size_t *result)
 
     case UC_QUERY_TIMEOUT:
         *result = uc->timed_out;
+        break;
+
+    case UC_QUERY_COUNT_STOP:
+        if (uc->count_stop_ambiguous) {
+            restore_jit_state(uc);
+            return UC_ERR_RESOURCE;
+        }
+        *result = uc->count_stop_requested;
         break;
     }
 
