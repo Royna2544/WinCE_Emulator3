@@ -1,22 +1,31 @@
 # E28 Stage 2 run-outcome contract: one sealed native attempt
 
-Status: **design for review only** (2026-10-14). No source implementation,
-new test result, O-P1 completion, Stage 2 acceptance or scheduler migration is
-claimed here. This narrows [Architecture A3](../ARCHITECTURE.md#a3-execution-and-continuation-boundary),
+Status: **partially connected design, not an acceptance claim** (2026-10-14).
+The additive native count-stop query and typed `CountLimit` adapter now have
+[focused](../../evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md)
+and [broad validation](../../evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md);
+the [native C seam](../../evidence/e28-count-witness-audit-20261014/native-c-seam.receipt.md)
+is listed in [vendor PATCHES.md](../../vendor/unicorn-engine-sys/PATCHES.md).
+The pre-adapter source description below is retained as the design baseline.
+An immutable owner/frame-qualified final report, fallible
+[finish-before-handoff](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md),
+nested/reversal/query-error controls and diagnostic-private query-error
+provenance remain open; O-P1, Stage 2 and scheduler migration are not claimed.
+This narrows [Architecture A3](../ARCHITECTURE.md#a3-execution-and-continuation-boundary),
 [PLAN Stages 2-3](../PLAN.md#migration-sequence-and-acceptance-gates) and
 [O-P1](../DECISIONS.md) into the outcome prerequisite for the
 [E26 S3-A identity slice](e26-scheduler-core-design.md#migration-gates-and-acceptance).
 It does not select a task, change the one-million-instruction tick, or make a
 host timeout into a CE deadline or quantum.
 
-## Current source and the missing authority
+## Pre-adapter source baseline and the missing authority
 
 `CpuBackend::run_until_import_trap_with_framebuffer_limits` still returns
 `Result<()>` ([cpu.rs](../../src/emulator/cpu.rs)); there is no task-facing
 `RunOutcome`. `NativeSliceOutcome` in [types.rs](../../src/emulator/types.rs)
 is the last attempt's mutable summary. It distinguishes `NoAttempt`,
 `UnknownNormalStop`, four typed hook reasons, native deadline, requested PC,
-guest process exit and native/backend error. It has no proven `CountLimit`,
+guest process exit and native/backend error. At this baseline it had no proven `CountLimit`,
 registered block, voluntary yield, guest-deadline service or structural
 boundary variant. `UnknownNormalStop` remains eligible for the *existing*
 service-boundary rotation; this is not evidence that a CE quantum expired.
@@ -44,9 +53,23 @@ repair, not a new scheduling policy. The explicit-PC and diagnostic-private
 tails already check outgoing sync and `finish` before returning success, but
 their error paths still need the same one-attempt report discipline.
 
-The vendored Unicorn core's count hook has an internal `emu_counter` and
-`emu_count` ([uc.c](../../vendor/unicorn-engine-sys/uc.c)), but public
-`uc_query` exposes timeout, not a count-stop flag
+For the ordinary tail, the minimal order is: read back the captured outgoing
+owner's file views while `uc` is live; check `uc.finish()` and classify any
+error on that still-active owner; only then rotate and prune parked processes.
+Use a per-engine, one-shot test-only finish failure after a real counted MIPS
+run to verify the parent remains selected, receives the backend-error report,
+and leaves its runnable child parked. The successful parent/child view-readback
+test is the opposite control. This order is necessary but not sufficient for a
+fully sealed outcome: `persist_run_state` already drains shared run handles
+before the ordinary finish, and `saved_context` is assigned before later
+fallible work. Moving persistence after finish without explicit failure
+salvage could lose pending/parked state; leaving these pre-finish mutations
+requires a separate continuation/error-state review. See the
+[finish-order audit](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md).
+
+At this baseline, the vendored Unicorn core's count hook had an internal
+`emu_counter` and `emu_count` ([uc.c](../../vendor/unicorn-engine-sys/uc.c)),
+but public `uc_query` exposed timeout, not a count-stop flag
 ([unicorn.h](../../vendor/unicorn-engine-sys/include/unicorn/unicorn.h)).
 `Ok` plus configured `count > 0`, a matching PC, or a sampled instruction
 counter is therefore **not** an independent count-exhaustion witness. The

@@ -5,9 +5,18 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 This page cannot independently redefine the shared contracts or mark Phase 1 complete.
 
 The [E28 run-outcome design](../evidence/e28-run-outcome-contract-design.md)
-scopes the remaining immutable-attempt/count-witness prerequisite for E26
-S3-A. It is a plan only; current `NativeSliceOutcome` is not the anchored
-task-facing `RunOutcome`, and O-P1 remains open.
+scopes the prerequisite for E26 S3-A. E28's additive
+[native C query](../../evidence/e28-count-witness-audit-20261014/native-c-seam.receipt.md)
+and [typed Rust adapter](../../evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md)
+now witness an uncontested count stop as `CountLimit`; the local patch is
+inventoried in [vendor PATCHES.md](../../vendor/unicorn-engine-sys/PATCHES.md).
+The [broad validation](../../evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md)
+passed 1,671/0/16 ignored release and 1,259/0/14 ignored no-feature, with
+no-trace and format green. `NativeSliceOutcome` is still not an immutable
+owner/frame-qualified task-facing `RunOutcome`; the
+[fallible finish-order plan](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)
+is unimplemented. O-P1, Stage 2 and S3-A remain open, and service-boundary
+rotation policy is unchanged.
 
 ## Current implementation
 
@@ -131,12 +140,18 @@ Search by symbol, not by line number; the file moves.
 - `Query::TIMEOUT`, the actual expiry, was collected only when
   `ce.slice_profile` debug was on. Current D: source collects it every attempt.
 
-The remaining connected O-P1 work after the narrow E-15/E-17/E-19 corrections is:
+After the narrow E-15/E-17/E-19 corrections and E-28 count adapter, the
+remaining connected O-P1 work is:
 
-1. Obtain an independent native count-stop witness before reporting
-   `CountLimit`. `Ok` with `count > 0` and no recorded hook reason remains
-   `UnknownNormalStop`: an early native exit or unrecorded hook can also
-   return normally.
+1. Seal one immutable outgoing-owner/frame-qualified native-attempt report
+   after all fallible context, PC, byte/view sync and lease-finish work.
+   E-28 supplies a count-stop *request* witness, not an exclusive cause or
+   retired-instruction total. Move fallible ordinary `uc.finish()` before
+   handoff and test its failure on real MIPS without losing drained run state
+   or publishing the earlier saved continuation as a successful boundary.
+   Add native nested-start, stop-reversal, forced query-error and competing-
+   hook controls; preserve native-query error provenance in diagnostic-private
+   rejection.
 2. Record each remaining hook reason at its actual request, then make
    post-run restart-PC repair consume typed provenance while preserving safe
    continuations after remote/ready-peer yields and actual budget stops.
@@ -149,10 +164,10 @@ The remaining connected O-P1 work after the narrow E-15/E-17/E-19 corrections is
    feature/full-backend and bounded live gates. Record newly exposed native
    errors in KNOWN_BUGS; do not suppress them again.
 
-These steps would close the remaining O-P1 classification gap. They do not
-change the 1M-instruction tick, the quantum or the clock.
+These steps would close the remaining O-P1 classification/report gap. E-28
+did not change the 1M-instruction tick, quantum, clock or handoff policy.
 
-Status (latest validated E-19 source identity: `types.rs` SHA-256
+Historical E-19 status (source identity: `types.rs` SHA-256
 `00856084…80521`, `unicorn.rs` `6560E1E3…A0F2`;
 focused/full-suite controls, with alternate profiles separately validated,
 not O-P1 completion,

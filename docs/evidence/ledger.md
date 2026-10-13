@@ -919,6 +919,35 @@ interrupted pre-witness compile are in the
 [discriminator receipt](../../evidence/e27-orphan-discriminator-20261014/receipt.md)
 (SHA-256 `D66F8E33B9FF27B388A287EF5B48E9D83185E95BF436A754E74781F4BB537D12`).
 
+## E-28 Native count-stop witness and typed adapter (2026-10-14, executed)
+
+An additive local Unicorn 2.1.5 C query now exposes whether the current
+`uc_emu_start` accepted a count-hook stop request. It is reset per start and
+queried on the same lease immediately after the primary native call, with
+`Query::TIMEOUT`; it is **not** an exclusive cause or retired-instruction
+count. The Rust adapter classifies an uncontested successful request as
+`NativeSliceOutcome::CountLimit` and treats query failure as a hard error.
+`CountLimit` remains a service boundary under the existing rotation policy;
+the one-million-instruction count, CE quantum and task selection did not
+change. The [native C seam receipt](../../evidence/e28-count-witness-audit-20261014/native-c-seam.receipt.md)
+and [vendor patch inventory](../../vendor/unicorn-engine-sys/PATCHES.md)
+record the exact local patch and its upstream status. Focused real-MIPS
+count/timeout/private-owner/service-boundary controls and two public typed
+one-/two-instruction integration controls passed
+([adapter receipt](../../evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md)).
+
+On that source, locked full release features passed **1,671/0/16 ignored**
+and no-feature passed **1,259/0/14 ignored**; no-trace release and format
+checks exited 0. Complete logs and selected source SHA-256 values are in the
+[broad validation receipt](../../evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md).
+The ordinary tail still rotates before fallible `uc.finish`; the
+[finish-order plan](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)
+is documentation, not a test or fix. O-P1 still needs one immutable
+owner/frame-qualified final attempt report, checked finish before handoff,
+native nested-start/reversal/query-error and competing-hook controls, and
+preserved native-query provenance in the diagnostic-private error path.
+O-P1, fresh-owner Stage 2, E26 S3-A and live-app acceptance remain open.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
