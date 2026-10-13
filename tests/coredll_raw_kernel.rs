@@ -22864,6 +22864,23 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
+    let queued_nid = kernel
+        .peek_ready_visible_message_w_filtered(
+            thread_id,
+            Some(taskbar_hwnd),
+            WM_HANDLESHELLNOTIFYICON,
+            WM_HANDLESHELLNOTIFYICON,
+        )
+        .expect("taskbar payload queued")
+        .lparam;
+    assert_eq!(
+        kernel.memory.heap_size(PROCESS_HEAP_HANDLE, 0, queued_nid),
+        Some(152)
+    );
+    // CE6 serializes only the 152-byte form, even when a synthetic raw caller
+    // supplied extended host metadata. Guard both words outside the allocation.
+    memory.write_word(queued_nid + NID_STATE_OFFSET, 0xa5a5_1520);
+    memory.write_word(queued_nid + NID_STATE_MASK_OFFSET, 0x5a5a_1560);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -22916,8 +22933,12 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
         memory.read_wide_z(copied_nid + NID_TIP_OFFSET, 64),
         "Taskbar copy"
     );
-    assert_eq!(memory.read_u32(copied_nid + NID_STATE_OFFSET)?, 0x4);
-    assert_eq!(memory.read_u32(copied_nid + NID_STATE_MASK_OFFSET)?, 0xff);
+    assert_eq!(copied_nid, queued_nid);
+    assert_eq!(memory.read_u32(copied_nid + NID_STATE_OFFSET)?, 0xa5a5_1520);
+    assert_eq!(
+        memory.read_u32(copied_nid + NID_STATE_MASK_OFFSET)?,
+        0x5a5a_1560
+    );
     assert!(
         kernel
             .memory

@@ -38,7 +38,7 @@ use crate::{
         },
         memory::{
             HEAP_ZERO_MEMORY, Heap, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, MemoryAllocation,
-            PROCESS_HEAP_HANDLE,
+            PROCESS_HEAP_HANDLE, PreparedAllocation, PreparedReallocation,
         },
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
@@ -776,6 +776,10 @@ pub trait CoredllGuestMemory {
 
     fn ensure_mapped(&mut self, _addr: u32, _len: u32) -> Result<()> {
         Ok(())
+    }
+
+    fn ensure_heap_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
+        self.ensure_mapped(addr, len)
     }
 }
 
@@ -5404,6 +5408,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_MALLOC | ORD_OPERATOR_NEW | ORD_OPERATOR_NEW_ARRAY | ORD_OPERATOR_NEW_ARRAY_NOTHROW => {
             Some(CoredllValue::Handle(crt::malloc_raw(
                 kernel,
+                memory,
                 thread_id,
                 raw_arg(args, 0),
             )))
@@ -5663,6 +5668,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_LOCAL_ALLOC | ORD_LOCAL_ALLOC_TRACE => Some(CoredllValue::Handle(local_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -5687,12 +5693,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_REMOTE_LOCAL_ALLOC => Some(CoredllValue::Handle(local_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
         ORD_LOCAL_ALLOC_IN_PROCESS => Some(CoredllValue::Handle(local_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -5739,6 +5747,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_HEAP_ALLOC | ORD_HEAP_ALLOC_TRACE => Some(CoredllValue::Handle(heap_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -5769,6 +5778,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_REMOTE_HEAP_ALLOC => Some(CoredllValue::Handle(heap_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 1),
             raw_arg(args, 2),
@@ -5971,7 +5981,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_REGISTER_GESTURE => Some(CoredllValue::Handle(register_gesture_raw(
-            kernel, thread_id, args,
+            kernel, memory, thread_id, args,
         ))),
         ORD_FIND_WINDOW_W => Some(CoredllValue::Handle(find_window_w_raw(
             kernel,
@@ -6131,6 +6141,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_CREATE_COMPATIBLE_BITMAP => Some(CoredllValue::Handle(create_compatible_bitmap_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_i32_arg(args, 1),
@@ -6263,6 +6274,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_SELECT_OBJECT => Some(CoredllValue::Handle(select_object_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -7759,6 +7771,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_IMM_CREATE_IMCC => Some(CoredllValue::Handle(imm_create_imcc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
         ))),
@@ -9863,7 +9876,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_OPERATOR_NEW_NOTHROW => {
             // operator new(size_t, nothrow_t): same as malloc, never throws
             let size = raw_arg(args, 0);
-            let ptr = crt::malloc_raw(kernel, thread_id, size);
+            let ptr = crt::malloc_raw(kernel, memory, thread_id, size);
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(ptr))
         }
@@ -20131,7 +20144,7 @@ fn get_clipboard_data_alloc_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    let Some(copy) = kernel.memory.local_alloc(0, size) else {
+    let Some(copy) = allocate_guest_local(kernel, memory, 0, size) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -25032,12 +25045,13 @@ fn get_command_line_w_raw<M: CoredllGuestMemory>(
         .chain(std::iter::once(0u16))
         .collect();
     let byte_count = (units.len() * 2) as u32;
-    let Some(ptr) = kernel.memory.local_alloc(0, byte_count) else {
+    let Some(ptr) = allocate_guest_local(kernel, memory, 0, byte_count) else {
         kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
         return 0;
     };
     for (i, &unit) in units.iter().enumerate() {
         if !write_guest_u16(kernel, memory, thread_id, ptr + i as u32 * 2, unit) {
+            let _ = kernel.memory.local_free(ptr);
             return 0;
         }
     }
@@ -25183,12 +25197,13 @@ fn get_proc_name_raw<M: CoredllGuestMemory>(
         .chain(std::iter::once(0u16))
         .collect();
     let byte_count = (units.len() * 2) as u32;
-    let Some(ptr) = kernel.memory.local_alloc(0, byte_count) else {
+    let Some(ptr) = allocate_guest_local(kernel, memory, 0, byte_count) else {
         kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
         return 0;
     };
     for (i, &unit) in units.iter().enumerate() {
         if !write_guest_u16(kernel, memory, thread_id, ptr + i as u32 * 2, unit) {
+            let _ = kernel.memory.local_free(ptr);
             return 0;
         }
     }
@@ -29113,8 +29128,14 @@ fn msg_wait_has_input(
     }
 }
 
-fn local_alloc_raw(kernel: &mut CeKernel, thread_id: u32, flags: u32, bytes: u32) -> u32 {
-    match kernel.memory.local_alloc(flags, bytes) {
+fn local_alloc_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    flags: u32,
+    bytes: u32,
+) -> u32 {
+    match allocate_guest_local(kernel, memory, flags, bytes) {
         Some(ptr) => ptr,
         None => {
             kernel
@@ -29133,8 +29154,8 @@ fn local_re_alloc_raw<M: CoredllGuestMemory>(
     bytes: u32,
     flags: u32,
 ) -> u32 {
-    match kernel.memory.local_re_alloc_detail(ptr, bytes, flags) {
-        Some(result) => copy_reallocated_bytes(kernel, memory, thread_id, &result),
+    match kernel.memory.prepare_local_re_alloc(ptr, bytes, flags) {
+        Some(prepared) => apply_prepared_reallocation(kernel, memory, thread_id, prepared),
         None => {
             kernel
                 .threads
@@ -29176,8 +29197,11 @@ fn ce_get_module_heap_info_raw<M: CoredllGuestMemory>(
     const MODULE_HEAP_INFO_ALLOCATION_SIZE: u32 = MODULE_HEAP_INFO_SIZE + 4 + 24;
 
     let mut info_ptr = kernel.module_heap_info_guest_ptr();
+    let newly_allocated = info_ptr == 0;
     if info_ptr == 0 {
-        let Some(ptr) = kernel.memory.heap_alloc(
+        let Some(ptr) = allocate_guest_heap(
+            kernel,
+            memory,
             PROCESS_HEAP_HANDLE,
             HEAP_ZERO_MEMORY,
             MODULE_HEAP_INFO_ALLOCATION_SIZE,
@@ -29188,13 +29212,15 @@ fn ce_get_module_heap_info_raw<M: CoredllGuestMemory>(
             return 0;
         };
         info_ptr = ptr;
-        kernel.set_module_heap_info_guest_ptr(info_ptr);
     }
 
     if memory
-        .ensure_mapped(info_ptr, MODULE_HEAP_INFO_ALLOCATION_SIZE)
+        .ensure_heap_mapped(info_ptr, MODULE_HEAP_INFO_ALLOCATION_SIZE)
         .is_err()
     {
+        if newly_allocated {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, info_ptr);
+        }
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -29208,26 +29234,23 @@ fn ce_get_module_heap_info_raw<M: CoredllGuestMemory>(
     values[1] = critical_section_ptr;
     values[2] = heap_list_ptr;
 
-    for (index, value) in values.into_iter().enumerate() {
-        if !write_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            info_ptr.wrapping_add((index as u32) * 4),
-            value,
-        ) {
-            return 0;
+    let written = values
+        .into_iter()
+        .enumerate()
+        .all(|(index, value)| memory.write_u32(info_ptr + index as u32 * 4, value).is_ok())
+        && memory
+            .write_u32(heap_list_ptr, kernel.memory.get_process_heap())
+            .is_ok();
+    if !written {
+        if newly_allocated {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, info_ptr);
         }
-    }
-    if !write_guest_u32(
-        kernel,
-        memory,
-        thread_id,
-        heap_list_ptr,
-        kernel.memory.get_process_heap(),
-    ) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    kernel.set_module_heap_info_guest_ptr(info_ptr);
 
     kernel.threads.set_last_error(thread_id, 0);
     info_ptr
@@ -29265,8 +29288,15 @@ fn heap_destroy_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32) -> bool {
     }
 }
 
-fn heap_alloc_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32, flags: u32, bytes: u32) -> u32 {
-    match kernel.memory.heap_alloc(heap, flags, bytes) {
+fn heap_alloc_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    heap: u32,
+    flags: u32,
+    bytes: u32,
+) -> u32 {
+    match allocate_guest_heap(kernel, memory, heap, flags, bytes) {
         Some(ptr) => ptr,
         None => {
             kernel
@@ -29286,8 +29316,8 @@ fn heap_re_alloc_raw<M: CoredllGuestMemory>(
     ptr: u32,
     bytes: u32,
 ) -> u32 {
-    match kernel.memory.heap_re_alloc_detail(heap, flags, ptr, bytes) {
-        Some(result) => copy_reallocated_bytes(kernel, memory, thread_id, &result),
+    match kernel.memory.prepare_heap_re_alloc(heap, flags, ptr, bytes) {
+        Some(prepared) => apply_prepared_reallocation(kernel, memory, thread_id, prepared),
         None => {
             kernel
                 .threads
@@ -29297,25 +29327,124 @@ fn heap_re_alloc_raw<M: CoredllGuestMemory>(
     }
 }
 
-fn copy_reallocated_bytes<M: CoredllGuestMemory>(
+/// Immediate guest allocations become live only after persistent mapping and
+/// explicit full-physical-extent ZERO (including a logical zero-byte request).
+/// Host-only queued payload reservations intentionally use metadata-only APIs.
+pub(crate) fn allocate_guest_heap<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    heap: u32,
+    flags: u32,
+    bytes: u32,
+) -> Option<u32> {
+    allocate_guest_heap_initialized(kernel, memory, heap, flags, bytes, |_, _| Ok(()))
+}
+
+pub(crate) fn allocate_guest_heap_initialized<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    heap: u32,
+    flags: u32,
+    bytes: u32,
+    initialize: impl FnOnce(&mut M, u32) -> Result<()>,
+) -> Option<u32> {
+    let prepared = kernel.memory.prepare_heap_alloc(heap, flags, bytes)?;
+    apply_prepared_allocation(kernel, memory, prepared, initialize)
+}
+
+pub(crate) fn allocate_guest_local<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    flags: u32,
+    bytes: u32,
+) -> Option<u32> {
+    let prepared = kernel.memory.prepare_local_alloc(flags, bytes)?;
+    apply_prepared_allocation(kernel, memory, prepared, |_, _| Ok(()))
+}
+
+fn apply_prepared_allocation<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    prepared: PreparedAllocation,
+    initialize: impl FnOnce(&mut M, u32) -> Result<()>,
+) -> Option<u32> {
+    let allocation = prepared.allocation();
+    if memory
+        .ensure_heap_mapped(allocation.ptr, allocation.actual_size)
+        .is_err()
+        || (allocation.zeroed
+            && memory
+                .fill_bytes(allocation.ptr, 0, allocation.actual_size)
+                .is_err())
+        || initialize(memory, allocation.ptr).is_err()
+    {
+        kernel.memory.abort_allocation(prepared);
+        return None;
+    }
+    kernel.memory.commit_allocation(prepared)
+}
+
+pub(crate) fn apply_prepared_reallocation<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,
-    result: &crate::ce::memory::Reallocation,
+    prepared: PreparedReallocation,
 ) -> u32 {
-    if !result.moved {
-        return result.ptr;
+    let result = prepared.result().clone();
+    let copy_len = prepared.copy_len();
+    let zero_range = prepared.zero_range();
+    if (copy_len != 0 || zero_range.is_some())
+        && memory
+            .ensure_heap_mapped(result.ptr, result.new_actual_size)
+            .is_err()
+    {
+        kernel.memory.abort_reallocation(prepared);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
     }
-    let copy_len = result.old_actual_size.min(result.new_actual_size);
-    if copy_len == 0 {
-        return result.ptr;
-    }
-    if let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, result.old_ptr, copy_len) {
-        if !write_guest_bytes(kernel, memory, thread_id, result.ptr, &bytes) {
+
+    let copied = if copy_len == 0 {
+        None
+    } else {
+        let mut bytes = vec![0; copy_len as usize];
+        if memory.read_bytes(result.old_ptr, &mut bytes).is_err() {
+            kernel.memory.abort_reallocation(prepared);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return 0;
         }
+        Some(bytes)
+    };
+    if let Some(bytes) = copied.as_deref()
+        && memory.write_bytes(result.ptr, bytes).is_err()
+    {
+        kernel.memory.abort_reallocation(prepared);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
     }
-    result.ptr
+    if let Some((zero_start, zero_len)) = zero_range
+        && memory.fill_bytes(zero_start, 0, zero_len).is_err()
+    {
+        kernel.memory.abort_reallocation(prepared);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    match kernel.memory.commit_reallocation(prepared) {
+        Some(result) => result.ptr,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+    }
 }
 
 fn heap_size_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32, flags: u32, ptr: u32) -> u32 {
@@ -30577,7 +30706,12 @@ fn register_window_message_w_raw<M: CoredllGuestMemory>(
 
 const REGISTER_GESTURE_BYTES: u32 = 0x400;
 
-fn register_gesture_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+fn register_gesture_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
     let id = raw_arg(args, 0);
     let arg1 = raw_arg(args, 1);
     let arg2 = raw_arg(args, 2);
@@ -30596,7 +30730,9 @@ fn register_gesture_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> 
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let Some(handle) = kernel.memory.heap_alloc(
+    let Some(handle) = allocate_guest_heap(
+        kernel,
+        memory,
         PROCESS_HEAP_HANDLE,
         HEAP_ZERO_MEMORY,
         REGISTER_GESTURE_BYTES,
@@ -30607,6 +30743,7 @@ fn register_gesture_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> 
         return 0;
     };
     if !kernel.gwe.register_gesture(id, handle, arg1, arg2, arg3) {
+        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, handle);
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -32452,6 +32589,8 @@ fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(
     let Some(tip) = read_notify_icon_tip_w(kernel, memory, thread_id, data_ptr) else {
         return false;
     };
+    // Optional synthetic extended input metadata is separate from the target
+    // CE6 taskbar wire layout: dumped coredll export 481 passes 0x98 bytes.
     let state = if cb_size >= NOTIFYICONDATA_STATE_OFFSET + 4 {
         read_guest_u32(
             kernel,
@@ -36979,11 +37118,13 @@ fn clone_bitmap_for_icon<M: CoredllGuestMemory>(
         return Some((bitmap, false));
     }
     let bytes = read_bitmap_object_bytes(memory, &source)?;
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, bytes.len() as u32)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        bytes.len() as u32,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -37207,9 +37348,8 @@ fn copy_resource_bytes_to_guest_heap<M: CoredllGuestMemory>(
     bytes: &[u8],
 ) -> Option<u32> {
     let size = u32::try_from(bytes.len()).ok()?;
-    let Some(ptr) = kernel
-        .memory
-        .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, size)
+    let Some(ptr) =
+        allocate_guest_heap(kernel, memory, PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, size)
     else {
         kernel
             .threads
@@ -38433,11 +38573,13 @@ fn create_image_list_mask_bitmap<M: CoredllGuestMemory>(
     let bits_per_row = source.width.unsigned_abs() as u64;
     let width_bytes = (((bits_per_row + 31) / 32) * 4).min(i32::MAX as u64) as u32;
     let byte_count = width_bytes.checked_mul(source.height as u32)?;
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        byte_count,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -38642,11 +38784,13 @@ fn create_blank_owned_bitmap<M: CoredllGuestMemory>(
     let bits_per_row = (width.unsigned_abs() as u64).checked_mul(u64::from(bits_pixel))?;
     let width_bytes = (((bits_per_row + 31) / 32) * 4).min(i32::MAX as u64) as u32;
     let byte_count = width_bytes.checked_mul(height.unsigned_abs())?;
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        byte_count,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -38780,11 +38924,13 @@ fn clone_bitmap_for_image_list<M: CoredllGuestMemory>(
         return Some(bitmap);
     }
     let bytes = read_bitmap_object_bytes(memory, &source)?;
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, bytes.len() as u32)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        bytes.len() as u32,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -39126,11 +39272,13 @@ fn create_owned_zeroed_bitmap<M: CoredllGuestMemory>(
     bits_pixel: u16,
 ) -> Option<u32> {
     let byte_count = bitmap_byte_count(width, height, bits_pixel)?;
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        byte_count,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -42150,11 +42298,13 @@ fn create_bitmap_from_file_bytes<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        byte_count,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -42291,11 +42441,13 @@ fn create_bitmap_from_dib_bytes_with_options<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        byte_count,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -42414,11 +42566,13 @@ fn create_bitmap_raw<M: CoredllGuestMemory>(
         let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, bits_ptr, source_size) else {
             return 0;
         };
-        let Some(owned_bits) =
-            kernel
-                .memory
-                .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, storage_size)
-        else {
+        let Some(owned_bits) = allocate_guest_heap(
+            kernel,
+            memory,
+            PROCESS_HEAP_HANDLE,
+            HEAP_ZERO_MEMORY,
+            storage_size,
+        ) else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -42587,8 +42741,9 @@ fn create_bitmap_from_pointer_raw<M: CoredllGuestMemory>(
     bitmap
 }
 
-fn ensure_bitmap_backing_for_memory_dc_select(
+fn ensure_bitmap_backing_for_memory_dc_select<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     hdc: u32,
     bitmap_handle: u32,
@@ -42614,11 +42769,13 @@ fn ensure_bitmap_backing_for_memory_dc_select(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, storage_size)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        storage_size,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -43918,15 +44075,18 @@ fn dpa_create_raw<M: CoredllGuestMemory>(
 ) -> u32 {
     let cp_grow = raw_i32_arg(args, 0).max(1);
     let heap = kernel.memory.get_process_heap();
-    let Some(hdpa) = kernel.memory.heap_alloc(heap, 0, DPA_SIZE) else {
+    let fields = [0, 0, heap, 0, cp_grow as u32];
+    let Some(hdpa) =
+        allocate_guest_heap_initialized(kernel, memory, heap, 0, DPA_SIZE, |memory, ptr| {
+            for (index, value) in fields.into_iter().enumerate() {
+                memory.write_u32(ptr + index as u32 * 4, value)?;
+            }
+            Ok(())
+        })
+    else {
         kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
         return 0;
     };
-    let _ = memory.write_u32(hdpa + DPA_OFFSET_CP_ITEMS, 0);
-    let _ = memory.write_u32(hdpa + DPA_OFFSET_PP, 0);
-    let _ = memory.write_u32(hdpa + DPA_OFFSET_HHEAP, heap);
-    let _ = memory.write_u32(hdpa + DPA_OFFSET_CP_CAPACITY, 0);
-    let _ = memory.write_u32(hdpa + DPA_OFFSET_CP_GROW, cp_grow as u32);
     kernel.threads.set_last_error(thread_id, 0);
     hdpa
 }
@@ -44003,22 +44163,34 @@ fn dpa_ensure_capacity<M: CoredllGuestMemory>(
     let Ok(pp) = memory.read_u32(hdpa + DPA_OFFSET_PP) else {
         return false;
     };
-    let Some(new_pp) = kernel.memory.heap_alloc(heap, 0, byte_count) else {
+    let Some(new_pp) = allocate_guest_heap(kernel, memory, heap, 0, byte_count) else {
         return false;
     };
     if pp != 0 {
-        // Copy existing items to new array.
-        if let Ok(cap_u32) = memory.read_u32(hdpa + DPA_OFFSET_CP_CAPACITY) {
-            for i in 0..cap_u32 {
-                if let Ok(val) = memory.read_u32(pp + i * 4) {
-                    let _ = memory.write_u32(new_pp + i * 4, val);
-                }
-            }
+        let copied = (0..capacity).all(|index| {
+            memory
+                .read_u32(pp + index * 4)
+                .and_then(|value| memory.write_u32(new_pp + index * 4, value))
+                .is_ok()
+        });
+        if !copied {
+            let _ = kernel.memory.heap_free(heap, 0, new_pp);
+            return false;
         }
+    }
+    // Byte initialization is complete before the new pointer is exposed.
+    // Already-live headers retain the adapter's ordinary partial-write behavior;
+    // do not invent rollback writes or free a possibly published candidate.
+    if memory
+        .write_u32(hdpa + DPA_OFFSET_CP_CAPACITY, new_capacity)
+        .is_err()
+        || memory.write_u32(hdpa + DPA_OFFSET_PP, new_pp).is_err()
+    {
+        return false;
+    }
+    if pp != 0 {
         let _ = kernel.memory.heap_free(heap, 0, pp);
     }
-    let _ = memory.write_u32(hdpa + DPA_OFFSET_PP, new_pp);
-    let _ = memory.write_u32(hdpa + DPA_OFFSET_CP_CAPACITY, new_capacity);
     true
 }
 
@@ -44256,32 +44428,50 @@ fn dpa_clone_raw<M: CoredllGuestMemory>(
         hdpa_new
     } else {
         let heap = kernel.memory.get_process_heap();
-        let Some(h) = kernel.memory.heap_alloc(heap, 0, DPA_SIZE) else {
+        let Some(h) =
+            allocate_guest_heap_initialized(kernel, memory, heap, 0, DPA_SIZE, |memory, ptr| {
+                for (index, value) in [0, 0, heap, 0, src_cp_grow].into_iter().enumerate() {
+                    memory.write_u32(ptr + index as u32 * 4, value)?;
+                }
+                Ok(())
+            })
+        else {
             kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
             return 0;
         };
-        let _ = memory.write_u32(h + DPA_OFFSET_CP_ITEMS, 0);
-        let _ = memory.write_u32(h + DPA_OFFSET_PP, 0);
-        let _ = memory.write_u32(h + DPA_OFFSET_HHEAP, heap);
-        let _ = memory.write_u32(h + DPA_OFFSET_CP_CAPACITY, 0);
-        let _ = memory.write_u32(h + DPA_OFFSET_CP_GROW, src_cp_grow);
         h
     };
-    if src_cp_items > 0 {
-        if !dpa_ensure_capacity(kernel, memory, dest, src_cp_items) {
-            kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
-            return 0;
-        }
-        let Ok(dest_pp) = memory.read_u32(dest + DPA_OFFSET_PP) else {
-            return 0;
-        };
-        for i in 0..src_cp_items {
-            if let Ok(val) = memory.read_u32(src_pp + i * 4) {
-                let _ = memory.write_u32(dest_pp + i * 4, val);
+    let initialized = (|| {
+        if src_cp_items > 0 {
+            if !dpa_ensure_capacity(kernel, memory, dest, src_cp_items) {
+                kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
+                return false;
+            }
+            let Ok(dest_pp) = memory.read_u32(dest + DPA_OFFSET_PP) else {
+                return false;
+            };
+            if !(0..src_cp_items).all(|index| {
+                memory
+                    .read_u32(src_pp + index * 4)
+                    .and_then(|value| memory.write_u32(dest_pp + index * 4, value))
+                    .is_ok()
+            }) {
+                return false;
             }
         }
+        memory
+            .write_u32(dest + DPA_OFFSET_CP_ITEMS, src_cp_items)
+            .is_ok()
+    })();
+    if !initialized {
+        if hdpa_new == 0 {
+            let _ = dpa_destroy_raw(kernel, memory, thread_id, dest);
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
     }
-    let _ = memory.write_u32(dest + DPA_OFFSET_CP_ITEMS, src_cp_items);
     kernel.threads.set_last_error(thread_id, 0);
     dest
 }
@@ -44318,16 +44508,17 @@ fn dsa_create_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let heap = kernel.memory.get_process_heap();
-    let Some(hdsa) = kernel.memory.heap_alloc(heap, 0, DSA_SIZE) else {
+    let Some(hdsa) =
+        allocate_guest_heap_initialized(kernel, memory, heap, 0, DSA_SIZE, |memory, ptr| {
+            for (index, value) in [0, 0, heap, 0, cp_grow, cb_item].into_iter().enumerate() {
+                memory.write_u32(ptr + index as u32 * 4, value)?;
+            }
+            Ok(())
+        })
+    else {
         kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
         return 0;
     };
-    let _ = memory.write_u32(hdsa + DSA_OFFSET_CP_ITEMS, 0);
-    let _ = memory.write_u32(hdsa + DSA_OFFSET_PDATA, 0);
-    let _ = memory.write_u32(hdsa + DSA_OFFSET_HHEAP, heap);
-    let _ = memory.write_u32(hdsa + DSA_OFFSET_CP_CAPACITY, 0);
-    let _ = memory.write_u32(hdsa + DSA_OFFSET_CP_GROW, cp_grow);
-    let _ = memory.write_u32(hdsa + DSA_OFFSET_CB_ITEM, cb_item);
     kernel.threads.set_last_error(thread_id, 0);
     hdsa
 }
@@ -44404,23 +44595,34 @@ fn dsa_ensure_capacity<M: CoredllGuestMemory>(
     let Some(byte_count) = new_capacity.checked_mul(cb_item) else {
         return false;
     };
-    let Some(new_pdata) = kernel.memory.heap_alloc(heap, 0, byte_count) else {
-        return false;
-    };
     let Ok(old_pdata) = memory.read_u32(hdsa + DSA_OFFSET_PDATA) else {
         return false;
     };
+    let Some(new_pdata) = allocate_guest_heap(kernel, memory, heap, 0, byte_count) else {
+        return false;
+    };
     if old_pdata != 0 {
-        // Copy existing data.
-        for i in 0..(capacity * cb_item) {
-            if let Ok(b) = memory.read_u8(old_pdata + i) {
-                let _ = memory.write_u8(new_pdata + i, b);
-            }
+        let mut bytes = vec![0; capacity as usize * cb_item as usize];
+        if memory.read_bytes(old_pdata, &mut bytes).is_err()
+            || memory.write_bytes(new_pdata, &bytes).is_err()
+        {
+            let _ = kernel.memory.heap_free(heap, 0, new_pdata);
+            return false;
         }
+    }
+    // As for DPA, no invented rollback for partial writes to a live header.
+    if memory
+        .write_u32(hdsa + DSA_OFFSET_CP_CAPACITY, new_capacity)
+        .is_err()
+        || memory
+            .write_u32(hdsa + DSA_OFFSET_PDATA, new_pdata)
+            .is_err()
+    {
+        return false;
+    }
+    if old_pdata != 0 {
         let _ = kernel.memory.heap_free(heap, 0, old_pdata);
     }
-    let _ = memory.write_u32(hdsa + DSA_OFFSET_PDATA, new_pdata);
-    let _ = memory.write_u32(hdsa + DSA_OFFSET_CP_CAPACITY, new_capacity);
     true
 }
 
@@ -44681,33 +44883,51 @@ fn dsa_clone_raw<M: CoredllGuestMemory>(
         hdsa_new
     } else {
         let heap = kernel.memory.get_process_heap();
-        let Some(h) = kernel.memory.heap_alloc(heap, 0, DSA_SIZE) else {
+        let Some(h) =
+            allocate_guest_heap_initialized(kernel, memory, heap, 0, DSA_SIZE, |memory, ptr| {
+                for (index, value) in [0, 0, heap, 0, src_cp_grow, src_cb_item]
+                    .into_iter()
+                    .enumerate()
+                {
+                    memory.write_u32(ptr + index as u32 * 4, value)?;
+                }
+                Ok(())
+            })
+        else {
             kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
             return 0;
         };
-        let _ = memory.write_u32(h + DSA_OFFSET_CP_ITEMS, 0);
-        let _ = memory.write_u32(h + DSA_OFFSET_PDATA, 0);
-        let _ = memory.write_u32(h + DSA_OFFSET_HHEAP, heap);
-        let _ = memory.write_u32(h + DSA_OFFSET_CP_CAPACITY, 0);
-        let _ = memory.write_u32(h + DSA_OFFSET_CP_GROW, src_cp_grow);
-        let _ = memory.write_u32(h + DSA_OFFSET_CB_ITEM, src_cb_item);
         h
     };
-    if src_cp_items > 0 {
-        if !dsa_ensure_capacity(kernel, memory, dest, src_cp_items) {
-            kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
-            return 0;
-        }
-        let Ok(dest_pdata) = memory.read_u32(dest + DSA_OFFSET_PDATA) else {
-            return 0;
-        };
-        for i in 0..(src_cp_items * src_cb_item) {
-            if let Ok(b) = memory.read_u8(src_pdata + i) {
-                let _ = memory.write_u8(dest_pdata + i, b);
+    let initialized = (|| {
+        if src_cp_items > 0 {
+            if !dsa_ensure_capacity(kernel, memory, dest, src_cp_items) {
+                kernel.threads.set_last_error(thread_id, ERROR_OUTOFMEMORY);
+                return false;
+            }
+            let Ok(dest_pdata) = memory.read_u32(dest + DSA_OFFSET_PDATA) else {
+                return false;
+            };
+            let mut bytes = vec![0; src_cp_items as usize * src_cb_item as usize];
+            if memory.read_bytes(src_pdata, &mut bytes).is_err()
+                || memory.write_bytes(dest_pdata, &bytes).is_err()
+            {
+                return false;
             }
         }
+        memory
+            .write_u32(dest + DSA_OFFSET_CP_ITEMS, src_cp_items)
+            .is_ok()
+    })();
+    if !initialized {
+        if hdsa_new == 0 {
+            let _ = dsa_destroy_raw(kernel, memory, thread_id, dest);
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
     }
-    let _ = memory.write_u32(dest + DSA_OFFSET_CP_ITEMS, src_cp_items);
     kernel.threads.set_last_error(thread_id, 0);
     dest
 }
@@ -45444,10 +45664,14 @@ const INPUTCONTEXT_NUM_MSG_BUF_OFFSET: u32 = 304;
 const INPUTCONTEXT_MSG_BUF_OFFSET: u32 = 308;
 const INPUTCONTEXT_REFCOUNT_OFFSET: u32 = 344;
 
-fn imm_create_imcc_raw(kernel: &mut CeKernel, thread_id: u32, size: u32) -> u32 {
-    let Some(handle) = kernel
-        .memory
-        .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, size)
+fn imm_create_imcc_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    size: u32,
+) -> u32 {
+    let Some(handle) =
+        allocate_guest_heap(kernel, memory, PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, size)
     else {
         kernel
             .threads
@@ -45478,21 +45702,32 @@ fn imm_destroy_imcc_raw(kernel: &mut CeKernel, thread_id: u32, himcc: u32) -> bo
     ok
 }
 
-fn allocate_ime_component(
+fn allocate_ime_component<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     kind: crate::ce::gwe::ImeComponentKind,
     size: u32,
 ) -> Option<u32> {
-    let handle = kernel
-        .memory
-        .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, size)?;
+    let handle = allocate_guest_heap(kernel, memory, PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, size)?;
     kernel.gwe.register_ime_component(handle, kind, size);
     kernel.threads.set_last_error(thread_id, 0);
     Some(handle)
 }
 
-fn ensure_ime_context_guest_buffers(kernel: &mut CeKernel, thread_id: u32, himc: u32) -> bool {
+fn ensure_ime_context_guest_buffers<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    himc: u32,
+) -> bool {
+    let discard =
+        |kernel: &mut CeKernel, input: Option<u32>, comp: Option<u32>, cand: Option<u32>| {
+            for ptr in [input, comp, cand].into_iter().flatten() {
+                kernel.gwe.unregister_ime_component(ptr);
+                let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+            }
+        };
     let (needs_input, needs_comp, needs_cand) = {
         let Some(context) = kernel.gwe.ime_context(himc) else {
             kernel
@@ -45509,7 +45744,9 @@ fn ensure_ime_context_guest_buffers(kernel: &mut CeKernel, thread_id: u32, himc:
 
     let input_ptr = if needs_input {
         Some(
-            match kernel.memory.heap_alloc(
+            match allocate_guest_heap(
+                kernel,
+                memory,
                 PROCESS_HEAP_HANDLE,
                 HEAP_ZERO_MEMORY,
                 CE_INPUTCONTEXT_SIZE,
@@ -45529,12 +45766,14 @@ fn ensure_ime_context_guest_buffers(kernel: &mut CeKernel, thread_id: u32, himc:
     let comp_handle = if needs_comp {
         match allocate_ime_component(
             kernel,
+            memory,
             thread_id,
             crate::ce::gwe::ImeComponentKind::CompositionString,
             CE_COMPOSITIONSTRING_SIZE,
         ) {
             Some(handle) => Some(handle),
             None => {
+                discard(kernel, input_ptr, None, None);
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -45547,12 +45786,14 @@ fn ensure_ime_context_guest_buffers(kernel: &mut CeKernel, thread_id: u32, himc:
     let cand_handle = if needs_cand {
         match allocate_ime_component(
             kernel,
+            memory,
             thread_id,
             crate::ce::gwe::ImeComponentKind::CandidateInfo,
             CE_CANDIDATEINFO_SIZE,
         ) {
             Some(handle) => Some(handle),
             None => {
+                discard(kernel, input_ptr, comp_handle, None);
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -45564,6 +45805,7 @@ fn ensure_ime_context_guest_buffers(kernel: &mut CeKernel, thread_id: u32, himc:
     };
 
     let Some(context) = kernel.gwe.ime_context_mut(himc) else {
+        discard(kernel, input_ptr, comp_handle, cand_handle);
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -45594,7 +45836,7 @@ fn imm_lock_imc_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
-    if !ensure_ime_context_guest_buffers(kernel, thread_id, himc)
+    if !ensure_ime_context_guest_buffers(kernel, memory, thread_id, himc)
         || !serialize_ime_components(kernel, memory, thread_id, himc)
         || !serialize_input_context(kernel, memory, thread_id, himc)
     {
@@ -45772,7 +46014,7 @@ fn imm_resize_imcc_raw<M: CoredllGuestMemory>(
     let himcc = raw_arg(args, 0);
     let size = raw_arg(args, 1);
     if himcc == 0 {
-        return imm_create_imcc_raw(kernel, thread_id, size);
+        return imm_create_imcc_raw(kernel, memory, thread_id, size);
     }
     let Some(component) = kernel.gwe.ime_component(himcc).copied() else {
         kernel
@@ -45780,27 +46022,19 @@ fn imm_resize_imcc_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    let old_size = component.size;
-    let old_bytes = if old_size > 0 {
-        read_guest_bytes(kernel, memory, thread_id, himcc, old_size)
-    } else {
-        None
-    };
-    let Some(new_handle) =
+    let Some(prepared) =
         kernel
             .memory
-            .heap_re_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, himcc, size)
+            .prepare_heap_re_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, himcc, size)
     else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
         return 0;
     };
-    if let Some(bytes) = old_bytes.as_deref() {
-        let copy = bytes.len().min(size as usize);
-        if copy > 0 && !write_guest_bytes(kernel, memory, thread_id, new_handle, &bytes[..copy]) {
-            return 0;
-        }
+    let new_handle = apply_prepared_reallocation(kernel, memory, thread_id, prepared);
+    if new_handle == 0 {
+        return 0;
     }
     kernel
         .gwe
@@ -46452,6 +46686,7 @@ fn make_testime_no_dictionary_entry_guideline<M: CoredllGuestMemory>(
     let handle = if old_handle == 0 {
         match allocate_ime_component(
             kernel,
+            memory,
             thread_id,
             crate::ce::gwe::ImeComponentKind::GuideLine,
             total_size,
@@ -46460,13 +46695,17 @@ fn make_testime_no_dictionary_entry_guideline<M: CoredllGuestMemory>(
             None => return,
         }
     } else {
-        match kernel.memory.heap_re_alloc(
+        match kernel.memory.prepare_heap_re_alloc(
             PROCESS_HEAP_HANDLE,
             HEAP_ZERO_MEMORY,
             old_handle,
             total_size,
         ) {
-            Some(handle) => {
+            Some(prepared) => {
+                let handle = apply_prepared_reallocation(kernel, memory, thread_id, prepared);
+                if handle == 0 {
+                    return;
+                }
                 if handle != old_handle {
                     kernel.gwe.unregister_ime_component(old_handle);
                 }
@@ -49410,8 +49649,9 @@ fn delete_dc_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> bool {
     false
 }
 
-fn create_compatible_bitmap_raw(
+fn create_compatible_bitmap_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     hdc: u32,
     width: i32,
@@ -49469,11 +49709,13 @@ fn create_compatible_bitmap_raw(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        byte_count,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -49694,22 +49936,29 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
     } else {
         None
     };
-    let Some(bits_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
-    else {
+    let Some(bits_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        byte_count,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
         return 0;
     };
+    if let Some(bytes) = section_bytes.as_ref() {
+        if !write_guest_bytes(kernel, memory, thread_id, bits_ptr, bytes) {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+            return 0;
+        }
+    }
     if bits_out != 0 && !write_guest_u32(kernel, memory, thread_id, bits_out, bits_ptr) {
         let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
         return 0;
     }
     if let Some(bytes) = section_bytes.as_ref() {
-        try_seed_guest_bytes(memory, bits_ptr, bytes);
         let process_id = kernel.current_process_id();
         if let Ok(mapping) = kernel.handles.file_mapping_mut(section) {
             let start = offset as usize;
@@ -49998,11 +50247,13 @@ fn clone_bitmap_for_pattern_brush<M: CoredllGuestMemory>(
     let source = kernel.resources.bitmap(bitmap)?.clone();
     let bits_ptr = if source.bits_ptr != 0 {
         let bytes = read_bitmap_object_bytes(memory, &source)?;
-        let Some(bits_ptr) =
-            kernel
-                .memory
-                .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, bytes.len() as u32)
-        else {
+        let Some(bits_ptr) = allocate_guest_heap(
+            kernel,
+            memory,
+            PROCESS_HEAP_HANDLE,
+            HEAP_ZERO_MEMORY,
+            bytes.len() as u32,
+        ) else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -50612,7 +50863,13 @@ fn get_stock_object_raw(kernel: &mut CeKernel, thread_id: u32, index: u32) -> u3
     handle
 }
 
-fn select_object_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, object: u32) -> u32 {
+fn select_object_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hdc: u32,
+    object: u32,
+) -> u32 {
     if !is_valid_hdc(kernel, hdc) || object == 0 {
         kernel
             .threads
@@ -50638,7 +50895,7 @@ fn select_object_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, object: u3
         return status;
     }
     if object_kind == "bitmap"
-        && !ensure_bitmap_backing_for_memory_dc_select(kernel, thread_id, hdc, object)
+        && !ensure_bitmap_backing_for_memory_dc_select(kernel, memory, thread_id, hdc, object)
     {
         return 0;
     }
@@ -56361,11 +56618,13 @@ fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
         return 0;
     };
     let allocated_ptr = if dest_ptr == 0 {
-        let Some(allocated) =
-            kernel
-                .memory
-                .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, dest_storage_size)
-        else {
+        let Some(allocated) = allocate_guest_heap(
+            kernel,
+            memory,
+            PROCESS_HEAP_HANDLE,
+            HEAP_ZERO_MEMORY,
+            dest_storage_size,
+        ) else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -66909,6 +67168,124 @@ fn write_guest_message<M: CoredllGuestMemory>(
         && write_guest_i32(kernel, memory, thread_id, addr.wrapping_add(24), 0)
 }
 
+/// Encode a known host-owned message payload with the same writer used by
+/// GetMessage/PeekMessage. Unknown and mismatched guest pointers are untouched.
+pub(crate) fn message_pointer_payload_bytes(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    message: &Message,
+) -> Result<Option<Vec<u8>>> {
+    let known = match kernel.message_pointer_payload(message.lparam) {
+        Some(MessagePointerPayload::WindowPos(_)) => {
+            message.msg == crate::ce::gwe::WM_WINDOWPOSCHANGED
+        }
+        Some(MessagePointerPayload::ShellNotification(_)) => {
+            message.msg == crate::ce::gwe::WM_NOTIFY
+        }
+        Some(MessagePointerPayload::FileChangeNotification(_)) => message.msg == WM_FILECHANGEINFO,
+        Some(MessagePointerPayload::NotifyIcon(_)) => {
+            message.msg == crate::ce::gwe::WM_USER + 0x0bad
+        }
+        None => false,
+    };
+    if !known {
+        return Ok(None);
+    }
+    let allocation = kernel.memory.allocation(message.lparam).ok_or_else(|| {
+        Error::InvalidArgument("known message payload has no live allocation".to_owned())
+    })?;
+    let size = allocation.actual_size;
+    if kernel.memory.heap_size(allocation.heap, 0, message.lparam) != Some(size)
+        || message.lparam.checked_add(size).is_none()
+    {
+        return Err(Error::InvalidArgument(
+            "invalid message payload allocation".to_owned(),
+        ));
+    }
+    let mut memory = MessagePayloadMemory {
+        base: message.lparam,
+        allocation_size: size as usize,
+        bytes: Vec::new(),
+    };
+    // This is host preparation, not a guest API call: retain the receiver's
+    // last error even when a malformed payload fails the bounded writer.
+    let last_error = kernel.threads.get_last_error(thread_id);
+    let written = write_message_pointer_payload(kernel, &mut memory, thread_id, message);
+    kernel.threads.set_last_error(thread_id, last_error);
+    if !written {
+        return Err(Error::InvalidArgument(
+            "message payload exceeds its allocation".to_owned(),
+        ));
+    }
+    Ok(Some(memory.bytes))
+}
+
+struct MessagePayloadMemory {
+    base: u32,
+    allocation_size: usize,
+    bytes: Vec<u8>,
+}
+
+impl MessagePayloadMemory {
+    fn range(&self, addr: u32, len: usize) -> Result<std::ops::Range<usize>> {
+        let offset = addr.checked_sub(self.base).map(|offset| offset as usize);
+        let Some(start) = offset else {
+            return Err(Error::InvalidArgument(
+                "message payload address underflow".to_owned(),
+            ));
+        };
+        let end = start
+            .checked_add(len)
+            .filter(|end| *end <= self.allocation_size);
+        end.map(|end| start..end).ok_or_else(|| {
+            Error::InvalidArgument("message payload range exceeds allocation".to_owned())
+        })
+    }
+}
+
+impl CoredllGuestMemory for MessagePayloadMemory {
+    fn read_u8(&self, addr: u32) -> Result<u8> {
+        let mut byte = [0];
+        self.read_bytes(addr, &mut byte)?;
+        Ok(byte[0])
+    }
+    fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+        self.write_bytes(addr, &[value])
+    }
+    fn read_u32(&self, addr: u32) -> Result<u32> {
+        let mut bytes = [0; 4];
+        self.read_bytes(addr, &mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+    fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+        self.write_bytes(addr, &value.to_le_bytes())
+    }
+    fn read_u16(&self, addr: u32) -> Result<u16> {
+        let mut bytes = [0; 2];
+        self.read_bytes(addr, &mut bytes)?;
+        Ok(u16::from_le_bytes(bytes))
+    }
+    fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+        self.write_bytes(addr, &value.to_le_bytes())
+    }
+    fn read_bytes(&self, addr: u32, out: &mut [u8]) -> Result<()> {
+        let range = self.range(addr, out.len())?;
+        let bytes = self.bytes.get(range).ok_or_else(|| {
+            Error::InvalidArgument("message payload bytes are not initialized".to_owned())
+        })?;
+        out.copy_from_slice(bytes);
+        Ok(())
+    }
+    fn write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
+        let range = self.range(addr, bytes.len())?;
+        if self.bytes.len() < range.end {
+            self.bytes.resize(range.end, 0);
+        }
+        self.bytes[range].copy_from_slice(bytes);
+        Ok(())
+    }
+}
+
 fn write_message_pointer_payload<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -67143,6 +67520,9 @@ fn write_guest_notify_icon<M: CoredllGuestMemory>(
     addr: u32,
     notification: crate::ce::gwe::NotifyIconMessage,
 ) -> bool {
+    // CE6 dump: Shell_NotifyIcon (export 481), VA 0x4005dd48, loads
+    // A2=0x98. The SDK NOTIFYICONDATAW ends after WCHAR szTip[64].
+    // Do not write synthetic state fields beyond this 152-byte allocation.
     write_guest_u32(kernel, memory, thread_id, addr, NOTIFYICONDATA_FIXED_SIZE_W)
         && write_guest_u32(
             kernel,
@@ -67186,20 +67566,6 @@ fn write_guest_notify_icon<M: CoredllGuestMemory>(
             addr.wrapping_add(NOTIFYICONDATA_TIP_OFFSET),
             &notification.tip,
             NOTIFYICONDATA_TIP_CHARS,
-        )
-        && write_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            addr.wrapping_add(NOTIFYICONDATA_STATE_OFFSET),
-            notification.state,
-        )
-        && write_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            addr.wrapping_add(NOTIFYICONDATA_STATE_MASK_OFFSET),
-            notification.state_mask,
         )
 }
 

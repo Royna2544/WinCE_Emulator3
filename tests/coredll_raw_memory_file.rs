@@ -45,12 +45,12 @@ use wince_emulation_v3::{
             ORD_GET_SYSTEM_DEFAULT_LANG_ID, ORD_GET_SYSTEM_DEFAULT_LCID, ORD_GET_USER_DEFAULT_LCID,
             ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE,
             ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE, ORD_HEAP_VALIDATE,
-            ORD_HYPOT, ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE,
-            ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_CODE_PTR, ORD_IS_BAD_PTR,
-            ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE, ORD_IS_VALID_LOCALE,
-            ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LL_LSHIFT,
-            ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W, ORD_LOCAL_ALLOC,
-            ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
+            ORD_HYPOT, ORD_IMM_CREATE_IMCC, ORD_IMM_RE_SIZE_IMCC, ORD_INTERLOCKED_DECREMENT,
+            ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_CODE_PTR,
+            ORD_IS_BAD_PTR, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_IS_SYSTEM_FILE,
+            ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP,
+            ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOAD_IMAGE_W,
+            ORD_LOCAL_ALLOC, ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
             ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOCK_FILE_EX,
             ORD_LOG, ORD_LOG10, ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY,
             ORD_MEMMOVE, ORD_MEMSET, ORD_MOUNT_PARTITION, ORD_MOVE_FILE_W, ORD_MSIZE,
@@ -111,7 +111,298 @@ use wince_emulation_v3::{
 mod support;
 use support::{TestGuestMemory, unique_test_root};
 
+#[derive(Debug, Default)]
+struct FaultingHeapMemory {
+    inner: TestGuestMemory,
+    fail_read_range: Option<(u32, u32)>,
+    fail_write_range: Option<(u32, u32)>,
+    fail_heap_map: bool,
+    heap_maps: Vec<(u32, u32)>,
+}
+
+impl FaultingHeapMemory {
+    fn write_bytes(&mut self, addr: u32, bytes: &[u8]) {
+        self.inner.write_bytes(addr, bytes);
+    }
+
+    fn read_bytes(&self, addr: u32, len: usize) -> Vec<u8> {
+        self.inner.read_bytes(addr, len)
+    }
+
+    fn write_is_faulted(&self, addr: u32) -> bool {
+        self.fail_write_range
+            .is_some_and(|(start, end)| addr >= start && addr < end)
+    }
+
+    fn read_is_faulted(&self, addr: u32) -> bool {
+        self.fail_read_range
+            .is_some_and(|(start, end)| addr >= start && addr < end)
+    }
+}
+
+impl CoredllGuestMemory for FaultingHeapMemory {
+    fn read_u8(&self, addr: u32) -> Result<u8> {
+        if self.read_is_faulted(addr) {
+            return Err(wince_emulation_v3::Error::Backend(format!(
+                "injected heap read fault at 0x{addr:08x}"
+            )));
+        }
+        self.inner.read_u8(addr)
+    }
+
+    fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+        if self.write_is_faulted(addr) {
+            return Err(wince_emulation_v3::Error::Backend(format!(
+                "injected heap write fault at 0x{addr:08x}"
+            )));
+        }
+        self.inner.write_u8(addr, value)
+    }
+
+    fn read_u32(&self, addr: u32) -> Result<u32> {
+        if (0..4).any(|offset| self.read_is_faulted(addr + offset)) {
+            return Err(wince_emulation_v3::Error::Backend(
+                "injected heap word read fault".to_owned(),
+            ));
+        }
+        self.inner.read_u32(addr)
+    }
+
+    fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+        if (0..4).any(|offset| self.write_is_faulted(addr + offset)) {
+            return Err(wince_emulation_v3::Error::Backend(
+                "injected heap word write fault".to_owned(),
+            ));
+        }
+        self.inner.write_u32(addr, value)
+    }
+
+    fn read_u16(&self, addr: u32) -> Result<u16> {
+        self.inner.read_u16(addr)
+    }
+
+    fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+        if (0..2).any(|offset| self.write_is_faulted(addr + offset)) {
+            return Err(wince_emulation_v3::Error::Backend(
+                "injected heap halfword write fault".to_owned(),
+            ));
+        }
+        self.inner.write_u16(addr, value)
+    }
+
+    fn ensure_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
+        self.inner.ensure_mapped(addr, len)
+    }
+
+    fn ensure_heap_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
+        self.heap_maps.push((addr, len));
+        if self.fail_heap_map {
+            return Err(wince_emulation_v3::Error::Backend(
+                "injected heap mapping fault".to_owned(),
+            ));
+        }
+        self.inner.ensure_heap_mapped(addr, len)
+    }
+}
+
 const ERROR_PATH_NOT_FOUND: u32 = 3;
+
+fn allocation_return(dispatch: CoredllDispatch) -> u32 {
+    match dispatch {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr) | CoredllValue::U32(ptr),
+            ..
+        } => ptr,
+        other => panic!("unexpected allocation result: {other:?}"),
+    }
+}
+
+#[test]
+fn coredll_raw_initial_allocation_zeroes_predirtied_extent_and_aliases() -> Result<()> {
+    use wince_emulation_v3::ce::coredll_ordinals::{
+        ORD_CALLOC, ORD_HEAP_ALLOC_TRACE, ORD_LOCAL_ALLOC_TRACE,
+    };
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = FaultingHeapMemory::default();
+    let heap = kernel.memory.get_process_heap();
+    for (ordinal, args) in [
+        (ORD_HEAP_ALLOC, vec![heap, HEAP_ZERO_MEMORY, 31]),
+        (ORD_HEAP_ALLOC_TRACE, vec![heap, HEAP_ZERO_MEMORY, 31]),
+        (ORD_REMOTE_HEAP_ALLOC, vec![99, heap, HEAP_ZERO_MEMORY, 31]),
+        (ORD_LOCAL_ALLOC, vec![LMEM_ZEROINIT, 31]),
+        (ORD_LOCAL_ALLOC_TRACE, vec![LMEM_ZEROINIT, 31]),
+        (ORD_REMOTE_LOCAL_ALLOC, vec![99, LMEM_ZEROINIT, 31]),
+        (ORD_LOCAL_ALLOC_IN_PROCESS, vec![LMEM_ZEROINIT, 31, 99]),
+        (ORD_IMM_CREATE_IMCC, vec![31]),
+        (ORD_CALLOC, vec![1, 31]),
+    ] {
+        let candidate = kernel.memory.heap_high_water_mark();
+        memory.write_bytes(candidate, &[0xa5; 32]);
+        let ptr = allocation_return(table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            11,
+            ordinal,
+            args,
+        ));
+        assert_eq!(ptr, candidate, "ordinal {ordinal}");
+        assert_eq!(memory.read_bytes(ptr, 31), vec![0; 31], "ordinal {ordinal}");
+        assert_eq!(memory.read_bytes(ptr + 31, 1), vec![0xa5]);
+        assert_eq!(memory.heap_maps.last(), Some(&(ptr, 31)));
+    }
+    for (ordinal, args) in [
+        (ORD_HEAP_ALLOC, vec![heap, 0, 7]),
+        (ORD_LOCAL_ALLOC, vec![0, 7]),
+        (ORD_MALLOC, vec![7]),
+        (ORD_REALLOC, vec![0, 7]),
+    ] {
+        let ptr = kernel.memory.heap_high_water_mark();
+        memory.write_bytes(ptr, &[0x73; 8]);
+        assert_eq!(
+            allocation_return(table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                11,
+                ordinal,
+                args
+            )),
+            ptr
+        );
+        assert_eq!(memory.read_bytes(ptr, 8), vec![0x73; 8]);
+        assert_eq!(memory.heap_maps.last(), Some(&(ptr, 7)));
+    }
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_initial_allocation_zero_size_has_one_physical_zero_byte() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = FaultingHeapMemory::default();
+    let heap = kernel.memory.get_process_heap();
+    for (ordinal, args) in [
+        (ORD_HEAP_ALLOC, vec![heap, HEAP_ZERO_MEMORY, 0]),
+        (ORD_LOCAL_ALLOC, vec![LMEM_ZEROINIT, 0]),
+    ] {
+        let candidate = kernel.memory.heap_high_water_mark();
+        memory.write_bytes(candidate, &[0xa5, 0x6b]);
+        let ptr = allocation_return(table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            11,
+            ordinal,
+            args,
+        ));
+        assert_eq!(ptr, candidate);
+        assert_eq!(memory.read_bytes(ptr, 2), vec![0, 0x6b]);
+        let allocation = kernel.memory.allocation(ptr).unwrap();
+        assert_eq!(allocation.requested_size, 0);
+        assert_eq!(allocation.actual_size, 1);
+        assert_eq!(memory.heap_maps.last(), Some(&(ptr, 1)));
+    }
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_initial_allocation_map_and_zero_failures_publish_no_live_pointer() -> Result<()> {
+    use wince_emulation_v3::ce::coredll_ordinals::ORD_CALLOC;
+    let table = CoredllExportTable::default();
+    for fail_map in [true, false] {
+        for ordinal in [
+            ORD_HEAP_ALLOC,
+            ORD_LOCAL_ALLOC,
+            ORD_CALLOC,
+            ORD_IMM_CREATE_IMCC,
+        ] {
+            let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+            let mut memory = FaultingHeapMemory::default();
+            let heap = kernel.memory.get_process_heap();
+            let candidate = kernel.memory.heap_high_water_mark();
+            let generation = kernel.memory.heap_generation();
+            memory.write_bytes(candidate, &[0xa5; 32]);
+            memory.fail_heap_map = fail_map;
+            memory.fail_write_range = (!fail_map).then_some((candidate + 3, candidate + 4));
+            let args = match ordinal {
+                ORD_HEAP_ALLOC => vec![heap, HEAP_ZERO_MEMORY, 31],
+                ORD_LOCAL_ALLOC => vec![LMEM_ZEROINIT, 31],
+                ORD_CALLOC => vec![1, 31],
+                _ => vec![31],
+            };
+            assert_eq!(
+                allocation_return(table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    11,
+                    ordinal,
+                    args
+                )),
+                0
+            );
+            assert!(kernel.memory.allocation(candidate).is_none());
+            assert!(kernel.gwe.ime_component(candidate).is_none());
+            assert_eq!(kernel.memory.heap_generation(), generation);
+            assert_eq!(kernel.memory.heap_high_water_mark(), candidate + 32);
+            assert_eq!(
+                memory.read_bytes(candidate, 3),
+                if fail_map { vec![0xa5; 3] } else { vec![0; 3] }
+            );
+            memory.fail_heap_map = false;
+            memory.fail_write_range = None;
+            let fresh = candidate + 32;
+            memory.write_bytes(fresh, &[0xa5; 31]);
+            assert_eq!(
+                allocation_return(table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    11,
+                    ORD_LOCAL_ALLOC,
+                    [LMEM_ZEROINIT, 31]
+                )),
+                fresh
+            );
+            assert_eq!(memory.read_bytes(fresh, 31), vec![0; 31]);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_initial_allocation_header_and_cache_write_failures_stay_unpublished() -> Result<()> {
+    use wince_emulation_v3::ce::coredll_ordinals::{ORD_GET_COMMAND_LINE_W, ORD_GET_PROC_NAME};
+    let table = CoredllExportTable::default();
+    for (ordinal, args) in [
+        (ORD_DPA_CREATE, vec![4]),
+        (ORD_DSA_CREATE, vec![8, 4]),
+        (ORD_CE_GET_MODULE_HEAP_INFO, vec![]),
+        (ORD_GET_COMMAND_LINE_W, vec![]),
+        (ORD_GET_PROC_NAME, vec![]),
+    ] {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let mut memory = FaultingHeapMemory::default();
+        let candidate = kernel.memory.heap_high_water_mark();
+        memory.fail_write_range = Some((candidate, candidate + 4));
+        assert_eq!(
+            allocation_return(table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                11,
+                ordinal,
+                args
+            )),
+            0
+        );
+        assert!(
+            kernel.memory.allocation(candidate).is_none(),
+            "ordinal {ordinal}"
+        );
+        assert_eq!(kernel.module_heap_info_guest_ptr(), 0);
+        assert_eq!(kernel.command_line_guest_ptr(), 0);
+        assert_eq!(kernel.process_name_guest_ptr(), 0);
+        assert!(kernel.memory.heap_high_water_mark() > candidate);
+    }
+    Ok(())
+}
 const ERROR_DIRECTORY: u32 = 267;
 const ERROR_INVALID_FLAGS: u32 = 1004;
 
@@ -1030,6 +1321,379 @@ fn coredll_raw_realloc_allocates_copies_and_frees_process_heap_blocks() -> Resul
         }
     ));
     assert_eq!(kernel.memory.heap_size(process_heap, 0, grown), None);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_heap_and_local_realloc_copy_prefix_and_zero_only_growth_tail() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let heap = kernel.memory.get_process_heap();
+
+    let heap_source = kernel.memory.heap_alloc(heap, 0, 5).unwrap();
+    let heap_prefix = [0x11, 0x22, 0x33, 0x44, 0x55];
+    memory.write_bytes(heap_source, &heap_prefix);
+    let heap_destination = kernel.memory.heap_high_water_mark();
+    memory.fill(heap_destination, 0xa5, 16);
+
+    let heap_grown = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_RE_ALLOC,
+        [heap, HEAP_ZERO_MEMORY, heap_source, 13],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("HeapReAlloc did not return a pointer: {other:?}"),
+    };
+    assert_eq!(heap_grown, heap_destination);
+    assert_eq!(memory.read_bytes(heap_grown, 5), heap_prefix);
+    assert_eq!(memory.read_bytes(heap_grown + 5, 8), vec![0; 8]);
+    assert_eq!(memory.read_bytes(heap_grown + 13, 3), vec![0xa5; 3]);
+
+    let retained = (0..13u8).map(|value| value + 1).collect::<Vec<_>>();
+    memory.write_bytes(heap_grown, &retained);
+    let heap_shrunk = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_RE_ALLOC,
+        [heap, HEAP_ZERO_MEMORY, heap_grown, 7],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("HeapReAlloc shrink did not return a pointer: {other:?}"),
+    };
+    assert_eq!(heap_shrunk, heap_grown);
+    assert_eq!(memory.read_bytes(heap_shrunk, 13), retained);
+
+    let zero_sized = kernel.memory.heap_alloc(heap, 0, 0).unwrap();
+    memory.write_bytes(zero_sized, &[0xa7]);
+    let one_byte = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_RE_ALLOC,
+        [heap, HEAP_ZERO_MEMORY, zero_sized, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("HeapReAlloc zero-to-one growth did not return a pointer: {other:?}"),
+    };
+    assert_eq!(one_byte, zero_sized);
+    assert_eq!(memory.read_bytes(one_byte, 1), vec![0xa7]);
+
+    let two_bytes = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_RE_ALLOC,
+        [heap, HEAP_ZERO_MEMORY, one_byte, 2],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("HeapReAlloc one-to-two growth did not return a pointer: {other:?}"),
+    };
+    assert_eq!(memory.read_bytes(two_bytes, 2), vec![0xa7, 0]);
+
+    let local_source = kernel.memory.local_alloc(0, 6).unwrap();
+    let local_prefix = [0x61, 0x62, 0x63, 0x64, 0x65, 0x66];
+    memory.write_bytes(local_source, &local_prefix);
+    let local_destination = kernel.memory.heap_high_water_mark();
+    memory.fill(local_destination, 0x5a, 16);
+
+    let local_grown = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOCAL_RE_ALLOC,
+        [local_source, 14, LMEM_ZEROINIT],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("LocalReAlloc did not return a pointer: {other:?}"),
+    };
+    assert_eq!(local_grown, local_destination);
+    assert_eq!(memory.read_bytes(local_grown, 6), local_prefix);
+    assert_eq!(memory.read_bytes(local_grown + 6, 8), vec![0; 8]);
+    assert_eq!(memory.read_bytes(local_grown + 14, 2), vec![0x5a; 2]);
+
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum FaultingReallocCall {
+    Heap,
+    Local,
+    Crt,
+}
+
+fn assert_faulted_realloc_keeps_old_allocation(
+    call: FaultingReallocCall,
+    fail_map: bool,
+    fail_read: bool,
+    fail_write_offset: Option<u32>,
+    zero_tail: bool,
+) -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = FaultingHeapMemory::default();
+    let thread_id = 11;
+    let heap = kernel.memory.get_process_heap();
+    let source = kernel.memory.heap_alloc(heap, 0, 5).unwrap();
+    let source_bytes = [0xd1, 0xd2, 0xd3, 0xd4, 0xd5];
+    memory.write_bytes(source, &source_bytes);
+    let high_water_before = kernel.memory.heap_high_water_mark();
+    memory.fail_heap_map = fail_map;
+    memory.fail_read_range = fail_read.then_some((source, source + 1));
+    memory.fail_write_range = fail_write_offset.map(|offset| {
+        let start = high_water_before + offset;
+        (start, start + 1)
+    });
+
+    let dispatch = match call {
+        FaultingReallocCall::Heap => table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_HEAP_RE_ALLOC,
+            [
+                heap,
+                if zero_tail { HEAP_ZERO_MEMORY } else { 0 },
+                source,
+                32,
+            ],
+        ),
+        FaultingReallocCall::Local => table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCAL_RE_ALLOC,
+            [source, 32, if zero_tail { LMEM_ZEROINIT } else { 0 }],
+        ),
+        FaultingReallocCall::Crt => table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REALLOC,
+            [source, 32],
+        ),
+    };
+
+    assert!(matches!(
+        dispatch,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.memory.heap_size(heap, 0, source), Some(5));
+    assert_eq!(kernel.memory.allocation(high_water_before), None);
+    assert_eq!(kernel.memory.heap_high_water_mark(), high_water_before + 32);
+    assert_eq!(memory.read_bytes(source, source_bytes.len()), source_bytes);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_realloc_map_copy_and_zero_failures_keep_old_allocation() -> Result<()> {
+    assert_faulted_realloc_keeps_old_allocation(
+        FaultingReallocCall::Heap,
+        true,
+        false,
+        None,
+        false,
+    )?;
+    assert_faulted_realloc_keeps_old_allocation(
+        FaultingReallocCall::Heap,
+        false,
+        true,
+        None,
+        false,
+    )?;
+    assert_faulted_realloc_keeps_old_allocation(
+        FaultingReallocCall::Local,
+        false,
+        false,
+        Some(0),
+        false,
+    )?;
+    assert_faulted_realloc_keeps_old_allocation(
+        FaultingReallocCall::Heap,
+        false,
+        false,
+        Some(5),
+        true,
+    )?;
+    assert_faulted_realloc_keeps_old_allocation(
+        FaultingReallocCall::Crt,
+        false,
+        false,
+        Some(0),
+        false,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_failed_realloc_does_not_reuse_dirty_storage_for_zero_allocations() -> Result<()> {
+    let table = CoredllExportTable::default();
+    for fail_offset in [2, 5] {
+        for local_allocation in [false, true] {
+            let config = RuntimeConfig::load_default()?;
+            let mut kernel = CeKernel::boot(config);
+            let mut memory = FaultingHeapMemory::default();
+            // Model the initially zero-filled heap arena, not just absent-byte
+            // fallback in the test adapter. The failed destination stays dirty.
+            memory.inner.map_bytes(0x3000_0000, 0x1000);
+            let thread_id = 11;
+            let heap = kernel.memory.get_process_heap();
+            let source = kernel.memory.heap_alloc(heap, 0, 5).unwrap();
+            let source_bytes = [0xd1, 0xd2, 0xd3, 0xd4, 0xd5];
+            memory.write_bytes(source, &source_bytes);
+            let failed_destination = kernel.memory.heap_high_water_mark();
+            memory.fail_write_range = Some((
+                failed_destination + fail_offset,
+                failed_destination + fail_offset + 1,
+            ));
+
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_HEAP_RE_ALLOC,
+                    [heap, HEAP_ZERO_MEMORY, source, 32],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(0),
+                    ..
+                }
+            ));
+            assert_eq!(memory.read_bytes(failed_destination, 2), source_bytes[..2]);
+            assert_eq!(kernel.memory.heap_size(heap, 0, source), Some(5));
+            assert_eq!(memory.read_bytes(source, 5), source_bytes);
+            assert!(kernel.memory.allocation(failed_destination).is_none());
+
+            memory.fail_write_range = None;
+            let dispatch = if local_allocation {
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_LOCAL_ALLOC,
+                    [LMEM_ZEROINIT, 32],
+                )
+            } else {
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_HEAP_ALLOC,
+                    [heap, HEAP_ZERO_MEMORY, 32],
+                )
+            };
+            let fresh = match dispatch {
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(ptr),
+                    ..
+                } if ptr != 0 => ptr,
+                other => panic!("zero-initialized allocation failed: {other:?}"),
+            };
+            assert_eq!(fresh, failed_destination + 32);
+            let mut fresh_bytes = [0xff; 32];
+            CoredllGuestMemory::read_bytes(&memory, fresh, &mut fresh_bytes)?;
+            assert_eq!(fresh_bytes, [0; 32]);
+            assert_eq!(memory.read_bytes(failed_destination, 2), source_bytes[..2]);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_imm_resize_imcc_uses_transactional_reallocation() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = FaultingHeapMemory::default();
+    let thread_id = 11;
+
+    let source = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMM_CREATE_IMCC,
+        [5],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr != 0 => ptr,
+        other => panic!("ImmCreateIMCC did not return a pointer: {other:?}"),
+    };
+    let source_bytes = [0x41, 0x42, 0x43, 0x44, 0x45];
+    memory.write_bytes(source, &source_bytes);
+    let destination = kernel.memory.heap_high_water_mark();
+    memory.inner.fill(destination, 0xa5, 32);
+    memory.fail_read_range = Some((source, source + 1));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMM_RE_SIZE_IMCC,
+            [source, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.memory.heap_high_water_mark(), destination + 32);
+    assert_eq!(kernel.memory.allocation(source).unwrap().actual_size, 5);
+    assert_eq!(kernel.gwe.ime_component(source).unwrap().size, 5);
+    assert_eq!(memory.read_bytes(source, 5), source_bytes);
+
+    memory.fail_read_range = None;
+    let destination = kernel.memory.heap_high_water_mark();
+    memory.inner.fill(destination, 0xa5, 32);
+    let resized = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMM_RE_SIZE_IMCC,
+        [source, 32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr != 0 => ptr,
+        other => panic!("ImmReSizeIMCC did not return a pointer: {other:?}"),
+    };
+    assert_eq!(resized, destination);
+    assert_eq!(memory.read_bytes(resized, 5), source_bytes);
+    assert_eq!(memory.read_bytes(resized + 5, 27), vec![0; 27]);
+    assert!(kernel.gwe.ime_component(source).is_none());
+    assert_eq!(kernel.gwe.ime_component(resized).unwrap().size, 32);
     Ok(())
 }
 

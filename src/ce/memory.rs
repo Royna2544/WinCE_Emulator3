@@ -55,6 +55,21 @@ pub struct MemoryAllocation {
     pub zeroed: bool,
 }
 
+/// A monotonic address reservation, not yet a live guest allocation.
+/// Guest-backed callers must map and initialize its bytes before committing.
+/// Abort never reuses a destination that a failed memory write may have dirtied.
+#[derive(Debug)]
+#[must_use = "prepared allocations must be committed or aborted"]
+pub struct PreparedAllocation {
+    allocation: MemoryAllocation,
+}
+
+impl PreparedAllocation {
+    pub fn allocation(&self) -> &MemoryAllocation {
+        &self.allocation
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reallocation {
     pub ptr: u32,
@@ -62,6 +77,51 @@ pub struct Reallocation {
     pub old_actual_size: u32,
     pub new_actual_size: u32,
     pub moved: bool,
+}
+
+/// A heap reallocation whose destination address is reserved but whose
+/// allocation metadata has not been committed yet.
+///
+/// Guest-memory users must map and populate the destination successfully
+/// before calling [`MemorySystem::commit_reallocation`]. Dropping or aborting
+/// the token leaves the old allocation live. A moved destination remains an
+/// unused address hole: failed guest writes may have changed its bytes, so it
+/// is not reused; address reuse is deliberately outside this byte-effect boundary.
+#[derive(Debug)]
+#[must_use = "prepared reallocations must be committed or aborted"]
+pub struct PreparedReallocation {
+    result: Reallocation,
+    original_allocation: MemoryAllocation,
+    requested_size: u32,
+    zero_requested: bool,
+}
+
+impl PreparedReallocation {
+    pub fn result(&self) -> &Reallocation {
+        &self.result
+    }
+
+    pub fn copy_len(&self) -> u32 {
+        if self.result.moved {
+            self.result.old_actual_size.min(self.result.new_actual_size)
+        } else {
+            0
+        }
+    }
+
+    pub fn zero_range(&self) -> Option<(u32, u32)> {
+        let len = self
+            .result
+            .new_actual_size
+            .saturating_sub(self.result.old_actual_size);
+        if !self.zero_requested || len == 0 {
+            return None;
+        }
+        self.result
+            .ptr
+            .checked_add(self.result.old_actual_size)
+            .map(|start| (start, len))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +165,13 @@ impl MemorySystem {
         self.process_heap
     }
 
+    /// Metadata-only convenience; raw APIs must map/initialize before commit.
     pub fn local_alloc(&mut self, flags: u32, bytes: u32) -> Option<u32> {
+        let prepared = self.prepare_local_alloc(flags, bytes)?;
+        self.commit_allocation(prepared)
+    }
+
+    pub fn prepare_local_alloc(&mut self, flags: u32, bytes: u32) -> Option<PreparedAllocation> {
         if flags & !LMEM_VALID_FLAGS != 0 {
             return None;
         }
@@ -114,20 +180,34 @@ impl MemorySystem {
         } else {
             0
         };
-        self.heap_alloc(self.process_heap, heap_flags, bytes)
+        self.prepare_heap_alloc(self.process_heap, heap_flags, bytes)
     }
 
+    /// Metadata-only local reallocation; it does not copy or zero guest bytes.
     pub fn local_re_alloc(&mut self, ptr: u32, bytes: u32, flags: u32) -> Option<u32> {
         self.local_re_alloc_detail(ptr, bytes, flags)
             .map(|result| result.ptr)
     }
 
+    /// Metadata-only convenience for callers without guest-memory backing.
+    /// Raw guest APIs must use `prepare_local_re_alloc` and commit only after
+    /// their copy and zero-fill operations succeed.
     pub fn local_re_alloc_detail(
         &mut self,
         ptr: u32,
         bytes: u32,
         flags: u32,
     ) -> Option<Reallocation> {
+        let prepared = self.prepare_local_re_alloc(ptr, bytes, flags)?;
+        self.commit_reallocation(prepared)
+    }
+
+    pub fn prepare_local_re_alloc(
+        &mut self,
+        ptr: u32,
+        bytes: u32,
+        flags: u32,
+    ) -> Option<PreparedReallocation> {
         if flags & !(LMEM_VALID_FLAGS | LMEM_MODIFY) != 0 {
             return None;
         }
@@ -136,7 +216,7 @@ impl MemorySystem {
         } else {
             0
         };
-        self.heap_re_alloc_detail(self.process_heap, heap_flags, ptr, bytes)
+        self.prepare_heap_re_alloc(self.process_heap, heap_flags, ptr, bytes)
     }
 
     pub fn local_size(&self, ptr: u32) -> Option<u32> {
@@ -189,7 +269,18 @@ impl MemorySystem {
         true
     }
 
+    /// Metadata-only convenience; it does not map or zero guest bytes.
     pub fn heap_alloc(&mut self, heap: u32, flags: u32, bytes: u32) -> Option<u32> {
+        let prepared = self.prepare_heap_alloc(heap, flags, bytes)?;
+        self.commit_allocation(prepared)
+    }
+
+    pub fn prepare_heap_alloc(
+        &mut self,
+        heap: u32,
+        flags: u32,
+        bytes: u32,
+    ) -> Option<PreparedAllocation> {
         if flags & !(HEAP_GENERATE_EXCEPTIONS | HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY) != 0
             || !self.is_live_heap(heap)
         {
@@ -197,25 +288,40 @@ impl MemorySystem {
         }
         let actual_size = sanitize_size(bytes)?;
         let ptr = self.allocate_heap_ptr(actual_size)?;
-        self.allocations.insert(
-            ptr,
-            MemoryAllocation {
+        Some(PreparedAllocation {
+            allocation: MemoryAllocation {
                 ptr,
                 heap,
                 requested_size: bytes,
                 actual_size,
                 zeroed: flags & HEAP_ZERO_MEMORY != 0,
             },
-        );
+        })
+    }
+
+    pub fn commit_allocation(&mut self, prepared: PreparedAllocation) -> Option<u32> {
+        let allocation = prepared.allocation;
+        if !self.is_live_heap(allocation.heap) || self.allocations.contains_key(&allocation.ptr) {
+            return None;
+        }
+        let ptr = allocation.ptr;
+        self.allocations.insert(ptr, allocation);
         self.bump_heap_generation();
         Some(ptr)
     }
 
+    /// Discard uncommitted metadata, retaining its possibly dirtied address hole.
+    pub fn abort_allocation(&mut self, _prepared: PreparedAllocation) {}
+
+    /// Metadata-only heap reallocation; it does not copy or zero guest bytes.
     pub fn heap_re_alloc(&mut self, heap: u32, flags: u32, ptr: u32, bytes: u32) -> Option<u32> {
         self.heap_re_alloc_detail(heap, flags, ptr, bytes)
             .map(|result| result.ptr)
     }
 
+    /// Metadata-only convenience for callers without guest-memory backing.
+    /// Raw guest APIs must use `prepare_heap_re_alloc` and commit only after
+    /// their copy and zero-fill operations succeed.
     pub fn heap_re_alloc_detail(
         &mut self,
         heap: u32,
@@ -223,6 +329,17 @@ impl MemorySystem {
         ptr: u32,
         bytes: u32,
     ) -> Option<Reallocation> {
+        let prepared = self.prepare_heap_re_alloc(heap, flags, ptr, bytes)?;
+        self.commit_reallocation(prepared)
+    }
+
+    pub fn prepare_heap_re_alloc(
+        &mut self,
+        heap: u32,
+        flags: u32,
+        ptr: u32,
+        bytes: u32,
+    ) -> Option<PreparedReallocation> {
         if flags
             & !(HEAP_GENERATE_EXCEPTIONS
                 | HEAP_NO_SERIALIZE
@@ -240,43 +357,72 @@ impl MemorySystem {
         }
         let old_actual_size = allocation.actual_size;
         if actual_size <= allocation.actual_size {
-            let allocation = self.allocations.get_mut(&ptr)?;
-            allocation.requested_size = bytes;
-            allocation.actual_size = actual_size;
-            allocation.zeroed |= flags & HEAP_ZERO_MEMORY != 0;
-            self.bump_heap_generation();
-            return Some(Reallocation {
-                ptr,
-                old_ptr: ptr,
-                old_actual_size,
-                new_actual_size: actual_size,
-                moved: false,
+            return Some(PreparedReallocation {
+                result: Reallocation {
+                    ptr,
+                    old_ptr: ptr,
+                    old_actual_size,
+                    new_actual_size: actual_size,
+                    moved: false,
+                },
+                original_allocation: allocation,
+                requested_size: bytes,
+                zero_requested: flags & HEAP_ZERO_MEMORY != 0,
             });
         }
         if flags & HEAP_REALLOC_IN_PLACE_ONLY != 0 {
             return None;
         }
         let new_ptr = self.allocate_heap_ptr(actual_size)?;
-        self.allocations.remove(&ptr);
-        self.allocations.insert(
-            new_ptr,
-            MemoryAllocation {
+        Some(PreparedReallocation {
+            result: Reallocation {
                 ptr: new_ptr,
-                heap,
-                requested_size: bytes,
-                actual_size,
-                zeroed: allocation.zeroed || flags & HEAP_ZERO_MEMORY != 0,
+                old_ptr: ptr,
+                old_actual_size,
+                new_actual_size: actual_size,
+                moved: true,
             },
-        );
-        self.bump_heap_generation();
-        Some(Reallocation {
-            ptr: new_ptr,
-            old_ptr: ptr,
-            old_actual_size,
-            new_actual_size: actual_size,
-            moved: true,
+            original_allocation: allocation,
+            requested_size: bytes,
+            zero_requested: flags & HEAP_ZERO_MEMORY != 0,
         })
     }
+
+    pub fn commit_reallocation(&mut self, prepared: PreparedReallocation) -> Option<Reallocation> {
+        let old_ptr = prepared.result.old_ptr;
+        let destination_conflict =
+            prepared.result.moved && self.allocations.contains_key(&prepared.result.ptr);
+        if self.allocations.get(&old_ptr) != Some(&prepared.original_allocation)
+            || destination_conflict
+        {
+            return None;
+        }
+
+        let result = prepared.result.clone();
+        if result.moved {
+            self.allocations.remove(&old_ptr);
+            self.allocations.insert(
+                result.ptr,
+                MemoryAllocation {
+                    ptr: result.ptr,
+                    heap: prepared.original_allocation.heap,
+                    requested_size: prepared.requested_size,
+                    actual_size: result.new_actual_size,
+                    zeroed: prepared.original_allocation.zeroed || prepared.zero_requested,
+                },
+            );
+        } else {
+            let allocation = self.allocations.get_mut(&old_ptr)?;
+            allocation.requested_size = prepared.requested_size;
+            allocation.actual_size = result.new_actual_size;
+            allocation.zeroed |= prepared.zero_requested;
+        }
+        self.bump_heap_generation();
+        Some(result)
+    }
+
+    /// Discard uncommitted metadata without reusing a possibly written address.
+    pub fn abort_reallocation(&mut self, _prepared: PreparedReallocation) {}
 
     pub fn heap_free(&mut self, heap: u32, flags: u32, ptr: u32) -> bool {
         if flags & !HEAP_NO_SERIALIZE != 0 || ptr < POINTER_FLOOR || !self.is_live_heap(heap) {
@@ -489,6 +635,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prepared_allocation_is_not_live_until_commit_and_abort_keeps_hole() {
+        let mut memory = MemorySystem::default();
+        let generation = memory.heap_generation();
+        let prepared = memory.prepare_local_alloc(LMEM_ZEROINIT, 0).unwrap();
+        let ptr = prepared.allocation().ptr;
+        assert_eq!(prepared.allocation().actual_size, 1);
+        assert_eq!(prepared.allocation().requested_size, 0);
+        assert!(prepared.allocation().zeroed);
+        assert!(memory.allocation(ptr).is_none());
+        assert_eq!(memory.heap_generation(), generation);
+        memory.abort_allocation(prepared);
+        assert_eq!(memory.heap_high_water_mark(), ptr + HEAP_ALIGN);
+        let prepared = memory
+            .prepare_heap_alloc(PROCESS_HEAP_HANDLE, 0, 9)
+            .unwrap();
+        let next = prepared.allocation().ptr;
+        assert_eq!(next, ptr + HEAP_ALIGN);
+        assert_eq!(memory.commit_allocation(prepared), Some(next));
+        assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, next), Some(9));
+        assert_eq!(memory.heap_generation(), generation + 1);
+    }
+
+    #[test]
+    fn prepared_allocation_commit_rejects_destroyed_heap_without_reuse() {
+        let mut memory = MemorySystem::default();
+        let heap = memory.heap_create(0, 0, 0).unwrap();
+        let prepared = memory
+            .prepare_heap_alloc(heap, HEAP_ZERO_MEMORY, 32)
+            .unwrap();
+        let ptr = prepared.allocation().ptr;
+        assert!(memory.heap_destroy(heap));
+        assert!(memory.commit_allocation(prepared).is_none());
+        assert!(memory.allocation(ptr).is_none());
+        assert_eq!(memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 1), Some(ptr + 32));
+    }
+
+    #[test]
     fn local_alloc_size_and_free_follow_ce_return_shape() {
         let mut memory = MemorySystem::default();
         let ptr = memory.local_alloc(LMEM_ZEROINIT, 0).unwrap();
@@ -534,6 +717,50 @@ mod tests {
         );
         assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, first), None);
         assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, second), Some(16));
+    }
+
+    #[test]
+    fn aborted_moved_reallocation_retains_its_reserved_address_hole() {
+        let mut memory = MemorySystem::default();
+        let source = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 5).unwrap();
+        let original = memory.allocation(source).unwrap().clone();
+        let prepared = memory
+            .prepare_heap_re_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, source, 32)
+            .unwrap();
+        let destination = prepared.result().ptr;
+        let reserved_end = memory.heap_high_water_mark();
+
+        memory.abort_reallocation(prepared);
+
+        assert_eq!(memory.allocation(source), Some(&original));
+        assert!(memory.allocation(destination).is_none());
+        assert_eq!(memory.heap_high_water_mark(), reserved_end);
+        assert_eq!(
+            memory.heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, 32),
+            Some(reserved_end)
+        );
+    }
+
+    #[test]
+    fn conflicting_moved_reallocation_does_not_reuse_reserved_destination() {
+        let mut memory = MemorySystem::default();
+        let source = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 5).unwrap();
+        let prepared = memory
+            .prepare_heap_re_alloc(PROCESS_HEAP_HANDLE, 0, source, 32)
+            .unwrap();
+        let destination = prepared.result().ptr;
+        let reserved_end = memory.heap_high_water_mark();
+        assert!(memory.heap_free(PROCESS_HEAP_HANDLE, 0, source));
+
+        assert!(memory.commit_reallocation(prepared).is_none());
+
+        assert!(memory.allocation(source).is_none());
+        assert!(memory.allocation(destination).is_none());
+        assert_eq!(memory.heap_high_water_mark(), reserved_end);
+        assert_eq!(
+            memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 32),
+            Some(reserved_end)
+        );
     }
 
     #[test]

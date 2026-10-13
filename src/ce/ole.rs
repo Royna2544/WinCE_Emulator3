@@ -1,6 +1,6 @@
 use crate::ce::{
     com::E_POINTER,
-    coredll::CoredllGuestMemory,
+    coredll::{CoredllGuestMemory, allocate_guest_heap},
     kernel::CeKernel,
     memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
     thread::{ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY, ERROR_SUCCESS},
@@ -36,11 +36,13 @@ pub fn string_from_clsid_raw<M: CoredllGuestMemory>(
 
     let string = format_guid(&clsid);
     let wide = wide_nul_bytes(&string);
-    let Some(buffer_ptr) =
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, wide.len() as u32)
-    else {
+    let Some(buffer_ptr) = allocate_guest_heap(
+        kernel,
+        memory,
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        wide.len() as u32,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);

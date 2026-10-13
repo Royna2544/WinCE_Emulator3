@@ -1,5 +1,8 @@
 use crate::ce::{
-    coredll::{CoredllGuestMemory, read_guest_bytes, write_guest_bytes, write_guest_u16},
+    coredll::{
+        CoredllGuestMemory, allocate_guest_heap, apply_prepared_reallocation, read_guest_bytes,
+        write_guest_bytes, write_guest_u16,
+    },
     file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_ALWAYS, OPEN_EXISTING},
     kernel::CeKernel,
     thread::{ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER},
@@ -187,7 +190,7 @@ pub(crate) fn wcsdup_raw<M: CoredllGuestMemory>(
         .ok()
         .and_then(|chars| chars.checked_mul(2))
         .unwrap_or(0);
-    let ptr = malloc_raw(kernel, thread_id, bytes);
+    let ptr = malloc_raw(kernel, memory, thread_id, bytes);
     if ptr == 0 {
         return 0;
     }
@@ -516,11 +519,14 @@ fn fold_ascii_wide(unit: u16) -> u16 {
     }
 }
 
-pub(crate) fn malloc_raw(kernel: &mut CeKernel, thread_id: u32, bytes: u32) -> u32 {
-    match kernel
-        .memory
-        .heap_alloc(kernel.memory.get_process_heap(), 0, bytes)
-    {
+pub(crate) fn malloc_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    bytes: u32,
+) -> u32 {
+    let heap = kernel.memory.get_process_heap();
+    match allocate_guest_heap(kernel, memory, heap, 0, bytes) {
         Some(ptr) => ptr,
         None => {
             kernel
@@ -554,32 +560,20 @@ pub(crate) fn realloc_raw<M: CoredllGuestMemory>(
     bytes: u32,
 ) -> u32 {
     if ptr == 0 {
-        return malloc_raw(kernel, thread_id, bytes);
+        return malloc_raw(kernel, memory, thread_id, bytes);
     }
     if bytes == 0 {
         free_raw(kernel, ptr);
         return 0;
     }
-    match kernel
-        .memory
-        .heap_re_alloc_detail(kernel.memory.get_process_heap(), 0, ptr, bytes)
-    {
-        Some(result) => {
-            if result.moved {
-                let copy_len = result.old_actual_size.min(result.new_actual_size);
-                if copy_len != 0 {
-                    let Some(old_bytes) =
-                        read_guest_bytes(kernel, memory, thread_id, result.old_ptr, copy_len)
-                    else {
-                        return 0;
-                    };
-                    if !write_guest_bytes(kernel, memory, thread_id, result.ptr, &old_bytes) {
-                        return 0;
-                    }
-                }
+    let heap = kernel.memory.get_process_heap();
+    match kernel.memory.prepare_heap_re_alloc(heap, 0, ptr, bytes) {
+        Some(prepared) => {
+            let result = apply_prepared_reallocation(kernel, memory, thread_id, prepared);
+            if result != 0 {
+                kernel.threads.set_last_error(thread_id, 0);
             }
-            kernel.threads.set_last_error(thread_id, 0);
-            result.ptr
+            result
         }
         None => {
             kernel
@@ -2432,11 +2426,19 @@ pub(crate) fn strdup_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let len = strlen_raw(memory, s);
-    let ptr = malloc_raw(kernel, thread_id, len.wrapping_add(1));
+    let ptr = malloc_raw(kernel, memory, thread_id, len.wrapping_add(1));
     if ptr == 0 {
         return 0;
     }
-    strcpy_raw(kernel, memory, thread_id, ptr, s)
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, s, len.wrapping_add(1)) else {
+        free_raw(kernel, ptr);
+        return 0;
+    };
+    if !write_guest_bytes(kernel, memory, thread_id, ptr, &bytes) {
+        free_raw(kernel, ptr);
+        return 0;
+    }
+    ptr
 }
 
 pub(crate) fn stricmp_raw<M: CoredllGuestMemory>(memory: &M, a: u32, b: u32) -> i32 {
@@ -3616,11 +3618,22 @@ pub(crate) fn calloc_raw<M: CoredllGuestMemory>(
     if total == 0 {
         return 0;
     }
-    let ptr = malloc_raw(kernel, thread_id, total);
-    if ptr != 0 {
-        let _ = memory.fill_bytes(ptr, 0, total);
+    let heap = kernel.memory.get_process_heap();
+    match allocate_guest_heap(
+        kernel,
+        memory,
+        heap,
+        crate::ce::memory::HEAP_ZERO_MEMORY,
+        total,
+    ) {
+        Some(ptr) => ptr,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
     }
-    ptr
 }
 
 // ---- parse helpers ----

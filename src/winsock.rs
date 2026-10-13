@@ -1,5 +1,9 @@
 use crate::{
-    ce::{coredll::CoredllGuestMemory, kernel::CeKernel, memory::PROCESS_HEAP_HANDLE},
+    ce::{
+        coredll::{CoredllGuestMemory, allocate_guest_heap},
+        kernel::CeKernel,
+        memory::PROCESS_HEAP_HANDLE,
+    },
     error::Result,
 };
 
@@ -1668,23 +1672,37 @@ fn write_hostent<M: CoredllGuestMemory>(
     name: &str,
     addr: Ipv4Addr,
 ) -> Option<u32> {
-    let name_ptr = alloc_guest(kernel, name.len() as u32 + 1)?;
-    memory.write_bytes(name_ptr, name.as_bytes()).ok()?;
-    memory.write_u8(name_ptr + name.len() as u32, 0).ok()?;
-    let aliases_ptr = alloc_guest(kernel, 4)?;
-    memory.write_u32(aliases_ptr, 0).ok()?;
-    let addr_ptr = alloc_guest(kernel, 4)?;
-    memory.write_bytes(addr_ptr, &addr.octets()).ok()?;
-    let addr_list_ptr = alloc_guest(kernel, 8)?;
-    memory.write_u32(addr_list_ptr, addr_ptr).ok()?;
-    memory.write_u32(addr_list_ptr + 4, 0).ok()?;
-    let hostent_ptr = alloc_guest(kernel, 16)?;
-    memory.write_u32(hostent_ptr, name_ptr).ok()?;
-    memory.write_u32(hostent_ptr + 4, aliases_ptr).ok()?;
-    memory.write_u16(hostent_ptr + 8, AF_INET as u16).ok()?;
-    memory.write_u16(hostent_ptr + 10, 4).ok()?;
-    memory.write_u32(hostent_ptr + 12, addr_list_ptr).ok()?;
-    Some(hostent_ptr)
+    let mut candidates = Vec::new();
+    let result = (|| {
+        let name_ptr = alloc_guest(kernel, memory, name.len() as u32 + 1)?;
+        candidates.push(name_ptr);
+        memory.write_bytes(name_ptr, name.as_bytes()).ok()?;
+        memory.write_u8(name_ptr + name.len() as u32, 0).ok()?;
+        let aliases_ptr = alloc_guest(kernel, memory, 4)?;
+        candidates.push(aliases_ptr);
+        memory.write_u32(aliases_ptr, 0).ok()?;
+        let addr_ptr = alloc_guest(kernel, memory, 4)?;
+        candidates.push(addr_ptr);
+        memory.write_bytes(addr_ptr, &addr.octets()).ok()?;
+        let addr_list_ptr = alloc_guest(kernel, memory, 8)?;
+        candidates.push(addr_list_ptr);
+        memory.write_u32(addr_list_ptr, addr_ptr).ok()?;
+        memory.write_u32(addr_list_ptr + 4, 0).ok()?;
+        let hostent_ptr = alloc_guest(kernel, memory, 16)?;
+        candidates.push(hostent_ptr);
+        memory.write_u32(hostent_ptr, name_ptr).ok()?;
+        memory.write_u32(hostent_ptr + 4, aliases_ptr).ok()?;
+        memory.write_u16(hostent_ptr + 8, AF_INET as u16).ok()?;
+        memory.write_u16(hostent_ptr + 10, 4).ok()?;
+        memory.write_u32(hostent_ptr + 12, addr_list_ptr).ok()?;
+        Some(hostent_ptr)
+    })();
+    if result.is_none() {
+        for ptr in candidates {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+        }
+    }
+    result
 }
 
 fn guest_to_host_addr(addr: SocketAddrV4) -> SocketAddr {
@@ -1718,15 +1736,23 @@ fn write_heap_c_string<M: CoredllGuestMemory>(
     thread_id: u32,
     text: &str,
 ) -> Option<u32> {
-    let ptr = alloc_guest(kernel, text.len() as u32 + 1)?;
-    memory.write_bytes(ptr, text.as_bytes()).ok()?;
-    memory.write_u8(ptr + text.len() as u32, 0).ok()?;
+    let ptr = alloc_guest(kernel, memory, text.len() as u32 + 1)?;
+    if memory.write_bytes(ptr, text.as_bytes()).is_err()
+        || memory.write_u8(ptr + text.len() as u32, 0).is_err()
+    {
+        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+        return None;
+    }
     set_wsa_error(kernel, thread_id, 0);
     Some(ptr)
 }
 
-fn alloc_guest(kernel: &mut CeKernel, bytes: u32) -> Option<u32> {
-    kernel.memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, bytes)
+fn alloc_guest<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    bytes: u32,
+) -> Option<u32> {
+    allocate_guest_heap(kernel, memory, PROCESS_HEAP_HANDLE, 0, bytes)
 }
 
 fn read_guest_c_string<M: CoredllGuestMemory>(
