@@ -739,9 +739,34 @@ public remote Ex operation, Stage 2 or application acceptance is claimed.
 Post-suite independent review found a legacy ownership escape on this E-23
 snapshot: cross-owner `VirtualFree` can erase a parent's `FileViewLegacy`
 metadata, and base-only `UnmapViewOfFile` can commit/remove that parent's
-view. The green suites did not cover those cases. A corrective owner guard
-and focused cross-process controls are required before treating E-23 as a
-safe completed boundary; the raw validation above remains historical.
+view. The green suites did not cover those cases. E-24 below corrected the
+foreign mutation paths; the E-23 snapshot and validation remain historical.
+
+## E-24 owner-qualified file-view mutation (2026-10-14, corrected)
+
+On tested source `59f7923b9e3b508705838b8da8f28a5f7aa3b14e`, every
+`VirtualFree`/decommit requires its exact `(ProcessBirthKey, base)` owner.
+`UnmapViewOfFile` requires current-owner `FileViewLegacy` metadata before
+committing/removing a view. The shared commit path used by Flush/Unmap
+rejects a foreign process ID or foreign birth key before guest-byte read or
+mapping mutation; legacy nonprivate read/query visibility remains global.
+An independent review and the new public regression confirm that child
+Free, Flush and Unmap all fail without changing the parent's view, metadata
+or bytes, while parent Flush and Unmap succeed. Three focused release
+controls passed; see local
+`evidence/stage2-e24-owner-fileview-20261013/focused-owner-fileview.md`.
+
+The same source passed the full release suite **1,650/0/5 ignored** and
+no-feature suite **1,251/0/2 ignored**. Explicit ignored E-18/E-20 reruns
+still failed at their intended stale private byte (`0x11223344` versus
+`0x11223345`) and child same-VA `VirtualAlloc` (`Handle(0)`) assertions.
+Exact commands and log hashes are in local
+`evidence/stage2-e24-owner-fileview-20261013/post-e24-validation.receipt.md`.
+A same-PID DIB section view without `VirtualAllocation` metadata can still
+Flush through the same-PID commit path but is conservatively refused by
+Unmap. Native VA backing remains global, and no fresh-default, memory
+improvement, Stage 2 or app/map acceptance is claimed; the E-22 live run
+predates this source.
 
 ## Chat-project validation notes (not in this repository)
 

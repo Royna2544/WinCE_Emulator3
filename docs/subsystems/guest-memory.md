@@ -57,6 +57,21 @@ passed on source `4a1a9bfb9898a9f2a251212d6120794970266692`
 E-18 and E-20 gates still failed at their stale-byte and child-same-VA
 assertions. No slab backing or fresh-default owner policy was introduced.
 
+### E-24 file-view mutation guard (2026-10-14)
+
+E-23's green suites missed foreign mutation of legacy file views. E-24 now
+requires the exact birth key for every `VirtualFree`/decommit and an owned
+`FileViewLegacy` allocation before Unmap. The shared Flush/Unmap commit path
+checks the view's process ID and any VA record's birth key before reading
+guest bytes or changing mapping data. Child Free/Flush/Unmap rejection and
+parent Flush/Unmap success have a public regression; three focused controls
+passed. Full release passed 1,650/0/5 ignored and no-feature 1,251/0/2
+ignored on source `59f7923b9e3b508705838b8da8f28a5f7aa3b14e`
+([ledger E-24](../evidence/ledger.md)). E-18/E-20 explicitly remain red.
+Legacy nonprivate read/query visibility remains, and a same-PID DIB view
+without VA metadata may Flush but is conservatively refused by Unmap. Native
+VA-only backing and the fresh-owner byte gap are unchanged.
+
 ## Target authority and permitted interfaces
 
 - `CeMachine` owns mutation sequencing; each `AddressSpace` owns its process's
