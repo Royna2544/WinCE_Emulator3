@@ -28,7 +28,10 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
   and visibility changes on splash window `0x00020008`; record the any/all
   mode and event generation of the apparently signaled TID 10 wait. Static
   service counters, a busy host CPU, and the hidden map-window hierarchy are
-  leads, not a proven cause ([E-29 receipt](evidence/e22-live-20261013T211230Z/analysis.receipt.md)).
+  leads, not a proven cause ([E-29 receipt](evidence/e22-live-20261013T211230Z/analysis.receipt.md),
+  [post-120 trace design](docs/evidence/e29-post120-native-attempt-trace-design.md)).
+  The latter is design only; wait id 833 needs a separate boot-forward trace
+  because registration may precede the post-120 capture window.
 - **Stage 2, now, in this repo** (source map:
   `docs/subsystems/cpu-engine.md`, "Stage 2 source map"):
   0. D-007's in-repo Unicorn dependency patch is present. The post-order
@@ -144,6 +147,19 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      and a retry returns `NoAttempt` before another native entry
      ([red](evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md),
      [green](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
+     Two further executed reds narrowed wait ownership: a host-wall debug
+     marker could delete the Kernel's wait on a failed native query adapter;
+     a private entered-attempt error could retain the Kernel wait while losing
+     its CPU record. The typed-success cleanup and handles-only salvage passed
+     four focused real-MIPS controls on their source
+     ([focused receipt](evidence/e28-run-outcome-20261014/typed-stop-and-private-wait-green.receipt.md)).
+     A separate private-page pre-entry fence red returned `NoAttempt` with
+     the Kernel wait intact but CPU wait lost
+     ([red receipt](evidence/e28-run-outcome-20261014/private-preentry-wait-salvage-expected-red.receipt.md),
+     [repair design](docs/evidence/e28-preentry-handle-salvage-design.md)).
+     Validate its two-phase handle-restoration source before treating that
+     specific setup loss as repaired. The report remains observational and
+     the app still discards it.
      Finish the other fallible context/PC/byte-view/lease-tail and
      partial-effect paths, then
      migrate live/monitor consumers with explicit owner/frame validation

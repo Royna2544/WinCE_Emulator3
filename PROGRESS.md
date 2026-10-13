@@ -353,6 +353,25 @@ references for historical reconstruction.
   The failed attempt's partial guest effects remain evidence, not rollback.
   E-29 used a pre-fix executable, so it cannot validate this correction;
   full O-P1, Stage 2 and S3-A remain open.
+- A later E-28 real-MIPS error control exposed a separate stale-wait boundary:
+  after a real host-budget stop, a test-only Rust `RESOURCE` substitution
+  following the actual C `COUNT_STOP=0` query made the attempt fail, but a
+  retained host-wall debug marker still caused the old cleanup to delete a
+  registered Kernel wait. Cleanup is now gated on the finalized successful
+  `HookStop(_)`/`NativeDeadline` after checked native teardown, not that
+  marker. A second private-error red found the Kernel wait intact while the
+  CPU's transferred wait record was lost; private entered-attempt failure
+  exits now restore the transient handles. The focused release source passed
+  four real-MIPS controls, **4/0**, for ordinary/private error preservation
+  and successful-stop cleanup
+  ([reds](evidence/e28-run-outcome-20261014/typed-stop-wait-cleanup-expected-red.receipt.md),
+  [private red](evidence/e28-run-outcome-20261014/private-wait-error-salvage-expected-red.receipt.md),
+  [focused green](evidence/e28-run-outcome-20261014/typed-stop-and-private-wait-green.receipt.md)).
+  This does not establish a failing C `uc_query` or a full-suite result on
+  that source. A further [pre-entry expected red](evidence/e28-run-outcome-20261014/private-preentry-wait-salvage-expected-red.receipt.md)
+  showed a private-page fence error returning `NoAttempt` after dropping the
+  CPU wait but retaining Kernel's. Its source repair and broader validation
+  are a separate gate; O-P1, Stage 2, S3-A and map readiness stay open.
 - E-29 ran the then-current, pre-retry-fix D: release executable
   (`8A8B9C7E…57AFB3E094A`)
   against the three original ZIP-backed read/write mounts. It exited 0 at
@@ -1135,9 +1154,12 @@ only slow when their body is.
 - The former no-hook crash at handle-like `pc=0x00001054` no longer reproduces
   after blocked scheduler contexts were removed from direct receiver-work
   eligibility. Debug handle output identifies `0x1054` as an event handle.
-- Host wall-clock slice stops now purge stale blocked-wait and parked
-  `GetMessage` records for the thread that just executed, avoiding impossible
-  active-and-blocked thread snapshots at `THREAD_EXIT_STUB_ADDR`.
+- On a successfully finalized `HookStop(_)`/`NativeDeadline` without a
+  requested-PC stop, slice maintenance purges stale blocked-wait and parked
+  `GetMessage` records for the executed thread. Failed attempts retain waits
+  for diagnosis; a saved GetMessage wait must still be live in Kernel before
+  the host idle-poll gate can use it. These narrow controls do not prove every
+  wait/callback interleaving or full O-P1 closure.
 - Host live-pump idle polling no longer forces short 100 ms CPU slices while an
   active guest context is runnable.
 - Current live runs reach real iNavi splash/resource state, hidden map child

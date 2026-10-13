@@ -447,9 +447,14 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   current startup path after blocked scheduler contexts were excluded from
   direct receiver-work eligibility.
 - Stale blocked-wait records for the thread that just executed are cleaned up
-  at host wall-clock slice stops.
-- Stale parked `GetMessage` waiters no longer force short host idle-poll slices
-  while active guest CPU work is runnable.
+  only after a successfully finalized `HookStop(_)`/`NativeDeadline` without
+  a requested-PC stop. An E-28 red proved that using the host-wall debug
+  marker before checked teardown could wrongly delete a wait on native error;
+  the focused ordinary/private controls now pass, but other fallible tails
+  remain open (ledger E-28).
+- A saved parked `GetMessage` waiter must still exist in Kernel before it can
+  trigger host idle polling. This guards the tested stale-ID case; it does not
+  prove every live-pump pacing or callback interleaving.
 - Remote touch/key input reaches the real iNavi window stack after the
   scheduler handoff fix. Current COM7 consumption is proven by successful
   ReadFile payload/transferred-byte records, not host queue emptiness alone.
