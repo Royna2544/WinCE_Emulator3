@@ -62,7 +62,8 @@ not decide whether the task is runnable.
 
 Names below are proposed contracts, not newly implemented APIs.
 
-- `ProcessIdentity`: public PID plus checked creation incarnation.
+- `ProcessIdentity`: machine/checkpoint lineage, public PID and checked
+  creation incarnation. Reusing a numeric PID cannot reuse a birth key.
 - `TaskIdentity`: immutable creation ProcessIdentity, public TID and checked
   task incarnation. Creation owner is not whichever process is selected later.
 - `FrameIdentity`: TaskIdentity plus monotonically checked frame generation.

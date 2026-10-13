@@ -60,6 +60,12 @@ frame and outcome ownership. A fixture's event signal is not live input-delivery
 proof. Full task-context transfer waits for Stage 3 canonical identity and
 Stage 4 continuation ownership.
 
+D-008 permits a narrow private-slab E-18 diagnostic before public owner/clone
+acceptance; it does not move the Stage 2 finish line or enable O-P4 fresh
+default. Fresh default before private/shared outgoing bytes are coherent would
+reproduce the observed E-18 stale read. The full process birth authority needed
+for public two-process VM is then extended, not recreated, in Stage 3.
+
 ### Parallel lanes (never gate a stage)
 
 - Native arena lane: continue diagnostic-only work on the translation arena and

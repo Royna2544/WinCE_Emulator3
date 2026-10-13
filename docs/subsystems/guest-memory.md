@@ -265,7 +265,10 @@ that use and its failures before matching CE behavior in the emulator.
   backing pin. Acquire a non-moving pin before `mem_map_ptr`, install the
   in-slice ledger entry before guest entry, and keep a local pin after map
   success until checked unmap or owner close even if metadata commit fails.
-  Every early return/Drop closes the owner before its final pin drops. Host
+  Every early return takes a checked close path before its final pin drops;
+  Drop is only a fail-safe and cannot publish success. If closure cannot be
+  established, retain/quarantine the pin and latch a terminal backend error
+  instead of freeing host memory. Host
   bytes need audited interior mutability and access guards; no live Rust byte
   slice or mutable reference may cross `emu_start`. A VA-only `virtual_pages`
   set or a source `Vec` pointer is not evidence of identity. Only the VM may
@@ -319,6 +322,15 @@ that use and its failures before matching CE behavior in the emulator.
   another full-RAM staging image.
 
 ### Connected migration and executable gates
+
+An optional narrow first slab slice may make internal single-address-space
+E-18 green before public per-process VM is complete. It must carry checked VM
+owner/allocation incarnations, exact native pins and error paths, remove the
+private reseed path it replaces, and reject checkpoint clone of slab-backed
+state explicitly until machine-level relineage exists. This is a diagnostic
+milestone only: it cannot enable public same-VA/Ex semantics, fresh-default
+ownership or Stage 2 acceptance. A clean unsupported error is safer than a
+derived clone sharing mutable slab bytes.
 
 1. Confirm the dumped target's allocation/API sequence against the local CE6
    source distinction above. Introduce the one canonical HandleTable-owned
