@@ -698,7 +698,7 @@ remain in place. Bounded survival does not close E-18, E-20, Stage 2 or
 splash-to-map acceptance.
 
 Memory, from the same run's `memory.jsonl` (two-second host samples, PID
-43456; added by the supervisor pass at 01:05):
+43456):
 - Working set was 888 MiB at 41 s, 1,009 MiB at 60 s and 1,519 MiB at
   328.6 s.
 - Sampled peaks were 1,543.9 MiB working set and 1,554.4 MiB private bytes.
