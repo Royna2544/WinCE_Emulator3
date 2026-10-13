@@ -559,15 +559,25 @@ stop failure. Focused raw logs SHA-256 were `63166691…E918`,
 On frozen `types.rs` SHA-256 `00856084…80521` and `unicorn.rs` SHA-256
 `6560E1E3…A0F2`, the full release suite passed **1,634 passed, 0 failed,
 4 ignored** (raw log SHA-256 `B56F3E54…CE30`). The fourth ignored control is
-E-18's private-byte expected red, not a pass. Alternate feature/no-feature
-validation and a final run receipt are pending separately. E-16's injected
-same-VA green and E-18's private-byte red remain separate; this O-P1 slice
-does not change production fresh-owner policy or close Stage 2.
+E-18's private-byte expected red, not a pass. Unicorn-only and
+Unicorn+desktop/no-trace release checks exited 0 (raw log SHA-256
+`8458A187…3943` / `FCF30D1A…BC61`); the no-feature suite passed
+**1,239 passed, 0 failed, 1 ignored** (log `3A25F566…07C1`). An explicit
+rerun of E-18 on this source still exited 101 at the intended stale-byte
+assertion (`0x11223345` written, `0x11223344` read; raw log SHA-256
+`70AE4B88…206A`). That deliberate ignored-test run is not a normal-suite
+failure. All logs are local in `evidence/op1-global-code-hook-20261013/`;
+exact commands, full source/log hashes and limits are in
+`evidence/op1-global-code-hook-20261013/post-global-stop-validation.receipt.md`
+(receipt SHA-256 `C9EE9661…5FB3`). E-16's injected same-VA green and E-18's
+private-byte red remain separate; this O-P1 slice does not change production
+fresh-owner policy or close Stage 2.
 
 The hookless/sparse remote and ready-peer paths, native count-exhaustion
 witness, typed restart-PC repair, O-P4/O-M1 and bounded live-app gates remain
-open. First observed remote or budget condition wins when both occur before
-the safe stop; the type is not a post-hoc inference from elapsed time.
+open. The first reason observed by this hook wins when both arise before
+the safe stop; the type is not a post-hoc inference from elapsed time or
+proof of which real-world condition happened first.
 
 ## Chat-project validation notes (not in this repository)
 

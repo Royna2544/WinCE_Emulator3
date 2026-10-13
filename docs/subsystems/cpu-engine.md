@@ -119,7 +119,7 @@ Search by symbol, not by line number; the file moves.
 - `Query::TIMEOUT`, the actual expiry, was collected only when
   `ce.slice_profile` debug was on. Current D: source collects it every attempt.
 
-The remaining connected O-P1 work after the narrow E-15/E-17 corrections is:
+The remaining connected O-P1 work after the narrow E-15/E-17/E-19 corrections is:
 
 1. Obtain an independent native count-stop witness before reporting
    `CountLimit`. `Ok` with `count > 0` and no recorded hook reason remains
@@ -140,9 +140,10 @@ The remaining connected O-P1 work after the narrow E-15/E-17 corrections is:
 These steps would close the remaining O-P1 classification gap. They do not
 change the 1M-instruction tick, the quantum or the clock.
 
-Status (latest validated E-17 source identity: `types.rs` SHA-256
-`6EA882B5…D14DE`, `unicorn.rs` `F1D45245…FD38`;
-focused/full-suite/alternate-profile controls, not O-P1 completion,
+Status (latest validated E-19 source identity: `types.rs` SHA-256
+`00856084…80521`, `unicorn.rs` `6560E1E3…A0F2`;
+focused/full-suite controls, with alternate profiles separately validated,
+not O-P1 completion,
 fresh-owner, Stage 2 or live-run acceptance; the E-16 O-M1 green belongs to
 its separate frozen source):
 
@@ -196,17 +197,32 @@ its separate frozen source):
   CreateProcess; failing native PC-write/stop APIs were not injected. The
   successful service-handoff policy and 1M-instruction count did not change.
   Later source edits must be validated separately.
-- Historical hook-site inventory on the E-15 source:
+- E-19 global deferred-stop progress: the per-instruction hook now latches
+  the first observed `RemoteControlService` or `HostWallBudget` condition and
+  carries it to checked safe-PC completion at JR thunk, trampoline origin or
+  ordinary safe instruction. Only successful native PC write and `emu_stop`
+  publish `HookStop(reason)`; control failure records a backend error. Two
+  real-backend focused controls passed together three times (2/0 each) with
+  safe saved/native PC and `Query::TIMEOUT = 0`. The remote input was queued
+  through a test helper, not delivered over a public network request; failing
+  PC-write/stop APIs were not injected. Frozen E-19 source passed the full
+  release suite (1,634 passed, 0 failed, 4 ignored), both no-trace release
+  checks, and no-feature tests (1,239 passed, 0 failed, 1 ignored). Exact
+  hashes are in local
+  `evidence/op1-global-code-hook-20261013/post-global-stop-validation.receipt.md`
+  (ledger E-19). E-18 is still the fourth ignored private-byte expected red;
+  explicitly rerunning it on E-19 source failed at the same final byte
+  assertion. No scheduling tick or handoff policy changed.
+- Historical hook-site inventory on the E-15 source (not the E-19 source):
   `NativeSliceOutcome` had `UnknownNormalStop` and
   `HookStop(NativeHookStopReason)`, and `HostWallBudget` was its only reason.
-  E-17 adds the distinct visible-peer reason without a host-wall marker.
-  Only one of the seven hook sites that write
-  `UnicornHostWallClockStop` sets a reason: the timeslice hook. The other
-  six fall through to `UnknownNormalStop` while still writing the debug
-  record. In this source they are:
+  E-17 later added the distinct visible-peer reason without a host-wall marker.
+  Only one of the seven hook sites that wrote
+  `UnicornHostWallClockStop` set a reason: the timeslice hook. The other
+  six fell through to `UnknownNormalStop` while still writing the debug
+  record. On the E-15 source they were:
   - Global code hook, deferred safe-PC completion (three sites). The reason
-    is whatever set `host_wall_clock_stop_pending`, which is only a `bool`
-    today.
+    was whatever set `host_wall_clock_stop_pending`, then only a `bool`.
   - Fast/trampoline block hook, the hookless default path:
     - After `drain_remote_server_control_messages_for_message_target`: a
       remote-control service stop.
@@ -214,11 +230,11 @@ its separate frozen source):
     - When `elapsed >= limit || ready peer`: an ambiguous stop that needs
       both branches recorded separately.
 
-  Next shape:
-  1. Turn the pending `bool` into `Cell<Option<NativeHookStopReason>>`, set
-     at the moment a stop is requested.
-  2. Add `RemoteControlService` and the remaining ready-peer yield paths;
-     E-17 covers only the checked hookless visible-peer path.
+  Remaining after E-19:
+  1. Cover sparse/hookless remote and ready-peer stops with independent
+     reasons at their actual request; E-19 covers deferred global stops only.
+  2. Keep first-observed reason across mixed remote/budget conditions and
+     exercise each safe-PC branch and failing PC-write/stop API paths.
   3. Write the reason and the debug record through one helper, so the two
      signals cannot disagree.
   4. Key restart-PC repair off `HookStop(_)` and `NativeDeadline`.
