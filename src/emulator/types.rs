@@ -33,6 +33,8 @@ pub struct UnicornRunLimits {
 pub enum NativeHookStopReason {
     /// A hook observed the elapsed host budget and stopped at a safe PC.
     HostWallBudget,
+    /// The hookless scheduler yielded at a safe PC to a larger visible parked process.
+    VisibleParkedPeerYield,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -68,6 +70,10 @@ mod native_slice_outcome_tests {
         assert!(NativeSliceOutcome::UnknownNormalStop.is_service_boundary());
         assert!(
             NativeSliceOutcome::HookStop(NativeHookStopReason::HostWallBudget)
+                .is_service_boundary()
+        );
+        assert!(
+            NativeSliceOutcome::HookStop(NativeHookStopReason::VisibleParkedPeerYield)
                 .is_service_boundary()
         );
         assert!(NativeSliceOutcome::NativeDeadline.is_service_boundary());

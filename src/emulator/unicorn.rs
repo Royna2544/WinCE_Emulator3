@@ -7592,8 +7592,18 @@ impl UnicornMips {
                     unsafe { &*kernel_ptr },
                     *current_thread_id_timeslice_hook.borrow(),
                 ) {
-                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(yield_pc));
-                    let _ = uc.emu_stop();
+                    let safe_pc_write = uc.reg_write(RegisterMIPS::PC, u64::from(yield_pc));
+                    let stop_request = uc.emu_stop();
+                    if safe_pc_write.is_ok() && stop_request.is_ok() {
+                        if hookless_trampolines_enabled {
+                            native_hook_stop_reason_timeslice_hook
+                                .set(Some(NativeHookStopReason::VisibleParkedPeerYield));
+                        }
+                    } else {
+                        *native_hook_control_error_timeslice_hook.borrow_mut() = Some(format!(
+                            "visible-peer safe stop failed: PC write={safe_pc_write:?}, emu_stop={stop_request:?}"
+                        ));
+                    }
                     return;
                 }
             }
@@ -54363,7 +54373,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: ledger E-14, Stage 2 O-M1 same-VA file-view ownership"]
     fn native_two_process_same_va_distinct_file_views_keep_mapping_owners() -> crate::Result<()> {
         const PARENT_BYTES: u32 = 0x1122_3344;
         const CHILD_BYTES: u32 = 0x5566_7788;
@@ -54505,6 +54514,78 @@ mod unicorn_tests {
             observed, expected,
             "each actual native PID slice must read and write only its own mapping at the same guest VA"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn native_file_view_closed_handle_readback_uses_exact_mapping() -> crate::Result<()> {
+        const BASE: u32 = 0x3018_0000;
+        let mut kernel = phase1_kernel("closed-view-owner.exe")?;
+        let other = kernel
+            .handles
+            .create_file_mapping(Some("other-view".to_owned()), 4, 4, None);
+        let closed = kernel
+            .handles
+            .create_file_mapping(Some("closed-view".to_owned()), 4, 4, None);
+        for (handle, process_id, initial) in [(other, 1, 0x1122_3344u32), (closed, 2, 0)] {
+            let mapping = kernel.handles.file_mapping_mut(handle)?;
+            mapping.data[..4].copy_from_slice(&initial.to_le_bytes());
+            mapping.views.push(crate::ce::object::FileMappingView {
+                base: BASE,
+                size: 4,
+                offset: 0,
+                process_id,
+            });
+        }
+        assert!(
+            kernel
+                .handles
+                .close_file_mapping_handle_with_live_views(closed)?
+        );
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(u64::from(BASE), 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(BASE), &0xaabb_ccddu32.to_le_bytes())
+            .unwrap();
+
+        super::sync_file_mapping_views_from_unicorn(&mut uc, &mut kernel, 2)?;
+        assert_eq!(
+            &kernel.handles.file_mapping(other)?.data[..4],
+            &0x1122_3344u32.to_le_bytes()
+        );
+        let crate::ce::object::KernelObject::FileMapping(mapping) = kernel.handles.get(closed)?
+        else {
+            panic!("closed live-view object changed type");
+        };
+        assert!(mapping.closed);
+        assert_eq!(&mapping.data[..4], &0xaabb_ccddu32.to_le_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn native_file_view_rejects_ambiguous_global_lazy_seed() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("ambiguous-lazy-view.exe")?;
+        let base = kernel
+            .memory
+            .virtual_alloc(0, 4, 0x3000, 0x04)
+            .expect("test lazy allocation");
+        assert!(kernel.memory.set_virtual_initial_bytes(base, vec![0; 4]));
+        for process_id in [1, 2] {
+            let handle = kernel.handles.create_file_mapping(None, 4, 4, None);
+            kernel.handles.file_mapping_mut(handle)?.views.push(
+                crate::ce::object::FileMappingView {
+                    base,
+                    size: 4,
+                    offset: 0,
+                    process_id,
+                },
+            );
+        }
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let to_err = super::sync_file_mapping_views_to_unicorn(&mut uc, &kernel, 1).unwrap_err();
+        assert!(format!("{to_err:?}").contains("ambiguous lazy file-view seed"));
+        let from_err =
+            super::sync_file_mapping_views_from_unicorn(&mut uc, &mut kernel, 1).unwrap_err();
+        assert!(format!("{from_err:?}").contains("ambiguous lazy file-view seed"));
         Ok(())
     }
 
@@ -54763,6 +54844,134 @@ mod unicorn_tests {
                 .unwrap(),
             0,
             "the native one-second deadline did not cause this stop"
+        );
+        native.finish().unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn visible_parked_peer_block_hook_has_typed_stop_reason() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("phase1-visible-peer-parent.exe")?;
+        let parent_state = kernel.current_process_state();
+        let mut active = phase1_counter_cpu(0x1000, "phase1-visible-peer-parent.exe")?;
+        let parent_entry = active.entry.unwrap();
+        assert!(active.trampoline_origins_all_direct());
+        let launch = kernel.queue_process_launch(Some("\\Test\\visible-peer.exe".to_owned()), None);
+        assert!(
+            kernel
+                .take_pending_process_launches()
+                .iter()
+                .any(|queued| queued.process_id == launch.process_id)
+        );
+        let peer_state = crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        };
+        kernel.set_current_process_state(peer_state);
+        let peer_window = kernel.create_window_ex_w_with_rect(
+            launch.thread_id,
+            "visible_peer",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert!(kernel.gwe.validate_window(peer_window));
+        kernel.set_current_process_state(parent_state);
+
+        let mut peer = phase1_counter_cpu(0x2000, "phase1-visible-peer.exe")?;
+        peer.set_initial_thread_id(launch.thread_id);
+        let mut peer_regs = super::MipsGuestContext::zero();
+        peer_regs.regs[29] = peer.stack_top.unwrap() - 0x100;
+        peer.saved_context = Some(super::SavedCpuContext {
+            pc: peer.entry.unwrap(),
+            regs: peer_regs,
+        });
+        active
+            .parked_child_processes
+            .push_back(super::ParkedProcess {
+                application: launch.application.clone(),
+                process_handle: Some(launch.process_handle),
+                thread_handle: Some(launch.thread_handle),
+                process_state: peer_state,
+                thread_id: launch.thread_id,
+                cpu: Box::new(peer),
+                blocked_send_id: None,
+                module_base: 0x0040_0000,
+                module_path: "\\Test\\visible-peer.exe".to_owned(),
+                module_host_path: std::path::PathBuf::from("visible-peer.exe"),
+                command_line: String::new(),
+                current_directory: None,
+            });
+        assert!(active.active_should_yield_to_visible_parked_process(&kernel));
+        assert!(!super::UnicornMips::thread_has_visible_receiver_work(
+            active.current_thread_id(),
+            &kernel
+        ));
+        // This is a slice-end-selected parent. Without the gate, preflight
+        // would rotate to the visible peer before any native attempt.
+        active.slice_end_rotation_pending = true;
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        active.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 0,
+                stop_pc: None,
+                live_pump: true,
+            },
+        )?;
+        assert_eq!(kernel.current_process_id(), launch.process_id);
+        let outgoing = active
+            .parked_child_processes
+            .iter()
+            .find(|process| process.process_state.process_id == parent_state.process_id)
+            .expect("parent parked after the real native yield");
+        assert_eq!(
+            outgoing.cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::HookStop(
+                super::NativeHookStopReason::VisibleParkedPeerYield
+            )
+        );
+        assert!(
+            outgoing
+                .cpu
+                .last_native_slice_outcome()
+                .is_service_boundary()
+        );
+        let saved_pc = outgoing
+            .cpu
+            .saved_context_pc()
+            .expect("saved safe restart PC");
+        assert!(saved_pc >= parent_entry && saved_pc < parent_entry + 124 * 4);
+        let snapshot = outgoing.cpu.last_debug_snapshot().unwrap();
+        assert_eq!(snapshot.pc, saved_pc);
+        assert!(snapshot.host_wall_clock_stop.is_none());
+        let native = outgoing.cpu.native_engine.lease().unwrap();
+        assert_eq!(
+            native.reg_read(RegisterMIPS::PC).unwrap(),
+            u64::from(saved_pc)
+        );
+        assert_eq!(
+            native
+                .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
+                .unwrap(),
+            0,
+            "the bounded native deadline did not cause the peer yield"
+        );
+        assert_eq!(
+            super::scheduler_timeslice_context_pc(
+                saved_pc,
+                &outgoing.cpu.trampoline_ranges,
+                &super::MipsTrampolineJumpIndex::new(&outgoing.cpu.trampoline_jumps),
+                |addr| super::read_unicorn_u32(&native, addr),
+            ),
+            Some(saved_pc),
+            "the captured restart PC remains a safe scheduler context"
         );
         native.finish().unwrap();
         Ok(())
