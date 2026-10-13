@@ -55730,6 +55730,56 @@ mod unicorn_tests {
     }
 
     #[test]
+    #[ignore = "expected red: E-28 ordinary checked-finish failure must quarantine its continuation"]
+    fn ordinary_finish_failure_rejects_retry_before_another_native_attempt() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("finish-retry.exe")?;
+        let mut cpu = phase1_counter_cpu(0x3000, "finish-retry.exe")?;
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 20,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        cpu.native_engine.arm_finish_failure_once_for_test();
+
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        assert!(first.result.is_err(), "the checked finish injection must fire");
+        assert!(first.report.attempt_id().is_some(), "real MIPS ran");
+        assert_eq!(
+            first.report.final_outcome(),
+            super::NativeSliceOutcome::BackendError
+        );
+        assert_eq!(kernel.current_process_id(), 1);
+        let counter_after_failure = phase1_counter(&cpu);
+        assert_eq!(counter_after_failure, 0x3006);
+        assert!(cpu.native_engine_identity_for_test().is_none());
+
+        // The failed lease discarded its native owner after guest effects and
+        // before a continuation was safely published. A second call must not
+        // restore the provisional scalar context into a fresh owner and run.
+        let retry = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        assert!(retry.result.is_err(), "uncertain continuation must fail closed");
+        assert_eq!(
+            retry.report.attempt_id(),
+            None,
+            "a rejected retry must not enter the native MIPS engine"
+        );
+        assert_eq!(retry.report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
+        assert_eq!(phase1_counter(&cpu), counter_after_failure);
+        assert_eq!(kernel.current_process_id(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn native_two_process_same_va_distinct_file_views_keep_mapping_owners() -> crate::Result<()> {
         const PARENT_BYTES: u32 = 0x1122_3344;
         const CHILD_BYTES: u32 = 0x5566_7788;
