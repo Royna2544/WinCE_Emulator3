@@ -247,6 +247,36 @@ references for historical reconstruction.
   separate broad-validation receipt are under `evidence/e25-private-slab-20261014/`.
   This is an internal diagnostic, not public O-M1/O-P4, Stage 2, measured
   memory benefit or live-app acceptance (ledger E-25).
+- E-26 ported the historical thirteen E-8/E-11 Task controls to the sole D:
+  checkout without changing their assertions. Focused no-feature default
+  test-target runs compiled and reported **1 active pass, 12 ignored, 0
+  failed**; format passed. Three explicit ignored-control runs each exited 1
+  after successful compilation, with **all 12 failing at intended
+  assertions** and no unexpected pass or setup failure. The older E-8/E-11
+  copy-mirror receipts remain historical; current-source fixture hashes,
+  complete raw logs and exit codes are in local
+  `evidence/e26-stage3-red-20261014/{port-and-compile,executed-red}.receipt.md`
+  (ledger E-26). No production Task migration, full-suite rerun or Stage 3
+  acceptance follows.
+- A second bounded iNavi run on the corrected E-25 runtime-source boundary
+  was analyzed as E-27. Its newly built release executable SHA-256
+  `90A944B9…A6F4F` exited 0 after 330.430 s at the configured cap, without
+  RSS-monitor trip. Three changed frame captures ended on the real splash;
+  the final splash JPEG hash repeated in 151 successful polls through
+  input-ready +328.974 s, with no observed map. Sixteen raw-NMEA requests
+  were ACKed, and three guest `COM7:` `ReadFile` records transferred
+  174/348/174 B matching injected `$GPRMC` previews. One +153 s tap had
+  down/up WNDPROC return records by the +159.00 s capture. These establish
+  transfer and message delivery, not GPS position parsing or navigation.
+  The raw log has 2,518 child return-stub warning occurrences, not proven
+  distinct callbacks or a demonstrated splash cause. In 160 host samples,
+  working set/private bytes peaked at 1,489.2/1,503.5 MiB; four mounted
+  entries changed timestamps only, with no file-content change reported.
+  The lower memory peaks than E-22's earlier unmatched run are not a measured
+  improvement. Exact source/binary/script/config and raw-file hashes, the
+  missing full-tree digest limitation, and run observations are in local
+  `evidence/e22-live-20261013T182442Z/analysis.receipt.md` (ledger E-27).
+  Public VM, fresh-default ownership, Stage 2 and map acceptance remain open.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

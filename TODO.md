@@ -160,10 +160,12 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
   with alias/execution/wait pins, full continuation ownership, explicit outcomes
   with CE6 priorities/quantum, and one guest clock/live event fence. Full Task
   state, virtual time and splash-to-map bring-up remain open. Thirteen
-  Task/alias controls have run in private copies: one close-source positive
-  control and twelve expected reds, including final-public-handle loss,
-  alias-indexed wake and registered-wait target loss (ledger E-8/E-11). Keep
-  the fixtures as the Task migration baseline; add genuine native
+  Task/alias controls ran historically in private copies (ledger E-8/E-11)
+  and have now been ported to this D: checkout (ledger E-26). Their focused
+  default runs have one active close-source pass and twelve ignored; explicit
+  current-source runs fail all twelve at intended assertions, including
+  final-public-handle loss, alias-indexed wake and registered-wait target
+  loss. Keep the fixtures as the Task migration baseline; add genuine native
   last-public-handle execution, wait acquisition and continuation controls
   before claiming lifecycle acceptance. Native wait/exit FPU controls remain staged;
   the actual-backend count-stop and nonzero-unmapped-error controls were the
