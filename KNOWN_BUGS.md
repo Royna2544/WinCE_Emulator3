@@ -1,6 +1,6 @@
 # Known Bugs And Risks
 
-Refreshed on 2026-10-13. This file lists unresolved behavior only.
+Refreshed on 2026-10-14. This file lists unresolved behavior only.
 
 ## Open Issues
 
@@ -101,6 +101,14 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   lacks fault injection. The static COREDLL table also lacks ROM-exported
   `VirtualAllocEx`/`VirtualQueryEx` ordinals, but the target EXE does not
   directly import those Ex functions (dynamic lookup remains possible).
+  E-22 now records canonical process-birth keys, per-lineage allocation
+  incarnations and explicit private/file-view/locale/Toolhelp/shared-compat
+  source kinds. It does not change the global base-keyed allocation directory,
+  native copy-seeded bytes, Ex target handling or clone lineage. The combined
+  release suite passed 1,647/0/5 ignored and the no-feature suite passed
+  1,248/0/2 ignored. Explicit E-18/E-20 reruns on that source still failed
+  at the intended stale-byte and child-same-VA-allocation assertions
+  (ledger E-22).
   This is not O-M1/O-P4 or Stage 2 acceptance.
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,

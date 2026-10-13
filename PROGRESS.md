@@ -1,6 +1,6 @@
 # Progress
 
-Refreshed on 2026-10-13 (client KST date). This file records confirmed facts only.
+Refreshed on 2026-10-14 (client KST date). This file records confirmed facts only.
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
@@ -175,6 +175,21 @@ references for historical reconstruction.
   process-handle milestone; selected-process snapshots, wait pins, clone
   lineage, public same-VA VM, private bytes across fresh owner, Stage 2 and
   app acceptance remain open. No app run was made on E-21 source.
+- E-22 added a metadata-only VM identity slice: the canonical process-birth
+  directory supplies checked owner keys; successful virtual allocations carry
+  a non-reused incarnation within one `MemorySystem` lineage and an explicit
+  private/Ex-compat/file-view/locale/Toolhelp/shared-compat source kind. Four
+  focused release controls passed (2/2, 1/1, 1/1). The later combined O-P1
+  sparse-stop plus VM-metadata source passed the full release suite (**1,647
+  passed, 0 failed, 5 ignored**) and no-feature suite (**1,248 passed,
+  0 failed, 2 ignored**), with raw logs under
+  `evidence/op1-sparse-stop-20261014/`. Explicit E-18 and E-20 reruns still
+  failed at their intended boundaries: the fresh owner read stale
+  `0x11223344` after a guest store of `0x11223345`, and the public child
+  same-VA allocation returned `Handle(0)`. This metadata does not change
+  global base-keyed VA, native bytes, reserve-only behavior, Ex targeting,
+  clone lineage or O-P4 fresh-default lifetime. No Stage 2 or app acceptance
+  is claimed (ledger E-22).
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

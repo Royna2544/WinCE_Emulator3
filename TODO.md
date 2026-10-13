@@ -1,6 +1,6 @@
 # TODO
 
-Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
+Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
@@ -53,10 +53,14 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
       not outgoing private-page copy-back. E-21 introduced one canonical
       HandleTable process-birth directory independent of public aliases; its
       five focused controls, full release/no-feature suites and alternate
-      checks pass, but selected-process snapshots, worker sweep, wait pins and
-      clone lineage remain open. Next connect owner-scoped reservation,
-      allocation incarnation and remote queries to that directory; Stage 3
-      extends the same authority. Then migrate
+      checks pass. E-22 attaches checked birth keys, non-reused within-lineage
+      allocation incarnations and producer kinds to virtual metadata; four
+      focused controls and combined release/no-feature suites pass. This
+      does not scope the global VA directory or migrate bytes. Selected-
+      process snapshots, worker sweep, wait pins and clone lineage remain
+      open. Next connect owner-scoped reservations, overlap checks, reserve/
+      commit behavior and remote queries to that directory; Stage 3 extends
+      the same authority. Then migrate
       private pages with exact pinned native maps, checked failure/publication
       and no whole-`initial_bytes` reseed for that family. A failed unmap must
       retain its pin and fail the attempt, not recycle a stale VA. Turn E-18
