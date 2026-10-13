@@ -330,16 +330,31 @@ references for historical reconstruction.
   `evidence/e28-run-outcome-20261014/`). The report's frame is explicitly
   `LegacyUnbound`; the app loop still discards it and the scheduler still
   uses selected-CPU compatibility state. An earlier broad run was interrupted
-  for an error-precedence repair; subsequent completed current-source gates
+  for an error-precedence repair; subsequent completed pre-retry-fix gates
   passed **1,682 release tests, 0 failed, 16 ignored** and **1,262 no-feature
   tests, 0 failed, 14 ignored**. Format, diff and three feature/profile checks
   exited 0. Three focused real-MIPS post-real-query Rust adapter-error
   controls also passed; they do not inject a C `uc_query` failure
-  ([current-source validation](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md),
+  ([pre-retry-fix validation](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md),
   [query-adapter controls](evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)).
   Genuine C query-error/competing-hook and full tail/consumer gates remain
   open; this is not O-P1, Stage 2, S3-A, or live-app acceptance (ledger E-28).
-- E-29 ran the subsequent D: release executable (`8A8B9C7E…57AFB3E094A`)
+- A later E-28 real-MIPS expected-red control showed ordinary checked-finish
+  failure returning `BackendError` after counter `0x3006`, then wrongly
+  allowing a second native attempt that advanced it to `0x3010`. The
+  corrected path poisons the outgoing CPU after any entered-attempt error
+  and clears its provisional saved context; the formerly ignored focused
+  control now passes **1/0** and rejects retry as `NoAttempt` without a new
+  ID or counter change. On this corrected source, the full release suite
+  passed **1,683/0/16 ignored**, no-feature passed **1,262/0/14 ignored**,
+  and feature/release-no-trace checks, format and diff checks exited 0
+  ([red receipt](evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md),
+  [green validation](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
+  The failed attempt's partial guest effects remain evidence, not rollback.
+  E-29 used a pre-fix executable, so it cannot validate this correction;
+  full O-P1, Stage 2 and S3-A remain open.
+- E-29 ran the then-current, pre-retry-fix D: release executable
+  (`8A8B9C7E…57AFB3E094A`)
   against the three original ZIP-backed read/write mounts. It exited 0 at
   its configured 330 s cap (330.395 s), without watchdog trip or stderr.
   The final settled iNavi splash repeated for 151 successful frame polls

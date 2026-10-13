@@ -229,14 +229,21 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   An owned outgoing-attempt report now exists for observation, but it is not
   a canonical owner/Task/Frame-qualified scheduler result: its frame is
   `LegacyUnbound`, its ID is host-process-local, the app loop discards it,
-  and rotation still reads the mutable selected-CPU outcome. The newer source
+  and rotation still reads the mutable selected-CPU outcome. The earlier
+  detached-report source
   passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature
   plus check/format/diff gates
-  ([current-source receipt](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)).
-  Fallible-tail
-  effect salvage, real C query-error/competing-hook controls, other sparse/
-  hookless reasons and typed restart-PC repair remain open. A test-only Rust
-  post-query failure control does not establish a genuine C query failure.
+  ([earlier report-source receipt](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)).
+  A later executed real-MIPS red showed a failed ordinary checked finish
+  allowing a second native attempt and guest counter progress. The
+  corrected path rejects the retry before `emu_start`; focused 1/0 and full
+  **1,683/0/16 ignored** release plus **1,262/0/14 ignored** no-feature pass
+  ([red](evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md),
+  [green](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
+  Other fallible-tail effect salvage, real C query-error/competing-hook
+  controls, sparse/hookless reasons and typed restart-PC repair remain open.
+  A test-only Rust post-query failure control does not establish a genuine C
+  query failure.
   Complete O-P1 classification, fresh-owner Stage 2 and live acceptance
   remain open; the 1M-instruction tick is intact.
 - HeapFree does not reuse addresses or release per-process spillover pages.
@@ -355,8 +362,9 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   earliest visible splash interval. The current post-COM7 path reaches GPS and
   sensor devices plus map-era child windows, but final map presentation remains
   gated while the framebuffer still shows the iNavi splash artwork.
-- E-29's next bounded 330 s run again stayed on the splash despite 10 retained
-  positive guest `COM7:` reads (2,784 B) and down/up touch return records.
+- E-29's pre-retry-fix bounded 330 s run again stayed on the splash despite
+  10 retained positive guest `COM7:` reads (2,784 B) and down/up touch return
+  records.
   The full-screen splash window `0x00020008` remained visible over 23 hidden,
   update-pending controls. Service counters stopped changing by about +120 s
   while sampled host CPU kept increasing; the previous E-27 run also reached

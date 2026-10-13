@@ -20,9 +20,10 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
   real-MIPS controls now pass. The controlled stale-stub replay is not tied
   to the 2,518 live warnings or splash stall; any recovery change still needs
   identity-matched live evidence ([ledger E-27](docs/evidence/ledger.md)).
-- E-29's bounded run still ends on the real splash despite positive guest
-  `COM7:` reads and dequeued/returned tap messages. Before changing scheduling
-  or window policy, make a bounded +100-to-180 s diagnostic joining native
+- E-29's pre-retry-fix bounded run still ends on the real splash despite
+  positive guest `COM7:` reads and dequeued/returned tap messages. Before
+  changing scheduling or window policy, make a bounded +100-to-180 s
+  diagnostic joining native
   attempt PID/birth/TID/count/stop/PC/time to TID 1's callback continuation
   and visibility changes on splash window `0x00020008`; record the any/all
   mode and event generation of the apparently signaled TID 10 wait. Static
@@ -137,14 +138,24 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      native-error and decoded-exit finish-error controls pass. This is still
      observational: `AttemptFrameBinding::LegacyUnbound` cannot authorize a
      Task transition; `main.rs` discards the report through its `Result<()>`
-     wrapper and selected-CPU outcome remains the rotation input. Finish the
-     fallible context/PC/byte-view/lease-tail and partial-effect audit, then
+     wrapper and selected-CPU outcome remains the rotation input. The
+     ordinary checked-finish failed-retry control is now green: a failed
+     entered attempt poisons the outgoing CPU, clears provisional context,
+     and a retry returns `NoAttempt` before another native entry
+     ([red](evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md),
+     [green](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
+     Finish the other fallible context/PC/byte-view/lease-tail and
+     partial-effect paths, then
      migrate live/monitor consumers with explicit owner/frame validation
      ([report design](evidence/e28-run-outcome-20261014/sealed-report-next-gate.receipt.md)).
-     The completed current-source suite passed **1,682/0/16 ignored** release
+     The earlier report source passed **1,682/0/16 ignored** release
      and **1,262/0/14 ignored** no-feature; three check profiles, format and
      diff checks exited 0
      ([validation receipt](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)).
+     The retry-fix source passed **1,683/0/16 ignored** release and
+     **1,262/0/14 ignored** no-feature, plus focused 1/0, applicable checks,
+     format and diff gates
+     ([green validation](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
      Do not rerun the recursive Rust hook probe; actual same-handle nested
      execution is unvalidated, not a prerequisite for ordinary count stops.
      A non-recursive private query-state control may check ambiguity policy

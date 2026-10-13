@@ -36,12 +36,18 @@ remote-control HTTP/WebSocket surface.
   A later additive per-call native report retains outgoing-attempt evidence
   across a child handoff and distinguishes preflight `NoAttempt`; its frame is
   still `LegacyUnbound`, and the app scheduler does not consume it. Focused
-  report/decoded-exit controls pass. The completed current-source gates passed
+  report/decoded-exit controls pass. The earlier report-source gates passed
   **1,682 release tests, 0 failed, 16 ignored** and **1,262 no-feature tests,
   0 failed, 14 ignored**, with check/format/diff gates green
   ([validation receipt](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)).
-  The older 1,674/1,259 counts above remain historical. A later bounded
-  live app run is E-29 below; these suites do not establish map readiness.
+  An executed ordinary finish-failure retry red is now corrected: the
+  failed outgoing CPU rejects another native entry. The corrected source
+  passed focused 1/0, full release **1,683/0/16 ignored**, no-feature
+  **1,262/0/14 ignored**, and applicable check/format/diff gates
+  ([red](evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md),
+  [green](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
+  The older 1,674/1,259 and 1,682/1,262 counts above remain historical.
+  E-29 below used a pre-fix executable and does not validate this correction.
   An exploratory same-handle nested-start hook probe exited
   `0xC0000005` before a query assertion, was removed, and remains unresolved
   ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),
