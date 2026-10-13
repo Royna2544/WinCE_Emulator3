@@ -52,10 +52,10 @@ native mapping/reclaim is VA-only. Raw COREDLL Ex arms resolve their target,
 allow the current process and fail closed for a remote process; these arms
 are not published in the default export table. Two focused release controls
 passed on source `4a1a9bfb9898a9f2a251212d6120794970266692`
-([ledger E-23](../evidence/ledger.md)); full regressions were still pending
-at that checkpoint. E-20 same-VA private isolation and E-18 fresh-owner
-private bytes remain red. No slab backing or fresh-default owner policy was
-introduced.
+([ledger E-23](../evidence/ledger.md)). The same source passed full release
+1,649/0/5 ignored and no-feature 1,250/0/2 ignored; explicitly run ignored
+E-18 and E-20 gates still failed at their stale-byte and child-same-VA
+assertions. No slab backing or fresh-default owner policy was introduced.
 
 ## Target authority and permitted interfaces
 

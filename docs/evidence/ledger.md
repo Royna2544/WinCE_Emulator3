@@ -710,7 +710,7 @@ curve is consistent with the E-3 arena-retention mechanism. This is a
 sampled correlation, not attribution. It is the memory baseline that the
 fresh-default lifetime (O-P4) must be measured against.
 
-## E-23 owner-qualified private-VA metadata (2026-10-14, focused green)
+## E-23 owner-qualified private-VA metadata (2026-10-14, default suites green)
 
 On source `4a1a9bfb9898a9f2a251212d6120794970266692`, private virtual
 allocation metadata is keyed by `(ProcessBirthKey, base)`; allocation
@@ -725,10 +725,23 @@ default COREDLL export table does not publish those arms.
 Two focused release controls passed (2/2 total), including the public raw
 COREDLL self/foreign Ex-arm checks; exact commands and source identity are
 in local `evidence/stage2-e23-owner-va-20261013/focused-owner-va.md`.
-This is not a broader regression result. E-20's public child same-VA path
-remains expected red at the native overlap fence, and E-18 fresh-owner
-private bytes still require coherent backing. No O-P4 fresh default, public
-remote Ex operation, Stage 2 or application acceptance is claimed.
+The same source passed the full release Unicorn/trace/desktop suite with
+**1,649 passed, 0 failed, 5 ignored**, and the no-feature suite with
+**1,250 passed, 0 failed, 2 ignored**. Raw logs are local
+`evidence/stage2-e23-owner-va-20261013/full-release.log` and
+`no-feature.log`. The two explicitly run ignored gates remain expected red:
+E-18's fresh owner read stale `0x11223344` after guest-written `0x11223345`,
+and E-20's public child same-VA `VirtualAlloc` returned `Handle(0)` at the
+native overlap fence. Their logs are local `e18-expected-red.log` and
+`e20-expected-red.log` in the same evidence folder. No O-P4 fresh default,
+public remote Ex operation, Stage 2 or application acceptance is claimed.
+
+Post-suite independent review found a legacy ownership escape on this E-23
+snapshot: cross-owner `VirtualFree` can erase a parent's `FileViewLegacy`
+metadata, and base-only `UnmapViewOfFile` can commit/remove that parent's
+view. The green suites did not cover those cases. A corrective owner guard
+and focused cross-process controls are required before treating E-23 as a
+safe completed boundary; the raw validation above remains historical.
 
 ## Chat-project validation notes (not in this repository)
 
