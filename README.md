@@ -57,7 +57,10 @@ remote-control HTTP/WebSocket surface.
   focused **1/0**, with the fence and wait filters rerun **2/0** and **5/0**
   on its rebuilt binary
   ([receipt](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)).
-  No current full-suite or live iNavi validation is claimed for that source.
+  The [current-source broad gate](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)
+  passes release **1,691/0/16 ignored** and no-feature **1,263/0/14 ignored**,
+  plus both Unicorn no-trace checks and format/diff checks. No live iNavi
+  validation is claimed for that source.
   An exploratory same-handle nested-start hook probe exited
   `0xC0000005` before a query assertion, was removed, and remains unresolved
   ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),

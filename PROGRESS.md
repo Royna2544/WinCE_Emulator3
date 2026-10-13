@@ -378,9 +378,11 @@ references for historical reconstruction.
   [fence filter **2/0** and executed-wait filter **5/0**](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md).
   A later [ready GetMessage/private-slab integration control](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)
   passes **1/0**; the fence **2/0** and wait **5/0** filters also pass on
-  its rebuilt binary. Other ready-resume families, setup/tail paths, and a
-  current full-suite result remain separate gates; O-P1, Stage 2, S3-A and
-  map readiness stay open.
+  its rebuilt binary. The [current-source broad gate](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)
+  passes release **1,691/0/16 ignored**, no-feature **1,263/0/14 ignored**,
+  both no-trace Unicorn checks, format and scoped diff checks. Other
+  ready-resume families and setup/tail paths remain separate gates; O-P1,
+  Stage 2, S3-A and map readiness stay open.
 - E-29 ran the then-current, pre-retry-fix D: release executable
   (`8A8B9C7E…57AFB3E094A`)
   against the three original ZIP-backed read/write mounts. It exited 0 at

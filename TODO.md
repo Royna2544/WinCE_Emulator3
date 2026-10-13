@@ -164,8 +164,13 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      [focused fence **2/0** and wait **5/0** filters](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md).
      A [ready GetMessage/private-slab integration control](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)
      now passes **1/0** with fence **2/0** and wait **5/0** rerun on its
-     rebuilt binary. Run current broad validation and cover other resume
-     families; do not infer rollback for all ready-resume failures.
+     rebuilt binary. The [current broad source](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)
+     passes release **1,691/0/16 ignored**, no-feature **1,263/0/14 ignored**,
+     both no-trace Unicorn checks and format/diff checks. Cover other resume
+     families and native-entry failure consistency; do not infer rollback.
+     A separate [stale-snapshot remote-target red design](docs/evidence/stale-snapshot-host-routing-design-20261014.md)
+     is proposed but unexecuted; keep its routing assertion separate from
+     the snapshot-only host idle-slice pacing gate.
      The report remains observational and the app still discards it.
      Finish the other fallible context/PC/byte-view/lease-tail and
      partial-effect paths, then

@@ -243,11 +243,14 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   Later pre-entry private-page fence reds separately lost a transferred CPU
   wait, consumed a ready worker's wait before `NoAttempt`, and dropped an
   orphaned WNDPROC return. The combined source now passes the reproduced
-  [fence **2/0** and executed-wait **5/0** controls](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md),
+  [fence **2/0** and executed-wait **5/0** controls](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md).
   A later [ready GetMessage/private-slab control](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)
   passes **1/0** on a rebuilt source. Other ready-resume families and state
   consistency when a ready helper consumes state before a native-entry
   failure are unvalidated; no rollback semantics are claimed.
+  The [latest broad source](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)
+  passes release **1,691/0/16 ignored** and no-feature **1,263/0/14 ignored**,
+  but has not been exercised in a new live iNavi run.
   Other fallible-tail effect salvage, real C query-error/competing-hook
   controls, sparse/hookless reasons and typed restart-PC repair remain open.
   A test-only Rust post-query failure control does not establish a genuine C
@@ -461,9 +464,10 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   the focused ordinary/private controls now pass, but other fallible tails
   remain open (ledger E-28).
 - A saved parked `GetMessage` waiter must still exist in Kernel before it can
-  trigger host idle polling. This source guard covers the stale-ID shape; its
-  focused binary-target test remains to run. It does not prove every live-pump
-  pacing or callback interleaving.
+  trigger host idle polling. This source guard covers the stale-ID shape, and
+  its binary-target test passed within the current broad release main suite
+  ([receipt](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)).
+  It does not prove every live-pump pacing or callback interleaving.
 - Remote touch/key input reaches the real iNavi window stack after the
   scheduler handoff fix. Current COM7 consumption is proven by successful
   ReadFile payload/transferred-byte records, not host queue emptiness alone.
