@@ -133,13 +133,19 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      fallible context/PC/byte-view/lease-tail and partial-effect audit, then
      migrate live/monitor consumers with explicit owner/frame validation
      ([report design](evidence/e28-run-outcome-20261014/sealed-report-next-gate.receipt.md)).
+     The completed current-source suite passed **1,682/0/16 ignored** release
+     and **1,262/0/14 ignored** no-feature; three check profiles, format and
+     diff checks exited 0
+     ([validation receipt](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)).
      Do not rerun the recursive Rust hook probe; actual same-handle nested
      execution is unvalidated, not a prerequisite for ordinary count stops.
      A non-recursive private query-state control may check ambiguity policy
-     without claiming recursive safety. A test-only post-real-query fault
-     control is in progress; it must be distinguished from a genuine C query
-     failure. Add same-instruction competing-hook controls and finish
-     diagnostic-private query provenance validation. Remaining
+     without claiming recursive safety. Three real-MIPS test-only
+     post-real-query Rust adapter-error controls pass; they do not establish
+     a genuine C `uc_query` failure
+     ([focused receipt](evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)).
+     Add genuine C query-error and same-instruction competing-hook controls;
+     finish diagnostic-private query provenance validation. Remaining
      sparse/hookless stop reasons, typed restart-PC repair and failed
      PC-write/stop injection also remain. Do not close O-P1, Stage 2 or S3-A
      or infer a scheduler-core rewrite from the count-only adapter.

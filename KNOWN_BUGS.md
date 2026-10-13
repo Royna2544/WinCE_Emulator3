@@ -229,7 +229,11 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   An owned outgoing-attempt report now exists for observation, but it is not
   a canonical owner/Task/Frame-qualified scheduler result: its frame is
   `LegacyUnbound`, its ID is host-process-local, the app loop discards it,
-  and rotation still reads the mutable selected-CPU outcome. Fallible-tail
+  and rotation still reads the mutable selected-CPU outcome. The newer source
+  passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature
+  plus check/format/diff gates
+  ([current-source receipt](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)).
+  Fallible-tail
   effect salvage, real C query-error/competing-hook controls, other sparse/
   hookless reasons and typed restart-PC repair remain open. A test-only Rust
   post-query failure control does not establish a genuine C query failure.

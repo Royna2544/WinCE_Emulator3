@@ -329,10 +329,16 @@ references for historical reconstruction.
   without terminating the guest process (focused receipts under
   `evidence/e28-run-outcome-20261014/`). The report's frame is explicitly
   `LegacyUnbound`; the app loop still discards it and the scheduler still
-  uses selected-CPU compatibility state. The broad run on this new source
-  was interrupted for an error-precedence repair and is not validation.
-  Forced query-error/competing-hook and full tail/consumer gates remain open;
-  this is not O-P1, Stage 2, S3-A, or live-app acceptance (ledger E-28).
+  uses selected-CPU compatibility state. An earlier broad run was interrupted
+  for an error-precedence repair; subsequent completed current-source gates
+  passed **1,682 release tests, 0 failed, 16 ignored** and **1,262 no-feature
+  tests, 0 failed, 14 ignored**. Format, diff and three feature/profile checks
+  exited 0. Three focused real-MIPS post-real-query Rust adapter-error
+  controls also passed; they do not inject a C `uc_query` failure
+  ([current-source validation](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md),
+  [query-adapter controls](evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)).
+  Genuine C query-error/competing-hook and full tail/consumer gates remain
+  open; this is not O-P1, Stage 2, S3-A, or live-app acceptance (ledger E-28).
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

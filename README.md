@@ -36,18 +36,22 @@ remote-control HTTP/WebSocket surface.
   A later additive per-call native report retains outgoing-attempt evidence
   across a child handoff and distinguishes preflight `NoAttempt`; its frame is
   still `LegacyUnbound`, and the app scheduler does not consume it. Focused
-  report/decoded-exit controls pass, but the older 1,674/1,259 counts above
-  do not validate this newer source.
+  report/decoded-exit controls pass. The completed current-source gates passed
+  **1,682 release tests, 0 failed, 16 ignored** and **1,262 no-feature tests,
+  0 failed, 14 ignored**, with check/format/diff gates green
+  ([validation receipt](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)).
+  The older 1,674/1,259 counts above remain historical. The separate live
+  app run is pending; these suites do not establish map readiness.
   An exploratory same-handle nested-start hook probe exited
   `0xC0000005` before a query assertion, was removed, and remains unresolved
   ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),
   [nested risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
-- The latest bounded iNavi run exited normally at its 330 s cap and remained
-  on the genuine splash, not the map. Guest `COM7:` reads transferred injected
-  raw NMEA bytes and the splash window handled a tap; GPS fix, map readiness
-  and route interaction were not demonstrated. Its sampled working-set and
-  private peaks were 1,489.2/1,503.5 MiB. The read/write mounts were backed
-  up as adjacent ZIPs before that run
+- The latest completed bounded iNavi run exited normally at its 330 s cap
+  and remained on the genuine splash, not the map. Guest `COM7:` reads
+  transferred injected raw NMEA bytes and the splash window handled a tap;
+  GPS fix, map readiness and route interaction were not demonstrated. Its
+  sampled working-set and private peaks were 1,489.2/1,503.5 MiB. The
+  read/write mounts were backed up as adjacent ZIPs before that run
   ([E-27 analysis](evidence/e22-live-20261013T182442Z/analysis.receipt.md)).
 - Historical comparison, not current acceptance: the persistent-owner 650
   build passed 1,618 tests before a normal app run crashed at 129.108 s with
