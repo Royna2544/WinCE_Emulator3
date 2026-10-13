@@ -59135,6 +59135,52 @@ mod unicorn_tests {
         Ok(())
     }
 
+    struct OrphanReturnWarningCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for OrphanReturnWarningCounter {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() != "ce.gwe"
+                || *event.metadata().level() != tracing::Level::WARN
+            {
+                return;
+            }
+            struct MessageVisitor(bool);
+
+            impl tracing::field::Visit for MessageVisitor {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    if field.name() == "message"
+                        && format!("{value:?}")
+                            .contains("orphaned WNDPROC return stub with no pending callout")
+                    {
+                        self.0 = true;
+                    }
+                }
+
+                fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                    if field.name() == "message"
+                        && value.contains("orphaned WNDPROC return stub with no pending callout")
+                    {
+                        self.0 = true;
+                    }
+                }
+            }
+
+            let mut visitor = MessageVisitor(false);
+            event.record(&mut visitor);
+            if visitor.0 {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+
     fn run_child_dispatch_message_counter_fixture(lose_pending_return: bool) -> crate::Result<()> {
         const MSG_PTR: u32 = 0x0040_1080;
         const DISPATCH_TRAP: u32 = crate::emulator::imports::IMPORT_TRAP_BASE + 0x240;
@@ -59314,31 +59360,45 @@ mod unicorn_tests {
             assert_eq!(lost.return_sp, return_sp);
             assert!(cpu.pending_wndproc_returns.is_empty());
 
-            for _ in 0..2 {
-                assert_eq!(kernel.current_process_id(), launch.process_id);
-                run_to(&mut cpu, &mut kernel, &mut framebuffer, None)?;
-                let child_after = phase1_actor_cpu(&cpu, &kernel, launch.process_id);
-                let saved = child_after
-                    .saved_context
-                    .as_ref()
-                    .expect("orphaned child context");
-                assert_eq!(saved.pc, super::WNDPROC_RETURN_STUB_ADDR);
-                assert_eq!(saved.regs.regs[31], super::WNDPROC_RETURN_STUB_ADDR);
-                assert_eq!(saved.regs.regs[29], call_sp);
-                assert_eq!(counters(child_after), (1, 1, 0));
-                assert!(child_after.pending_wndproc_returns.is_empty());
-                assert!(
-                    child_after
-                        .last_debug_snapshot()
-                        .unwrap()
-                        .last_wndproc_returns
-                        .iter()
-                        .all(|record| record.source != "DispatchMessageW")
-                );
-                if kernel.current_process_id() != launch.process_id {
-                    assert!(cpu.rotate_to_parked_process_id(&mut kernel, launch.process_id));
+            use tracing_subscriber::prelude::*;
+            let warnings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let subscriber = tracing_subscriber::registry()
+                .with(OrphanReturnWarningCounter(std::sync::Arc::clone(&warnings)));
+            tracing::subscriber::with_default(subscriber, || -> crate::Result<()> {
+                for attempt in 1..=2 {
+                    assert_eq!(kernel.current_process_id(), launch.process_id);
+                    let generation_before = cpu.run_slice_generation;
+                    run_to(&mut cpu, &mut kernel, &mut framebuffer, None)?;
+                    let child_after = phase1_actor_cpu(&cpu, &kernel, launch.process_id);
+                    assert_eq!(child_after.run_slice_generation, generation_before + 1);
+                    assert_eq!(
+                        warnings.load(std::sync::atomic::Ordering::SeqCst),
+                        attempt,
+                        "each native attempt must freshly enter the orphan stub hook"
+                    );
+                    let saved = child_after
+                        .saved_context
+                        .as_ref()
+                        .expect("orphaned child context");
+                    assert_eq!(saved.pc, super::WNDPROC_RETURN_STUB_ADDR);
+                    assert_eq!(saved.regs.regs[31], super::WNDPROC_RETURN_STUB_ADDR);
+                    assert_eq!(saved.regs.regs[29], call_sp);
+                    assert_eq!(counters(child_after), (1, 1, 0));
+                    assert!(child_after.pending_wndproc_returns.is_empty());
+                    assert!(
+                        child_after
+                            .last_debug_snapshot()
+                            .unwrap()
+                            .last_wndproc_returns
+                            .iter()
+                            .all(|record| record.source != "DispatchMessageW")
+                    );
+                    if kernel.current_process_id() != launch.process_id {
+                        assert!(cpu.rotate_to_parked_process_id(&mut kernel, launch.process_id));
+                    }
                 }
-            }
+                Ok(())
+            })?;
             return Ok(());
         }
 
