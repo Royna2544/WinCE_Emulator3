@@ -33,13 +33,29 @@ Toolhelp snapshot buffers. Four focused release metadata controls passed;
 the combined release suite passed 1,647/0/5 ignored and the no-feature suite
 passed 1,248/0/2 ignored on the later source ([ledger E-22](../evidence/ledger.md)).
 
-This is identity metadata, **not** AddressSpace ownership or slab backing.
-The allocation directory and cursor are still global/base-keyed, native
-`mem_map`/`initial_bytes` behavior is unchanged, and a derived clone can
+E-22 was identity metadata, **not** AddressSpace ownership or slab backing.
+At that point the allocation directory and cursor were global/base-keyed;
+native `mem_map`/`initial_bytes` behavior was unchanged, and a derived clone can
 reuse a later allocation incarnation under the same copied birth key.
 Neither reserve-only native behavior nor E-18 private bytes, E-20 same-VA
 private isolation, Ex targeting, shared views, clone lineage, or O-P4
 fresh-default lifetime has passed its acceptance gate.
+
+### E-23 owner-qualified private-VA metadata (2026-10-14)
+
+The virtual-allocation directory now keys metadata by process birth and
+base. Private allocation lookup, release, query visibility and pointer
+probes reject a foreign owner's region; nonprivate legacy producers remain
+globally visible for compatibility. Per-owner cursor metadata exists, but a
+global floor and overlap fence still forbid live same-VA regions because
+native mapping/reclaim is VA-only. Raw COREDLL Ex arms resolve their target,
+allow the current process and fail closed for a remote process; these arms
+are not published in the default export table. Two focused release controls
+passed on source `4a1a9bfb9898a9f2a251212d6120794970266692`
+([ledger E-23](../evidence/ledger.md)); full regressions were still pending
+at that checkpoint. E-20 same-VA private isolation and E-18 fresh-owner
+private bytes remain red. No slab backing or fresh-default owner policy was
+introduced.
 
 ## Target authority and permitted interfaces
 

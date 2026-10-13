@@ -710,6 +710,26 @@ curve is consistent with the E-3 arena-retention mechanism. This is a
 sampled correlation, not attribution. It is the memory baseline that the
 fresh-default lifetime (O-P4) must be measured against.
 
+## E-23 owner-qualified private-VA metadata (2026-10-14, focused green)
+
+On source `4a1a9bfb9898a9f2a251212d6120794970266692`, private virtual
+allocation metadata is keyed by `(ProcessBirthKey, base)`; allocation
+lookup, release, query visibility and pointer probes now reject another
+process's private region. Owner cursor metadata was added, but its global
+floor and a global overlap fence still prevent two live private allocations
+at the same guest VA because the native page map is VA-only. Nonprivate
+legacy producers retain global compatibility visibility. The known Ex
+ordinal arms resolve a target and reject foreign processes, while the
+default COREDLL export table does not publish those arms.
+
+Two focused release controls passed (2/2 total), including the public raw
+COREDLL self/foreign Ex-arm checks; exact commands and source identity are
+in local `evidence/stage2-e23-owner-va-20261013/focused-owner-va.md`.
+This is not a broader regression result. E-20's public child same-VA path
+remains expected red at the native overlap fence, and E-18 fresh-owner
+private bytes still require coherent backing. No O-P4 fresh default, public
+remote Ex operation, Stage 2 or application acceptance is claimed.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
