@@ -676,10 +676,39 @@ Separately, user-authorized ZIP backups beside the three original mounted
 data folders were created and verified before another guest run; exact
 archive hashes and cleanup of one invalid partial ZIP are in local
 `evidence/e22-pre-live-mounted-data-20261013.receipt.md`. The bounded
-read/write launch script `scripts/inavi_bounded_e22.ps1` was prepared but
-had not been launched at this ledger point. The earlier raw-NMEA GPS payload
-and send frequency were not retained, so a future run cannot be called
-input-matched without recovering them.
+read/write script `scripts/inavi_bounded_e22.ps1` was then run against the
+original mounts. Local `evidence/e22-live-20261013T154435Z/result.json`
+records emulator exit 0 at its configured 330 s limit (330.502 s elapsed),
+no monitor trip, no stderr CPU-exception/PC-zero text, and a terminal frame.
+The observer completed its 420 s horizon and saved four changed frames; its
+last observed and terminal images remain iNavi splash, not the map. A newly
+constructed raw-NMEA feed sent 16 once-per-second HTTP requests starting at
+input-ready +93 s, plus a tap at +153 s; all were accepted by the remote API.
+API ACKs alone would not prove guest delivery, but retained
+`observer-captures/files-full-0065.txt` records positive `COM7:` `ReadFile`
+transfers with the injected `$GPRMC` bytes (174/348 bytes on handle 5204).
+`observer-captures/messages-0165.txt` records tap down/up delivery and
+window-procedure returns. Neither trace establishes parsed GPS position,
+touch-driven navigation, or map readiness. The earlier exact NMEA payload
+and frequency were not retained, so this is not an input-matched BED2
+comparison. `mounted-changes.jsonl` reports two directory and two file
+timestamp changes; both file lengths and SHA-256 values were unchanged, with
+no added or removed entries. The originals and adjacent verified ZIP backups
+remain in place. Bounded survival does not close E-18, E-20, Stage 2 or
+splash-to-map acceptance.
+
+Memory, from the same run's `memory.jsonl` (two-second host samples, PID
+43456; added by the supervisor pass at 01:05):
+- Working set was 888 MiB at 41 s, 1,009 MiB at 60 s and 1,519 MiB at
+  328.6 s.
+- Sampled peaks were 1,543.9 MiB working set and 1,554.4 MiB private bytes.
+
+That is about 2.7× BED2's sampled peak (E-1: 582,623,232 B RSS) and close to
+the failed 650 run's 1,662.59 MiB (E-2). This run survived 330 s, but the
+source still keeps the persistent native owner by default, and the growth
+curve is consistent with the E-3 arena-retention mechanism. This is a
+sampled correlation, not attribution. It is the memory baseline that the
+fresh-default lifetime (O-P4) must be measured against.
 
 ## Chat-project validation notes (not in this repository)
 
