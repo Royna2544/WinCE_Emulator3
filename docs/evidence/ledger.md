@@ -1048,8 +1048,13 @@ An additional [pre-entry fence expected red](../../evidence/e28-run-outcome-2026
 showed `NoAttempt` with Kernel wait intact but CPU wait lost before `emu_start`
 when a private-page execution fence rejected setup. Its
 [two-phase repair design](../evidence/e28-preentry-handle-salvage-design.md)
-covers state moved before/after hook construction; validation belongs to a
-later source boundary. These controls do not close all preflight/tail errors,
+covers state moved before/after hook construction. The first handles-only
+source passed [the non-ready wait control](../../evidence/e28-run-outcome-20261014/private-preentry-nonready-wait-focused-green.receipt.md)
+**1/0**, but a [ready-worker expected red](../../evidence/e28-run-outcome-20261014/private-preentry-ready-wait-expected-red.receipt.md)
+showed the stronger failure: a selectable worker wait was consumed and the
+worker was selected before a later fence error returned `NoAttempt`, leaving
+no saved PC. Hook/fence ordering and a separately moved orphaned-WNDPROC
+queue need their own repair/validation. These controls do not close all preflight/tail errors,
 Task/Frame authority, O-P1, Stage 2, S3-A, or live-app map readiness. E-29
 used an earlier executable and cannot validate them.
 
