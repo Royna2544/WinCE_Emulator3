@@ -632,7 +632,10 @@ retried with permission; both no-trace release feature checks exited 0. No
 raw logs were saved for E-21. Exact commands, full hashes, focused cases,
 permission limitation and source boundaries are in local
 `evidence/e21-process-birth-20261013.receipt.md` (receipt SHA-256
-`04122F08…F3BB2EB`). The selected-process compatibility snapshot, worker
+`5F9F16B6…A0A681`). Explicit E-18 and public same-VA E-20 reruns on this
+source still exited 1 at their intended stale-byte (`0x11223344` versus
+`0x11223345`) and child-allocation-null assertions, respectively. The
+selected-process compatibility snapshot, worker
 sweep, checked guest-visible allocation failure, wait pins and clone lineage
 remain open. E-20's *other* red, public same-VA private allocation, remains
 ignored; E-18 private bytes, O-P4 fresh default, Stage 2 and bounded iNavi
