@@ -140,8 +140,10 @@ The remaining connected O-P1 work after the narrow E-15 correction is:
 These steps would close the remaining O-P1 classification gap. They do not
 change the 1M-instruction tick, the quantum or the clock.
 
-Status (working D: tree; E-15 focused controls and final-source full release
-suite, not alternate-profile or live-run acceptance):
+Status (E-15 source identity: `types.rs` SHA-256 `5CCAD8FF…92E5`,
+`unicorn.rs` `CD693878…25F8`; focused/full-suite/alternate-profile controls,
+not fresh-owner, Stage 2 or live-run acceptance; later O-M1 source must be
+validated separately):
 
 - Done in source: `unicorn_native_timeout` is gone. `Query::TIMEOUT` is
   always collected, and a post-run *synthetic* host-wall record is created
@@ -171,7 +173,11 @@ suite, not alternate-profile or live-run acceptance):
   E-15). The final follow-up source also passed the complete release suite
   (1,628 passed, 0 failed, 4 ignored; raw log SHA-256
   `8946D073…1E041`); this is later than the E-13 1,626-pass checkpoint and
-  does not turn the ignored E-14 VM control green. Keep
+  does not turn the ignored E-14 VM control green. Both no-trace release
+  checks and the no-feature suite also passed
+  (1,239/0/1 ignored); exact log hashes and source identity are in local
+  `evidence/op1-stop-taxonomy-20261013/post-op1-validation.receipt.md`
+  (ledger E-15). Keep
   `is_service_boundary()` true for successful Unknown, HookStop and
   NativeDeadline, preserving rotation policy. A debug
   `UnicornHostWallClockStop` alone does not prove a host-budget hook reason.

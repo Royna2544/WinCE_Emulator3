@@ -355,7 +355,7 @@ only the injected same-VA native-view collision: public same-VA MapView,
 private `VirtualAlloc` readback, fresh owner closure, same-mapping aliases,
 file flush/unmap, and application readiness remain open.
 
-## E-15 Narrow O-P1 native stop taxonomy (2026-10-13, focused green)
+## E-15 Narrow O-P1 native stop taxonomy (2026-10-13, executed)
 
 On the sole D: source, `NativeSliceOutcome::UnknownNormalStop` replaced the
 unproven successful `ServiceBoundary` residual. A positive configured count
@@ -401,11 +401,21 @@ fixture; it did not turn green. Raw log SHA-256
 is local `evidence/op1-stop-taxonomy-20261013/full-release-suite-final.log`.
 This supersedes the earlier E-13 full-suite count as the latest release
 result, but does not convert any ignored gate into a pass.
+Both no-trace release checks then exited 0 on the same source:
+`--features unicorn` (log SHA-256 `E2EE30F4…EE67E`) and
+`--features unicorn,win32-desktop` (`5CFDDB76…AAA95`). The no-feature
+`cargo test --locked -j1` suite passed **1,239 passed, 0 failed, 1 ignored**
+(log SHA-256 `4F448F59…51560`). Raw logs are local
+`evidence/op1-stop-taxonomy-20261013/{check-unicorn-final.log,check-win32-final.log,no-feature-suite-final.log}`.
+The final-source identity, commands, full hashes and serial-run scope are in
+local `evidence/op1-stop-taxonomy-20261013/post-op1-validation.receipt.md`.
+These results apply to `types.rs` SHA-256 `5CCAD8FF…92E5` and `unicorn.rs`
+SHA-256 `CD693878…25F8`, before any later O-M1 memory edits.
 
 This is focused O-P1 progress, not a complete classification or Stage 2
 acceptance. Native count-stop witness, remaining hook reasons, typed
-restart-PC repair, alternate feature profiles on this source and a bounded
-live workload remain separate gates. The earlier E-13 suite counts are
+restart-PC repair, fresh-owner/VM gates and a bounded live workload remain
+separate gates. The earlier E-13 suite counts are
 historical and must not be attributed to this O-P1 source.
 
 ## Chat-project validation notes (not in this repository)
