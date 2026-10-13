@@ -99,11 +99,39 @@ as an invented transaction rollback.
 The smallest native change to review is a per-`emu_start` count-stop bit in
 the vendored core: reset it at attempt start, set it only at the internal
 count hook's successful stop request, and expose it through a checked query
-to the Rust adapter. The vendored header, implementation, binding and wrapper
-must change together; do not read private `uc_engine` fields from Rust or
-infer the cause from `emu_counter >= count`. Read the bit on the same native
+to the Rust adapter. The exact C seam is
+[`include/unicorn/unicorn.h`](../../vendor/unicorn-engine-sys/include/unicorn/unicorn.h)
+(append a query enum value), [`include/uc_priv.h`](../../vendor/unicorn-engine-sys/include/uc_priv.h)
+(per-run field), and [`uc.c`](../../vendor/unicorn-engine-sys/uc.c)
+(count hook, start reset, and query case). The vendored [`build.rs`](../../vendor/unicorn-engine-sys/build.rs)
+already generates Rust `Query` from the header; the pinned 2.1.5 Rust wrapper
+already accepts any `Query` in `Unicorn::query`. Neither the generated binding
+file nor the registry wrapper needs a hand edit. Do not read private
+`uc_engine` fields from Rust or infer the cause from `emu_counter >= count`.
+Read the bit on the same native
 owner immediately after `emu_start`, alongside `Query::TIMEOUT`, before
 another run can reset it. A query error is an error, never `false`.
+
+The bit must reset on **every** `uc_emu_start` entry, before `UC_INIT`, nesting
+validation, hook registration or any other early return; an unsuccessful new
+attempt must not expose an older count stop. The current counter already resets
+at entry. Same-handle nested starts also reset that counter and can corrupt a
+single-bit attempt record, so the first adapter must forbid them or use a
+stacked native record. In this core, `hook_count_cb` increments at the code
+callback and requests stop only when `emu_counter > emu_count`: a limit of one
+is signalled at callback two, before that candidate instruction executes.
+The counter is not an independently verified retired-instruction count.
+
+The count hook is inserted first among `UC_HOOK_CODE` hooks. At the threshold,
+its stop can suppress a user code hook on that same instruction; a block hook
+or exact `until` PC can instead stop before the next count callback. A timeout
+thread can race with count stop, leaving both facts true. Preserve these
+observations rather than choosing a quantum from the configured count. The
+trace helper also has a `UC_HOOK_FLAG_NO_STOP` path that can reverse a stop
+request; no current call site passes that flag, but a flag advertised as a
+completed count stop must be cleared on such reversal (or be named and used
+only as request evidence). The invalid-instruction `size == 0` path can call
+the counter too; a primary native error still wins classification.
 
 `CountLimit` requires that witness, a successful primary native result and
 no competing explicit PC/hook/deadline/error cause. If independent facts
@@ -127,6 +155,13 @@ count-witness adapter and immutable per-attempt report, keeping current
 record legacy/unbound frame identity; no S3-A production caller consumes it
 until the canonical frame shell and outcome review are ready. Do not add a
 second task registry or claim that this slice classifies every `emu_stop`.
+An ignored test still has to compile: before the header generates a new Rust
+`Query` variant, a control can run real MIPS through the existing API and
+temporarily compare the successful outcome's debug label with `CountLimit`
+(alongside `TIMEOUT == 0`, no requested PC, and no typed hook). Replace that
+string assertion with a typed one when the variant exists. Stage a direct
+typed native-query control only after the header/bindgen seam compiles; do
+not transmute a not-yet-valid Rust enum discriminant.
 
 Focused controls must include real MIPS execution, not just enum-unit tests:
 
