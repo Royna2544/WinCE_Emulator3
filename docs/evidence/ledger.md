@@ -455,6 +455,40 @@ guest-written `VirtualAlloc` persistence across fresh owners, same-mapping
 aliases, closed-handle flush/unmap, `VirtualQueryEx` owner resolution,
 O-P4, Stage 2 and bounded live application readiness remain open.
 
+## E-17 Visible parked-peer yield attribution (2026-10-13, narrow green)
+
+After the frozen E-16 O-M1 source, the hookless live-pump scheduler block hook
+gained `HookStop(VisibleParkedPeerYield)` for a visible, runnable parked peer
+only after it selected a safe restart PC and both the checked native PC write
+and `emu_stop` request succeeded. Control-transfer failures use the existing
+backend-error slot. This yield creates no host-wall debug marker and does not
+claim a count limit, native deadline or remote-input cause. The scheduler's
+successful service-handoff policy and one-million-instruction count are
+unchanged.
+
+The real-backend fixture directly constructs a visible resumable peer and
+bypasses only preflight rotation so the parent takes a native slice. It passed
+three serial focused runs with `Query::TIMEOUT = 0`, typed outcome, native and
+saved safe PC, no host-wall marker and peer handoff. Seven nearby focused
+controls also passed. No failing Unicorn PC-write/stop API call was injected;
+the peer fixture is not a public CreateProcess test.
+
+On frozen `types.rs` SHA-256 `6EA882B5…D14DE` and `unicorn.rs` SHA-256
+`F1D45245…FD38`, the full release suite passed **1,632 passed, 0 failed,
+3 ignored** (raw log SHA-256 `6BD9C340…3DA2`). Unicorn-only and
+Unicorn+desktop/no-trace release checks exited 0; the no-feature suite passed
+**1,239 passed, 0 failed, 1 ignored**. Exact commands, full source/binary/log
+hashes and limits are in local
+`evidence/op1-visible-peer-20261013/post-visible-peer-validation.receipt.md`
+(receipt SHA-256 `0E270930…BFE03`); focused repetitions are in the same
+directory's `focused-controls.receipt.md`. These totals do not transfer to
+later source edits.
+
+Global and sparse hook writers still lack independent typed provenance; an
+actual native count-exhaustion witness and typed restart-PC repair remain
+open. O-P1 is incomplete, as are O-P4, public same-VA/lazy/private O-M1,
+Stage 2 and bounded live-app acceptance.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

@@ -119,7 +119,7 @@ Search by symbol, not by line number; the file moves.
 - `Query::TIMEOUT`, the actual expiry, was collected only when
   `ce.slice_profile` debug was on. Current D: source collects it every attempt.
 
-The remaining connected O-P1 work after the narrow E-15 correction is:
+The remaining connected O-P1 work after the narrow E-15/E-17 corrections is:
 
 1. Obtain an independent native count-stop witness before reporting
    `CountLimit`. `Ok` with `count > 0` and no recorded hook reason remains
@@ -140,10 +140,11 @@ The remaining connected O-P1 work after the narrow E-15 correction is:
 These steps would close the remaining O-P1 classification gap. They do not
 change the 1M-instruction tick, the quantum or the clock.
 
-Status (E-15 source identity: `types.rs` SHA-256 `5CCAD8FF…92E5`,
-`unicorn.rs` `CD693878…25F8`; focused/full-suite/alternate-profile controls,
-not fresh-owner, Stage 2 or live-run acceptance; later O-M1 source must be
-validated separately):
+Status (latest validated E-17 source identity: `types.rs` SHA-256
+`6EA882B5…D14DE`, `unicorn.rs` `F1D45245…FD38`;
+focused/full-suite/alternate-profile controls, not O-P1 completion,
+fresh-owner, Stage 2 or live-run acceptance; the E-16 O-M1 green belongs to
+its separate frozen source):
 
 - Done in source: `unicorn_native_timeout` is gone. `Query::TIMEOUT` is
   always collected, and a post-run *synthetic* host-wall record is created
@@ -181,10 +182,25 @@ validated separately):
   `is_service_boundary()` true for successful Unknown, HookStop and
   NativeDeadline, preserving rotation policy. A debug
   `UnicornHostWallClockStop` alone does not prove a host-budget hook reason.
-- Remaining hook-site inventory on the E-15 source:
-  `NativeSliceOutcome` now has `UnknownNormalStop` and
-  `HookStop(NativeHookStopReason)`, and `HostWallBudget` is the only reason
-  so far. Only one of the seven hook sites that write
+- E-17 visible-peer progress: one hookless live-pump block-hook path now
+  reports `HookStop(VisibleParkedPeerYield)` only for a visible runnable
+  parked peer after safe PC selection and successful checked native PC
+  write/stop. It emits no host-wall debug marker. A real-backend control
+  passed three serial runs with outgoing typed outcome, native/saved safe PC,
+  `Query::TIMEOUT = 0` and peer handoff; seven nearby controls passed.
+  On frozen E-17 source the full release suite passed 1,632/0/3 ignored,
+  both no-trace release checks exited 0, and no-feature tests passed
+  1,239/0/1 ignored. Exact source/log hashes are in local
+  `evidence/op1-visible-peer-20261013/post-visible-peer-validation.receipt.md`
+  (ledger E-17). The peer is directly constructed, not public
+  CreateProcess; failing native PC-write/stop APIs were not injected. The
+  successful service-handoff policy and 1M-instruction count did not change.
+  Later source edits must be validated separately.
+- Historical hook-site inventory on the E-15 source:
+  `NativeSliceOutcome` had `UnknownNormalStop` and
+  `HookStop(NativeHookStopReason)`, and `HostWallBudget` was its only reason.
+  E-17 adds the distinct visible-peer reason without a host-wall marker.
+  Only one of the seven hook sites that write
   `UnicornHostWallClockStop` sets a reason: the timeslice hook. The other
   six fall through to `UnknownNormalStop` while still writing the debug
   record. In this source they are:
@@ -201,7 +217,8 @@ validated separately):
   Next shape:
   1. Turn the pending `bool` into `Cell<Option<NativeHookStopReason>>`, set
      at the moment a stop is requested.
-  2. Add `RemoteControlService` and `ReadyPeerYield`.
+  2. Add `RemoteControlService` and the remaining ready-peer yield paths;
+     E-17 covers only the checked hookless visible-peer path.
   3. Write the reason and the debug record through one helper, so the two
      signals cannot disagree.
   4. Key restart-PC repair off `HookStop(_)` and `NativeDeadline`.
