@@ -10303,6 +10303,7 @@ impl UnicornMips {
         let post_native_state_ready = native_timeout_query.is_ok()
             && native_capture_result.is_ok()
             && snapshot_context_result.is_ok()
+            && native_hook_control_error.borrow().is_none()
             && deferred_launch_error.is_none()
             && deferred_view_sync_error.is_none()
             && mapped_blob_sync_error.is_none()
