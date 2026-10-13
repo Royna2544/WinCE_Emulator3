@@ -4,7 +4,7 @@ Status: proposed subsystem plan; implementation follows review and test gates. T
 
 ## Responsibility and scope
 
-CeMachine owns scheduling across all AddressSpaces. Its machine-owned HandleTable contains the single canonical TaskDirectory. The scheduler selects canonical tasks and continuation frames; a process CPU/native engine is an execution resource, not a second Task registry. Kernel shims and native hooks request transitions through that authority.
+CeMachine owns scheduling across all AddressSpaces. Its machine-owned HandleTable is the target single canonical directory: Stage 2 introduces process-birth records and process-handle aliases there, and Stage 3 extends that same authority for Tasks/objects. The scheduler selects canonical tasks and continuation frames; a process CPU/native engine is an execution resource, not a second Task registry. Kernel shims and native hooks request transitions through that authority.
 
 In scope: authentic task birth/exit, runnable state, explicit suspension, waits, nested continuation ownership, CE priority and quantum accounting. Out of scope for this first plan: heap reuse, app-specific readiness/visibility rules, a new HLE syscall boundary, or assumed cycle timing. Clock conversion is coordinated with [clock and timers](clock-timers.md); wait-target lifetimes with [kernel objects](kernel-objects.md).
 
@@ -23,7 +23,7 @@ In scope: authentic task birth/exit, runnable state, explicit suspension, waits,
 
 Canonical TaskDirectory stores creation identity, lifecycle metadata, base/effective priority, suspend depth, quantum state and frame ownership once. Public thread handles resolve to canonical identity; Kernel cannot retain writable copies as another truth. Boot registration need not publish a new guest-visible handle. Creation identity survives launch-queue drain, trace eviction, process rotation and external-handle closure.
 
-The first cut also needs a durable child ProcessIdentity and primary TaskKey for launch completion. The current completion path signals the original launch process/thread handle numbers; either may already have been closed. Completion and worker cleanup must resolve canonical identities, not recover ownership from a public alias or diagnostic ring. The exact process-worker sweep remains open (O-K5).
+The first cut consumes the durable boot/child ProcessIdentity from Stage 2's canonical birth directory, then adds the primary TaskKey for launch completion; it must not create another process registry. The current completion path signals the original launch process/thread handle numbers; either may already have been closed. Completion and worker cleanup must resolve canonical identities, not recover ownership from a public alias or diagnostic ring. The exact process-worker sweep remains open (O-K5).
 
 The shared execution-state contract must distinguish:
 
@@ -76,7 +76,7 @@ The first continuation family should migrate with **all** consumers: attach exis
 
 ## Migration and test gates
 
-- Gate 1: canonical alias/lifecycle authority, durable child ProcessIdentity/primary completion and checked PID/TID/handle allocation. The ten earlier controls (ledger E-8) plus three Task lifetime/alias-wake reds (E-11) must turn green; add genuine native last-public-handle execution, wait acquisition after alias closure, stale-key, allocator-exhaustion and child-exit-after-original-handle-close controls. O-K3 pin/retirement is part of this first cut, not a later cleanup. Later assertions in several earlier red cases were not reached. This is not a passed gate.
+- Gate 1: extend Stage 2 process birth/alias authority to canonical Task/object lifecycle, primary completion and checked TID/handle allocation. The ten earlier controls (ledger E-8) plus three Task lifetime/alias-wake reds (E-11) must turn green; add genuine native last-public-handle execution, wait acquisition after alias closure, stale-key, allocator-exhaustion and child-exit-after-original-handle-close controls. O-K3 pin/retirement is part of this first cut, not a later cleanup. Later assertions in several earlier red cases were not reached. This is not a passed gate.
 - Gate 2: ordinary blocked-wait and ready-continuation ownership, with genuine MIPS capture/restore and full caller return. The staged in-slice FPU regression is unexecuted; existing GPR handoff controls do not prove FPU/frame preservation.
 - Gate 3: nested callback→outer wait resume, stale incarnation/frame rejection without consumption, explicit suspend while blocked, alias close during execution, process exit with workers and creation failure cleanup.
 - Gate 4: effective/base priority, equal-priority quantum rotation, higher-priority preemption, quantum 0 and genuine idle eligibility. Only then enable the clock migration and retire compatibility heuristics.

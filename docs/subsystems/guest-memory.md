@@ -22,8 +22,11 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 
 ## Target authority and permitted interfaces
 
-- `CeMachine` owns mutation sequencing; each `AddressSpace` owns its process's regions,
-  backing objects, protections and native mapping ledger. No CPU-local allocator authority.
+- `CeMachine` owns mutation sequencing; each `AddressSpace` owns its process's
+  regions, private backing, view records and desired protections. Canonical
+  shared backing belongs to a VM/file-mapping object. The selected native
+  owner/lease holds its observed map ledger and pins; VM alone computes and
+  reconciles it, and owner closure discards it. No CPU-local allocator authority.
 - A caller's shared `TaskIdentity` resolves through the canonical lifecycle directory;
   ownership cannot come from a transient current PID or copied ThreadObject.
 - Access also identifies the shared `FrameIdentity` when retaining a guest buffer
@@ -44,13 +47,18 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
   implementing reuse or reclamation. Live logical size is not the reservation footprint.
 - Reject a stale prepared token/frame even if another allocation has the same address.
   Never infer free pages from a high-water gap or another process's allocation snapshot.
-- A run lease receives the correct outgoing mapping ledger and returns it only after
-  checked reconciliation/synchronization; process rotation cannot attach it to incoming RAM.
+- A run lease holds the exact observed native-owner mapping ledger. Checked
+  reconciliation/synchronization precedes completion; fresh-owner close
+  discards that ledger, while a persistent lease may retain it only for the
+  same owner. Process rotation cannot attach it to incoming RAM or treat it
+  as canonical VM state.
 - On the proposed fresh-engine path, `KernelMemoryMappings` is rederived per
   owner rather than carried across native-owner closure: old `virtual_pages`
   would otherwise request unmapping pages absent from the new engine. The
-  native byte readback and canonical backing must complete before closing the
-  outgoing owner or rotating to a different process.
+  current copy-based families need checked byte synchronization before closing
+  the outgoing owner or rotating. Migrated private committed pages instead
+  retain one AddressSpace-owned backing, pinned through native mapping; a
+  fresh engine remaps that same backing without private-page readback.
 - Reconcile exact current native map extents, removed pages, protections and runtime-added
   pages. Do not remap an existing region or retain a freed virtual page by omission.
 - Preserve canonical shared-view ordering and host edits to parked blob bytes. Same blob
@@ -93,14 +101,15 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
   This is an expected-red private-byte boundary, not a Context failure or a
   production fresh-default change ([ledger E-18](../evidence/ledger.md),
   local `evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`).
-  Establish checked outgoing readback and owner-qualified canonical private
-  backing before fresh becomes default; public COREDLL `VirtualAlloc` and
-  cross-process private isolation still require separate controls.
+  E-18 stays red until ordinary private pages have owner-qualified canonical
+  backing across fresh owners. The selected host-backing design below removes
+  private copy-in/readback rather than adding another copy-back path; public
+  COREDLL `VirtualAlloc` and cross-process isolation require separate controls.
 - Read-only E-18 production audit: `MemorySystem` allocations/lazy seeds are
   global and base-keyed, mixing private `VirtualAlloc` and file-view backing;
-  the native page ledger is VA-only. A safe readback gate needs captured owner,
-  backing kind and allocation incarnation, exact mapped-page bytes before
-  owner finish/rotation, and staged failure handling. Mapping any page can
+  the native page ledger is VA-only. A copy-back interim would need captured
+  owner, backing kind and allocation incarnation, exact mapped-page reads
+  before owner finish/rotation, and staged failure handling. Mapping any page can
   currently reseed the entire `initial_bytes` range, risking overwrite of a
   guest-written page; free/reallocation at the same VA can retain old native
   bytes. `self.saved_context` is published before byte synchronization, so
@@ -150,12 +159,19 @@ native mapping, fault repair, public view allocation and lifetime still lack
 an authoritative `AddressSpace` identity. A filter on one sync helper is not
 a complete O-M1 fix.
 
-The smallest transitional key may be an explicit `AddressSpaceKey` backed by
-the currently incremented PID, captured when the CPU slice starts and passed through
-the virtual-allocation and view paths. Keep `CeKernel.current_process_id` and
-`CurrentProcessState` as existing selectors for now; do not present a PID as a
-durable process incarnation or reuse-safe identity. Replace this transitional
-key with canonical `ProcessIdentity` before allowing PID reuse.
+The owner key must be the anchor's birth-qualified `ProcessIdentity`, not the
+currently selected PID. There is no existing canonical process-birth record:
+`CeKernel` holds a bare selected PID and pending launches, while each public
+process handle contains a copied `ProcessObject`. Introduce one durable,
+machine-owned process-birth directory inside the HandleTable authority,
+independent of public handle lifetime,
+for boot PID1 and child birth; mint PID/incarnation with checked exhaustion and
+capture the identity at native-attempt start. Current `next_process_id` uses
+saturating increment and `set_current_process_id` changes a bare PID; neither
+is safe as a backing owner. Stage 3 extends this same directory for Task/object
+authority and makes process handles aliases, not a parallel long-lived registry.
+Checkpoint clone establishes a new machine lineage and deep-copies private
+backing.
 
 Staged implementation boundary, with the E-14 real-backend expected-red
 collision control now turned green for injected native-resident views under
@@ -180,74 +196,176 @@ A fresh-owner two-slice guest-written private `VirtualAlloc` round-trip is now
 an executed expected-red gate under E-18. It must turn green with authoritative
 byte backing; the E-16 view controls alone cannot establish it.
 
-## O-M1 backing proposal: host-owned slabs via `mem_map_ptr` (reviewed 2026-10-13)
+## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
-Source facts (working tree, 2026-10-13):
+**Design selected; implementation and acceptance open.** Per anchor A4, each
+migrated page has one writable byte authority: stable host backing mapped into
+the selected native engine with `mem_map_ptr`. An `AddressSpace` owns private
+slabs and its view records; a canonical VM/file-mapping object owns shared
+slabs referenced by all corresponding views, including closed-handle live
+views. Ordinary private pages do not use per-slice `initial_bytes` copy-in or
+copy-back after migration. Unmigrated file views and image/heap blobs retain
+their existing checked copy boundary until each family moves in a connected
+change; do not silently mix both authorities for one backing.
 
-- **Duplicate writable byte storage.** Guest bytes reach a native engine by copy-in
-  (`uc.mem_map` plus writes from blobs or `initial_bytes`). They leave by
-  copy-back (`sync_mapped_blobs_from_unicorn`,
-  `sync_file_mapping_views_from_unicorn`). Host blobs and native RAM are
-  separate writable copies; making a copy-based design meet anchor A4 would
-  require an explicit, checked authority hand-off at every boundary.
-- **E-18 is that gap.** Private `VirtualAlloc` pages have no copy-back, so a
-  fresh owner reseeds from `initial_bytes`.
-- **Copy-back has a cost risk.** Pinned Unicorn 2.1.5 exposes no public
-  dirty-page API, so complete copy-back would require scanning mapped pages
-  or tracking writes. The actual cost of either approach has not been measured
-  for this migration; Phase 0's hook measurements are in ledger E-9.
-- **The native mechanism works in isolation.** The explicitly selected ignored
-  diagnostic
-  `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner`
-  (`native_engine.rs`) passed 1/1 on the E-18 source: a fixed host slab mapped
-  with `mem_map_ptr` took guest stores, survived a `mem_protect` split, and was
-  visible to a fresh owner without byte copy. See the local
-  `evidence/om1-host-slab-20261013/focused-diagnostic.receipt.md`. This does
-  not exercise production allocation ownership, hooks or engine lifetime.
+This choice is supported, not proved in production, by the explicitly selected
+ignored `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner`
+diagnostic (`native_engine.rs`): one fixed boxed slab took real MIPS stores,
+survived protect/unmap splits and was visible to a fresh owner. It passed 1/1
+on the E-18 source ([local receipt](../../evidence/om1-host-slab-20261013/focused-diagnostic.receipt.md)).
+The vendored Unicorn pointer-map contract requires a writable, stable host
+range for the mapping lifetime. The diagnostic did not exercise production
+Kernel allocation, concurrent host access, clone, failed native calls or app
+memory. E-18 is still red on the later E-19 source ([ledger E-18/E-19](../evidence/ledger.md)).
 
-Reviewed recommendation, **not an accepted O-M1 decision or implementation**:
-target host-owned, address-stable backing mapped with `mem_map_ptr`, with the
-AddressSpace as its byte authority. Before the first private-page migration,
-define owner, backing kind and allocation incarnation; scope native map, fault,
-reclaim and query paths to that identity; pin each slab in the native mapping
-lease until checked unmap or owner close; deep-copy private bytes on clone;
-and report map/protect/unmap or backing failures as checked backend errors.
+The local CE6 kernel source at
+`C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c` directly confirms the
+design distinction: `DoVMAlloc` adds `MEM_RESERVE` for a null address, scans
+an existing reservation for commit-only requests and separately commits pages
+(lines 856-909); `VMDecommit` invalidates a page range (1598-1625), while
+`VMRelease` releases the reservation (1639-1688). `VMProtect` is a real
+permission operation (2916-2940), and `NKVirtualSharedAlloc` uses the shared
+heap rather than ordinary private allocation (3687-3705). These are source
+semantics, not proof of the dumped application's exact API sequence; capture
+that use and its failures before matching CE behavior in the emulator.
 
-- If integrated correctly, native code and host shims would use one
-  authoritative backing per page. A fresh engine could map existing private
-  slabs without reseeding or readback; E-18 must still turn green in the full
-  backend before that claim is accepted.
-- Shared file views would map the *same* backing where their view identity
-  permits it; private pages would have per-process backing. Same-VA isolation
-  and aliases require separate public-path controls beyond E-14 and E-16.
-- Reduced per-slice copying and a cheaper fresh lifetime (O-P4) are
-  hypotheses, not measured results. Migrating private pages alone leaves
-  image/heap blob and file-view copies in place; map topology and host memory
-  costs must be measured.
-- The `unsafe` stays in one module, with these invariants:
-  - a slab never moves or resizes (`Box<[u8]>` or a page arena, never a
-    growing `Vec`);
-  - every active or idle engine retains a backing pin until its mapping is
-    checked-unmapped or the owner is closed, before the slab is dropped;
-  - host access happens only while no `emu_start` is running, or from hooks
-    through the existing bounded lease;
-  - protection changes go through `mem_protect` on the mapping, never through
-    a re-seed.
-- Migrate in one connected change per backing family:
-  1. Private `VirtualAlloc`: E-18 must turn green.
-  2. File views: E-14 and E-16 must stay green.
-  3. Image/heap blobs.
+### Authority, identities and interface direction
 
-  Delete the matching copy-in and copy-back paths in the same change, so the
-  old paths never linger beside the new ones.
-- Promote the slab diagnostic to a normal test, because it is the
-  foundation. Add the same-VA and fresh-owner controls on real Kernel
-  allocations.
+- One new canonical machine-owned HandleTable birth directory mints the anchor's
+  `ProcessIdentity` once at boot/child birth: public PID plus checked
+  incarnation, scoped to a machine lineage. It lives independently of the
+  current copied per-handle `ProcessObject`; a public handle stores only an
+  immutable identity/key, never its own mutable process state or lifetime.
+  Exit/signaled/debugger/lookup/close resolve one canonical record; active
+  execution, VM/view and launch pins keep it alive after the last public
+  handle closes. `open_process` resolves a live canonical birth, not an
+  existing alias scan. Boot PID1 has no invented public handle. PID selection
+  is not ownership.
+  `next_process_id` currently saturates and can repeat; exhaustion must fail,
+  not alias a prior birth. Stage 3 extends this same directory rather than
+  adding another registry.
+- Each address space owns its reservation cursor and allocation directory.
+  An allocation has checked incarnation, original reserved extent, backing
+  kind (`Private` or exact shared-mapping identity), protection and committed
+  page set. A reallocation at the same VA gets a different identity. A
+  `FileMappingView` gains a distinct view identity; public handle aliases and
+  closed handles with live views cannot be resolved by base alone.
+- API shims request checked reserve/commit/protect/decommit/release and scoped
+  read/write operations. They do not own slabs or mint a PID. For an inactive
+  process, publish initialized canonical backing and owner/permission metadata;
+  its first execution/access lease maps and checks them before use. For an
+  active owner, validate the native map before returning a pointer the guest
+  may immediately dereference. The CPU captures the owner at primary-attempt
+  start and passes it unchanged through
+  map, fault, reclaim and sync, even if a child launch temporarily changes
+  `kernel.current_process_id`. `VirtualQueryEx` resolves the requested process
+  handle or fails; it cannot silently inspect the selected process.
+- The native mapping lease records exact `(owner, allocation incarnation,
+  backing identity, page offset, protection)` entries and holds a strong
+  backing pin. Acquire a non-moving pin before `mem_map_ptr`, install the
+  in-slice ledger entry before guest entry, and keep a local pin after map
+  success until checked unmap or owner close even if metadata commit fails.
+  Every early return/Drop closes the owner before its final pin drops. Host
+  bytes need audited interior mutability and access guards; no live Rust byte
+  slice or mutable reference may cross `emu_start`. A VA-only `virtual_pages`
+  set or a source `Vec` pointer is not evidence of identity. Only the VM may
+  reconcile this ledger; the CPU does not maintain a second virtual allocator.
 
-This is the preferred target to evaluate against checked outgoing private-byte
-readback, not permission for an immediate pointer swap. Readback could be an
-explicit interim boundary, but it would retain copy and failure-staging costs
-and would not by itself complete O-M1 or Stage 2.
+### Backing, lifetime and failure boundary
+
+- Keep 64-KiB reservation granularity separate from 4-KiB committed pages.
+  Allocate fixed, page-multiple host segments only for committed pages; group
+  contiguous pages of the same segment/protection where native mapping allows.
+  A one-page commit must not allocate a full reservation by default. A segment
+  never moves or resizes. `FileMappingObject.data` is currently a resizable
+  `Vec<u8>` and cannot be passed directly to `mem_map_ptr` in the later view
+  migration.
+- Quarantine pointer mapping and host-byte access in one module. Native guest
+  writes and Rust mutable references may not alias during `emu_start`; the
+  execution lease fences ordinary host access, with only a bounded hook lease
+  permitted inside a callback. No unchecked `Send`/`Sync` promise follows
+  from a stable pointer. Protect changes use checked native `mem_protect`, not
+  a re-seed.
+- An active or idle engine pins each mapped segment until checked unmap or
+  owner closure. `VirtualFree`, decommit or same-VA reuse cannot drop/rebind
+  backing while a native pointer still maps it. On failed unmap, retain pins,
+  fail the attempt and close its owner before release; never publish a
+  half-unmapped state. Fresh `finish()` discards the engine-specific blank
+  Context and ledger after checked CPU capture, while preserving only a
+  proven transferable CPU snapshot. The existing manual-close fixture passes
+  intermediate Context checks but still fails its final default-policy
+  assertion; it is not O-P4 acceptance.
+- Prepare and validate backing and metadata before pointer publication;
+  validate a native map before active-guest access, or on the inactive owner's
+  first native lease. If a pre-run map fails, abandon the candidate without
+  changing the old live allocation. A fault-time native map/protect/unmap or
+  identity failure becomes `BackendError`, closes the unusable lease and forbids a
+  successful continuation from a previously captured CPU snapshot. Guest
+  writes already made to a live slab are not promised rollback; record their
+  attempt/owner and stop. Do not turn an error into a normal CE return or PC0.
+- A checkpoint clone creates a new machine lineage and deep-copies private
+  bytes. It remaps birth records, pending/current process selection, VM/view
+  and CPU/parked owner keys in one checked machine operation; independent
+  derived clones of `CeKernel`/`HandleTable`/`MemorySystem` cannot safely
+  relineage a partial checkpoint. A source-machine key is stale in the clone.
+  Shared aliases within that clone refer to one clone-local backing; no
+  mutable slab is shared with the original. Image/heap and file-view copy
+  paths remain explicit until their separate migration.
+- At slice completion, stage the CPU snapshot and all outgoing bytes from any
+  unmigrated copy-based family, check every sync and owner-close result, and
+  publish a successful continuation/VM state only after all checks pass. A
+  failed sync poisons/closes that owner and forbids replay from an earlier
+  `saved_context`; already-executed guest writes are not promised rollback or
+  another full-RAM staging image.
+
+### Connected migration and executable gates
+
+1. Confirm the dumped target's allocation/API sequence against the local CE6
+   source distinction above. Introduce the one canonical HandleTable-owned
+   process-birth directory, migrate all process-handle mutable state/aliases
+   and checked selection to it, then move private allocation
+   callers, owner-scoped cursors, incarnation and queries together; no unused
+   parallel registry or implicit PID-1 fallback. Inventory locale and file
+   views, Toolhelp snapshots, shared allocation and every public
+   VirtualAlloc/Free/Protect/Query and Ex caller before defaulting to Private.
+   Targeted Ex operations must resolve their process or fail closed; reserve-
+   only then commit, partial decommit/recommit and host/native permissions need
+   executable controls. One owner-scoped region/overlap directory must cover
+   private, image, heap, shared-view and native regions; an explicit VA that
+   overlaps another family fails before pointer publication, never silently
+   skips an already mapped native page. Add overlap, release/reallocate and
+   failed-publication controls before using identity for native mapping.
+   Replace independent checkpoint clones with one machine-level relineage;
+   prove original keys are rejected in the clone and clone-local aliases stay
+   shared with each other but not with the original.
+2. Migrate the private `VirtualAlloc` family in one change: stable committed
+   backing, exact pinned native page ledger, owner-qualified startup
+   reconciliation/map/fault/reclaim, checked failure latch, and removal of
+   that family's whole-`initial_bytes` reseed/copy path. No migrated private
+   page may reappear as native-owned `mem_map` RAM. Promote the isolated
+   pointer-map diagnostic to a normal native control. Turn E-18 green without
+   retaining the old engine; add
+   public COREDLL two-slice store/load, two-PID same-VA private isolation,
+   untouched/two-page writes, free/reallocate, decommit/protect, independent
+   clone and injected second-page map/identity failures. E-16 view regressions
+   must remain green. These tests, not this design record, prove the boundary.
+3. Migrate shared file views with stable mapping backing and exact view
+   identities. Exercise public two-process same-VA distinct files, same-file
+   aliases, closed-handle live views, flush/unmap, lazy faults and foreign
+   private/view collision. Then migrate image/heap blobs without leaving a
+   second writable copy for any migrated family.
+4. Only after private/shared bytes and exact closed-owner CPU Context pass,
+   select O-P4 fresh-per-slice as production default. Repeat focused, full
+   release, no-feature and alternate-feature suites, then bounded app runs.
+   Keep the preserved BED2 fallback distinct from candidate builds.
+
+Measure reserved versus committed guest bytes, slab capacity, native map
+count, setup/sync time, engine count, host RSS/private and guest busy MIPS on
+matched workloads. Less copying, smaller host footprint and faster boot are
+hypotheses until phase-aligned runs establish them. A checked private
+copy-back could be an explicit interim boundary, but it retains duplicate
+writable storage, full-scan/write-tracking cost and failure staging; it is not
+the selected O-M1 target or Stage 2 completion.
 
 ## Telemetry and executable migration gates
 

@@ -9,14 +9,15 @@ must update this anchor and its consuming tests before implementation.
 
 ## Current evidence and safe baseline
 
-The installed fallback is BED2: a clean, bounded 330 s run that is still on the
-decorative splash. It is not full Windows CE boot or interactive map readiness
+The hash-preserved measured fallback is BED2: a clean, bounded 330 s run that
+is still on the decorative splash. The current `target/release` executable is
+not BED2. This is not full Windows CE boot or interactive map readiness
 ([ledger E-1](evidence/ledger.md)).
 
 The first persistent-engine migration passed 1,618 tests but crashed after
 129.108 s with host access violation `0xC0000005` (ledger E-2). Its source is
-preserved uncommitted in the working tree; rebuilding it does not reproduce the
-installed fallback, and no runtime acceptance is implied. The crash site is
+preserved in the D: checkout and backup commits; rebuilding current source
+does not reproduce BED2, and no runtime acceptance is implied. The crash site is
 native TranslationBlock initialization; the cause is not established.
 
 A source-confirmed candidate mechanism is the 1 GiB per-engine translation
@@ -26,8 +27,9 @@ candidate in the pinned native allocator. They are diagnostic: they do not
 explain the 650 crash, validate a cache budget or accept any stage.
 
 Per [DECISIONS D-003](DECISIONS.md), the Task, object, outcome and clock work
-runs on the existing fresh-engine-per-slice lifetime, so this native-lifetime
-investigation does not gate it. Persistent engines are a later swap behind the
+runs on the fresh-engine-per-slice target lifetime after the Stage 2 O-P4 gate;
+production currently retains an owner, so this native-lifetime investigation
+does not gate later scheduler design. Persistent engines are a later swap behind the
 CPU interface (plan Stage 8). Hot-path throughput facts (amortized block hook,
 hookless default, per-slice MIPS logging) are in ledger E-9.
 
@@ -86,6 +88,10 @@ wait's locked object. Exit and final retirement are distinct transitions.
 Checkpoint clones must have independent mutable task/object/memory/engine
 state; immutable CPU snapshots may be shared only where the native contract
 permits it. Incarnation/frame mismatch fails closed, never guessed recovery.
+Lineage changes are one machine/checkpoint operation that remaps canonical
+birth, pending launch, current selection, VM/view and CPU/parked owner keys
+together. Independently deriving `Clone` for those owners cannot relineage a
+partial machine; a key from the original must fail in its clone.
 
 ## A3. Execution and continuation boundary
 
@@ -122,9 +128,14 @@ Do not infer CE suspension from the legacy SuspendedGuestThread queue name.
 ## A4. Guest memory and publication
 
 VM is the single coherence authority. Retained host blobs and native RAM must
-not both be independently writable truths. Select the concrete page-backing
-strategy in a VM design gate; until then preserve the existing checked byte
-boundary and document duplication. Debug/checkpoint copies are snapshots,
+not both be independently writable truths. O-M1 selects address-stable host
+backing for migrated committed pages: an AddressSpace owns private slabs and
+view records, while a canonical VM/file-mapping object owns shared slabs.
+Each native engine maps the exact backing under a checked run lease, not a
+second writable copy. Existing
+unmigrated blob/view copy boundaries remain explicit and checked until their
+own connected migration. The isolated pointer-mapping diagnostic is not VM
+integration or Stage 2 acceptance. Debug/checkpoint copies are snapshots,
 not authorization to retain a third full RAM image indefinitely.
 
 `GuestMemory` scopes access to the stable AddressSpace owner, validated
@@ -144,6 +155,12 @@ Shared file views have canonical shared backing and explicit per-process views.
 An inactive process's cached view must not overwrite the active owner's bytes.
 Unknown pointers, absent data and failed reads remain explicit failures; no
 zero-filled evidence or guessed ownership is substituted.
+Native pointer mappings pin their exact private or shared backing until checked
+unmap or engine closure; a closed public mapping handle with a live view does
+not release shared bytes. A reservation does not itself allocate committed host pages. Private
+checkpoint clones copy bytes into independent backing; shared aliases within a
+clone retain one clone-local backing. Native map/protect/unmap or identity
+failure cannot publish a successful continuation.
 
 ## A5. Time, scheduling and external events
 

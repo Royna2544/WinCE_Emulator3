@@ -9,11 +9,12 @@ architecture is implemented.
 
 ## Entry state
 
-- BED2 is installed and preserved as the clean bounded fallback, still on the
-  splash (ledger E-1).
+- The clean bounded BED2 binary is hash-preserved under `evidence/` and remains
+  the measured fallback, still on the splash (ledger E-1). The current
+  `target/release` executable has a different hash and is not that fallback.
 - The persistent-owner experiment passed 1,618 tests but crashed at 129.108 s
-  with `0xC0000005` and 1.62 GiB RSS (E-2). Preserve its source (uncommitted),
-  binary and evidence; a unit suite is not permission for runtime acceptance.
+  with `0xC0000005` and 1.62 GiB RSS (E-2). Its source, binary and evidence
+  are preserved; a unit suite is not permission for runtime acceptance.
 - Decision [D-003](DECISIONS.md): Stages 3-6 run on the fresh-engine-per-slice
   lifetime. Persistent engines move to Stage 8, a later swap behind the CPU
   interface, so the native-arena investigation no longer gates the scheduler.
@@ -43,8 +44,8 @@ and the durable status files.
 | --- | --- | --- | --- |
 | 0 Recovery/evidence | Crash ledger, preserved 650/BED2, scoped cleanup manifest | Diagnostic-only probes/fixtures; no architecture policy change | Exact crash symbol/source recorded in the ledger; clean fallback intact |
 | 1 Common boundaries | Anchor + subsystem ownership/interface/error pages, dependency review | Named interfaces only when they replace actual consumers | No duplicate state authority; no unresolved identity/time semantics hidden in defaults |
-| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; VM page-backing strategy | Honest outcome inputs and checked byte boundary on the existing engine lifetime | Expected-red stop/error controls (ledger E-7) turn green; native errors hard-fail; VM same-VA isolation and shared-view tests |
-| 3 Task/object authority | Canonical directory and execution/alias/wait pin design | Boot/birth/alias/lifecycle migration across all direct consumers | Ledger E-8 reds turn green; alias coherence, durable PID/primary identity, close/exit/wait lifetime, independent checkpoint clones |
+| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | Connected process-alias/private-page authority and checked native mapping/failure boundary first, then exact shared-view families and fresh-default owner policy | E-7 stop/error controls remain green; E-18 private stale-byte red turns green under a fresh owner; public same-VA private/view, stale-key clone, free/reuse, protect/decommit, failure and closed-owner Context controls pass; native errors hard-fail |
+| 3 Task/object authority | Extend the Stage 2 canonical process-birth directory with Task/object execution/alias/wait pins | Migrate task, alias and lifecycle consumers to that same authority; do not re-mint boot/child identities | Ledger E-8 reds turn green; alias coherence, durable PID/primary identity, close/exit/wait lifetime, independent checkpoint clones |
 | 4 Continuation ownership | Raw-native vs synthesized frames; nested callback/wait state | One complete continuation family, removing old duplicate authority | Native wait→callback→resume/exit, FPU/HI/LO/branch correctness, cancellation and debugger exactness |
 | 5 Outcomes and scheduler | Explicit count/yield/deadline/error, ready indexes, CE6 priorities/quantum | Replace false timeout inference and policy heuristics together | Native errors hard-fail, equal-priority RR, higher-priority preemption, blocked/suspended eligibility; no starvation |
 | 6 One guest clock | CPU/time conversion; live-first mode plus opt-in fast-idle (D-002) | Replace hybrid offsets; idle advancement only with established events | No double time, finite/infinite/zero waits, wrap projection, timer ordering, external GPS/input pacing |
@@ -76,9 +77,15 @@ Executed controls are recorded in the ledger; none of them is a stage pass.
   E-11), the red baseline for Stage 3. The added last-public-handle,
   alias-indexed wake and registered-wait retention controls are red; native
   execution/wait acquisition and stale-incarnation controls remain to add.
-- Native outcome: full-backend count-stop and nonzero-unmapped-error controls
-  fail as expected (E-7), the red baseline for Stages 2 and 5. In-slice native
-  FPU wait→resume→exit controls are staged and unexecuted.
+- Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
+  controls were red originally and later turned green on the D: source. E-19
+  added focused typed global-hook stop controls and passed the frozen full
+  release suite (1,634/0/4 ignored); the remaining O-P1 causes and count
+  witness are open. In-slice native FPU wait→resume→exit remains unexecuted.
+- VM coherence: E-16's injected same-VA view control is green on its frozen
+  source; E-18's private fresh-owner guest-write control remains expected red
+  on the later E-19 source. D-008 selects a backing design, not Stage 2
+  acceptance or a demonstrated footprint/timing improvement.
 - Native owner/arena: six Stage 0 owner controls, the pre-init budget
   differential and the commit-tail repair controls (E-4 to E-6) are isolated and
   diagnostic; they feed Stage 8 only.

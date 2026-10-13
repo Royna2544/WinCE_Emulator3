@@ -17,10 +17,10 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Experiment | Persistent-owner 650 passed 1,618 tests, then host-crashed at 129.108 s with 1.62 GiB RSS (E-2). Source preserved uncommitted; deferred to Stage 8 |
 | Plan position | Stage 0 evidence is diagnostic and ongoing; Stage 1 pages are written, no consumer migrated. Stages 3-6 run on fresh engines (D-003) |
 | Red baselines | Task/handle ownership 13 controls, 1 pass, 12 expected red (E-8/E-11); historical E-7 native stop/error reds are green in the D: checkout, while E-18 private fresh-owner bytes are expected red |
-| Decisions | D-001 to D-007 decided. Next needed: O-P1, O-M1 and O-P4 (Stage 2), then O-T1, O-K1 to O-K3 (Stage 3) |
+| Decisions | D-001 to D-008 decided; D-008 selects the O-M1 backing design, not its implementation. Next gates: O-P1, O-M1 and O-P4 (Stage 2), then O-T1, O-K1 to O-K3 (Stage 3) |
 | Source control | Working tree is uncommitted by decision (D-004); GPG signing blocks commits. Backup proposal: O-X2 |
 | Source of truth | One active source dir (this repo) and one Cargo target dir (D-007). The D working tree still contains the persistent-owner experiment; E-7 stop/error controls pass and O-P1 stop taxonomy is partial. O-P4 fresh-default/VM coherence remains open |
-| Next action | Turn the executed E-18 private-byte expected red green with checked owner-qualified backing, then prove closed-owner Context and public same-VA/shared VM behavior before a fresh default. Complete O-P1 classification separately. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
+| Next action | Add one canonical process-birth directory and connected private VM authority, then turn E-18's private-byte expected red green with exact pinned backing; prove closed-owner Context and public same-VA/shared VM before a fresh default. Complete O-P1 classification separately. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
 
 ## Standalone boundaries
 

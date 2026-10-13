@@ -4,9 +4,10 @@ Status: design-first verification plan. [Architecture](../ARCHITECTURE.md) owns 
 
 ## Current evidence and boundaries
 
-Current suite/harnesses cover Kernel/API/GWES/memory/native behavior; root freezes
-all source hashes, builds offline mirror/release/features and owns
-app/input/termination. [types.rs](../../src/emulator/types.rs),
+Current suite/harnesses cover Kernel/API/GWES/memory/native behavior; source
+and Cargo output stay in the sole D: checkout, while retained run evidence
+stays outside disposable `target/`. Root freezes source hashes, validates
+release/features and owns app/input/termination. [types.rs](../../src/emulator/types.rs),
 [unicorn.rs](../../src/emulator/unicorn.rs) and the run-loop/interactive-monitor
 paths in [main.rs](../../src/main.rs) expose different retained native/debug/loop
 contexts. Formatting/source review, test compilation, executed focused/full tests
@@ -15,24 +16,42 @@ and real workload are separate acceptance levels.
 Executed evidence is recorded once in the [ledger](../evidence/ledger.md); this
 page owns only how to read it:
 
-- BED2 (E-1) is the clean 330 s fallback and still decorative splash. A passing
-  suite (the 650 build passed 1,618 tests) and a clean elapsed exit do not prove
-  map readiness; the 650 failure (E-2) is positive evidence to preserve, and
-  memory-growth correlation does not establish its cause.
+- BED2 (E-1) is the preserved clean 330 s fallback and still decorative
+  splash; it is not the current source's release executable. A passing suite
+  (the 650 build passed 1,618 tests) and a clean elapsed exit do not prove map
+  readiness; the 650 failure (E-2) is positive evidence to preserve, and
+  memory-growth correlation does not establish its cause. No bounded live-app
+  run has validated the current E-19 source.
 - Isolated native controls (E-4 to E-6) establish bounded Stage 8 fixture behavior only.
   Their elapsed time includes native timeout service and observation overhead, so
   it is not application throughput or cache speed, and they did not run the
   production mapping reconciler, Task/FPU transfer, backend stop/error matrix or
   the app.
-- Full-backend controls (E-7): one mapping/context control passes; two stop/error
-  controls are expected red and are preserved, not fixed by fabricating expiry.
+- Full-backend controls (E-7): the mapping/context control passed; the
+  count-stop and native-error controls were an expected-red baseline, then
+  turned green in the D: checkout without fabricating native expiry. These
+  narrow results do not complete O-P1 or Stage 2.
 - Task/handle ownership (E-8/E-11) is a red baseline: 13 controls, 1 pass,
   12 failures.
 - The cross-owner same-VA/FPU green control (E-10) uses the experimental
   persistent-owner path; it cannot accept the Stage 2 fresh-engine VM gate.
+- E-13's repaired-PC FPU continuation and E-16's owner-qualified injected
+  same-VA native-view controls are narrow greens. E-18 is an ignored, explicitly
+  rerun expected red: private guest-written bytes are stale after test-only
+  fresh-owner closure, despite correct PC and normal stops. Public same-VA
+  `MapViewOfFile`, public `VirtualAlloc`, and production fresh-owner lifetime
+  remain open.
+- E-19's global deferred-stop slice types the first hook-observed remote or
+  host-budget reason. On that frozen source, three serial focused runs passed;
+  the full release suite passed 1,634 tests (0 failed, 4 ignored), both no-trace
+  release checks exited 0, and no-feature passed 1,239 tests (0 failed, 1
+  ignored). The E-18 red was reconfirmed separately on the same source; it is
+  not a suite pass. Sparse/hookless reasons, native count witness, typed
+  restart-PC repair and Unicorn-control failure injection remain open.
 - Hot-path throughput (E-9) is measured per slice from guest instructions and busy
   MIPS, not from time to a milestone.
-- Staged fragments are not applied, compiled or passing until separately recorded.
+- Unexecuted staged fragments are not applied, compiled or passing until
+  separately recorded.
 - Verify the image RSDS GUID+age and the PDB actually loaded before interpreting a
   crash address; an adjacent generic-name PDB mislabeled the first 650 analysis.
 
