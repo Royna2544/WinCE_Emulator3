@@ -6978,23 +6978,31 @@ impl UnicornMips {
                                         .set(Some(NativeHookStopReason::RemoteControlService));
                                 }
                             }
-                            if live_pump
-                                && parked_child_processes.borrow().iter().any(|process| {
-                                    let kernel = unsafe { &*kernel_ptr };
-                                    let active_thread_ids =
-                                        [*current_thread_id_fast_code_hook.borrow()];
+                            if live_pump && pending_stop_reason.get().is_none() {
+                                let kernel = unsafe { &*kernel_ptr };
+                                let parked = parked_child_processes.borrow();
+                                let active_thread_id = *current_thread_id_fast_code_hook.borrow();
+                                let visible =
+                                    Self::live_pump_active_should_yield_to_visible_parked_process(
+                                        &parked,
+                                        kernel,
+                                        active_thread_id,
+                                    );
+                                let ready = parked.iter().any(|process| {
                                     !Self::parked_process_matches_active(
                                         process,
                                         kernel.current_process_id(),
-                                        &active_thread_ids,
+                                        &[active_thread_id],
                                     ) && Self::parked_process_can_resume_from_live_pump(
                                         process, kernel,
                                     )
-                                })
-                            {
-                                if pending_stop_reason.get().is_none() {
+                                });
+                                if visible {
                                     pending_stop_reason
                                         .set(Some(NativeHookStopReason::VisibleParkedPeerYield));
+                                } else if ready {
+                                    pending_stop_reason
+                                        .set(Some(NativeHookStopReason::ReadyParkedPeerYield));
                                 }
                             }
                             if let Err(err) =
@@ -55334,7 +55342,8 @@ mod unicorn_tests {
         let expected_offsets = match reason {
             super::NativeHookStopReason::HostWallBudget => 0x6000..0x9000,
             super::NativeHookStopReason::RemoteControlService
-            | super::NativeHookStopReason::VisibleParkedPeerYield => 0..0x1000,
+            | super::NativeHookStopReason::VisibleParkedPeerYield
+            | super::NativeHookStopReason::ReadyParkedPeerYield => 0..0x1000,
         };
         let offset = saved_pc
             .checked_sub(entry)

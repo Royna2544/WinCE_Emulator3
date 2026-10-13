@@ -37,6 +37,8 @@ pub enum NativeHookStopReason {
     RemoteControlService,
     /// A hook yielded at a safe PC to a visible parked process.
     VisibleParkedPeerYield,
+    /// A sparse hook observed a resumable parked peer without a larger visible window.
+    ReadyParkedPeerYield,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -80,6 +82,10 @@ mod native_slice_outcome_tests {
         );
         assert!(
             NativeSliceOutcome::HookStop(NativeHookStopReason::VisibleParkedPeerYield)
+                .is_service_boundary()
+        );
+        assert!(
+            NativeSliceOutcome::HookStop(NativeHookStopReason::ReadyParkedPeerYield)
                 .is_service_boundary()
         );
         assert!(NativeSliceOutcome::NativeDeadline.is_service_boundary());
