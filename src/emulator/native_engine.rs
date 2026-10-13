@@ -584,6 +584,34 @@ mod tests {
     }
 
     #[test]
+    fn injected_checked_finish_failure_discards_owner_and_is_one_shot() {
+        let slot = slot();
+        slot.arm_finish_failure_once_for_test();
+        let mut first = slot.lease().unwrap();
+        mapped(&mut first);
+        first.add_code_hook(0x1000, 0x1010, |_, _, _| {}).unwrap();
+        first.emu_start(0x1000, 0x1010, 100_000, 16).unwrap();
+        assert_eq!(first.finish(), Err(uc_error::RESOURCE));
+        assert!(
+            slot.identity().is_none(),
+            "failed finish cannot publish owner"
+        );
+
+        let mut second = slot.lease().unwrap();
+        assert!(!second.reused(), "replacement owner must be fresh");
+        assert!(
+            second.take_metadata().is_none(),
+            "failed ledger was discarded"
+        );
+        mapped(&mut second);
+        second.finish().unwrap();
+        assert!(
+            slot.identity().is_some(),
+            "one-shot failure cannot fire twice"
+        );
+    }
+
+    #[test]
     fn native_engine_unfinished_or_ledgerless_lease_is_discarded() {
         let slot = slot();
         {

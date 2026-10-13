@@ -10968,14 +10968,17 @@ impl UnicornMips {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             return Err(err);
         }
-        self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
-        self.prune_exited_and_active_processes_from_parked(kernel);
         if let Err(err) = uc.finish() {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             return Err(Error::Backend(format!(
                 "release native slice hooks: {err:?}"
             )));
         }
+        // Keep the outgoing CPU selected until its native lease has passed
+        // checked hook teardown. A failed finish belongs to that CPU and must
+        // not publish a handoff to an unrun child.
+        self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
+        self.prune_exited_and_active_processes_from_parked(kernel);
         Ok(())
     }
 
@@ -55335,11 +55338,14 @@ mod unicorn_tests {
         active.slice_end_rotation_pending = true;
         active.native_engine.arm_finish_failure_once_for_test();
 
-        let launch = kernel.queue_process_launch(Some("\\Test\\finish-reader.exe".to_owned()), None);
-        assert!(kernel
-            .take_pending_process_launches()
-            .iter()
-            .any(|queued| queued.process_id == launch.process_id));
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\finish-reader.exe".to_owned()), None);
+        assert!(
+            kernel
+                .take_pending_process_launches()
+                .iter()
+                .any(|queued| queued.process_id == launch.process_id)
+        );
         let mut child = phase1_counter_cpu(0x4000, "finish-reader.exe")?;
         child.set_initial_thread_id(launch.thread_id);
         let mut child_regs = super::MipsGuestContext::zero();
@@ -55348,24 +55354,26 @@ mod unicorn_tests {
             pc: child.entry.unwrap(),
             regs: child_regs,
         });
-        active.parked_child_processes.push_back(super::ParkedProcess {
-            application: launch.application.clone(),
-            process_handle: Some(launch.process_handle),
-            thread_handle: Some(launch.thread_handle),
-            process_state: crate::ce::kernel::CurrentProcessState {
-                process_id: launch.process_id,
-                exit_code: crate::ce::kernel::STILL_ACTIVE,
-                signaled: false,
-            },
-            thread_id: launch.thread_id,
-            cpu: Box::new(child),
-            blocked_send_id: None,
-            module_base: 0x0040_0000,
-            module_path: "\\Test\\finish-reader.exe".to_owned(),
-            module_host_path: std::path::PathBuf::from("finish-reader.exe"),
-            command_line: String::new(),
-            current_directory: None,
-        });
+        active
+            .parked_child_processes
+            .push_back(super::ParkedProcess {
+                application: launch.application.clone(),
+                process_handle: Some(launch.process_handle),
+                thread_handle: Some(launch.thread_handle),
+                process_state: crate::ce::kernel::CurrentProcessState {
+                    process_id: launch.process_id,
+                    exit_code: crate::ce::kernel::STILL_ACTIVE,
+                    signaled: false,
+                },
+                thread_id: launch.thread_id,
+                cpu: Box::new(child),
+                blocked_send_id: None,
+                module_base: 0x0040_0000,
+                module_path: "\\Test\\finish-reader.exe".to_owned(),
+                module_host_path: std::path::PathBuf::from("finish-reader.exe"),
+                command_line: String::new(),
+                current_directory: None,
+            });
 
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
         let error = active
@@ -55384,7 +55392,11 @@ mod unicorn_tests {
             format!("{error:#}").contains("release native slice hooks"),
             "{error:#}"
         );
-        assert_eq!(kernel.current_process_id(), 1, "failed parent cannot hand off");
+        assert_eq!(
+            kernel.current_process_id(),
+            1,
+            "failed parent cannot hand off"
+        );
         assert_eq!(phase1_counter(&active), 0x3006);
         assert_eq!(
             &kernel.handles.file_mapping(mapping_handle)?.data[..4],
