@@ -116,9 +116,13 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      (1,634/0/4 ignored), both no-trace release checks and the no-feature
      suite (1,239/0/1 ignored). These
      counts do not turn E-18 green or supersede its expected-red diagnosis.
-     After remaining source fixes, repeat the applicable profiles, then one
-     bounded 330 s live run of a frozen candidate, compared with the
-     hash-preserved BED2 baseline.
+     E-22's later combined source passed 1,647 release tests (0 failed,
+     5 ignored) and 1,248 no-feature tests (0 failed, 2 ignored). Its bounded
+     live run reached the configured 330 s limit and exited 0, but remained
+     on splash; retained `COM7:` reads prove delivery of injected NMEA bytes,
+     but parsed GPS fix and map use do not follow. The new feed was not
+     input-matched to BED2. After remaining source fixes, repeat
+     applicable profiles and a bounded live run before any Stage 2 claim.
      Record any newly exposed native errors in KNOWN_BUGS; neither the frozen
      1,634-pass E-19 source suite nor the decorative splash closes
      Stage 2.

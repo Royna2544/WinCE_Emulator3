@@ -109,7 +109,16 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   1,248/0/2 ignored. Explicit E-18/E-20 reruns on that source still failed
   at the intended stale-byte and child-same-VA-allocation assertions
   (ledger E-22).
-  This is not O-M1/O-P4 or Stage 2 acceptance.
+  Its later bounded live run reached the configured 330 s limit and the
+  emulator exited 0 without a monitor trip, yet last observed and terminal
+  frames stayed on splash. Sixteen remote NMEA ACKs alone would not establish
+  guest consumption; retained positive `COM7:` reads do prove injected NMEA
+  bytes reached guest code, while parsing/fix/map use remains unproven. Tap
+  down/up reached the guest window procedure without a map transition. The
+  feed was not input-matched to BED2 (local
+  `evidence/e22-live-20261013T154435Z/observer-captures/files-full-0065.txt`
+  and `observer-captures/messages-0165.txt`). This is not O-M1/O-P4, Stage 2
+  or map-readiness acceptance.
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,
   inferred creation PID, lost boot/primary identity or alias incoherence in a

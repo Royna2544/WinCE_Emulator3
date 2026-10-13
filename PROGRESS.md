@@ -190,6 +190,21 @@ references for historical reconstruction.
   global base-keyed VA, native bytes, reserve-only behavior, Ex targeting,
   clone lineage or O-P4 fresh-default lifetime. No Stage 2 or app acceptance
   is claimed (ledger E-22).
+- The E-22 bounded live run reached its configured 330 s limit and the
+  emulator exited 0 after 330.502 s; its monitor did not fire and no
+  CPU-exception/PC-zero stderr text was reported. The 420 s observer saved
+  four changed frames; its last observed and terminal frames remain iNavi
+  splash rather than map. Sixteen newly constructed raw-NMEA posts and one
+  tap were accepted by the remote API. Beyond those ACKs, retained traces
+  prove positive guest `COM7:` reads of injected `$GPRMC` bytes and tap
+  down/up window-procedure returns; parsed GPS fix and touch-driven map
+  navigation remain unproven. The three original read/write mounts were
+  ZIP-backed up beside their folders first.
+  Four mounted entries changed only timestamps, and both affected files
+  retained their length and SHA-256. See local
+  `evidence/e22-pre-live-mounted-data-20261013.receipt.md` and
+  `evidence/e22-live-20261013T154435Z/result.json` (ledger E-22). This is
+  bounded survival, not Stage 2, memory-footprint or map acceptance.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial
