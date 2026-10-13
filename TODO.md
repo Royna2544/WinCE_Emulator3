@@ -94,20 +94,35 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
       connected migration. Add end-to-end immediate CreateProcess sync-error
       fault injection; its error latch is source-reviewed only. Measure host
       RSS/private and guest busy work on matched runs before claiming benefit.
-  2. O-P1's E-28 native count-stop query and typed `CountLimit` adapter now
-     pass focused real-MIPS controls and source-bound broad validation:
+  2. O-P1's E-28 native count-stop query and typed `CountLimit` adapter pass
+     focused real-MIPS controls. The previous count-adapter source passed
      **1,671/0/16 ignored** release, **1,259/0/14 ignored** no-feature,
-     no-trace release check and format green
+     no-trace release check and format green; those are historical counts for
+     a source before the later focused finish-order and edge-control changes
      ([adapter](evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md),
      [broad](evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md),
      [native C seam](evidence/e28-count-witness-audit-20261014/native-c-seam.receipt.md),
      [vendor patches](vendor/unicorn-engine-sys/PATCHES.md)). The new fact
      witnesses an accepted count-stop request, not an exclusive cause or CE
      quantum; the existing 1M-instruction service-boundary policy is unchanged.
+     A direct ARM Thumb stop-reversal/next-start reset control passed (3/0/0
+     including the two public MIPS count tests); its same-handle nested-start
+     exploratory probe exited `0xC0000005` before a query assertion and was
+     removed from default tests
+     ([edge receipt](evidence/e28-count-witness-audit-20261014/edge-controls.receipt.md),
+     [read-only risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
+     The narrow checked `uc.finish()`-before-handoff fix has an intended red
+     and three focused green controls; parent error/view bytes stay with the
+     outgoing owner, child stays parked, and the failed native owner is
+     discarded ([finish-order receipt](evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
+     A new full release/no-feature suite on this later source is pending.
      Next seal one immutable owner/frame-qualified attempt report through
-     outgoing byte/view sync and checked `uc.finish()` **before** process
-     handoff ([finish-order plan](evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)).
-     Add native nested-start, stop-reversal, forced query-error and
+     all fallible outgoing byte/view sync, checked finish and partial-effect
+     paths ([report design](evidence/e28-run-outcome-20261014/sealed-report-next-gate.receipt.md)).
+     Do not rerun the recursive Rust hook probe; actual same-handle nested
+     execution is unvalidated, not a prerequisite for ordinary count stops.
+     A non-recursive private query-state control may check ambiguity policy
+     without claiming recursive safety. Add forced query-error and
      same-instruction competing-hook controls; preserve native-query failure
      provenance in the diagnostic-private rejection path. Remaining
      sparse/hookless stop reasons, typed restart-PC repair and failed

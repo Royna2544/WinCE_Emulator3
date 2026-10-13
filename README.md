@@ -11,59 +11,42 @@ remote-control HTTP/WebSocket surface.
 
 ## Current State
 
-- The reviewed [common architecture anchor](docs/ARCHITECTURE.md),
-  [migration plan](docs/PLAN.md) and [19 subsystem pages](docs/README.md)
-  implement the latest plan-first documentation direction, not finished runtime
-  architecture. The earlier persistent-owner freeze passed 1,618 tests but its
-  first normal trial host-crashed at 129.108 s/0xC0000005 with 1.62 GiB RSS.
-  An intermediate dirty-source post-order full release suite passed 1,623
-  tests (0 failed, 3 ignored). After the repaired-PC change, the dirty source
-  passed 1,626 release tests (0 failed, 3 ignored), Unicorn-only and
-  Unicorn+desktop/no-trace release checks, and 1,239 no-feature tests
-  (0 failed, 1 ignored). The isolated closed-owner test remains expected red
-  at its final closure assertion. This does not accept fresh-owner default
-  execution, O-P1/O-P4/O-M1, Stage 2 or the real application.
-  Exact failed executable/symbols are preserved; installed BED2 is restored.
-  Rebuilding the dirty source does not reproduce that fallback. Crash/cache
-  diagnostics continue in parallel; the fresh-engine Stage 2 gates precede
-  further production scheduler/clock migration. Six isolated native stress
-  cases pass and measure hook-associated retention;
-  they do not clear the failed app run or the remaining Stage0/Stage2 gates.
-- Runtime runs can reach real iNavi splash/resource-loading state with hidden
-  map child windows created.
-- Remote status/frame capture, touch input, and GPS/NMEA injection are wired.
-- Current mounted runs open `COM7:`, `MFS1:`, and `SMB1:`; injected GPS bytes
-  are positively returned by guest `ReadFile`, not just accepted by HTTP.
-- Earlier BED2 bounded 330 s runs exited cleanly but remained on splash.
-  Bounded read-only file windows reduce sampled peak host RSS from about
-  1,300 to 562 MiB;
-  the installed BED2 guard build passed 1,593 tests (one fixture ignored).
-  Reallocation preserves old bytes on failure; authenticated callback recovery
-  restores the original caller stack in the real app. The earlier BC 330 s run
-  peaks at about 493 MiB and delivers the test tap after 0.835 s, but remains
-  on splash. Full map readiness, residual memory and input lag remain open;
-  these combined-run observations are not controlled performance claims.
-  Checked initial allocation and native typed-message delivery are now
-  validated/integrated; their new app run failed at260s with a pool-worker
-  zero-PC CPU exception. That continuation bug is under investigation, so
-  that354 build was not live-stable. The new12DF entry-only handoff guard
-  passes1,585 tests and a clean330.268s actual GPS/tap run, still on splash;
-  peakRSS/private556.0/571.3MiB, tap lag0.777s. Full map bring-up remains open.
-  Bounded native diagnostics pass1,580 tests but are not installed/live-run.
-  Two further genuine native tests reproduce unsafe branch-helper handoff
-  and duplicate caller replay; the validated guard defers those interiors.
-  The subsequent BED2 safe-yield guard passes1,593 tests and another clean
-  330.234s run: splash by4.358s, tap callback0.397s, peakRSS/private555.6/568.4MiB.
-  All observed frames remain genuine splash. These single observations are
-  not controlled gains. The later E-7 correction queries actual native expiry
-  and hard-fails native errors except source-validated guest exits, but complete
-  stop-reason taxonomy and
-  fresh-owner acceptance stay open; a retained terminal snapshot does not
-  prove every native run succeeded.
-- Real visible-message delivery advances startup into map-skin decoding. The
-  remaining runtime frontier is map presentation and route interaction.
-- Hookless trampoline execution is the default. The live-pump instruction
-  budget remains one million per slice while time-based scheduling is validated.
+- The [architecture anchor](docs/ARCHITECTURE.md), [migration plan](docs/PLAN.md)
+  and [subsystem pages](docs/README.md) guide the user-authorized scheduler-core
+  rewrite; they do not mark it complete. The sole source checkout is the D:
+  repository. Fresh-engine ownership, public same-VA/private-page coherence,
+  one sealed task/frame-qualified run outcome, Stage 2 and the Stage 3 task
+  migration remain open. The current D: implementation retains native
+  process engines by default, but that behavior is experimental and not an
+  accepted Stage 2 baseline. The approved target is fresh-engine-per-slice;
+  persistent-owner architecture is deferred to Stage 8.
+- The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
+  controls. The count-adapter source passed 1,671 release tests (0 failed,
+  16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
+  and formatting checks. Those counts are **historical** for that exact source.
+  Later ARM stop-reversal/reset controls and a checked finish-before-handoff
+  repair pass focused tests; the current follow-up source awaits a new full
+  suite. An exploratory same-handle nested-start hook probe exited
+  `0xC0000005` before a query assertion, was removed, and remains unresolved
+  ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),
+  [nested risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
+- The latest bounded iNavi run exited normally at its 330 s cap and remained
+  on the genuine splash, not the map. Guest `COM7:` reads transferred injected
+  raw NMEA bytes and the splash window handled a tap; GPS fix, map readiness
+  and route interaction were not demonstrated. Its sampled working-set and
+  private peaks were 1,489.2/1,503.5 MiB. The read/write mounts were backed
+  up as adjacent ZIPs before that run
+  ([E-27 analysis](evidence/e22-live-20261013T182442Z/analysis.receipt.md)).
+- Historical comparison, not current acceptance: the persistent-owner 650
+  build passed 1,618 tests before a normal app run crashed at 129.108 s with
+  `0xC0000005` and about 1.62 GiB RSS. The installed BED2 fallback's later
+  safe-yield guard passed 1,593 tests and a 330.234 s GPS/tap run, still on
+  splash; sampled RSS/private were 555.6/568.4 MiB and the tap callback took
+  0.397 s. These different-source runs are not a controlled performance
+  comparison ([history and caveats](docs/evidence/ledger.md)).
+- Hookless trampoline execution remains the default. The live-pump limit is
+  one million instructions per native slice; E-28 did not change scheduling
+  policy, guest clock or CE quantum handling.
 
 See `PLAN.MD`, `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md` for the current
 roadmap and durable project memory. Source evidence is indexed in

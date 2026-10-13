@@ -180,7 +180,7 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   to `UnknownNormalStop` and proved `HookStop(HostWallBudget)` at one checked
   block-hook site (ledger E-15); six other debug host-wall writers were
   untyped on that E-15 source, and no independent native count-stop witness
-  exists. Seven
+  existed on that source. Seven
   focused controls passed on the first O-P1 source; a follow-up guard kept
   hook-control failures from being masked by decoded guest exit and passed
   two host-budget controls. Real hook-control-failure/encoded-exit injection
@@ -204,10 +204,27 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   exited 0, and no-feature passed 1,239/0/1 ignored. Exact hashes are in
   local `evidence/op1-global-code-hook-20261013/post-global-stop-validation.receipt.md`.
   The queued remote input is test-
-  inserted, not a public network-delivery proof. Other sparse/hookless
-  reasons, a native count-exhaustion witness and typed
-  restart-PC repair remain open. Complete O-P1 classification, fresh-owner
-  Stage 2 and live acceptance remain open; the 1M-instruction tick is intact.
+  inserted, not a public network-delivery proof. The later E-28 source added
+  a native count-stop *request* query and typed uncontested `CountLimit`, not
+  an exclusive stop cause or retired-instruction count. Direct ARM controls
+  passed stop reversal and next-start reset; one exploratory same-handle
+  nested-start hook probe exited `0xC0000005` before its ambiguity-query
+  assertion and was removed from default tests. The cause is unestablished;
+  actual nested execution remains unvalidated. A read-only audit identifies
+  plausible overlapping Rust `FnMut` access and shared C per-start fields,
+  but not the crash cause; it advises against rerunning that recursive hook
+  probe ([edge receipt](evidence/e28-count-witness-audit-20261014/edge-controls.receipt.md),
+  [risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
+  A separate one-shot checked-finish failure exposed parent-to-child error
+  misattribution; the narrow finish-before-handoff fix and three focused
+  controls now pass
+  ([finish-order receipt](evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
+  No full release/no-feature suite has yet been recorded for this later
+  source. An immutable owner/frame-qualified final report, forced query-
+  error/competing-hook controls, diagnostic-private query-error provenance,
+  other sparse/hookless reasons and typed restart-PC repair remain open.
+  Complete O-P1 classification, fresh-owner Stage 2 and live acceptance
+  remain open; the 1M-instruction tick is intact.
 - HeapFree does not reuse addresses or release per-process spillover pages.
   Initial/reallocation mapping, ZERO and metadata ordering are now validated,
   but global allocation metadata lacks authoritative private-process ownership,

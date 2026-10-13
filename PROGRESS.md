@@ -297,11 +297,26 @@ references for historical reconstruction.
   16 ignored** and **1,259 no-feature tests, 0 failed, 14 ignored**; no-trace
   release check and format check also exited 0
   ([broad receipt](evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md)).
-  The [finish-order audit](evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)
-  remains a plan: immutable owner/frame-qualified final reports, fallible
-  finish-before-handoff ordering, nested/revert/query-error controls and
-  diagnostic-private query-error provenance are still open. This is not
-  O-P1, Stage 2, S3-A, or live-app acceptance (ledger E-28).
+  Those broad counts are historical for the count-adapter source, not yet a
+  full-suite result for the later focused changes. A direct ARM Thumb
+  control then passed count-stop reversal and next-start reset (3/0/0
+  integration tests). An exploratory same-handle nested-start hook probe
+  exited `0xC0000005` before any ambiguity-query assertion; it was removed
+  from the default test, and that edge remains unproved
+  ([edge receipt](evidence/e28-count-witness-audit-20261014/edge-controls.receipt.md),
+  [read-only risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
+  A separate real-MIPS expected-red control showed fallible hook finish
+  rotating from parent PID 1 to child PID 66 before reporting the parent's
+  `RESOURCE` error. After the narrow ordering fix, three focused controls
+  passed: failure stays with the selected outgoing parent, outgoing view
+  bytes are reconciled, the child remains parked, and the failed native
+  owner is discarded; the successful sibling still rotates normally
+  ([finish-order receipt](evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
+  Full release/no-feature validation for this later source is pending.
+  Immutable owner/frame-qualified final reports, forced query-error and
+  competing-hook controls, and diagnostic-private
+  query-error provenance remain open. This is not O-P1, Stage 2, S3-A, or
+  live-app acceptance (ledger E-28).
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial
