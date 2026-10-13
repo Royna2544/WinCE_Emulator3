@@ -641,6 +641,46 @@ remain open. E-20's *other* red, public same-VA private allocation, remains
 ignored; E-18 private bytes, O-P4 fresh default, Stage 2 and bounded iNavi
 acceptance also remain open. No live app run occurred on this source.
 
+## E-22 VM identity metadata and pre-live preparation (2026-10-14, narrow green)
+
+`ProcessBirthKey` is now read from the E-21 canonical birth directory for
+the selected process; an unregistered selected PID has no VM owner key.
+`MemorySystem::virtual_alloc` records this key, a checked allocation
+incarnation not reused within one `MemorySystem` lineage, and an explicit
+producer kind. COREDLL marks private, Ex-compat, file-view, locale-view,
+Toolhelp-snapshot and shared-compat allocations separately. Four focused
+release metadata tests passed in three filters (2/2, 1/1, 1/1); their
+terminal output was observed but not separately saved as raw logs. The four
+source SHA-256 prefixes were `object.rs` `4F5982D9`, `kernel.rs`
+`5F056945`, `memory.rs` `C597DFC0`, `coredll.rs` `AA4529C1`.
+
+On the later combined sparse-stop and VM-metadata source, the full release
+suite passed **1,647 passed, 0 failed, 5 ignored** and the no-feature suite
+passed **1,248 passed, 0 failed, 2 ignored**. Raw logs are local
+`evidence/op1-sparse-stop-20261014/full-release-suite-attempt2.log` and
+`evidence/op1-sparse-stop-20261014/no-feature-suite.log`. Explicit ignored
+gate reruns remained expected red: E-18 guest MIPS wrote `0x11223345`, but
+the fresh owner loaded stale `0x11223344`; E-20 public child same-VA
+`VirtualAlloc` returned `Handle(0)`. Their raw outputs are local
+`evidence/op1-sparse-stop-20261014/e18-private-fresh-expected-red.log` and
+`evidence/op1-sparse-stop-20261014/e20-private-va-expected-red.log`.
+
+This slice leaves the global base-keyed VA directory, native copy-seeded
+bytes, reserve-only native behavior, Ex target semantics and derived-clone
+lineage unchanged. In particular, a cloned `MemorySystem` can later mint
+the same incarnation under its copied birth key; it is not a machine-unique
+identity. No slab backing, public two-PID private isolation, O-P4 fresh
+default, Stage 2 or live-app acceptance is claimed.
+
+Separately, user-authorized ZIP backups beside the three original mounted
+data folders were created and verified before another guest run; exact
+archive hashes and cleanup of one invalid partial ZIP are in local
+`evidence/e22-pre-live-mounted-data-20261013.receipt.md`. The bounded
+read/write launch script `scripts/inavi_bounded_e22.ps1` was prepared but
+had not been launched at this ledger point. The earlier raw-NMEA GPS payload
+and send frequency were not retained, so a future run cannot be called
+input-matched without recovering them.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

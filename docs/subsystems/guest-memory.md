@@ -20,6 +20,27 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 - Persisted spillover can mirror a global high-water mark into multiple CPU images;
   live heap metadata, blob capacity, native backing and host RSS are different measures.
 
+### E-22 metadata-only authority slice (2026-10-14)
+
+`HandleTable` now issues an immutable `ProcessBirthKey` from its canonical
+birth record; `CeKernel::current_process_birth_key` checks the selected PID
+against that directory rather than inventing PID 1. Each successful
+`MemorySystem::virtual_alloc` records that key, an allocation incarnation
+that is not reused within one `MemorySystem` lineage, and an explicit source
+classification. COREDLL distinguishes ordinary private allocations, its
+still-compatibility-only Ex and shared shims, file views, locale views, and
+Toolhelp snapshot buffers. Four focused release metadata controls passed;
+the combined release suite passed 1,647/0/5 ignored and the no-feature suite
+passed 1,248/0/2 ignored on the later source ([ledger E-22](../evidence/ledger.md)).
+
+This is identity metadata, **not** AddressSpace ownership or slab backing.
+The allocation directory and cursor are still global/base-keyed, native
+`mem_map`/`initial_bytes` behavior is unchanged, and a derived clone can
+reuse a later allocation incarnation under the same copied birth key.
+Neither reserve-only native behavior nor E-18 private bytes, E-20 same-VA
+private isolation, Ex targeting, shared views, clone lineage, or O-P4
+fresh-default lifetime has passed its acceptance gate.
+
 ## Target authority and permitted interfaces
 
 - `CeMachine` owns mutation sequencing; each `AddressSpace` owns its process's
