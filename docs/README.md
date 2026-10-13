@@ -14,13 +14,13 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Installed baseline | BED2: clean bounded 330 s run, still on the decorative splash (ledger E-1) |
 | App goal | BED2 first splash observed at +4.358 s; positive `COM7:` guest reads are proven, but parsed position, map presentation and responsive navigation remain open (E-1) |
 | Architecture implemented | None of the proposed types exist. Landed so far: compatibility `TaskWaitStore`, Phase 0 hot-path hygiene (amortized block hook, hookless default, per-slice MIPS logging; ledger E-9). Both are partly uncommitted |
-| Experiment | Persistent-owner 650 passed 1,618 tests, then host-crashed at 129.108 s with 1.62 GiB RSS (E-2). Source preserved uncommitted; deferred to Stage 8 |
-| Plan position | Stage 0 evidence is diagnostic and ongoing; Stage 1 pages are written, no consumer migrated. Stages 3-6 run on fresh engines (D-003) |
+| Experiment | Persistent-owner 650 passed 1,618 tests, then host-crashed at 129.108 s with 1.62 GiB RSS (E-2). Source preserved in the D: checkout; deferred to Stage 8 |
+| Plan position | Stage 0 evidence is diagnostic and ongoing; Stage 1 pages are written. E-21 migrated public process-birth aliases, not full Stage 2/3 Task ownership. Stages 3-6 run on fresh engines (D-003) |
 | Red baselines | Task/handle ownership 13 controls, 1 pass, 12 expected red (E-8/E-11); historical E-7 native stop/error reds are green in the D: checkout, while E-18 private fresh-owner bytes are expected red |
 | Decisions | D-001 to D-008 decided; D-008 selects the O-M1 backing design, not its implementation. Next gates: O-P1, O-M1 and O-P4 (Stage 2), then O-T1, O-K1 to O-K3 (Stage 3) |
-| Source control | Working tree is uncommitted by decision (D-004); GPG signing blocks commits. Backup proposal: O-X2 |
+| Source control | D-004 now permits an external supervisor's unsigned backup commits on `main`; those snapshots are not reviewed releases and do not replace frozen test evidence |
 | Source of truth | One active source dir (this repo) and one Cargo target dir (D-007). The D working tree still contains the persistent-owner experiment; E-7 stop/error controls pass and O-P1 stop taxonomy is partial. O-P4 fresh-default/VM coherence remains open |
-| Next action | Add one canonical process-birth directory and connected private VM authority, then turn E-18's private-byte expected red green with exact pinned backing; prove closed-owner Context and public same-VA/shared VM before a fresh default. Complete O-P1 classification separately. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
+| Next action | Extend E-21's canonical birth record into owner-scoped private VM authority, then turn E-18's private-byte expected red green with exact pinned backing; prove closed-owner Context and public same-VA/shared VM before a fresh default. Complete O-P1 classification separately. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
 
 ## Standalone boundaries
 

@@ -609,6 +609,35 @@ mapping functions; the ROM Ex-family export-index gap is separate, and
 dynamic imports are not ruled out. E-18 private-byte coherence, O-P4 fresh
 default, full O-M1, Stage 2, and live iNavi acceptance all remain open.
 
+## E-21 Canonical process birth and alias lifetime (2026-10-13, narrow green)
+
+The E-20 pending-child last-handle control is now unignored and green.
+`HandleTable` owns one birth record for boot PID1 and each child, independent
+of public process-handle aliases. Public aliases identify a PID/incarnation;
+exit, signal, debugger and execution lifetime live in that record. Five
+focused release controls each passed 1/0: pending-child PID reopen after last
+alias close, exit/wake after original-handle close, terminated PID external
+reopen prevention, selected-child pseudo termination signaling aliases, and
+completed-birth final-alias retirement/distinct rebirth. A registered wait is
+removed before the test asserts final retirement; Stage 3 wait-target pins
+are not claimed. `TerminateProcess` requests/signals, while actual child
+completion releases the execution pin. An independent review found no
+remaining narrow-patch blocker after the termination and test corrections.
+
+On `object.rs` SHA-256 `C65F7125…CF46D0` and `kernel.rs` SHA-256
+`D893BC67…2D176`, the final full release suite passed **1,639 passed,
+0 failed, 5 ignored** across binaries. The no-feature suite passed **1,244
+passed, 0 failed, 2 ignored** after an initial access-denied debug lock was
+retried with permission; both no-trace release feature checks exited 0. No
+raw logs were saved for E-21. Exact commands, full hashes, focused cases,
+permission limitation and source boundaries are in local
+`evidence/e21-process-birth-20261013.receipt.md` (receipt SHA-256
+`04122F08…F3BB2EB`). The selected-process compatibility snapshot, worker
+sweep, checked guest-visible allocation failure, wait pins and clone lineage
+remain open. E-20's *other* red, public same-VA private allocation, remains
+ignored; E-18 private bytes, O-P4 fresh default, Stage 2 and bounded iNavi
+acceptance also remain open. No live app run occurred on this source.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

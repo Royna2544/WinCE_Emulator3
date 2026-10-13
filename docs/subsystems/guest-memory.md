@@ -160,18 +160,17 @@ an authoritative `AddressSpace` identity. A filter on one sync helper is not
 a complete O-M1 fix.
 
 The owner key must be the anchor's birth-qualified `ProcessIdentity`, not the
-currently selected PID. There is no existing canonical process-birth record:
-`CeKernel` holds a bare selected PID and pending launches, while each public
-process handle contains a copied `ProcessObject`. Introduce one durable,
-machine-owned process-birth directory inside the HandleTable authority,
-independent of public handle lifetime,
-for boot PID1 and child birth; mint PID/incarnation with checked exhaustion and
-capture the identity at native-attempt start. Current `next_process_id` uses
-saturating increment and `set_current_process_id` changes a bare PID; neither
-is safe as a backing owner. Stage 3 extends this same directory for Task/object
-authority and makes process handles aliases, not a parallel long-lived registry.
-Checkpoint clone establishes a new machine lineage and deep-copies private
-backing.
+currently selected PID. At the E-20 baseline, `CeKernel` held a bare selected
+PID and pending launches while each public process handle copied its mutable
+`ProcessObject`. E-21 introduced one HandleTable-owned birth record for boot
+PID1 and each child, independent of public alias lifetime, with a checked
+incarnation and shared public-handle state. The next step is to capture that
+identity at native-attempt start and bind VM owners to it. `next_process_id`
+now uses checked arithmetic but still panics instead of returning a
+guest-visible exhaustion failure; `set_current_process_id` still changes a
+bare PID. Neither is a complete backing-owner contract. Stage 3 extends this
+same directory for Task/object authority; checkpoint clone must establish a
+new machine lineage and deep-copy private backing.
 
 Staged implementation boundary, with the E-14 real-backend expected-red
 collision control now turned green for injected native-resident views under
@@ -231,19 +230,16 @@ that use and its failures before matching CE behavior in the emulator.
 
 ### Authority, identities and interface direction
 
-- One new canonical machine-owned HandleTable birth directory mints the anchor's
-  `ProcessIdentity` once at boot/child birth: public PID plus checked
-  incarnation, scoped to a machine lineage. It lives independently of the
-  current copied per-handle `ProcessObject`; a public handle stores only an
-  immutable identity/key, never its own mutable process state or lifetime.
-  Exit/signaled/debugger/lookup/close resolve one canonical record; active
-  execution, VM/view and launch pins keep it alive after the last public
-  handle closes. `open_process` resolves a live canonical birth, not an
-  existing alias scan. Boot PID1 has no invented public handle. PID selection
-  is not ownership.
-  `next_process_id` currently saturates and can repeat; exhaustion must fail,
-  not alias a prior birth. Stage 3 extends this same directory rather than
-  adding another registry.
+- E-21 now gives HandleTable a canonical birth directory for boot PID1 and
+  child births: public PID plus checked incarnation, independent of public
+  process handles. An alias stores only an immutable birth key; public exit,
+  signaled, debugger, lookup and close resolve the canonical record. The
+  execution pin survives last-handle close until actual completion; boot PID1
+  has no invented public handle. This is not yet the anchor's full
+  machine-lineage `ProcessIdentity`: VM/view/wait pins, selected-process
+  compatibility state, clone relineage and guest-visible PID exhaustion still
+  need migration. PID selection is not ownership. Stage 3 extends this same
+  directory rather than adding another registry.
 - Each address space owns its reservation cursor and allocation directory.
   An allocation has checked incarnation, original reserved extent, backing
   kind (`Private` or exact shared-mapping identity), protection and committed
@@ -333,9 +329,9 @@ ownership or Stage 2 acceptance. A clean unsupported error is safer than a
 derived clone sharing mutable slab bytes.
 
 1. Confirm the dumped target's allocation/API sequence against the local CE6
-   source distinction above. Introduce the one canonical HandleTable-owned
-   process-birth directory, migrate all process-handle mutable state/aliases
-   and checked selection to it, then move private allocation
+   source distinction above. E-21 introduced the HandleTable-owned public
+   process-birth/alias directory; complete selected-state, lineage and
+   guest-visible exhaustion handling, then move private allocation
    callers, owner-scoped cursors, incarnation and queries together; no unused
    parallel registry or implicit PID-1 fallback. Inventory locale and file
    views, Toolhelp snapshots, shared allocation and every public
