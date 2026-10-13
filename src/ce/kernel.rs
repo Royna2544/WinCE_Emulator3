@@ -26,9 +26,9 @@ use crate::{
             ApiHandleObject, ApiSetObject, CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject,
             FileChangeNotificationObject, FileChangeRecord, FileObject, FindFileObject,
             HandleTable, KernelObject, MAX_SUSPEND_COUNT, MAX_WIN32_PRIORITY_LEVELS,
-            MessageQueueHandleObject, ThreadObject, ThreadResumeResult, ThreadSuspendResult,
-            VolumeObject, WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
-            win32_thread_priority_to_ce,
+            MessageQueueHandleObject, ProcessBirthKey, ThreadObject, ThreadResumeResult,
+            ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
+            ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
@@ -2826,6 +2826,12 @@ impl CeKernel {
 
     pub fn current_process_id(&self) -> u32 {
         self.current_process_id
+    }
+
+    /// Resolve the mutable selector through the canonical process-birth table.
+    /// VM callers must not infer ownership from a bare PID or fall back to PID 1.
+    pub fn current_process_birth_key(&self) -> Option<ProcessBirthKey> {
+        self.handles.process_birth_key(self.current_process_id)
     }
 
     pub fn stdio_path(&self, id: u32) -> Option<&str> {
@@ -10914,6 +10920,33 @@ mod tests {
             "a pending child remains addressable by PID after its last process handle closes",
         );
         assert_eq!(kernel.process_id(reopened), Some(launch.process_id));
+        Ok(())
+    }
+
+    #[test]
+    fn vm_owner_key_resolves_birth_not_mutable_pid_selector_or_public_alias() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let boot = kernel.current_process_birth_key().expect("boot birth");
+        assert_eq!(boot.process_id(), 1);
+        assert!(kernel.handles.contains_process_birth(boot));
+
+        let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
+        kernel.set_current_process_id(launch.process_id);
+        let child = kernel
+            .current_process_birth_key()
+            .expect("pending child birth");
+        assert_eq!(child.process_id(), launch.process_id);
+        assert_ne!(child, boot);
+        assert!(kernel.close_handle(launch.process_handle)?);
+        assert!(kernel.handles.contains_process_birth(child));
+        assert_eq!(kernel.current_process_birth_key(), Some(child));
+
+        kernel.set_current_process_id(0xdead);
+        assert_eq!(kernel.current_process_birth_key(), None);
+        kernel.set_current_process_id(launch.process_id);
+        kernel.mark_process_launch_exited(&launch, 0);
+        assert_eq!(kernel.current_process_birth_key(), None);
+        assert!(!kernel.handles.contains_process_birth(child));
         Ok(())
     }
 

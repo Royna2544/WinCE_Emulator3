@@ -234,6 +234,24 @@ pub struct ProcessObject {
     aliases: BTreeSet<u32>,
 }
 
+/// An immutable identity issued by the canonical process-birth directory.
+/// A selected PID alone is not sufficient to own process-scoped VM metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProcessBirthKey {
+    process_id: u32,
+    incarnation: u64,
+}
+
+impl ProcessBirthKey {
+    pub fn process_id(self) -> u32 {
+        self.process_id
+    }
+
+    pub fn incarnation(self) -> u64 {
+        self.incarnation
+    }
+}
+
 /// A public handle names a birth; mutable process state lives only in HandleTable.
 #[derive(Debug, Clone)]
 pub struct ProcessHandleObject {
@@ -723,6 +741,18 @@ impl HandleTable {
             .filter(|process| !process.signaled || !process.aliases.is_empty())
             .cloned()
             .collect()
+    }
+
+    pub fn process_birth_key(&self, process_id: u32) -> Option<ProcessBirthKey> {
+        let process = self.processes.get(&process_id)?;
+        Some(ProcessBirthKey {
+            process_id,
+            incarnation: process.incarnation,
+        })
+    }
+
+    pub fn contains_process_birth(&self, key: ProcessBirthKey) -> bool {
+        self.process_birth_key(key.process_id) == Some(key)
     }
 
     fn process_for_alias(&self, alias: &ProcessHandleObject) -> Option<&ProcessObject> {

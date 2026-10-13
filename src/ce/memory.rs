@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use crate::ce::object::ProcessBirthKey;
+
 pub const HEAP_MAX_ALLOC: u32 = 0x4000_0000;
 pub const PROCESS_HEAP_HANDLE: u32 = 0x0001_0000;
 
@@ -32,6 +34,7 @@ pub struct MemorySystem {
     next_virtual_ptr: u32,
     heap_generation: u64,
     virtual_generation: u64,
+    next_virtual_incarnation: u64,
     heaps: BTreeMap<u32, Heap>,
     allocations: BTreeMap<u32, MemoryAllocation>,
     virtual_allocations: BTreeMap<u32, VirtualAllocation>,
@@ -124,6 +127,18 @@ impl PreparedReallocation {
     }
 }
 
+/// Describes the producer of today's copy-backed virtual allocation. This is
+/// metadata only: native mapping remains unchanged until the backing migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VirtualAllocationSource {
+    Private,
+    PrivateExCompatibility,
+    FileViewLegacy,
+    LocaleViewLegacy,
+    ToolhelpSnapshotLegacy,
+    SharedCompatibility,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualAllocation {
     pub base: u32,
@@ -131,6 +146,9 @@ pub struct VirtualAllocation {
     pub allocation_type: u32,
     pub protect: u32,
     pub initial_bytes: Vec<u8>,
+    pub owner: ProcessBirthKey,
+    pub incarnation: u64,
+    pub source: VirtualAllocationSource,
 }
 
 impl Default for MemorySystem {
@@ -153,6 +171,7 @@ impl Default for MemorySystem {
             next_virtual_ptr: VIRTUAL_PTR_BASE,
             heap_generation: 0,
             virtual_generation: 0,
+            next_virtual_incarnation: 1,
             heaps,
             allocations: BTreeMap::new(),
             virtual_allocations: BTreeMap::new(),
@@ -456,6 +475,8 @@ impl MemorySystem {
 
     pub fn virtual_alloc(
         &mut self,
+        owner: ProcessBirthKey,
+        source: VirtualAllocationSource,
         address: u32,
         size: u32,
         allocation_type: u32,
@@ -464,6 +485,8 @@ impl MemorySystem {
         if size == 0 || allocation_type & (MEM_COMMIT | MEM_RESERVE) == 0 {
             return None;
         }
+        let incarnation = self.next_virtual_incarnation;
+        let next_incarnation = incarnation.checked_add(1)?;
         let (base, size) = if address == 0 {
             let size = align_up(size, VIRTUAL_ALIGN)?;
             let base = self.next_virtual_ptr;
@@ -479,6 +502,7 @@ impl MemorySystem {
         if self.virtual_overlaps(base, size) {
             return None;
         }
+        self.next_virtual_incarnation = next_incarnation;
         self.virtual_allocations.insert(
             base,
             VirtualAllocation {
@@ -487,6 +511,9 @@ impl MemorySystem {
                 allocation_type,
                 protect,
                 initial_bytes: Vec::new(),
+                owner,
+                incarnation,
+                source,
             },
         );
         self.bump_virtual_generation();
@@ -633,6 +660,13 @@ fn align_down(value: u32, alignment: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ce::object::HandleTable;
+
+    fn boot_owner() -> ProcessBirthKey {
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        handles.process_birth_key(1).expect("boot birth")
+    }
 
     #[test]
     fn prepared_allocation_is_not_live_until_commit_and_abort_keeps_hole() {
@@ -768,7 +802,14 @@ mod tests {
         let mut memory = MemorySystem::default();
         let heap_ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
         let virtual_ptr = memory
-            .virtual_alloc(0, 0x1234, MEM_COMMIT | MEM_RESERVE, 4)
+            .virtual_alloc(
+                boot_owner(),
+                VirtualAllocationSource::Private,
+                0,
+                0x1234,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
             .unwrap();
 
         assert!(memory.contains_allocated_range(heap_ptr, 16));
@@ -785,19 +826,44 @@ mod tests {
         // size=0 → None regardless of type flags
         assert!(
             memory
-                .virtual_alloc(0, 0, MEM_COMMIT | MEM_RESERVE, 4)
+                .virtual_alloc(
+                    boot_owner(),
+                    VirtualAllocationSource::Private,
+                    0,
+                    0,
+                    MEM_COMMIT | MEM_RESERVE,
+                    4,
+                )
                 .is_none()
         );
 
         // allocation_type=0 → None regardless of size
-        assert!(memory.virtual_alloc(0, 0x1000, 0, 4).is_none());
+        assert!(
+            memory
+                .virtual_alloc(
+                    boot_owner(),
+                    VirtualAllocationSource::Private,
+                    0,
+                    0x1000,
+                    0,
+                    4
+                )
+                .is_none()
+        );
     }
 
     #[test]
     fn virtual_alloc_with_unaligned_address_covers_requested_end() {
         let mut memory = MemorySystem::default();
         let base = memory
-            .virtual_alloc(0x500a_9d46, 0x1_0000, MEM_COMMIT | MEM_RESERVE, 4)
+            .virtual_alloc(
+                boot_owner(),
+                VirtualAllocationSource::Private,
+                0x500a_9d46,
+                0x1_0000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
             .unwrap();
 
         assert_eq!(base, 0x500a_0000);
@@ -810,7 +876,14 @@ mod tests {
     fn virtual_free_release_requires_size_zero_and_valid_base() {
         let mut memory = MemorySystem::default();
         let base = memory
-            .virtual_alloc(0, 0x1000, MEM_COMMIT | MEM_RESERVE, 4)
+            .virtual_alloc(
+                boot_owner(),
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
             .unwrap();
 
         // MEM_RELEASE with size!=0 → false
@@ -828,7 +901,14 @@ mod tests {
         let mut memory = MemorySystem::default();
         // Allocate exactly one VIRTUAL_ALIGN-sized region (0x1_0000 bytes).
         let base = memory
-            .virtual_alloc(0, VIRTUAL_ALIGN, MEM_COMMIT | MEM_RESERVE, 4)
+            .virtual_alloc(
+                boot_owner(),
+                VirtualAllocationSource::Private,
+                0,
+                VIRTUAL_ALIGN,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
             .unwrap();
 
         // MEM_DECOMMIT with size within allocation → true
@@ -839,6 +919,60 @@ mod tests {
 
         // unknown free_type → false
         assert!(!memory.virtual_free(base, 0, 0xdead));
+    }
+
+    #[test]
+    fn virtual_allocation_metadata_keeps_birth_source_and_nonreused_incarnation() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let base = memory
+            .virtual_alloc(
+                owner,
+                VirtualAllocationSource::Private,
+                0x5200_0000,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+        let original = memory.virtual_allocation(base).unwrap();
+        assert_eq!(original.owner, owner);
+        assert_eq!(original.source, VirtualAllocationSource::Private);
+        let original_incarnation = original.incarnation;
+        assert!(memory.virtual_free(base, 0, MEM_RELEASE));
+        assert_eq!(
+            memory.virtual_alloc(
+                owner,
+                VirtualAllocationSource::FileViewLegacy,
+                base,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            ),
+            Some(base)
+        );
+        let replacement = memory.virtual_allocation(base).unwrap();
+        assert_eq!(replacement.source, VirtualAllocationSource::FileViewLegacy);
+        assert!(replacement.incarnation > original_incarnation);
+    }
+
+    #[test]
+    fn exhausted_virtual_incarnation_fails_without_publishing_allocation() {
+        let mut memory = MemorySystem::default();
+        memory.next_virtual_incarnation = u64::MAX;
+        assert!(
+            memory
+                .virtual_alloc(
+                    boot_owner(),
+                    VirtualAllocationSource::Private,
+                    0x5200_0000,
+                    0x1000,
+                    MEM_COMMIT | MEM_RESERVE,
+                    4,
+                )
+                .is_none()
+        );
+        assert!(memory.virtual_allocation(0x5200_0000).is_none());
     }
 
     #[test]

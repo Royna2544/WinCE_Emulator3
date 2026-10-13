@@ -38,7 +38,7 @@ use crate::{
         },
         memory::{
             HEAP_ZERO_MEMORY, Heap, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, MemoryAllocation,
-            PROCESS_HEAP_HANDLE, PreparedAllocation, PreparedReallocation,
+            PROCESS_HEAP_HANDLE, PreparedAllocation, PreparedReallocation, VirtualAllocationSource,
         },
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
@@ -5831,6 +5831,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_VIRTUAL_ALLOC => Some(CoredllValue::Handle(virtual_alloc_raw(
             kernel,
             thread_id,
+            VirtualAllocationSource::Private,
             raw_arg(args, 0),
             raw_arg(args, 1),
             raw_arg(args, 2),
@@ -5842,6 +5843,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Handle(virtual_alloc_raw(
                 kernel,
                 thread_id,
+                VirtualAllocationSource::PrivateExCompatibility,
                 raw_arg(args, 1),
                 raw_arg(args, 2),
                 raw_arg(args, 3),
@@ -5921,6 +5923,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Handle(virtual_alloc_raw(
                 kernel,
                 thread_id,
+                VirtualAllocationSource::SharedCompatibility,
                 raw_arg(args, 0),
                 raw_arg(args, 1),
                 raw_arg(args, 2),
@@ -10169,11 +10172,20 @@ fn create_locale_view_raw<M: CoredllGuestMemory>(
     if !write_guest_u32(kernel, memory, thread_id, view_size_ptr, view_size) {
         return 0;
     }
-    let Some(base) =
+    let Some(owner) = kernel.current_process_birth_key() else {
         kernel
-            .memory
-            .virtual_alloc(0, view_size, MEM_COMMIT | MEM_RESERVE, PAGE_READONLY)
-    else {
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let Some(base) = kernel.memory.virtual_alloc(
+        owner,
+        VirtualAllocationSource::LocaleViewLegacy,
+        0,
+        view_size,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_READONLY,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -29473,14 +29485,21 @@ fn heap_free_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32, flags: u32, p
 fn virtual_alloc_raw(
     kernel: &mut CeKernel,
     thread_id: u32,
+    source: VirtualAllocationSource,
     address: u32,
     size: u32,
     allocation_type: u32,
     protect: u32,
 ) -> u32 {
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
     match kernel
         .memory
-        .virtual_alloc(address, size, allocation_type, protect)
+        .virtual_alloc(owner, source, address, size, allocation_type, protect)
     {
         Some(ptr) => ptr,
         None => {
@@ -29758,10 +29777,20 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
         bytes
     };
     let mapping_bytes = initial_bytes.clone();
-    let Some(base) = kernel
-        .memory
-        .virtual_alloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
-    else {
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let Some(base) = kernel.memory.virtual_alloc(
+        owner,
+        VirtualAllocationSource::FileViewLegacy,
+        0,
+        size,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -65723,11 +65752,20 @@ fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
         return INVALID_TOOLHELP_SNAPSHOT;
     };
     let allocation_size = snapshot_size_u32.max(0x1000);
-    let Some(base) =
+    let Some(owner) = kernel.current_process_birth_key() else {
         kernel
-            .memory
-            .virtual_alloc(0, allocation_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
-    else {
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return INVALID_TOOLHELP_SNAPSHOT;
+    };
+    let Some(base) = kernel.memory.virtual_alloc(
+        owner,
+        VirtualAllocationSource::ToolhelpSnapshotLegacy,
+        0,
+        allocation_size,
+        MEM_COMMIT | MEM_RESERVE,
+        PAGE_READWRITE,
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
@@ -69407,6 +69445,116 @@ mod tests {
             .create_volume_handle_for_guest_root("\\SDMMC Disk")
             .expect("mounted volume handle");
         (kernel, volume)
+    }
+
+    #[test]
+    fn virtual_allocation_producers_record_birth_and_distinct_sources() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let thread_id = 1;
+        let mut memory = UnitGuestMemory::default();
+
+        let private = virtual_alloc_raw(
+            &mut kernel,
+            thread_id,
+            VirtualAllocationSource::Private,
+            0,
+            0x1000,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        assert_ne!(private, 0);
+        assert_eq!(
+            kernel.memory.virtual_allocation(private).unwrap().owner,
+            owner
+        );
+        assert_eq!(
+            kernel.memory.virtual_allocation(private).unwrap().source,
+            VirtualAllocationSource::Private
+        );
+
+        memory.map_bytes(0x11000, 4);
+        let locale = create_locale_view_raw(&mut kernel, &mut memory, thread_id, 0x11000);
+        assert_ne!(locale, 0);
+        assert_eq!(
+            kernel.memory.virtual_allocation(locale).unwrap().source,
+            VirtualAllocationSource::LocaleViewLegacy
+        );
+
+        let mapping = kernel.handles.create_file_mapping(None, 0x1000, 4, None);
+        let view = map_view_of_file_raw(&mut kernel, &mut memory, thread_id, mapping, 0, 0, 4);
+        assert_ne!(view, 0);
+        assert_eq!(
+            kernel.memory.virtual_allocation(view).unwrap().source,
+            VirtualAllocationSource::FileViewLegacy
+        );
+
+        let snapshot = thcreate_snapshot_raw(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            &[TH32CS_SNAPPROCESS, 0],
+        );
+        assert_ne!(snapshot, INVALID_TOOLHELP_SNAPSHOT);
+        assert_eq!(
+            kernel.memory.virtual_allocation(snapshot).unwrap().source,
+            VirtualAllocationSource::ToolhelpSnapshotLegacy
+        );
+
+        let shared = virtual_alloc_raw(
+            &mut kernel,
+            thread_id,
+            VirtualAllocationSource::SharedCompatibility,
+            0,
+            0x1000,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        assert_ne!(shared, 0);
+        assert_eq!(
+            kernel.memory.virtual_allocation(shared).unwrap().source,
+            VirtualAllocationSource::SharedCompatibility
+        );
+
+        let child = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
+        kernel.set_current_process_id(child.process_id);
+        let child_owner = kernel.current_process_birth_key().expect("child birth");
+        let child_private = virtual_alloc_raw(
+            &mut kernel,
+            thread_id,
+            VirtualAllocationSource::Private,
+            0,
+            0x1000,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        assert_ne!(child_private, 0);
+        assert_eq!(
+            kernel
+                .memory
+                .virtual_allocation(child_private)
+                .unwrap()
+                .owner,
+            child_owner
+        );
+        assert_ne!(child_owner, owner);
+
+        kernel.set_current_process_id(0xdead);
+        let count = kernel.memory.virtual_allocations().count();
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                thread_id,
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            ),
+            0
+        );
+        assert_eq!(kernel.memory.virtual_allocations().count(), count);
+        Ok(())
     }
 
     #[test]
