@@ -131,6 +131,21 @@ references for historical reconstruction.
   (ledger E-18). E-17's separate 1,632/0/3 count is
   historical. None of these default/profile passes turns the explicitly run
   ignored private-byte failure green.
+- A later narrow O-P1 global code-hook change records the first observed
+  deferred stop reason: test-queued `RemoteControlService` or elapsed
+  `HostWallBudget`. At each of three safe-PC completion paths it publishes
+  `HookStop(reason)` only after checked PC write/stop; control failures take
+  the backend-error route. Two real-backend focused controls passed together
+  in three serial runs (2/0 each), with saved/native safe PC and actual
+  `Query::TIMEOUT = 0`. Frozen `types.rs`/`unicorn.rs` SHA-256
+  `00856084…80521` / `6560E1E3…A0F2` passed the full release suite
+  (**1,634 passed, 0 failed, 4 ignored**); raw log SHA-256 `B56F3E54…CE30`
+  is local `evidence/op1-global-code-hook-20261013/full-release-final.log`
+  (ledger E-19). Alternate feature/no-feature checks and a final receipt are
+  pending. The queued-input/straight-line controls do not prove public
+  network delivery, every safe-PC shape or failing Unicorn API injection.
+  Sparse/hookless remaining causes, native count witness, typed restart-PC
+  repair, E-18 private red, O-P4/O-M1, Stage 2 and live acceptance stay open.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial
