@@ -123,15 +123,23 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      The Unicorn+desktop/no-trace release check, format and diff checks also
      exited 0; exact source/log hashes are in the
      [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
-     Next seal one immutable owner/frame-qualified attempt report through
-     all fallible outgoing byte/view sync, checked finish and partial-effect
-     paths ([report design](evidence/e28-run-outcome-20261014/sealed-report-next-gate.receipt.md)).
+     An additive owned per-call `NativeAttemptReport` now transports primary
+     native/query facts and the outgoing owner through preflight, error and
+     handoff paths. Focused parent/child, checked-finish, preflight, private
+     native-error and decoded-exit finish-error controls pass. This is still
+     observational: `AttemptFrameBinding::LegacyUnbound` cannot authorize a
+     Task transition; `main.rs` discards the report through its `Result<()>`
+     wrapper and selected-CPU outcome remains the rotation input. Finish the
+     fallible context/PC/byte-view/lease-tail and partial-effect audit, then
+     migrate live/monitor consumers with explicit owner/frame validation
+     ([report design](evidence/e28-run-outcome-20261014/sealed-report-next-gate.receipt.md)).
      Do not rerun the recursive Rust hook probe; actual same-handle nested
      execution is unvalidated, not a prerequisite for ordinary count stops.
      A non-recursive private query-state control may check ambiguity policy
-     without claiming recursive safety. Add forced query-error and
-     same-instruction competing-hook controls; preserve native-query failure
-     provenance in the diagnostic-private rejection path. Remaining
+     without claiming recursive safety. A test-only post-real-query fault
+     control is in progress; it must be distinguished from a genuine C query
+     failure. Add same-instruction competing-hook controls and finish
+     diagnostic-private query provenance validation. Remaining
      sparse/hookless stop reasons, typed restart-PC repair and failed
      PC-write/stop injection also remain. Do not close O-P1, Stage 2 or S3-A
      or infer a scheduler-core rewrite from the count-only adapter.

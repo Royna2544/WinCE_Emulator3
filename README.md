@@ -33,6 +33,11 @@ remote-control HTTP/WebSocket surface.
   The Unicorn+desktop/no-trace release check, format and diff checks also
   passed; exact source/log hashes are in the
   [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
+  A later additive per-call native report retains outgoing-attempt evidence
+  across a child handoff and distinguishes preflight `NoAttempt`; its frame is
+  still `LegacyUnbound`, and the app scheduler does not consume it. Focused
+  report/decoded-exit controls pass, but the older 1,674/1,259 counts above
+  do not validate this newer source.
   An exploratory same-handle nested-start hook probe exited
   `0xC0000005` before a query assertion, was removed, and remains unresolved
   ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),

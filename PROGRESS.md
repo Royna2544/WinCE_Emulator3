@@ -319,10 +319,20 @@ references for historical reconstruction.
   The Unicorn+desktop/no-trace release check, format and diff checks also
   exited 0; exact commands, source/log hashes and caveats are in the
   [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
-  Immutable owner/frame-qualified final reports, forced query-error and
-  competing-hook controls, and diagnostic-private
-  query-error provenance remain open. This is not O-P1, Stage 2, S3-A, or
-  live-app acceptance (ledger E-28).
+  That 1,674/1,259 validation belongs to the earlier finish-order source.
+  The next source slice adds an owned `AttemptExecution { report, result }`
+  diagnostic: it captures a checked, host-process-local attempt ID and the
+  outgoing PID/birth/TID before deferred child work, and preserves actual
+  native/count/timeout/context observations with `NoAttempt` for preflight.
+  The real-MIPS parent/child, checked-finish, preflight and private native-
+  error controls passed; a decoded-exit finish-failure control also passed
+  without terminating the guest process (focused receipts under
+  `evidence/e28-run-outcome-20261014/`). The report's frame is explicitly
+  `LegacyUnbound`; the app loop still discards it and the scheduler still
+  uses selected-CPU compatibility state. The broad run on this new source
+  was interrupted for an error-precedence repair and is not validation.
+  Forced query-error/competing-hook and full tail/consumer gates remain open;
+  this is not O-P1, Stage 2, S3-A, or live-app acceptance (ledger E-28).
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

@@ -226,10 +226,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   The Unicorn+desktop/no-trace release check, format and diff checks also
   exited 0; exact source/log hashes are in the
   [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
-  An immutable
-  owner/frame-qualified final report, forced query-
-  error/competing-hook controls, diagnostic-private query-error provenance,
-  other sparse/hookless reasons and typed restart-PC repair remain open.
+  An owned outgoing-attempt report now exists for observation, but it is not
+  a canonical owner/Task/Frame-qualified scheduler result: its frame is
+  `LegacyUnbound`, its ID is host-process-local, the app loop discards it,
+  and rotation still reads the mutable selected-CPU outcome. Fallible-tail
+  effect salvage, real C query-error/competing-hook controls, other sparse/
+  hookless reasons and typed restart-PC repair remain open. A test-only Rust
+  post-query failure control does not establish a genuine C query failure.
   Complete O-P1 classification, fresh-owner Stage 2 and live acceptance
   remain open; the 1M-instruction tick is intact.
 - HeapFree does not reuse addresses or release per-process spillover pages.
