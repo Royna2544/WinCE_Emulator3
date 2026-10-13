@@ -57399,6 +57399,119 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn private_ready_get_message_writes_guarded_slab_before_native_slice() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("private-ready-get-message.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let private_base = kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("enable diagnostic private native path");
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(owner, private_base, vec![0xa5; 28])
+        );
+        let private_pin = kernel
+            .memory
+            .private_page_pin(owner, private_base)
+            .expect("committed private page");
+        let mut cpu = phase1_counter_cpu(0x1000, "private-ready-get-message.exe")?;
+        let main_thread_id = cpu.current_thread_id();
+        let entry = cpu.entry.expect("loaded guest entry");
+        let resume_pc = entry + 0x20;
+        let (worker_handle, worker_thread_id) = kernel.create_guest_thread(entry, 0, false);
+        assert_ne!(worker_thread_id, main_thread_id);
+        let wait_id = kernel.register_blocked_waiter(
+            worker_thread_id,
+            worker_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[8] = PHASE1_COUNTER_ADDRESS;
+        regs.regs[9] = 0x1000;
+        regs.regs[29] = cpu.stack_top.expect("loaded guest stack") - 0x200;
+        cpu.blocked_guest_thread = Some(super::BlockedGuestThread {
+            wait_id,
+            thread_id: worker_thread_id,
+            thread_handle: worker_handle,
+            regs,
+            import_pc: 0,
+            return_pc: resume_pc,
+            msg_ptr: private_base,
+            hwnd: None,
+            min_msg: 0,
+            max_msg: 0,
+        });
+        let message_id = crate::ce::gwe::WM_USER + 0x52;
+        assert!(kernel.post_thread_message_w(worker_thread_id, message_id, 0x53, 0x54));
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(
+                main_thread_id,
+                kernel.timers.tick_count(),
+                |wait, kernel| super::scheduler_blocked_wait_is_ready(wait, kernel)
+            ),
+            Some(wait_id),
+            "the GetMessage worker must be ready before the native slice"
+        );
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 20,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        let report = execution.report;
+        execution.result?;
+        assert_eq!(report.start_process_birth(), Some(owner));
+        assert_eq!(report.start_thread_id(), Some(worker_thread_id));
+        assert_eq!(report.start_pc(), Some(resume_pc));
+        assert_eq!(report.end_thread_id(), Some(worker_thread_id));
+        assert_eq!(cpu.current_thread_id(), worker_thread_id);
+        assert!(
+            phase1_counter(&cpu) > 0x1000,
+            "the resumed worker must execute MIPS stores"
+        );
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(cpu.blocked_guest_thread.is_none());
+        assert!(!cpu.private_slab_attempt_poisoned);
+
+        // The per-slice fence has been released, so inspect the canonical
+        // pointer-backed bytes rather than a separate Unicorn memory copy.
+        let mut msg_bytes = [0u8; 16];
+        private_pin
+            .read_bytes(0, &mut msg_bytes)
+            .expect("read canonical MSG bytes after the native slice");
+        assert_eq!(u32::from_le_bytes(msg_bytes[0..4].try_into().unwrap()), 0);
+        assert_eq!(
+            u32::from_le_bytes(msg_bytes[4..8].try_into().unwrap()),
+            message_id
+        );
+        assert_eq!(
+            u32::from_le_bytes(msg_bytes[8..12].try_into().unwrap()),
+            0x53
+        );
+        assert_eq!(
+            u32::from_le_bytes(msg_bytes[12..16].try_into().unwrap()),
+            0x54
+        );
+        Ok(())
+    }
+
+    #[test]
     fn private_real_mips_count_query_adapter_error_preserves_provenance() -> crate::Result<()> {
         use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
 
