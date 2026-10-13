@@ -51,6 +51,20 @@ references for historical reconstruction.
   (ledger E-14). This is an injected-view native failure, not a public
   same-VA `MapViewOfFile`, private `VirtualAlloc`, fresh-owner or app result;
   it does not change the post-E-12 suite totals above.
+- A later narrow O-P1 source slice replaced the successful
+  `ServiceBoundary` residual with `UnknownNormalStop`, and one scheduler
+  block-hook path now reports `HookStop(HostWallBudget)` only after a safe,
+  checked PC write and successful stop request. Seven final-source focused
+  release controls passed: actual MIPS host-budget stop, failed hook-control
+  precedence, counted unknown boundary, native error, explicit PC stop,
+  actual native deadline and unchanged service-handoff policy. The host-budget
+  control observed `Query::TIMEOUT = 0`; the deadline control observed 1.
+  Source/binary hashes and raw logs are in local
+  `evidence/op1-stop-taxonomy-20261013/focused-controls.receipt.md`
+  (ledger E-15). Six other debug host-wall writers remain untyped, and native
+  count exhaustion has no independent witness. Typed restart-PC repair, full
+  suite/feature validation on this source, O-P1 completion, Stage 2 and live
+  acceptance remain open. The 1,626-pass suite above predates this slice.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

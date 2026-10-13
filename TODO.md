@@ -27,8 +27,10 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      remain dirty-source validation, not Stage 2 acceptance (ledger E-13).
      Top-level run
      evidence and release EXE/PDB originals were hash-preserved and removed
-     after approval. Classify remaining nested target artifacts before treating
-     the whole build directory as disposable; retire old mirrors separately.
+     after approval. Four old C: source/build copies and the auxiliary Git
+     worktree were separately retired after approval, with selected unique
+     source, test patch and binaries preserved under D: `evidence/`. The D:
+     source, target and evidence remain in place.
   1. Continue fresh-engine lifetime policy work only in this repo. The E-7
      count-stop and native-error controls passed both focused and post-order
      full release validation, with exact receipts. The separately run ignored
@@ -44,13 +46,16 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
       The injected-view fixture does not cover private `VirtualAlloc` or
       fresh-owner persistence (ledger E-14; local
       `evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md`).
-  2. The current typed `NativeSliceOutcome` uses actual `Query::TIMEOUT` and
-     routes native errors to failure except validated guest exits, but
-     `ServiceBoundary` still combines possible count stops, hook yields and
-     unknown normal stops. Complete the O-P1 reason split with a genuine
-     native count-stop witness and hook/unknown controls; `Ok` with a positive
-     count but no recorded hook reason is not proof of count exhaustion. Keep
-     the 1M-instruction scheduling policy unchanged.
+  2. The narrow O-P1 slice now reports `UnknownNormalStop` for unproven
+     successful stops and `HookStop(HostWallBudget)` from one checked scheduler
+     block-hook path; seven final-source focused release controls passed
+     (ledger E-15; local
+     `evidence/op1-stop-taxonomy-20261013/focused-controls.receipt.md`).
+     Complete the other hook reasons and typed restart-PC repair, then add a
+     genuine native count-stop witness before reporting `CountLimit`.
+     `Ok` with a positive count alone is not proof. Keep the 1M-instruction
+     scheduling policy unchanged and repeat full suite/feature gates after
+     this source change; the earlier 1,626-pass suite predates O-P1.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR
@@ -90,7 +95,8 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
 - Finish per-primary-native-attempt outcome/actual expiry/fault telemetry under
   existing profile logging; summary and terminal retained snapshots cannot
   establish whole-run native behavior. The typed D-source outcome has
-  preliminary focused coverage, but final stop taxonomy, full-backend
+  focused E-15 coverage for one proven hook reason, but final stop taxonomy,
+  full-backend
   ownership/rotation and live controls remain open. Four native counted replay
   tests over64 boundaries already pass.
 - Diagnose/fix the actual normal-run PC0 at260s before claiming the new build

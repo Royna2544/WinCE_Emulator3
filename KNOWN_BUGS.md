@@ -121,10 +121,13 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   (1,626 passed, 0 failed, 3 ignored) on the dirty persistent-owner checkout.
   Unicorn-only and Unicorn+desktop/no-trace release checks and the no-feature
   suite (1,239 passed, 0 failed, 1 ignored) also passed; a bounded app run
-  remains pending. `ServiceBoundary`
-  still conflates possible count stops, hook yield and unknown normal stops;
-  O-P1 classification and fresh-owner Stage 2 acceptance remain open, and the
-  1M-instruction tick remains intact.
+  remains pending. A later focused O-P1 slice changed the successful residual
+  to `UnknownNormalStop` and proved `HookStop(HostWallBudget)` at one checked
+  block-hook site (ledger E-15); six other debug host-wall writers remain
+  untyped, and no independent native count-stop witness exists. Its seven
+  focused controls passed, but the full suite above predates that source.
+  Complete O-P1 classification and fresh-owner Stage 2 acceptance remain
+  open, and the 1M-instruction tick remains intact.
 - HeapFree does not reuse addresses or release per-process spillover pages.
   Initial/reallocation mapping, ZERO and metadata ordering are now validated,
   but global allocation metadata lacks authoritative private-process ownership,
