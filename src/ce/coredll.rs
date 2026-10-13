@@ -69410,6 +69410,127 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "expected red: ledger E-20, Stage 2"]
+    fn public_private_virtual_alloc_and_query_follow_process_rotation() -> Result<()> {
+        // CE6 VMAlloc takes a PPROCESS: equal user VAs in two processes are
+        // separate private allocations, not a collision in one global map.
+        let table = CoredllExportTable::default();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let mut memory = UnitGuestMemory::default();
+        let thread_id = 0x6101;
+        let address = 0x5200_0000;
+        let process_info = 0x0001_1000;
+        let parent_query = 0x0001_1100;
+        let child_query = 0x0001_1200;
+        let application = 0x0001_1300;
+        memory.map_bytes(process_info, 16);
+        memory.map_bytes(parent_query, 28);
+        memory.map_bytes(child_query, 28);
+        memory.write_wide_z(application, "child.exe");
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_VIRTUAL_ALLOC,
+                [address, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(ptr),
+                ..
+            } if ptr == address
+        ));
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CREATE_PROCESS_W,
+                [application, 0, 0, 0, 0, 0, 0, 0, 0, process_info],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        let child_handle = memory.read_u32(process_info)?;
+        let child_pid = memory.read_u32(process_info + 8)?;
+        let child_thread_id = memory.read_u32(process_info + 12)?;
+        let parent_pid = kernel.current_process_id();
+        assert_ne!(child_pid, kernel.current_process_id());
+        assert_eq!(kernel.process_id_for_handle(child_handle), Some(child_pid));
+
+        // This is the same selected-PID rotation used when the queued child
+        // runs, after checking that the public handle resolves to that child.
+        kernel.set_current_process_id(child_pid);
+        let child_allocation = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread_id,
+            ORD_VIRTUAL_ALLOC,
+            [address, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert!(
+            matches!(
+                &child_allocation,
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(ptr),
+                    ..
+                } if *ptr == address
+            ),
+            "a live child process must own its own private allocation at the same VA: {child_allocation:?}"
+        );
+
+        // Releasing the parent's same-VA allocation must not erase the child
+        // region. Public VirtualQuery must follow the selected process.
+        kernel.set_current_process_id(parent_pid);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_VIRTUAL_FREE,
+                [address, 0, MEM_RELEASE],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_VIRTUAL_QUERY,
+                [address, parent_query, 28],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(28),
+                ..
+            }
+        ));
+        kernel.set_current_process_id(child_pid);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                child_thread_id,
+                ORD_VIRTUAL_QUERY,
+                [address, child_query, 28],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(28),
+                ..
+            }
+        ));
+        assert_eq!(memory.read_u32(parent_query + 16)?, MEM_FREE_FLAG);
+        assert_eq!(memory.read_u32(child_query + 16)?, MEM_COMMIT_FLAG);
+        Ok(())
+    }
+
+    #[test]
     fn pe_icon_bi_rgb_16bpp_uses_ce_555_masks() {
         assert_eq!(
             pe_icon_bi_rgb_masks(16),

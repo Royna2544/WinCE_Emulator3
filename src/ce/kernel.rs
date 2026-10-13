@@ -10862,6 +10862,39 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "expected red: ledger E-20, Stage 2"]
+    fn pending_child_birth_survives_last_public_process_handle_close() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
+
+        assert!(kernel.handles.process_id_exists(launch.process_id));
+        assert_eq!(
+            kernel.process_id(launch.process_handle),
+            Some(launch.process_id)
+        );
+        assert!(kernel.close_handle(launch.process_handle)?);
+        assert_eq!(kernel.process_id(launch.process_handle), None);
+
+        // The queued child and its primary thread still own execution lifetime;
+        // closing the last public process alias must not retire its birth.
+        assert_eq!(kernel.pending_process_launches.len(), 1);
+        assert_eq!(
+            kernel.pending_process_launches[0].process_id,
+            launch.process_id
+        );
+        assert_eq!(
+            kernel.handles.thread_id(launch.thread_handle),
+            Some(launch.thread_id)
+        );
+
+        let reopened = kernel.open_process_handle(launch.process_id).expect(
+            "a pending child remains addressable by PID after its last process handle closes",
+        );
+        assert_eq!(kernel.process_id(reopened), Some(launch.process_id));
+        Ok(())
+    }
+
+    #[test]
     fn process_exit_restores_backing_store_for_already_destroyed_window() -> Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
