@@ -109,6 +109,28 @@ references for historical reconstruction.
   its earlier frozen source. Other hook causes, actual count witness, typed
   restart-PC repair, API-failure injection, O-P4/O-M1 completion, Stage 2 and
   live acceptance remain open. A later source edit needs its own validation.
+- An ignored E-18 private-page control on later test-only source ran five real
+  MIPS instructions against an internal `MemorySystem::virtual_alloc` page:
+  the first native owner held the guest-written `0x11223345`. A `cfg(test)`
+  helper closed that idle owner while retaining the CPU snapshot; a one-
+  instruction load on a genuinely fresh owner completed at the expected PC
+  with normal stop/no fault but saw stale `0x11223344`. The focused release
+  run exited 101 at the intended final byte assertion, not in setup or
+  Context restore. Exact source/log hashes and raw output are in local
+  `evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`
+  (ledger E-18). This demonstrates missing private-byte readback across the
+  simulated fresh-owner boundary; it does not change production owner policy
+  or exercise public COREDLL `VirtualAlloc`. The default release suite on
+  this later test-only source passed **1,632 passed, 0 failed, 4 ignored**;
+  E-18 is the fourth ignored control. Raw log SHA-256 `50310507…D622` is in
+  local `evidence/stage2-o-m1-private-fresh-20261013/default-release-suite-final.log`.
+  Unicorn-only and Unicorn+desktop/no-trace release checks exited 0, and the
+  no-feature suite passed **1,239 passed, 0 failed, 1 ignored**; exact raw
+  log hashes and source identity are in local
+  `evidence/stage2-o-m1-private-fresh-20261013/post-e18-validation.receipt.md`
+  (ledger E-18). E-17's separate 1,632/0/3 count is
+  historical. None of these default/profile passes turns the explicitly run
+  ignored private-byte failure green.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

@@ -44,7 +44,19 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
       allocation/lazy ownership, public same-VA `MapViewOfFile`, private
       guest-written `VirtualAlloc` persistence across fresh owner closure,
       alias/flush/unmap and remote query controls. The narrow E-16 green does
-      not close any of those gates. Add end-to-end immediate CreateProcess
+      not close any of those gates. The ignored E-18 control is now expected
+      red: guest MIPS wrote `0x11223345` to an internal private allocation,
+      but after a test-only idle-owner closure the fresh engine loaded stale
+      seed `0x11223344` at the correct PC without a fault. Establish checked
+      outgoing private-byte readback and owner-qualified canonical backing:
+      distinguish owner, backing kind and allocation incarnation; read exact
+      mapped pages before owner finish/rotation and stage failures before
+      publishing `saved_context`. A read-only source audit also found whole-
+      `initial_bytes` reseeding on page map and possible stale native bytes
+      after free/reallocation at one VA; prove those boundaries separately.
+      Turn E-18 green without retaining the old engine or suppressing native
+      errors. Then cover public COREDLL `VirtualAlloc` separately. Add
+      end-to-end immediate CreateProcess
       sync-error fault injection; its error latch is source-reviewed only.
   2. O-P1 now reports `UnknownNormalStop` for unproven successful stops,
      `HookStop(HostWallBudget)` from one checked elapsed-budget path (E-15),
@@ -67,10 +79,20 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      success/failure controls (ledger E-13). Keep the native snapshot for
      exact raw continuations; writing a synthesized PC into it can retain
      stale branch `hflags`. Closed-owner exact-key Context transfer, guest
-     `VirtualAlloc` coherence and the broader Stage 2 gates remain open.
+     `VirtualAlloc` coherence (now expected red under E-18) and the broader
+     Stage 2 gates remain open. E-18's PC/normal-stop/no-fault checks passed;
+     its stale byte is a RAM backing gap, not evidence of Context failure.
   3. The later E-17 visible-peer source passed the full release suite
      (1,632/0/3 ignored), both applicable no-trace release checks and the
      no-feature suite. E-16 O-M1 was separately validated on its own source.
+     A later E-18 ignored private-byte fixture is expected red when run
+     explicitly; its distinct test-only source passed the default full release
+     suite (1,632/0/4 ignored), with E-18 the fourth ignored control.
+     Both alternate release checks exited 0 and the no-feature suite passed
+     1,239/0/1 ignored on E-18 source (ledger E-18; local
+     `evidence/stage2-o-m1-private-fresh-20261013/post-e18-validation.receipt.md`).
+     This does not close its
+     explicitly run red private-byte gate.
      After remaining source fixes, repeat the applicable profiles, then one
      bounded 330 s live run against BED2.
      Record any newly exposed native errors in KNOWN_BUGS; neither the frozen

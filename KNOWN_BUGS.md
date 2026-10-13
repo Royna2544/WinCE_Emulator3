@@ -68,8 +68,8 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   in-hook register helpers still turn some read/write errors into zero or
   ignored results, and callback/o32 floating-return behavior is unverified.
 - Fresh-per-slice is not yet safe to select from the current dirty source:
-  ordinary guest-written `VirtualAlloc` bytes have no demonstrated readback
-  into host backing, and the separately run closed-owner fixture fails at the
+  ordinary guest-written private `VirtualAlloc` bytes lack authoritative
+  readback into host backing, and the separately run closed-owner fixture fails at the
   final assertion because the default still retains the owner. Its preceding
   Context/guest-store checks passed in that isolated fixture, but a production
   fresh-owner transition is not proved. Outgoing file-view readback now runs
@@ -81,9 +81,21 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   regression; closed-live exact readback and ambiguous lazy fail-closed
   controls also passed. Exact red/green logs and frozen source hash are in
   local `evidence/stage2-o-m1-same-va-20261013/owner-qualified-native-view.receipt.md`.
-  Public same-VA `MapViewOfFile`, private `VirtualAlloc` readback across fresh
-  owner closure, per-owner lazy fault repair and live-app behavior remain
-  untested; immediate CreateProcess error handling lacks fault injection.
+  The later ignored E-18 internal `MemorySystem::virtual_alloc` fixture now
+  demonstrates the private-byte loss: native RAM held `0x11223345` after a
+  guest MIPS store, but a one-instruction load on a fresh owner read stale
+  `0x11223344` from unchanged seed bytes. Expected PC, normal stop and no-
+  fault checks passed. Test-only helpers simulated idle-owner closure;
+  production owner policy is unchanged. Receipt:
+  `evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`.
+  The later test-only source passed its default full release suite
+  (1,632 passed, 0 failed, 4 ignored), both no-trace release checks and the
+  no-feature suite (1,239 passed, 0 failed, 1 ignored); E-18 is the fourth
+  ignored test, not a green private-byte result. Exact source/log hashes are
+  in local `evidence/stage2-o-m1-private-fresh-20261013/post-e18-validation.receipt.md`.
+  Public same-VA `MapViewOfFile`, public COREDLL `VirtualAlloc`, per-owner lazy
+  fault repair and live-app behavior remain untested; immediate CreateProcess
+  error handling lacks fault injection.
   This is not O-M1/O-P4 or Stage 2 acceptance.
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,
