@@ -559,12 +559,7 @@ impl MemorySystem {
     ) -> bool {
         match free_type {
             MEM_RELEASE => {
-                if size != 0
-                    || self
-                        .virtual_allocations
-                        .remove(&(owner, address))
-                        .is_none()
-                {
+                if size != 0 || self.virtual_allocations.remove(&(owner, address)).is_none() {
                     return false;
                 }
                 self.bump_virtual_generation();
@@ -663,6 +658,11 @@ impl MemorySystem {
         };
         self.virtual_allocations.values().any(|allocation| {
             allocation.owner != owner
+                && matches!(
+                    allocation.source,
+                    VirtualAllocationSource::Private
+                        | VirtualAllocationSource::PrivateExCompatibility
+                )
                 && allocation
                     .base
                     .checked_add(allocation.size)
@@ -872,10 +872,11 @@ mod tests {
     #[test]
     fn contains_allocated_range_checks_heap_and_virtual_bounds() {
         let mut memory = MemorySystem::default();
+        let owner = boot_owner();
         let heap_ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
         let virtual_ptr = memory
             .virtual_alloc(
-                boot_owner(),
+                owner,
                 VirtualAllocationSource::Private,
                 0,
                 0x1234,
@@ -884,11 +885,11 @@ mod tests {
             )
             .unwrap();
 
-        assert!(memory.contains_allocated_range(heap_ptr, 16));
-        assert!(memory.contains_allocated_range(heap_ptr + 4, 8));
-        assert!(!memory.contains_allocated_range(heap_ptr + 8, 16));
-        assert!(memory.contains_allocated_range(virtual_ptr, 0x1234));
-        assert!(!memory.contains_allocated_range(virtual_ptr.wrapping_sub(1), 2));
+        assert!(memory.contains_allocated_range(owner, heap_ptr, 16));
+        assert!(memory.contains_allocated_range(owner, heap_ptr + 4, 8));
+        assert!(!memory.contains_allocated_range(owner, heap_ptr + 8, 16));
+        assert!(memory.contains_allocated_range(owner, virtual_ptr, 0x1234));
+        assert!(!memory.contains_allocated_range(owner, virtual_ptr.wrapping_sub(1), 2));
     }
 
     #[test]
@@ -927,9 +928,10 @@ mod tests {
     #[test]
     fn virtual_alloc_with_unaligned_address_covers_requested_end() {
         let mut memory = MemorySystem::default();
+        let owner = boot_owner();
         let base = memory
             .virtual_alloc(
-                boot_owner(),
+                owner,
                 VirtualAllocationSource::Private,
                 0x500a_9d46,
                 0x1_0000,
@@ -939,17 +941,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(base, 0x500a_0000);
-        let allocation = memory.virtual_allocation(base).unwrap();
+        let allocation = memory.virtual_allocation(owner, base).unwrap();
         assert_eq!(allocation.size, 0x2_0000);
-        assert!(memory.contains_allocated_range(0x500b_9d48, 2));
+        assert!(memory.contains_allocated_range(owner, 0x500b_9d48, 2));
     }
 
     #[test]
     fn virtual_free_release_requires_size_zero_and_valid_base() {
         let mut memory = MemorySystem::default();
+        let owner = boot_owner();
         let base = memory
             .virtual_alloc(
-                boot_owner(),
+                owner,
                 VirtualAllocationSource::Private,
                 0,
                 0x1000,
@@ -959,22 +962,23 @@ mod tests {
             .unwrap();
 
         // MEM_RELEASE with size!=0 → false
-        assert!(!memory.virtual_free(base, 1, MEM_RELEASE));
+        assert!(!memory.virtual_free(owner, base, 1, MEM_RELEASE));
 
         // MEM_RELEASE with correct size=0 on valid base → true
-        assert!(memory.virtual_free(base, 0, MEM_RELEASE));
+        assert!(memory.virtual_free(owner, base, 0, MEM_RELEASE));
 
         // repeated release on now-freed base → false
-        assert!(!memory.virtual_free(base, 0, MEM_RELEASE));
+        assert!(!memory.virtual_free(owner, base, 0, MEM_RELEASE));
     }
 
     #[test]
     fn virtual_free_decommit_succeeds_for_valid_range_and_unknown_type_fails() {
         let mut memory = MemorySystem::default();
+        let owner = boot_owner();
         // Allocate exactly one VIRTUAL_ALIGN-sized region (0x1_0000 bytes).
         let base = memory
             .virtual_alloc(
-                boot_owner(),
+                owner,
                 VirtualAllocationSource::Private,
                 0,
                 VIRTUAL_ALIGN,
@@ -984,13 +988,13 @@ mod tests {
             .unwrap();
 
         // MEM_DECOMMIT with size within allocation → true
-        assert!(memory.virtual_free(base, VIRTUAL_ALIGN / 2, MEM_DECOMMIT));
+        assert!(memory.virtual_free(owner, base, VIRTUAL_ALIGN / 2, MEM_DECOMMIT));
 
         // MEM_DECOMMIT with size exceeding aligned allocation size → false
-        assert!(!memory.virtual_free(base, VIRTUAL_ALIGN + 1, MEM_DECOMMIT));
+        assert!(!memory.virtual_free(owner, base, VIRTUAL_ALIGN + 1, MEM_DECOMMIT));
 
         // unknown free_type → false
-        assert!(!memory.virtual_free(base, 0, 0xdead));
+        assert!(!memory.virtual_free(owner, base, 0, 0xdead));
     }
 
     #[test]
@@ -1007,11 +1011,11 @@ mod tests {
                 4,
             )
             .unwrap();
-        let original = memory.virtual_allocation(base).unwrap();
+        let original = memory.virtual_allocation(owner, base).unwrap();
         assert_eq!(original.owner, owner);
         assert_eq!(original.source, VirtualAllocationSource::Private);
         let original_incarnation = original.incarnation;
-        assert!(memory.virtual_free(base, 0, MEM_RELEASE));
+        assert!(memory.virtual_free(owner, base, 0, MEM_RELEASE));
         assert_eq!(
             memory.virtual_alloc(
                 owner,
@@ -1023,9 +1027,64 @@ mod tests {
             ),
             Some(base)
         );
-        let replacement = memory.virtual_allocation(base).unwrap();
+        let replacement = memory.virtual_allocation(owner, base).unwrap();
         assert_eq!(replacement.source, VirtualAllocationSource::FileViewLegacy);
         assert!(replacement.incarnation > original_incarnation);
+    }
+
+    #[test]
+    fn virtual_metadata_is_birth_qualified_but_native_same_va_remains_fenced() {
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        let parent = handles.process_birth_key(1).unwrap();
+        let _child_handle = handles.create_process(2);
+        let child = handles.process_birth_key(2).unwrap();
+        let mut memory = MemorySystem::default();
+        let base = memory
+            .virtual_alloc(
+                parent,
+                VirtualAllocationSource::Private,
+                0x5200_0000,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+
+        assert!(memory.virtual_allocation(parent, base).is_some());
+        assert!(memory.virtual_allocation(child, base).is_none());
+        assert_eq!(memory.virtual_allocations_for(parent).count(), 1);
+        assert_eq!(memory.virtual_allocations_for(child).count(), 0);
+        assert!(memory.contains_allocated_range(parent, base, 4));
+        assert!(!memory.contains_allocated_range(child, base, 4));
+        assert!(memory.intersects_foreign_virtual_allocation(child, base, 4));
+        assert!(!memory.set_virtual_initial_bytes(child, base, vec![1]));
+        assert!(!memory.virtual_free(child, base, 0, MEM_RELEASE));
+        assert!(memory.virtual_allocation(parent, base).is_some());
+        assert_eq!(
+            memory.virtual_alloc(
+                child,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            ),
+            None,
+            "global native mapping still forbids simultaneous same-VA private regions"
+        );
+        let child_base = memory
+            .virtual_alloc(
+                child,
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+        assert_ne!(child_base, base);
+        assert!(memory.virtual_allocation(child, child_base).is_some());
     }
 
     #[test]
@@ -1044,7 +1103,11 @@ mod tests {
                 )
                 .is_none()
         );
-        assert!(memory.virtual_allocation(0x5200_0000).is_none());
+        assert!(
+            memory
+                .virtual_allocation(boot_owner(), 0x5200_0000)
+                .is_none()
+        );
     }
 
     #[test]

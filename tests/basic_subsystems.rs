@@ -3913,7 +3913,7 @@ fn memory_system_allocation_accessors_and_generation_counters() {
         .unwrap();
     assert!(mem.virtual_generation() > vgen0);
 
-    let valloc = mem.virtual_allocation(vbase).unwrap();
+    let valloc = mem.virtual_allocation(owner, vbase).unwrap();
     assert_eq!(valloc.base, vbase);
     assert_eq!(valloc.size, 0x1_0000);
     assert!(valloc.initial_bytes.is_empty());
@@ -3923,19 +3923,19 @@ fn memory_system_allocation_accessors_and_generation_counters() {
 
     // set_virtual_initial_bytes stores bytes and bumps virtual generation.
     let vgen1 = mem.virtual_generation();
-    assert!(mem.set_virtual_initial_bytes(vbase, vec![0xAA, 0xBB]));
+    assert!(mem.set_virtual_initial_bytes(owner, vbase, vec![0xAA, 0xBB]));
     assert!(mem.virtual_generation() > vgen1);
     assert_eq!(
-        mem.virtual_allocation(vbase).unwrap().initial_bytes,
+        mem.virtual_allocation(owner, vbase).unwrap().initial_bytes,
         vec![0xAA, 0xBB]
     );
 
     // set_virtual_initial_bytes on a non-existent base returns false.
-    assert!(!mem.set_virtual_initial_bytes(0xDEAD_0000, vec![]));
+    assert!(!mem.set_virtual_initial_bytes(owner, 0xDEAD_0000, vec![]));
 
     // Free the virtual allocation.
-    assert!(mem.virtual_free(vbase, 0, MEM_RELEASE));
-    assert!(mem.virtual_allocation(vbase).is_none());
+    assert!(mem.virtual_free(owner, vbase, 0, MEM_RELEASE));
+    assert!(mem.virtual_allocation(owner, vbase).is_none());
     assert_eq!(mem.virtual_allocations().count(), 0);
 }
 
@@ -6310,6 +6310,9 @@ fn memory_system_local_alloc_heap_create_destroy_realloc_size_validate_and_range
     };
 
     let mut mem = MemorySystem::default();
+    let owner = CeKernel::boot(RuntimeConfig::load_default().unwrap())
+        .current_process_birth_key()
+        .expect("boot birth");
 
     // get_process_heap returns PROCESS_HEAP_HANDLE.
     assert_eq!(mem.get_process_heap(), PROCESS_HEAP_HANDLE);
@@ -6397,11 +6400,11 @@ fn memory_system_local_alloc_heap_create_destroy_realloc_size_validate_and_range
     assert!(mem.heap_alloc(h2, 0, 32).is_none());
 
     // contains_allocated_range: size=0 is always true.
-    assert!(mem.contains_allocated_range(0, 0));
+    assert!(mem.contains_allocated_range(owner, 0, 0));
     // A pointer within a live allocation returns true.
-    assert!(mem.contains_allocated_range(p1_shrunk, 16));
+    assert!(mem.contains_allocated_range(owner, p1_shrunk, 16));
     // A pointer entirely outside any allocation returns false.
-    assert!(!mem.contains_allocated_range(0x0000_0001, 1));
+    assert!(!mem.contains_allocated_range(owner, 0x0000_0001, 1));
 
     // heap_range_status: ptr inside requested area → Some(true).
     // First allocate a known-size block.

@@ -4360,7 +4360,12 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         } => ptr,
         other => panic!("VirtualAlloc did not return a base: {other:?}"),
     };
-    assert!(kernel.memory.virtual_allocation(virtual_base).is_some());
+    assert!(
+        kernel
+            .memory
+            .virtual_allocation(kernel.current_process_birth_key().unwrap(), virtual_base)
+            .is_some()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -21536,7 +21541,7 @@ fn coredll_raw_create_locale_view_maps_synthetic_nls_view() -> Result<()> {
     assert_eq!(memory.read_u32(size_ptr)?, 64);
     let allocation = kernel
         .memory
-        .virtual_allocation(view_ptr)
+        .virtual_allocation(kernel.current_process_birth_key().unwrap(), view_ptr)
         .expect("locale view virtual allocation");
     assert_eq!(allocation.size, 0x1_0000);
     assert_eq!(allocation.protect, 0x02);

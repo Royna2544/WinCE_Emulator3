@@ -5838,29 +5838,35 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 3),
         ))),
         ORD_VIRTUAL_ALLOC_EX => {
-            // VirtualAllocEx(hProcess, lpAddress, dwSize, flAllocType, flProtect)
-            // Single-process: delegate to VirtualAlloc (hProcess ignored).
-            Some(CoredllValue::Handle(virtual_alloc_raw(
-                kernel,
-                thread_id,
-                VirtualAllocationSource::PrivateExCompatibility,
-                raw_arg(args, 1),
-                raw_arg(args, 2),
-                raw_arg(args, 3),
-                raw_arg(args, 4),
-            )))
+            // Native pages are not yet target-process-owned. Resolve the
+            // handle, then reject a remote target instead of allocating in
+            // whichever process happens to be selected.
+            Some(CoredllValue::Handle(
+                if virtual_ex_targets_current(kernel, thread_id, raw_arg(args, 0)) {
+                    virtual_alloc_raw(
+                        kernel,
+                        thread_id,
+                        VirtualAllocationSource::PrivateExCompatibility,
+                        raw_arg(args, 1),
+                        raw_arg(args, 2),
+                        raw_arg(args, 3),
+                        raw_arg(args, 4),
+                    )
+                } else {
+                    0
+                },
+            ))
         }
-        ORD_VIRTUAL_FREE_EX => {
-            // VirtualFreeEx(hProcess, lpAddress, dwSize, dwFreeType)
-            // Single-process: delegate to VirtualFree (hProcess ignored).
-            Some(CoredllValue::Bool(virtual_free_raw(
-                kernel,
-                thread_id,
-                raw_arg(args, 1),
-                raw_arg(args, 2),
-                raw_arg(args, 3),
-            )))
-        }
+        ORD_VIRTUAL_FREE_EX => Some(CoredllValue::Bool(
+            virtual_ex_targets_current(kernel, thread_id, raw_arg(args, 0))
+                && virtual_free_raw(
+                    kernel,
+                    thread_id,
+                    raw_arg(args, 1),
+                    raw_arg(args, 2),
+                    raw_arg(args, 3),
+                ),
+        )),
         ORD_VIRTUAL_COPY | ORD_VIRTUAL_COPY_EX => {
             // VirtualCopy(lpvDest, lpvSrc, cbSize, fdwProtect) — CE physical memory mapping.
             // In emulation this is not meaningful; return TRUE (success).
@@ -5881,7 +5887,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_VIRTUAL_PROTECT | ORD_VIRTUAL_PROTECT_EX => {
+        ORD_VIRTUAL_PROTECT => {
             // CE doesn't enforce page protection at the API level in our emulator.
             // Accept any protection change and report success with old_protect = PAGE_READWRITE.
             let old_protect_ptr = raw_arg(args, 3);
@@ -5891,8 +5897,23 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_VIRTUAL_QUERY | ORD_VIRTUAL_QUERY_EX => Some(CoredllValue::U32(virtual_query_raw(
-            kernel, memory, thread_id, args,
+        ORD_VIRTUAL_PROTECT_EX => {
+            if !virtual_ex_targets_current(kernel, thread_id, raw_arg(args, 0)) {
+                Some(CoredllValue::Bool(false))
+            } else {
+                let old_protect_ptr = raw_arg(args, 4);
+                if old_protect_ptr != 0 {
+                    let _ = memory.write_u32(old_protect_ptr, PAGE_READWRITE);
+                }
+                kernel.threads.set_last_error(thread_id, 0);
+                Some(CoredllValue::Bool(true))
+            }
+        }
+        ORD_VIRTUAL_QUERY => Some(CoredllValue::U32(virtual_query_raw(
+            kernel, memory, thread_id, args, false,
+        ))),
+        ORD_VIRTUAL_QUERY_EX => Some(CoredllValue::U32(virtual_query_raw(
+            kernel, memory, thread_id, args, true,
         ))),
         ORD_VIRTUAL_ALLOC_COPY_EX => {
             // VirtualAllocCopyEx(hProcess, lpvDest, lpvSrc, cbSize, fdwCopyType)
@@ -10191,7 +10212,9 @@ fn create_locale_view_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
         return 0;
     };
-    kernel.memory.set_virtual_initial_bytes(base, bytes.clone());
+    kernel
+        .memory
+        .set_virtual_initial_bytes(owner, base, bytes.clone());
     try_seed_guest_bytes(memory, base, &bytes);
     kernel.threads.set_last_error(thread_id, 0);
     base
@@ -29511,6 +29534,28 @@ fn virtual_alloc_raw(
     }
 }
 
+fn virtual_ex_targets_current(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    let Some(target_pid) = kernel.process_id_for_handle(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let Some(target) = kernel.handles.process_birth_key(target_pid) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if kernel.current_process_birth_key() != Some(target) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return false;
+    }
+    true
+}
+
 fn virtual_free_raw(
     kernel: &mut CeKernel,
     thread_id: u32,
@@ -29518,7 +29563,13 @@ fn virtual_free_raw(
     size: u32,
     free_type: u32,
 ) -> bool {
-    if kernel.memory.virtual_free(address, size, free_type) {
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if kernel.memory.virtual_free(owner, address, size, free_type) {
         true
     } else {
         kernel
@@ -29538,10 +29589,20 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     args: &[u32],
+    is_ex: bool,
 ) -> u32 {
     // For VirtualQuery: (lpAddress, lpBuffer, dwLength)
     // For VirtualQueryEx: (hProcess, lpAddress, lpBuffer, dwLength)
-    let (addr, buf_ptr, buf_len) = if args.len() >= 4 {
+    if is_ex && !virtual_ex_targets_current(kernel, thread_id, raw_arg(args, 0)) {
+        return 0;
+    }
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let (addr, buf_ptr, buf_len) = if is_ex {
         (raw_arg(args, 1), raw_arg(args, 2), raw_arg(args, 3))
     } else {
         (raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2))
@@ -29559,7 +29620,7 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
     // Determine region state based on whether addr falls within a known virtual allocation.
     let (state, protect, region_size) = kernel
         .memory
-        .virtual_allocations()
+        .virtual_allocations_for(owner)
         .find(|a| addr >= a.base && addr < a.base.saturating_add(a.size))
         .map(|a| (MEM_COMMIT_FLAG, a.protect, a.size))
         .unwrap_or((MEM_FREE_FLAG, PAGE_NOACCESS, 0x1000));
@@ -29616,13 +29677,30 @@ fn is_bad_ptr_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return true;
     }
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return true;
+    };
+    // A foreign virtual region must not become valid merely because the old
+    // global native map happens to expose bytes at the same address.
+    if kernel
+        .memory
+        .intersects_foreign_virtual_allocation(owner, ptr, bytes)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return true;
+    }
     if let Some(valid) = kernel.memory.heap_range_status(ptr, bytes) {
         kernel
             .threads
             .set_last_error(thread_id, if valid { 0 } else { ERROR_INVALID_PARAMETER });
         return !valid;
     }
-    if kernel.memory.contains_allocated_range(ptr, bytes) {
+    if kernel.memory.contains_allocated_range(owner, ptr, bytes) {
         kernel.threads.set_last_error(thread_id, 0);
         return false;
     }
@@ -29798,7 +29876,7 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
     };
     kernel
         .memory
-        .set_virtual_initial_bytes(base, std::mem::take(&mut initial_bytes));
+        .set_virtual_initial_bytes(owner, base, std::mem::take(&mut initial_bytes));
     try_seed_guest_bytes(memory, base, &mapping_bytes);
     let process_id = kernel.current_process_id();
     let Ok(mapping) = kernel.handles.file_mapping_mut(mapping_handle) else {
@@ -29926,6 +30004,22 @@ fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     base: u32,
 ) -> bool {
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if !kernel
+        .memory
+        .virtual_allocation(owner, base)
+        .is_some_and(|allocation| allocation.source == VirtualAllocationSource::FileViewLegacy)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
     let Some((file_id, view, bytes)) =
         commit_file_mapping_view_from_guest(kernel, memory, thread_id, base, None)
     else {
@@ -29935,7 +30029,7 @@ fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
         let _ = kernel.write_file_at(file_id, view.offset as usize, &bytes);
     }
     if kernel.handles.remove_file_mapping_view(base).is_some() {
-        let _ = kernel.memory.virtual_free(base, 0, MEM_RELEASE);
+        let _ = kernel.memory.virtual_free(owner, base, 0, MEM_RELEASE);
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -65643,7 +65737,9 @@ fn create_toolhelp32_snapshot_raw<M: CoredllGuestMemory>(
 
 fn close_toolhelp32_snapshot_raw(kernel: &mut CeKernel, thread_id: u32, snapshot: u32) -> bool {
     if snapshot != INVALID_TOOLHELP_SNAPSHOT && snapshot != 0 {
-        let _ = kernel.memory.virtual_free(snapshot, 0, MEM_RELEASE);
+        if let Some(owner) = kernel.current_process_birth_key() {
+            let _ = kernel.memory.virtual_free(owner, snapshot, 0, MEM_RELEASE);
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
@@ -65819,16 +65915,18 @@ fn thcreate_snapshot_raw<M: CoredllGuestMemory>(
         }
     }
 
-    kernel.memory.set_virtual_initial_bytes(base, bytes.clone());
+    kernel
+        .memory
+        .set_virtual_initial_bytes(owner, base, bytes.clone());
     if memory.ensure_mapped(base, allocation_size).is_err() {
-        let _ = kernel.memory.virtual_free(base, 0, MEM_RELEASE);
+        let _ = kernel.memory.virtual_free(owner, base, 0, MEM_RELEASE);
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
         return INVALID_TOOLHELP_SNAPSHOT;
     }
     if !write_guest_bytes(kernel, memory, thread_id, base, &bytes) {
-        let _ = kernel.memory.virtual_free(base, 0, MEM_RELEASE);
+        let _ = kernel.memory.virtual_free(owner, base, 0, MEM_RELEASE);
         return INVALID_TOOLHELP_SNAPSHOT;
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -69465,11 +69563,19 @@ mod tests {
         );
         assert_ne!(private, 0);
         assert_eq!(
-            kernel.memory.virtual_allocation(private).unwrap().owner,
+            kernel
+                .memory
+                .virtual_allocation(owner, private)
+                .unwrap()
+                .owner,
             owner
         );
         assert_eq!(
-            kernel.memory.virtual_allocation(private).unwrap().source,
+            kernel
+                .memory
+                .virtual_allocation(owner, private)
+                .unwrap()
+                .source,
             VirtualAllocationSource::Private
         );
 
@@ -69477,7 +69583,11 @@ mod tests {
         let locale = create_locale_view_raw(&mut kernel, &mut memory, thread_id, 0x11000);
         assert_ne!(locale, 0);
         assert_eq!(
-            kernel.memory.virtual_allocation(locale).unwrap().source,
+            kernel
+                .memory
+                .virtual_allocation(owner, locale)
+                .unwrap()
+                .source,
             VirtualAllocationSource::LocaleViewLegacy
         );
 
@@ -69485,7 +69595,11 @@ mod tests {
         let view = map_view_of_file_raw(&mut kernel, &mut memory, thread_id, mapping, 0, 0, 4);
         assert_ne!(view, 0);
         assert_eq!(
-            kernel.memory.virtual_allocation(view).unwrap().source,
+            kernel
+                .memory
+                .virtual_allocation(owner, view)
+                .unwrap()
+                .source,
             VirtualAllocationSource::FileViewLegacy
         );
 
@@ -69497,7 +69611,11 @@ mod tests {
         );
         assert_ne!(snapshot, INVALID_TOOLHELP_SNAPSHOT);
         assert_eq!(
-            kernel.memory.virtual_allocation(snapshot).unwrap().source,
+            kernel
+                .memory
+                .virtual_allocation(owner, snapshot)
+                .unwrap()
+                .source,
             VirtualAllocationSource::ToolhelpSnapshotLegacy
         );
 
@@ -69512,7 +69630,11 @@ mod tests {
         );
         assert_ne!(shared, 0);
         assert_eq!(
-            kernel.memory.virtual_allocation(shared).unwrap().source,
+            kernel
+                .memory
+                .virtual_allocation(owner, shared)
+                .unwrap()
+                .source,
             VirtualAllocationSource::SharedCompatibility
         );
 
@@ -69532,7 +69654,7 @@ mod tests {
         assert_eq!(
             kernel
                 .memory
-                .virtual_allocation(child_private)
+                .virtual_allocation(child_owner, child_private)
                 .unwrap()
                 .owner,
             child_owner
@@ -69554,6 +69676,198 @@ mod tests {
             0
         );
         assert_eq!(kernel.memory.virtual_allocations().count(), count);
+        Ok(())
+    }
+
+    #[test]
+    fn public_virtual_metadata_rejects_foreign_owner_and_ex_target() -> Result<()> {
+        let table = CoredllExportTable::default();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let mut memory = UnitGuestMemory::default();
+        let parent = kernel.current_process_birth_key().expect("parent birth");
+        let base = 0x5200_0000;
+        let parent_thread = 1;
+        let parent_alloc = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            parent_thread,
+            ORD_VIRTUAL_ALLOC,
+            [base, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert!(matches!(
+            parent_alloc,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(ptr),
+                ..
+            } if ptr == base
+        ));
+
+        let child = kernel.queue_process_launch(Some("\\Windows\\child.exe".to_owned()), None);
+        kernel.set_current_process_id(child.process_id);
+        let child_owner = kernel.current_process_birth_key().expect("child birth");
+        let parent_handle = kernel.open_process_handle(parent.process_id()).unwrap();
+        let child_thread = child.thread_id;
+        let query_buf = 0x0001_1000;
+        memory.map_bytes(query_buf, 28);
+
+        let query = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_VIRTUAL_QUERY,
+            [base, query_buf, 28],
+        );
+        assert!(matches!(
+            query,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(28),
+                ..
+            }
+        ));
+        assert_eq!(memory.read_u32(query_buf + 16)?, MEM_FREE_FLAG);
+        let foreign_free = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_VIRTUAL_FREE,
+            [base, 0, MEM_RELEASE],
+        );
+        assert!(matches!(
+            foreign_free,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert!(kernel.memory.virtual_allocation(parent, base).is_some());
+        assert!(
+            kernel
+                .memory
+                .virtual_allocation(child_owner, base)
+                .is_none()
+        );
+        memory.map_bytes(base, 4);
+        let foreign_probe = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_IS_BAD_READ_PTR,
+            [base, 4],
+        );
+        assert!(matches!(
+            foreign_probe,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+
+        let remote_alloc = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_VIRTUAL_ALLOC_EX,
+            [
+                parent_handle,
+                0x5300_0000,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            ],
+        );
+        assert!(matches!(
+            remote_alloc,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(child_thread),
+            ERROR_NOT_SUPPORTED
+        );
+        assert!(
+            kernel
+                .memory
+                .virtual_allocation(parent, 0x5300_0000)
+                .is_none()
+        );
+        let remote_free = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_VIRTUAL_FREE_EX,
+            [parent_handle, base, 0, MEM_RELEASE],
+        );
+        assert!(matches!(
+            remote_free,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert!(kernel.memory.virtual_allocation(parent, base).is_some());
+        let remote_protect = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_VIRTUAL_PROTECT_EX,
+            [parent_handle, base, 0x1000, PAGE_READWRITE, query_buf],
+        );
+        assert!(matches!(
+            remote_protect,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        let remote_query = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_VIRTUAL_QUERY_EX,
+            [parent_handle, base, query_buf, 28],
+        );
+        assert!(matches!(
+            remote_query,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(child_thread),
+            ERROR_NOT_SUPPORTED
+        );
+
+        let self_alloc = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_VIRTUAL_ALLOC_EX,
+            [
+                crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                0x5400_0000,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            ],
+        );
+        assert!(matches!(
+            self_alloc,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0x5400_0000),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel
+                .memory
+                .virtual_allocation(child_owner, 0x5400_0000)
+                .unwrap()
+                .source,
+            VirtualAllocationSource::PrivateExCompatibility
+        );
         Ok(())
     }
 
