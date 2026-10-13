@@ -354,6 +354,8 @@ The exact command, paths, file sizes and full raw output are in local
 only the injected same-VA native-view collision: public same-VA MapView,
 private `VirtualAlloc` readback, fresh owner closure, same-mapping aliases,
 file flush/unmap, and application readiness remain open.
+This is the historical red baseline; the same fixture was later unignored and
+passed on the owner-qualified native-view source recorded in E-16.
 
 ## E-15 Narrow O-P1 native stop taxonomy (2026-10-13, executed)
 
@@ -417,6 +419,40 @@ acceptance. Native count-stop witness, remaining hook reasons, typed
 restart-PC repair, fresh-owner/VM gates and a bounded live workload remain
 separate gates. The earlier E-13 suite counts are
 historical and must not be attributed to this O-P1 source.
+
+## E-16 Owner-qualified native file-view sync (2026-10-13, narrow green)
+
+The final O-P1 source reproduced E-14's ignored red after both real MIPS
+slices: observed hex tuple `(55667789,55667789,55667788,55667789,55667789,55667788)`
+versus required `(11223345,11223345,55667788,55667789,11223345,55667789)`.
+The O-M1 edit captured the outgoing native process owner before view seeding,
+seeded only that owner's views, and retained exact mapping-handle/view identity
+for native readback. It rejects duplicate owner/base or stale views and fails
+closed for an ambiguous global lazy seed; a deferred unmapped write requires
+the exact canonical seed, while mapped native write errors propagate. The
+immediate CreateProcess hook also latches launch/view-sync errors and requests
+a checked stop, but no end-to-end injected CreateProcess sync failure ran.
+
+On O-M1 `unicorn.rs` SHA-256
+`0467E73EB55479681B1DC9BC74E464EEE65F051B4DD32FC131DC7C55E3DF8D89`,
+the formerly ignored E-14 two-PID native control passed as a default test;
+two new closed-live exact-readback/ambiguous-lazy controls passed, as did the
+outgoing-before-rotation regression. The full release suite passed
+**1,631 passed, 0 failed, 3 ignored** (log SHA-256 `BC8A085A…CB302C`).
+Unicorn-only and Unicorn+desktop/no-trace release checks exited 0; the
+no-feature suite passed **1,239 passed, 0 failed, 1 ignored**. Exact commands,
+source/executable hashes, all focused/broad raw logs and limits are in local
+`evidence/stage2-o-m1-same-va-20261013/owner-qualified-native-view.receipt.md`
+ (receipt SHA-256 `10939F07…4D14E`). These results belong to that frozen O-M1
+source, not any later source revision.
+
+The fixture still injects views at an already mapped VA because public
+`MapViewOfFile` uses a global virtual allocator and cannot create this
+collision. The lazy control proves safe rejection, not a per-owner lazy
+namespace or native fault repair. Public same-VA allocation, private
+guest-written `VirtualAlloc` persistence across fresh owners, same-mapping
+aliases, closed-handle flush/unmap, `VirtualQueryEx` owner resolution,
+O-P4, Stage 2 and bounded live application readiness remain open.
 
 ## Chat-project validation notes (not in this repository)
 

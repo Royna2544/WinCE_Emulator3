@@ -89,19 +89,23 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
   slices. This is an unexecuted O-M1 hypothesis, not a demonstrated failure;
   require a two-slice MIPS write/read test and a bounded per-process backing
   contract before enabling fresh by default.
-- `sync_file_mapping_views_to_unicorn` still iterates every process's views.
-  The outgoing native view is now read back before PID rotation, as covered by
-  `slice_end_reads_outgoing_shared_view_before_rotating_to_child`, but readback
-  filters on the current PID and then resolves the mapping by base alone.
-  The ignored two-PID, two-native-slice E-14 control demonstrates both
-  failures with distinct views injected at one VA: the parent received the
-  child's seed and the child's store was attributed to the parent mapping
-  ([ledger E-14](../evidence/ledger.md), local
-  `evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md`). Carry
-  the native attempt's address-space, view, and mapping identities through
-  synchronization, then test private same-VA isolation and shared canonical
-  visibility. E-14 does not exercise public `MapViewOfFile`, private
-  `VirtualAlloc` persistence, or fresh-owner closure.
+- The historical E-14 two-PID, two-native-slice red showed foreign-view
+  seeding and base-only readback at one injected guest VA. The narrow E-16
+  source captures the native attempt's process owner for view seeding and
+  carries exact mapping-handle/view identity through readback, including a
+  closed handle with a live view. It rejects duplicate owner/base and stale
+  view identity; an ambiguous global lazy seed fails closed. E-14 is now an
+  unignored passing default regression, and focused closed-live/ambiguous-lazy
+  and outgoing-before-rotation controls pass. The final O-M1 source also
+  passed 1,631 release tests (0 failed, 3 ignored), both no-trace release
+  checks and 1,239 no-feature tests (0 failed, 1 ignored). Exact frozen
+  source/log identities are in local
+  `evidence/stage2-o-m1-same-va-20261013/owner-qualified-native-view.receipt.md`
+  ([ledger E-16](../evidence/ledger.md)). This proves injected native-view
+  ownership only: public same-VA `MapViewOfFile`, global lazy page namespace,
+  native lazy fault repair, private `VirtualAlloc` persistence across fresh
+  owner closure, and app readiness remain open. The immediate CreateProcess
+  sync-error latch is source-reviewed but lacks injected-failure execution.
 
 - The crash site is TranslationBlock initialization, not FlatView/subpage
   construction; no evidence confirms the cause, so mapping topology remains a
@@ -123,10 +127,11 @@ The current kernel has one `MemorySystem` virtual-address cursor and a base-keye
 allocation map (`src/ce/memory.rs:28-38,457-503`), so public `MapViewOfFile`
 cannot yet allocate the same VA in two processes. `FileMappingView` records a
 PID but not a durable view identity; handle-table lookup, flush and unmap use
-base alone (`src/ce/object.rs:175-194,690-744`). Native mapping, fault repair and
-shared-view seeding also lack a captured address-space owner
-(`src/emulator/unicorn.rs:12637-12938`). A PID filter on one sync helper is not
-a complete fix.
+base alone (`src/ce/object.rs:175-194,690-744`). E-16 captures the selected
+process owner and exact live view for native seed/readback only; broader
+native mapping, fault repair, public view allocation and lifetime still lack
+an authoritative `AddressSpace` identity. A filter on one sync helper is not
+a complete O-M1 fix.
 
 The smallest transitional key may be an explicit `AddressSpaceKey` backed by
 the currently incremented PID, captured when the CPU slice starts and passed through
@@ -136,12 +141,14 @@ durable process incarnation or reuse-safe identity. Replace this transitional
 key with canonical `ProcessIdentity` before allowing PID reuse.
 
 Staged implementation boundary, with the E-14 real-backend expected-red
-collision control now executed: make virtual cursors, allocations, lazy seeds,
+collision control now turned green for injected native-resident views under
+E-16: make virtual cursors, allocations, lazy seeds,
 queries and native page ledgers owner-scoped without changing current heap
 callers; resolve views by
 owner plus exact mapping/view identity, including closed handles with live
-views; then pass the captured owner to native map/reclaim/fault and to/from-view
-sync. Update `VirtualQueryEx` to resolve its requested process or fail explicitly,
+views (native readback covered by E-16); then pass the captured owner through
+native map/reclaim/fault beyond the view sync now covered. Update
+`VirtualQueryEx` to resolve its requested process or fail explicitly,
 and propagate ambiguous/stale-view and unexpected native sync errors. An
 unmapped lazy page may defer its write only when its owner-qualified canonical
 seed is retained; it must not be reported as a successful write to native RAM.
