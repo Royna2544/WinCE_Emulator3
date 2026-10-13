@@ -13042,7 +13042,10 @@ fn ensure_unambiguous_file_view_lazy_seeds(kernel: &CeKernel) -> Result<()> {
     let mut seeded_bases = HashSet::new();
     for mapping in kernel.handles.file_mappings() {
         for view in &mapping.views {
-            if kernel.memory.virtual_allocation(view.base).is_some()
+            if kernel
+                .memory
+                .virtual_allocation_by_base_legacy(view.base)
+                .is_some()
                 && !seeded_bases.insert(view.base)
             {
                 return Err(Error::Backend(format!(
@@ -13156,12 +13159,16 @@ fn sync_file_mapping_views_from_unicorn<D>(
         })
         .collect();
     for (base, bytes) in seeds {
-        if kernel.memory.virtual_allocation(base).is_some()
-            && !kernel.memory.set_virtual_initial_bytes(base, bytes)
+        if let Some(owner) = kernel
+            .memory
+            .virtual_allocation_by_base_legacy(base)
+            .map(|allocation| allocation.owner)
         {
-            return Err(Error::Backend(format!(
-                "refresh file-view lazy seed at 0x{base:08x} failed"
-            )));
+            if !kernel.memory.set_virtual_initial_bytes(owner, base, bytes) {
+                return Err(Error::Backend(format!(
+                    "refresh file-view lazy seed at 0x{base:08x} failed"
+                )));
+            }
         }
     }
     Ok(())
@@ -13205,7 +13212,7 @@ fn sync_file_mapping_views_to_unicorn<D>(
             if !overlaps_native_ram {
                 let has_canonical_lazy_seed = kernel
                     .memory
-                    .virtual_allocation(view.base)
+                    .virtual_allocation_by_base_legacy(view.base)
                     .is_some_and(|allocation| {
                         allocation.initial_bytes.get(..bytes.len()) == Some(bytes)
                     });
@@ -54815,7 +54822,11 @@ mod unicorn_tests {
                 0x04,
             )
             .expect("test lazy allocation");
-        assert!(kernel.memory.set_virtual_initial_bytes(base, vec![0; 4]));
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(boot_owner, base, vec![0; 4])
+        );
         for process_id in [1, 2] {
             let handle = kernel.handles.create_file_mapping(None, 4, 4, None);
             kernel.handles.file_mapping_mut(handle)?.views.push(
@@ -54859,11 +54870,11 @@ mod unicorn_tests {
             )
             .expect("reserve ordinary private VirtualAlloc backing");
         assert_eq!(private_base, PRIVATE_BASE);
-        assert!(
-            kernel
-                .memory
-                .set_virtual_initial_bytes(private_base, INITIAL.to_le_bytes().to_vec())
-        );
+        assert!(kernel.memory.set_virtual_initial_bytes(
+            boot_owner,
+            private_base,
+            INITIAL.to_le_bytes().to_vec()
+        ));
 
         let mut bytes = tiny_mips_spinner_pe();
         write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
