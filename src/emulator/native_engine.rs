@@ -151,6 +151,29 @@ impl<K, P> ProcessNativeEngine<K, P> {
             .as_ref()
             .map(|engine| engine.get_handle() as usize)
     }
+
+    /// Isolate fresh-owner tests without changing the production lifetime.
+    /// A completed lease may retain a portable CPU snapshot, but the next
+    /// lease must derive its blank context and mapping ledger from a new owner.
+    #[cfg(test)]
+    pub(crate) fn close_idle_owner_preserving_snapshot_for_test(&self) {
+        let mut slot = self.slot.borrow_mut();
+        assert!(!slot.leased, "cannot close a live native lease");
+        assert!(
+            slot.saved.is_some(),
+            "no completed CPU snapshot to transfer"
+        );
+        if slot.engine.is_none() {
+            assert!(slot.blank.is_none() && slot.metadata.is_none());
+        }
+        let owner = slot.engine.take();
+        let blank = slot.blank.take();
+        let metadata = slot.metadata.take();
+        drop(slot);
+        drop(owner);
+        drop(blank);
+        drop(metadata);
+    }
 }
 
 pub(crate) struct NativeEngineLease<'a, K, P> {

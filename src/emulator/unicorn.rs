@@ -54590,6 +54590,106 @@ mod unicorn_tests {
     }
 
     #[test]
+    #[ignore = "expected red: ledger E-18, Stage 2 O-M1/O-P4 private VirtualAlloc bytes across fresh owner"]
+    fn native_private_virtual_write_survives_closed_owner_next_slice() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        const INITIAL: u32 = 0x1122_3344;
+        const PRIVATE_BASE: u32 = 0x5000_0000;
+        const PAGE_READWRITE: u32 = 0x04;
+
+        let mut kernel = phase1_kernel("private-virtual-fresh.exe")?;
+        let private_base = kernel
+            .memory
+            .virtual_alloc(0, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
+            .expect("reserve ordinary private VirtualAlloc backing");
+        assert_eq!(private_base, PRIVATE_BASE);
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(private_base, INITIAL.to_le_bytes().to_vec())
+        );
+
+        let mut bytes = tiny_mips_spinner_pe();
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
+        let words = [
+            0x3c08_0000 | (private_base >> 16),    // lui t0, private_base_hi
+            0x3508_0000 | (private_base & 0xffff), // ori t0,t0,private_base_lo
+            0x8d09_0000,                           // lw t1,0(t0)
+            0x2529_0001,                           // addiu t1,t1,1
+            0xad09_0000,                           // sw t1,0(t0)
+            0x8d0a_0000,                           // lw t2,0(t0) after fresh owner
+            0x1000_ffff,                           // bounded safety spinner
+            0,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("private-virtual-fresh.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("fixture PE entry");
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let run = |instruction_limit| super::UnicornRunLimits {
+            instruction_limit,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+
+        cpu.run_until_import_trap_with_framebuffer_limits(&mut kernel, &mut framebuffer, run(5))?;
+        let first = cpu
+            .saved_context
+            .as_ref()
+            .expect("first native slice saved a continuation");
+        assert_eq!(first.pc, entry + 5 * 4, "the guest store completed");
+        assert_eq!(first.regs.regs[9], INITIAL + 1);
+        let first_written = first.regs.regs[9];
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::UnknownNormalStop,
+            "first slice must stop normally, not by native deadline"
+        );
+        assert!(
+            cpu.last_debug_snapshot()
+                .is_some_and(|snapshot| snapshot.memory_fault.is_none())
+        );
+
+        // The current production policy retains an idle owner. Force only
+        // this completed fixture's next lease to be genuinely fresh. Once
+        // fresh is the default, this helper becomes an idempotent no-op.
+        cpu.native_engine
+            .close_idle_owner_preserving_snapshot_for_test();
+        assert!(cpu.native_engine_identity_for_test().is_none());
+
+        cpu.run_until_import_trap_with_framebuffer_limits(&mut kernel, &mut framebuffer, run(1))?;
+        let second = cpu
+            .saved_context
+            .as_ref()
+            .expect("fresh native slice saved a continuation");
+        assert_eq!(second.pc, entry + 6 * 4, "the second guest load completed");
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::UnknownNormalStop,
+            "second slice must stop normally, not by native deadline"
+        );
+        assert!(
+            cpu.last_debug_snapshot()
+                .is_some_and(|snapshot| snapshot.memory_fault.is_none())
+        );
+        eprintln!(
+            "fresh_private_virtual_bytes first_written=0x{:08x} second_read=0x{:08x} initial=0x{:08x}",
+            first_written, second.regs.regs[10], INITIAL
+        );
+        assert_eq!(
+            second.regs.regs[10],
+            INITIAL + 1,
+            "guest-written private VirtualAlloc bytes must survive native owner closure"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn preflight_rotation_clears_incoming_stale_native_outcome() -> crate::Result<()> {
         let mut kernel = phase1_kernel("idle-parent.exe")?;
         let parent_state = kernel.current_process_state();
