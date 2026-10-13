@@ -169,6 +169,34 @@ live-run result):
   alone does not prove `HookStop(HostWallBudget)`. Post-run restart-PC repair
   should use typed safe-stop provenance covering those hook yields and actual
   native deadline, rather than the side-channel `Rc` alone.
+- O-P1 progress (supervisor source check, 20:55, working tree):
+  `NativeSliceOutcome` now has `UnknownNormalStop` and
+  `HookStop(NativeHookStopReason)`, and `HostWallBudget` is the only reason
+  so far. Only one of the seven hook sites that write
+  `UnicornHostWallClockStop` sets a reason: the timeslice hook. The other
+  six fall through to `UnknownNormalStop` while still writing the debug
+  record. In this source they are:
+  - Global code hook, deferred safe-PC completion (three sites). The reason
+    is whatever set `host_wall_clock_stop_pending`, which is only a `bool`
+    today.
+  - Fast/trampoline block hook, the hookless default path:
+    - After `drain_remote_server_control_messages_for_message_target`: a
+      remote-control service stop.
+    - When a parked peer `can_resume_from_live_pump`: a ready-peer yield.
+    - When `elapsed >= limit || ready peer`: an ambiguous stop that needs
+      both branches recorded separately.
+
+  Next shape:
+  1. Turn the pending `bool` into `Cell<Option<NativeHookStopReason>>`, set
+     at the moment a stop is requested.
+  2. Add `RemoteControlService` and `ReadyPeerYield`.
+  3. Write the reason and the debug record through one helper, so the two
+     signals cannot disagree.
+  4. Key restart-PC repair off `HookStop(_)` and `NativeDeadline`.
+  5. Add one actual-backend control per reason on the hookless path.
+  6. Give the other `emu_stop` sites (about 115 non-test calls: import
+     traps, probes, PC stops) reasons over time, and count `UnknownNormalStop`
+     in `ce.slice_profile` so its rate is visible.
 - Still open for O-P4: the in-repo red
   `native_context_survives_closed_owner_and_resumes_at_instruction_boundary`
   (`native_engine.rs`, `#[ignore]`) turns green only when the fresh lifetime

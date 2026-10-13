@@ -93,11 +93,15 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
   The outgoing native view is now read back before PID rotation, as covered by
   `slice_end_reads_outgoing_shared_view_before_rotating_to_child`, but readback
   filters on the current PID and then resolves the mapping by base alone.
-  Same-VA views can still be seeded into the wrong native owner or attributed
-  to the wrong mapping. Carry the native attempt's address-space, view, and
-  mapping identities through synchronization, then test private same-VA
-  isolation and shared canonical visibility. These remain source-audit risks,
-  not executed same-VA regressions.
+  The ignored two-PID, two-native-slice E-14 control demonstrates both
+  failures with distinct views injected at one VA: the parent received the
+  child's seed and the child's store was attributed to the parent mapping
+  ([ledger E-14](../evidence/ledger.md), local
+  `evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md`). Carry
+  the native attempt's address-space, view, and mapping identities through
+  synchronization, then test private same-VA isolation and shared canonical
+  visibility. E-14 does not exercise public `MapViewOfFile`, private
+  `VirtualAlloc` persistence, or fresh-owner closure.
 
 - The crash site is TranslationBlock initialization, not FlatView/subpage
   construction; no evidence confirms the cause, so mapping topology remains a
@@ -131,9 +135,10 @@ the virtual-allocation and view paths. Keep `CeKernel.current_process_id` and
 durable process incarnation or reuse-safe identity. Replace this transitional
 key with canonical `ProcessIdentity` before allowing PID reuse.
 
-Staged implementation boundary, after a real-backend expected-red collision
-control: make virtual cursors, allocations, lazy seeds, queries and native page
-ledgers owner-scoped without changing current heap callers; resolve views by
+Staged implementation boundary, with the E-14 real-backend expected-red
+collision control now executed: make virtual cursors, allocations, lazy seeds,
+queries and native page ledgers owner-scoped without changing current heap
+callers; resolve views by
 owner plus exact mapping/view identity, including closed handles with live
 views; then pass the captured owner to native map/reclaim/fault and to/from-view
 sync. Update `VirtualQueryEx` to resolve its requested process or fail explicitly,

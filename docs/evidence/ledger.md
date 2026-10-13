@@ -326,6 +326,35 @@ O-M1 private/shared byte coherence, complete O-P1 classification, Stage 2/3,
 bounded live application stability or map/input readiness. The isolated
 ignored closed-owner/pointer probes were not part of the default suite.
 
+## E-14 Two-process same-VA file-view ownership (2026-10-13, expected red)
+
+The ignored Stage 2 O-M1 control in `src/emulator/unicorn.rs` ran five real
+MIPS load/increment/store instructions on each of two process CPUs. Two
+distinct pagefile-backed `FileMappingObject` views were injected at one guest
+VA under PID 1 and a queued child PID; injection is necessary because the
+current global virtual allocator cannot expose the same VA through public
+`MapViewOfFile`. The post-format focused release run exited **101** at its
+intended ownership assertion (one failed, 691 filtered), after both native
+slices completed. It is not a fixture setup error.
+
+In hex, the observed `(parent T1, parent mapping after parent, child mapping
+after parent, child T1, parent mapping after child, child mapping after child)`
+was `(55667789, 55667789, 55667788, 55667789, 55667789, 55667788)`; required
+was `(11223345, 11223345, 55667788, 55667789, 11223345, 55667789)`.
+All-view native seeding gave the parent the child's bytes; base-only readback
+then applied the child's write to the parent mapping, leaving the child's
+canonical bytes unchanged. The test stays ignored until a checked fix passes.
+
+Post-format SHA-256: `unicorn.rs`
+`E6E27273514557E271AC1A73C7DE9ECD1E1078AD8756EEDD1A021522B3E16FB0`;
+focused EXE `7C630A2ADF9D59A99C104C15E5CB24092DA11270141EABE90CF8B7F09CC9B826`;
+raw log `799FF159EB2FD1F0095A4DC1E41233043E8F618B71681B8D82BFB9C17CA61F42`.
+The exact command, paths, file sizes and full raw output are in local
+`evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md`. This proves
+only the injected same-VA native-view collision: public same-VA MapView,
+private `VirtualAlloc` readback, fresh owner closure, same-mapping aliases,
+file flush/unmap, and application readiness remain open.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
