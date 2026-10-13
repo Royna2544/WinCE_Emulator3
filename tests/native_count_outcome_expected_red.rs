@@ -1,6 +1,4 @@
-//! E28 O-P1 expected-red controls for the missing independent native count stop.
-//! These use a real MIPS PE through the public CPU runner. The debug-string
-//! assertion is temporary until `CountLimit` exists as a typed outcome.
+//! E28 O-P1 count-stop controls using a real MIPS PE and the public CPU runner.
 
 #![cfg(feature = "unicorn")]
 
@@ -10,7 +8,7 @@ use wince_emulation_v3::{
     Result,
     ce::{framebuffer::VirtualFramebuffer, kernel::CeKernel},
     config::RuntimeConfig,
-    emulator::cpu::{UnicornMips, UnicornRunLimits},
+    emulator::cpu::{NativeSliceOutcome, UnicornMips, UnicornRunLimits},
     pe::PeImage,
 };
 
@@ -108,7 +106,6 @@ fn run_guest_count_limit(count: usize) -> Result<UnicornMips> {
 }
 
 #[test]
-#[ignore = "expected red: E28 O-P1 lacks an independent native count-stop witness"]
 fn native_one_instruction_limit_has_typed_count_outcome() -> Result<()> {
     let cpu = run_guest_count_limit(1)?;
     let snapshot = cpu
@@ -120,15 +117,14 @@ fn native_one_instruction_limit_has_typed_count_outcome() -> Result<()> {
     assert!(snapshot.memory_fault.is_none());
     assert!(snapshot.host_wall_clock_stop.is_none());
     assert_eq!(
-        format!("{:?}", cpu.last_native_slice_outcome()),
-        "CountLimit",
+        cpu.last_native_slice_outcome(),
+        NativeSliceOutcome::CountLimit,
         "a positive configured count alone is not a count-stop witness",
     );
     Ok(())
 }
 
 #[test]
-#[ignore = "expected red: E28 O-P1 lacks an independent native count-stop witness"]
 fn native_two_instruction_limit_has_typed_count_outcome() -> Result<()> {
     let cpu = run_guest_count_limit(2)?;
     let snapshot = cpu
@@ -140,8 +136,8 @@ fn native_two_instruction_limit_has_typed_count_outcome() -> Result<()> {
     assert!(snapshot.memory_fault.is_none());
     assert!(snapshot.host_wall_clock_stop.is_none());
     assert_eq!(
-        format!("{:?}", cpu.last_native_slice_outcome()),
-        "CountLimit",
+        cpu.last_native_slice_outcome(),
+        NativeSliceOutcome::CountLimit,
         "the typed outcome must be tied to this finite native attempt",
     );
     Ok(())
