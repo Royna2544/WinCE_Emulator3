@@ -4349,19 +4349,14 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn refresh_finalized_wait_snapshots(&mut self, kernel: &CeKernel, current_wall_stop: bool) {
+    fn refresh_finalized_wait_snapshot(&mut self, kernel: &CeKernel) {
         // The PC and native stop facts remain a stop-time record, but host
         // idle decisions must see waits after successful slice maintenance.
-        // Do not refresh a failed attempt or an older wall-stop snapshot.
-        let active_blocked_waits = unicorn_blocked_wait_snapshots(kernel);
-        let scheduler_stats = kernel.scheduler_stats();
+        // A failed attempt and the retained historical wall-stop snapshot
+        // remain unchanged.
         if let Some(snapshot) = self.last_debug.as_mut() {
-            snapshot.active_blocked_waits = active_blocked_waits.clone();
-            snapshot.scheduler_stats = scheduler_stats;
-        }
-        if current_wall_stop && let Some(snapshot) = self.last_wall_clock_debug.as_mut() {
-            snapshot.active_blocked_waits = active_blocked_waits;
-            snapshot.scheduler_stats = scheduler_stats;
+            snapshot.active_blocked_waits = unicorn_blocked_wait_snapshots(kernel);
+            snapshot.scheduler_stats = kernel.scheduler_stats();
         }
     }
 
@@ -11182,7 +11177,7 @@ impl UnicornMips {
             }
             let _ = self.clear_orphaned_direct_send_callouts(kernel);
             let _ = self.clear_orphaned_send_depths(kernel);
-            self.refresh_finalized_wait_snapshots(kernel, host_wall_clock_stop.borrow().is_some());
+            self.refresh_finalized_wait_snapshot(kernel);
             *outcome_before_handoff = Some(self.last_native_slice_outcome);
             self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
             self.prune_exited_and_active_processes_from_parked(kernel);
@@ -11224,7 +11219,7 @@ impl UnicornMips {
         }
         let _ = self.clear_orphaned_direct_send_callouts(kernel);
         let _ = self.clear_orphaned_send_depths(kernel);
-        self.refresh_finalized_wait_snapshots(kernel, host_wall_clock_stop.borrow().is_some());
+        self.refresh_finalized_wait_snapshot(kernel);
         // Keep the outgoing CPU selected until its native lease has passed
         // checked hook teardown. A failed finish belongs to that CPU and must
         // not publish a handoff to an unrun child.
@@ -56984,6 +56979,166 @@ mod unicorn_tests {
             !cpu.blocked_wait_threads
                 .iter()
                 .any(|wait| wait.wait_id == wait_id)
+        );
+        assert!(cpu.last_debug_snapshot().is_some_and(|snapshot| {
+            snapshot
+                .active_blocked_waits
+                .iter()
+                .all(|wait| wait.id != wait_id)
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn private_real_mips_host_budget_query_error_preserves_executed_thread_wait()
+    -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("private-budget-error-wait.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("enable diagnostic private native path");
+        let mut cpu = phase1_counter_cpu(0x1000, "private-budget-error-wait.exe")?;
+        let thread_id = cpu.current_thread_id();
+        let wait_id = phase1_seed_executed_thread_sleep_wait(&mut kernel, &mut cpu);
+
+        // Let real MIPS execution record the budget hook. The test-only Rust
+        // adapter changes the result only after the real COUNT_STOP query.
+        cpu.native_engine
+            .arm_count_stop_query_error_once_for_test(0);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 1,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        let report = execution.report;
+        let err = execution
+            .result
+            .expect_err("private query error must reject the native attempt");
+        assert!(format!("{err:#}").contains("query native count stop"));
+        assert!(phase1_counter(&cpu) > 0x1000, "real MIPS stores must occur");
+        assert!(report.attempt_id().is_some());
+        assert_eq!(report.start_process_birth(), Some(owner));
+        assert_eq!(report.end_process_birth(), Some(owner));
+        assert_eq!(report.start_thread_id(), Some(thread_id));
+        assert_eq!(report.end_thread_id(), Some(thread_id));
+        assert_eq!(
+            report.native_result(),
+            &super::AttemptObservation::Value(())
+        );
+        assert!(matches!(
+            report.count_stop_query(),
+            super::AttemptObservation::Error(message) if message.contains("RESOURCE")
+        ));
+        assert_eq!(
+            report.timeout_query(),
+            &super::AttemptObservation::Value(false)
+        );
+        assert_eq!(
+            report.hook_stop_reason(),
+            Some(super::NativeHookStopReason::HostWallBudget)
+        );
+        assert_eq!(
+            report.final_outcome(),
+            super::NativeSliceOutcome::NativeError
+        );
+        assert_eq!(report.failure_operation(), Some("query native count stop"));
+        assert!(report.partial_effects_possible());
+        assert!(cpu.private_slab_attempt_poisoned);
+        assert!(
+            cpu.last_debug_snapshot()
+                .and_then(|snapshot| snapshot.host_wall_clock_stop.as_ref())
+                .is_some(),
+            "retain the stop-time marker for diagnosis, not cleanup authority"
+        );
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert!(
+            cpu.blocked_wait_threads
+                .iter()
+                .any(|wait| wait.wait_id == wait_id)
+        );
+        assert!(cpu.last_debug_snapshot().is_some_and(|snapshot| {
+            snapshot
+                .active_blocked_waits
+                .iter()
+                .any(|wait| wait.id == wait_id)
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn private_real_mips_successful_host_budget_stop_prunes_executed_thread_wait()
+    -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("private-budget-success-wait.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("enable diagnostic private native path");
+        let mut cpu = phase1_counter_cpu(0x1000, "private-budget-success-wait.exe")?;
+        let thread_id = cpu.current_thread_id();
+        let wait_id = phase1_seed_executed_thread_sleep_wait(&mut kernel, &mut cpu);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 1,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        let report = execution.report;
+        execution.result?;
+        assert!(phase1_counter(&cpu) > 0x1000, "real MIPS stores must occur");
+        assert!(report.attempt_id().is_some());
+        assert_eq!(report.start_process_birth(), Some(owner));
+        assert_eq!(report.end_process_birth(), Some(owner));
+        assert_eq!(report.start_thread_id(), Some(thread_id));
+        assert_eq!(report.end_thread_id(), Some(thread_id));
+        assert_eq!(
+            report.native_result(),
+            &super::AttemptObservation::Value(())
+        );
+        assert_eq!(
+            report.count_stop_query(),
+            &super::AttemptObservation::Value(false)
+        );
+        assert_eq!(
+            report.timeout_query(),
+            &super::AttemptObservation::Value(false)
+        );
+        assert_eq!(
+            report.hook_stop_reason(),
+            Some(super::NativeHookStopReason::HostWallBudget)
+        );
+        assert_eq!(
+            report.final_outcome(),
+            super::NativeSliceOutcome::HookStop(super::NativeHookStopReason::HostWallBudget)
+        );
+        assert_eq!(report.failure_operation(), None);
+        assert!(!cpu.private_slab_attempt_poisoned);
+        assert!(
+            cpu.last_debug_snapshot()
+                .and_then(|snapshot| snapshot.host_wall_clock_stop.as_ref())
+                .is_some()
+        );
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(
+            cpu.blocked_wait_threads
+                .iter()
+                .all(|wait| wait.wait_id != wait_id)
         );
         assert!(cpu.last_debug_snapshot().is_some_and(|snapshot| {
             snapshot

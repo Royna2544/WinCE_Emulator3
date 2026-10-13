@@ -782,7 +782,7 @@ fn run_cpu_loop(
             run_started.elapsed(),
             args.desktop,
             args.remote_server.is_some(),
-            host_idle_message_poll_slice(cpu, kernel, args.desktop),
+            host_idle_message_poll_slice(cpu, args.desktop),
             cpu.active_process_has_visible_receiver_work(kernel)
                 || cpu.active_process_has_receiver_work(kernel),
         );
@@ -1230,16 +1230,12 @@ fn should_run_active_receiver_work_for_live_message_waiter(
     live_pump_slice && message_waiter && active_receiver_work
 }
 
-fn host_idle_message_poll_slice(
-    cpu: &UnicornMips,
-    kernel: &CeKernel,
-    desktop: DesktopMode,
-) -> bool {
+fn host_idle_message_poll_slice(cpu: &UnicornMips, desktop: DesktopMode) -> bool {
     should_use_host_idle_message_poll_slice(
         desktop,
         cpu.has_saved_context(),
         cpu.last_debug_snapshot()
-            .is_some_and(|snapshot| snapshot_is_live_idle_message_wait_only(snapshot, kernel)),
+            .is_some_and(snapshot_is_idle_message_wait_only),
     )
 }
 
@@ -1387,18 +1383,8 @@ fn snapshot_has_only_stale_owned_blocked_waits(
     owned_waits != 0
 }
 
-#[cfg(test)]
 fn snapshot_is_idle_message_wait_only(snapshot: &UnicornDebugSnapshot) -> bool {
     snapshot_has_blocked_get_message(snapshot) && !snapshot_has_non_message_blocked_wait(snapshot)
-}
-
-fn snapshot_is_live_idle_message_wait_only(
-    snapshot: &UnicornDebugSnapshot,
-    kernel: &CeKernel,
-) -> bool {
-    snapshot_has_blocked_get_message(snapshot)
-        && snapshot_has_live_saved_get_message_waiter(snapshot, kernel)
-        && !snapshot_has_live_non_message_blocked_wait(snapshot, kernel)
 }
 
 fn remote_live_run_slice_ms() -> u64 {
@@ -4749,7 +4735,6 @@ mod tests {
             },
         );
         assert!(snapshot_is_idle_message_wait_only(&snapshot));
-        assert!(snapshot_is_live_idle_message_wait_only(&snapshot, &kernel));
         assert!(snapshot_has_live_saved_get_message_waiter(
             &snapshot, &kernel
         ));
@@ -4762,20 +4747,8 @@ mod tests {
             &snapshot, &kernel
         ));
         snapshot.trap_address = None;
-        snapshot.active_blocked_waits.push(
-            wince_emulation_v3::emulator::cpu::UnicornBlockedWaitSnapshot {
-                id: wait_id + 1,
-                thread_id: 7,
-                thread_handle: 0x120,
-                kind: "sleep".to_owned(),
-                wait_started_ms: 10,
-                timeout_ms: u32::MAX,
-                handles: Vec::new(),
-            },
-        );
-        assert!(snapshot_is_live_idle_message_wait_only(&snapshot, &kernel));
         assert!(kernel.remove_blocked_waiter(wait_id).is_some());
-        assert!(!snapshot_is_live_idle_message_wait_only(&snapshot, &kernel));
+        assert!(snapshot_is_idle_message_wait_only(&snapshot));
         assert!(!snapshot_has_live_saved_get_message_waiter(
             &snapshot, &kernel
         ));
