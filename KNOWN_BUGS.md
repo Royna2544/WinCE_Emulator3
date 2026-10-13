@@ -117,8 +117,10 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   down/up reached the guest window procedure without a map transition. The
   feed was not input-matched to BED2 (local
   `evidence/e22-live-20261013T154435Z/observer-captures/files-full-0065.txt`
-  and `observer-captures/messages-0165.txt`). This is not O-M1/O-P4, Stage 2
-  or map-readiness acceptance.
+  and `observer-captures/messages-0165.txt`). The persistent-owner run's
+  sampled working-set peak was 1,543.9 MiB and private-byte peak was
+  1,554.4 MiB, so survival did not resolve its memory footprint. This is
+  not O-M1/O-P4, Stage 2 or map-readiness acceptance.
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,
   inferred creation PID, lost boot/primary identity or alias incoherence in a
@@ -262,6 +264,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
 - Scheduler/message semantics are not complete for every reentrant wait,
   cancellation, nested send, abort-if-hung, modal-loop, and cross-thread
   result-delivery combination.
+- In E-22, `happyway_win` process 67/thread 3 revisited a completed WNDPROC
+  return stub 2,527 times with no pending callout. Its recorded last return
+  lacks caller context, so fabricating a recovery would be unsafe. Parent
+  message delivery continued, and this is not proved to cause the splash
+  stall. Preserve a child `WM_ACTIVATE` dispatch/park/resume regression that
+  checks the next PC is the `DispatchMessageW` continuation (local
+  `evidence/e22-live-20261013T154435Z/app.stdout.raw.txt`).
 - Shell notification behavior still needs integrated validation for taskbar
   rendering/routing, guest COM callback lifecycle, stale-handle ownership, and
   remove/update races.

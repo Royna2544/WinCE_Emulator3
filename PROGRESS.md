@@ -204,7 +204,9 @@ references for historical reconstruction.
   retained their length and SHA-256. See local
   `evidence/e22-pre-live-mounted-data-20261013.receipt.md` and
   `evidence/e22-live-20261013T154435Z/result.json` (ledger E-22). This is
-  bounded survival, not Stage 2, memory-footprint or map acceptance.
+  bounded survival, not Stage 2, memory-footprint or map acceptance. The
+  persistent-owner run's sampled working-set and private-byte peaks were
+  1,543.9 MiB and 1,554.4 MiB; O-P4 must be measured against this baseline.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

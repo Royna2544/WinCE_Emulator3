@@ -16,6 +16,10 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
   same-VA/shared-view coherence gates; then migrate one connected
   Task/object authority slice. Do not use the persistent-owner success path as
   a substitute for that gate.
+- Add a focused child `WM_ACTIVATE` return/park/resume control for E-22's
+  repeated `happyway_win` completed-stub loop. Assert continuation PC and
+  absence of a second no-pending WNDPROC return before changing recovery;
+  the loop's role in the splash stall remains unproven.
 - **Stage 2, now, in this repo** (source map:
   `docs/subsystems/cpu-engine.md`, "Stage 2 source map"):
   0. D-007's in-repo Unicorn dependency patch is present. The post-order
