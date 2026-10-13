@@ -63,16 +63,22 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      and `HookStop(VisibleParkedPeerYield)` from one checked hookless live-pump
      path (E-17). The peer gate passed three real-backend repetitions with
      `Query::TIMEOUT = 0`, safe PC, peer handoff and no host-wall marker.
-     Finish the global/sparse and remote-control hook reasons, move restart-PC
+     E-19 now types deferred global code-hook `RemoteControlService` or
+     `HostWallBudget` from the first observed cause; two real-backend controls
+     passed together in three serial runs with safe PC and native timeout 0.
+     Finish remaining sparse/hookless remote and peer reasons, move restart-PC
      repair to typed provenance, and obtain an independent native count-stop
      witness before reporting `CountLimit`; `Ok` with positive count is not
      proof. Add end-to-end failed PC-write/stop API injection. Keep the
-     1M-instruction scheduling policy unchanged. Frozen E-17 source passed
-     1,632 release tests (0 failed, 3 ignored), both no-trace release checks
-     and 1,239 no-feature tests (0 failed, 1 ignored); see local
-     `evidence/op1-visible-peer-20261013/post-visible-peer-validation.receipt.md`.
-     The O-M1 green remains tied to its separate frozen E-16 source. Later
-     edits and the bounded live gate require independent validation.
+     1M-instruction scheduling policy unchanged. Frozen E-19 source passed
+     1,634 release tests (0 failed, 4 ignored), both no-trace release checks
+     and 1,239 no-feature tests (0 failed, 1 ignored); exact source/log hashes
+     are in local
+     `evidence/op1-global-code-hook-20261013/post-global-stop-validation.receipt.md`.
+     The E-18 private-byte red was explicitly reconfirmed on this source and
+     remains ignored in the default suite. E-16 same-VA green belongs to its
+     separate frozen source. Later edits and the bounded live gate require
+     independent validation.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR
@@ -93,10 +99,14 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      `evidence/stage2-o-m1-private-fresh-20261013/post-e18-validation.receipt.md`).
      This does not close its
      explicitly run red private-byte gate.
+     The later E-19 global-hook source passed the full release suite
+     (1,634/0/4 ignored), both no-trace release checks and the no-feature
+     suite (1,239/0/1 ignored). These
+     counts do not turn E-18 green or supersede its expected-red diagnosis.
      After remaining source fixes, repeat the applicable profiles, then one
      bounded 330 s live run against BED2.
      Record any newly exposed native errors in KNOWN_BUGS; neither the frozen
-     1,632-pass E-17 source suite nor the decorative splash closes
+     1,634-pass E-19 source suite nor the decorative splash closes
      Stage 2.
 - Parallel Stage 8 native lane (diagnostic only, never gates Stages 2-6):
   the evidence is in ledger E-3 to E-6. Before any production budget change,

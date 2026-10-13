@@ -141,8 +141,12 @@ references for historical reconstruction.
   `00856084…80521` / `6560E1E3…A0F2` passed the full release suite
   (**1,634 passed, 0 failed, 4 ignored**); raw log SHA-256 `B56F3E54…CE30`
   is local `evidence/op1-global-code-hook-20261013/full-release-final.log`
-  (ledger E-19). Alternate feature/no-feature checks and a final receipt are
-  pending. The queued-input/straight-line controls do not prove public
+  (ledger E-19). Both no-trace release checks exited 0 and the no-feature
+  suite passed **1,239 passed, 0 failed, 1 ignored**. An explicit E-18 rerun
+  on this source still failed at the intended stale-byte assertion, not as a
+  normal-suite failure. Exact source/log hashes are in local
+  `evidence/op1-global-code-hook-20261013/post-global-stop-validation.receipt.md`.
+  The queued-input/straight-line controls do not prove public
   network delivery, every safe-PC shape or failing Unicorn API injection.
   Sparse/hookless remaining causes, native count witness, typed restart-PC
   repair, E-18 private red, O-P4/O-M1, Stage 2 and live acceptance stay open.

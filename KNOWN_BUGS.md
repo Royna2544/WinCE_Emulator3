@@ -138,8 +138,9 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   suite (1,239 passed, 0 failed, 1 ignored) also passed; a bounded app run
   remains pending. A later focused O-P1 slice changed the successful residual
   to `UnknownNormalStop` and proved `HookStop(HostWallBudget)` at one checked
-  block-hook site (ledger E-15); six other debug host-wall writers remain
-  untyped, and no independent native count-stop witness exists. Seven
+  block-hook site (ledger E-15); six other debug host-wall writers were
+  untyped on that E-15 source, and no independent native count-stop witness
+  exists. Seven
   focused controls passed on the first O-P1 source; a follow-up guard kept
   hook-control failures from being masked by decoded guest exit and passed
   two host-budget controls. Real hook-control-failure/encoded-exit injection
@@ -155,8 +156,16 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   1 ignored); exact hashes are in local
   `evidence/op1-visible-peer-20261013/post-visible-peer-validation.receipt.md`.
   The peer was directly constructed, not created through public CreateProcess,
-  and failing Unicorn control APIs were not injected. Other global/sparse and
-  remote-control hook reasons, a native count-exhaustion witness and typed
+  and failing Unicorn control APIs were not injected. A later E-19 global
+  code-hook slice types the first observed `RemoteControlService` or
+  `HostWallBudget` deferred stop after checked safe-PC transfer. Its two
+  real-backend focused controls passed in three serial runs (2/0 each);
+  frozen-source full release passed 1,634/0/4 ignored, both no-trace checks
+  exited 0, and no-feature passed 1,239/0/1 ignored. Exact hashes are in
+  local `evidence/op1-global-code-hook-20261013/post-global-stop-validation.receipt.md`.
+  The queued remote input is test-
+  inserted, not a public network-delivery proof. Other sparse/hookless
+  reasons, a native count-exhaustion witness and typed
   restart-PC repair remain open. Complete O-P1 classification, fresh-owner
   Stage 2 and live acceptance remain open; the 1M-instruction tick is intact.
 - HeapFree does not reuse addresses or release per-process spillover pages.
