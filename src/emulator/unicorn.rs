@@ -6623,6 +6623,31 @@ impl UnicornMips {
         let pending_wndproc_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_wndproc_returns,
         )));
+        // These two queues move before the complete run-state bundle exists.
+        // A pre-entry hook failure must restore them before abandoning the CPU.
+        macro_rules! pre_run_state_try {
+            ($result:expr) => {{
+                match $result {
+                    Ok(value) => value,
+                    Err(cause) => {
+                        let cause: Error = cause;
+                        self.parked_child_processes =
+                            std::mem::take(&mut *parked_child_processes.borrow_mut());
+                        self.pending_wndproc_returns =
+                            std::mem::take(&mut *pending_wndproc_returns.borrow_mut());
+                        let abort = uc.abort_close();
+                        // Native pointers stay fenced until their owner closes.
+                        active_private_page_guards.borrow_mut().clear();
+                        return Err(match abort {
+                            Ok(()) => cause,
+                            Err(cleanup) => Error::Backend(format!(
+                                "{cause}; abort native pre-entry setup: {cleanup:?}"
+                            )),
+                        });
+                    }
+                }
+            }};
+        }
         let pending_wndproc_returns_live_pump_hook = Rc::clone(&pending_wndproc_returns);
         let live_trampoline_state_code_hook = Rc::clone(&live_trampoline_state);
         let blocked_get_message = Rc::new(RefCell::new(None::<UnicornBlockedGetMessage>));
@@ -6676,7 +6701,7 @@ impl UnicornMips {
         } else if code_hook_mode == UnicornCodeHookMode::Global {
             let native_hook_stop_reason_code_hook = Rc::clone(&native_hook_stop_reason);
             let native_hook_control_error_code_hook = Rc::clone(&native_hook_control_error);
-            uc.add_code_hook(1, 0, move |uc, address, _size| {
+            pre_run_state_try!(uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
             if pc != 0 && stop_pc == Some(pc) {
                 let instruction = read_unicorn_code_u32(uc, &mapped_code, pc);
@@ -7085,7 +7110,7 @@ impl UnicornMips {
                 stack_words: read_unicorn_stack_words(uc, read_mips_reg(uc, RegisterMIPS::SP), 0x50),
             });
             })
-            .map_err(|err| Error::Backend(format!("install indirect-call probe: {err:?}")))?;
+            .map_err(|err| Error::Backend(format!("install indirect-call probe: {err:?}"))));
         } else {
             // ── Fast-start code hooks: sparse per-site and per-trampoline-range hooks ──
             let fast_mapped_code = Rc::new(MappedCodeIndex::new(&self.mapped_blobs));
@@ -7128,7 +7153,7 @@ impl UnicornMips {
                 let blocked_get_message = Rc::clone(&fast_blocked_get_message);
                 let pc_stop = Rc::clone(&fast_pc_stop);
                 let current_thread_id_fast_code_hook = Rc::clone(&current_thread_id_fast_code_hook);
-                uc.add_code_hook(
+                pre_run_state_try!(uc.add_code_hook(
                     u64::from(start),
                     u64::from(end),
                     move |uc, address, _size| {
@@ -7305,14 +7330,14 @@ impl UnicornMips {
                     Error::Backend(format!(
                         "install fast-start control-transfer hook 0x{start:08x}-0x{end:08x}: {err:?}"
                     ))
-                })?;
+                }));
             }
             for (base, size) in &self.trampoline_ranges {
                 let start = *base;
                 let end = base.saturating_add(size.saturating_sub(1));
                 let mapped_code = Rc::clone(&fast_mapped_code);
                 let trampoline_ranges = Rc::clone(&fast_trampoline_ranges);
-                uc.add_code_hook(
+                pre_run_state_try!(uc.add_code_hook(
                     u64::from(start),
                     u64::from(end),
                     move |uc, address, _size| {
@@ -7357,7 +7382,7 @@ impl UnicornMips {
                     Error::Backend(format!(
                         "install fast-start trampoline hook 0x{start:08x}-0x{end:08x}: {err:?}"
                     ))
-                })?;
+                }));
             }
         }
 
@@ -7367,26 +7392,28 @@ impl UnicornMips {
             let last_blocks_hook = Rc::clone(&last_blocks);
             let block_trace_counter = Rc::new(Cell::new(0u32));
             let block_trace_counter_hook = Rc::clone(&block_trace_counter);
-            uc.add_block_hook(1, 0, move |uc, address, size| {
-                let counter = block_trace_counter_hook.get().wrapping_add(1);
-                block_trace_counter_hook.set(counter);
-                if !fast_start_enabled && counter % UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL != 0 {
-                    return;
-                }
-                let mut last_blocks = last_blocks_hook.borrow_mut();
-                if last_blocks.len() == UNICORN_TRACE_LIMIT {
-                    last_blocks.remove(0);
-                }
-                let pc = address as u32;
-                last_blocks.push(UnicornLastBlock {
-                    pc,
-                    size: size as u32,
-                    ra: read_mips_reg(uc, RegisterMIPS::RA),
-                    sp: read_mips_reg(uc, RegisterMIPS::SP),
-                    instruction: read_unicorn_u32(uc, pc),
-                });
-            })
-            .map_err(|err| Error::Backend(format!("install block trace hook: {err:?}")))?;
+            pre_run_state_try!(
+                uc.add_block_hook(1, 0, move |uc, address, size| {
+                    let counter = block_trace_counter_hook.get().wrapping_add(1);
+                    block_trace_counter_hook.set(counter);
+                    if !fast_start_enabled && counter % UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL != 0 {
+                        return;
+                    }
+                    let mut last_blocks = last_blocks_hook.borrow_mut();
+                    if last_blocks.len() == UNICORN_TRACE_LIMIT {
+                        last_blocks.remove(0);
+                    }
+                    let pc = address as u32;
+                    last_blocks.push(UnicornLastBlock {
+                        pc,
+                        size: size as u32,
+                        ra: read_mips_reg(uc, RegisterMIPS::RA),
+                        sp: read_mips_reg(uc, RegisterMIPS::SP),
+                        instruction: read_unicorn_u32(uc, pc),
+                    });
+                })
+                .map_err(|err| Error::Backend(format!("install block trace hook: {err:?}")))
+            );
         }
 
         // ── Scheduler + wndproc + thread shared state ─────────────────────────────
@@ -7562,6 +7589,30 @@ impl UnicornMips {
             running_guest_thread: &running_guest_thread,
             guest_thread_stack_slots: &guest_thread_stack_slots,
         };
+        // No guest instruction has run yet. Keep every moved queue, including
+        // the earlier parked/WNDPROC queues, on any remaining setup failure.
+        // This is deliberately handles-only: orphan pruning and rotation are
+        // post-run maintenance, not valid for a rejected pre-entry attempt.
+        macro_rules! pre_entry_try {
+            ($result:expr) => {{
+                match $result {
+                    Ok(value) => value,
+                    Err(cause) => {
+                        let cause: Error = cause;
+                        self.persist_run_state_handles(&run_state);
+                        let abort = uc.abort_close();
+                        // Pointer-backed pages remain fenced through close.
+                        active_private_page_guards.borrow_mut().clear();
+                        return Err(match abort {
+                            Ok(()) => cause,
+                            Err(cleanup) => Error::Backend(format!(
+                                "{cause}; abort native pre-entry setup: {cleanup:?}"
+                            )),
+                        });
+                    }
+                }
+            }};
+        }
         let mapped_kernel_memory = Rc::new(RefCell::new(persisted_kernel_mappings));
         let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
         if running_guest_thread.borrow().is_none() {
@@ -7684,7 +7735,7 @@ impl UnicornMips {
         let native_hook_stop_reason_timeslice_hook = Rc::clone(&native_hook_stop_reason);
         let native_hook_control_error_timeslice_hook = Rc::clone(&native_hook_control_error);
         let framebuffer_tick_error_timeslice_hook = Rc::clone(&framebuffer_tick_error);
-        uc.add_block_hook(1, 0, move |uc, address, size| {
+        pre_entry_try!(uc.add_block_hook(1, 0, move |uc, address, size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
             scheduler_timeslice_counter_hook.set(counter);
             guest_code_bytes_hook.set(guest_code_bytes_hook.get() + u64::from(size));
@@ -8063,17 +8114,19 @@ impl UnicornMips {
                 &running_guest_thread_timeslice_hook,
             );
         })
-        .map_err(|err| Error::Backend(format!("install scheduler timeslice hook: {err:?}")))?;
+        .map_err(|err| Error::Backend(format!("install scheduler timeslice hook: {err:?}"))));
         if guest_entry_trace_enabled {
             let guest_entries_hook = Rc::clone(&guest_entry_traces);
-            uc.add_code_hook(0x0001_1900, 0x0001_1f00, move |uc, address, _size| {
-                let pc = address as u32;
-                let Some(label) = guest_entry_trace_label(pc) else {
-                    return;
-                };
-                record_guest_entry_trace(&guest_entries_hook, uc, label, pc);
-            })
-            .map_err(|err| Error::Backend(format!("install guest entry trace hook: {err:?}")))?;
+            pre_entry_try!(
+                uc.add_code_hook(0x0001_1900, 0x0001_1f00, move |uc, address, _size| {
+                    let pc = address as u32;
+                    let Some(label) = guest_entry_trace_label(pc) else {
+                        return;
+                    };
+                    record_guest_entry_trace(&guest_entries_hook, uc, label, pc);
+                })
+                .map_err(|err| Error::Backend(format!("install guest entry trace hook: {err:?}")))
+            );
         }
         let thread_exit_reached = Rc::new(RefCell::new(false));
 
@@ -8098,7 +8151,7 @@ impl UnicornMips {
         let live_trampoline_state_import_hook = Rc::clone(&live_trampoline_state);
         let thread_exit_reached_import_hook = Rc::clone(&thread_exit_reached);
         let pc_stop_import_hook = Rc::clone(&pc_stop);
-        uc.add_code_hook(
+        pre_entry_try!(uc.add_code_hook(
             u64::from(IMPORT_TRAP_BASE),
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
             move |uc, address, _size| {
@@ -9995,7 +10048,7 @@ impl UnicornMips {
                 }
             },
         )
-        .map_err(|err| Error::Backend(format!("install import hook: {err:?}")))?;
+        .map_err(|err| Error::Backend(format!("install import hook: {err:?}"))));
 
         // ── Memory fault hook + optional iNavi/render-map trace watch hooks ────────
         let memory_fault = Rc::new(RefCell::new(None));
@@ -10005,124 +10058,140 @@ impl UnicornMips {
         #[cfg(feature = "trace")]
         if inavi_slot_trace_enabled && let Some(addr) = inavi_slot_static_watch_addr {
             let slot_watch = Rc::clone(&inavi_render_milestones);
-            uc.add_mem_hook(
-                HookType::MEM_WRITE,
-                u64::from(addr),
-                u64::from(addr.wrapping_add(3)),
-                move |uc, _access, address, size, value| {
-                    record_inavi_slot_memory_write(
-                        &slot_watch,
-                        uc,
-                        address as u32,
-                        size,
-                        value,
-                        addr,
-                    );
-                    true
-                },
-            )
-            .map_err(|err| Error::Backend(format!("install iNavi exact slot hook: {err:?}")))?;
+            pre_entry_try!(
+                uc.add_mem_hook(
+                    HookType::MEM_WRITE,
+                    u64::from(addr),
+                    u64::from(addr.wrapping_add(3)),
+                    move |uc, _access, address, size, value| {
+                        record_inavi_slot_memory_write(
+                            &slot_watch,
+                            uc,
+                            address as u32,
+                            size,
+                            value,
+                            addr,
+                        );
+                        true
+                    },
+                )
+                .map_err(|err| Error::Backend(format!("install iNavi exact slot hook: {err:?}")))
+            );
         }
         #[cfg(feature = "trace")]
         if inavi_global_trace_enabled {
             let object_global_watch = Rc::clone(&inavi_render_milestones);
-            uc.add_mem_hook(
-                HookType::MEM_WRITE,
-                0x0079_19b4,
-                0x0079_19b7,
-                move |uc, _access, address, size, value| {
-                    record_inavi_pointer_global_write(
-                        &object_global_watch,
-                        uc,
-                        "inavi_object_global_write",
-                        address as u32,
-                        size,
-                        value,
-                    );
-                    true
-                },
-            )
-            .map_err(|err| Error::Backend(format!("install iNavi object watch hook: {err:?}")))?;
+            pre_entry_try!(
+                uc.add_mem_hook(
+                    HookType::MEM_WRITE,
+                    0x0079_19b4,
+                    0x0079_19b7,
+                    move |uc, _access, address, size, value| {
+                        record_inavi_pointer_global_write(
+                            &object_global_watch,
+                            uc,
+                            "inavi_object_global_write",
+                            address as u32,
+                            size,
+                            value,
+                        );
+                        true
+                    },
+                )
+                .map_err(|err| Error::Backend(format!("install iNavi object watch hook: {err:?}")))
+            );
             let thunk_global_watch = Rc::clone(&inavi_render_milestones);
-            uc.add_mem_hook(
-                HookType::MEM_WRITE,
-                0x0052_5794,
-                0x0052_5797,
-                move |uc, _access, address, size, value| {
-                    record_inavi_pointer_global_write(
-                        &thunk_global_watch,
-                        uc,
-                        "inavi_alloc_thunk_global_write",
-                        address as u32,
-                        size,
-                        value,
-                    );
-                    true
-                },
-            )
-            .map_err(|err| Error::Backend(format!("install iNavi thunk watch hook: {err:?}")))?;
+            pre_entry_try!(
+                uc.add_mem_hook(
+                    HookType::MEM_WRITE,
+                    0x0052_5794,
+                    0x0052_5797,
+                    move |uc, _access, address, size, value| {
+                        record_inavi_pointer_global_write(
+                            &thunk_global_watch,
+                            uc,
+                            "inavi_alloc_thunk_global_write",
+                            address as u32,
+                            size,
+                            value,
+                        );
+                        true
+                    },
+                )
+                .map_err(|err| Error::Backend(format!("install iNavi thunk watch hook: {err:?}")))
+            );
         }
         #[cfg(feature = "trace")]
         if full_trace_enabled {
             let render_map_global_watch = Rc::clone(&inavi_render_milestones);
-            uc.add_mem_hook(
-                HookType::MEM_WRITE,
-                0x0081_5550,
-                0x0081_55c0,
-                move |uc, _access, address, size, value| {
-                    record_render_map_global_write(
-                        &render_map_global_watch,
-                        uc,
-                        address as u32,
-                        size,
-                        value,
-                    );
-                    true
-                },
-            )
-            .map_err(|err| Error::Backend(format!("install render-map watch hook: {err:?}")))?;
+            pre_entry_try!(
+                uc.add_mem_hook(
+                    HookType::MEM_WRITE,
+                    0x0081_5550,
+                    0x0081_55c0,
+                    move |uc, _access, address, size, value| {
+                        record_render_map_global_write(
+                            &render_map_global_watch,
+                            uc,
+                            address as u32,
+                            size,
+                            value,
+                        );
+                        true
+                    },
+                )
+                .map_err(|err| Error::Backend(format!("install render-map watch hook: {err:?}")))
+            );
             let resource_table_watch = Rc::clone(&inavi_render_milestones);
-            uc.add_mem_hook(
-                HookType::MEM_WRITE,
-                0x0079_c440,
-                0x0079_c45f,
-                move |uc, _access, address, size, value| {
-                    record_resource_global_write(
-                        &resource_table_watch,
-                        uc,
-                        "resource_table_global_write",
-                        address as u32,
-                        size,
-                        value,
-                    );
-                    true
-                },
-            )
-            .map_err(|err| Error::Backend(format!("install resource-table watch hook: {err:?}")))?;
+            pre_entry_try!(
+                uc.add_mem_hook(
+                    HookType::MEM_WRITE,
+                    0x0079_c440,
+                    0x0079_c45f,
+                    move |uc, _access, address, size, value| {
+                        record_resource_global_write(
+                            &resource_table_watch,
+                            uc,
+                            "resource_table_global_write",
+                            address as u32,
+                            size,
+                            value,
+                        );
+                        true
+                    },
+                )
+                .map_err(|err| Error::Backend(format!(
+                    "install resource-table watch hook: {err:?}"
+                )))
+            );
             let resource_ready_watch = Rc::clone(&inavi_render_milestones);
-            uc.add_mem_hook(
-                HookType::MEM_WRITE,
-                0x0079_1794,
-                0x0079_1794,
-                move |uc, _access, address, size, value| {
-                    record_resource_global_write(
-                        &resource_ready_watch,
-                        uc,
-                        "resource_ready_global_write",
-                        address as u32,
-                        size,
-                        value,
-                    );
-                    true
-                },
-            )
-            .map_err(|err| Error::Backend(format!("install resource-ready watch hook: {err:?}")))?;
+            pre_entry_try!(
+                uc.add_mem_hook(
+                    HookType::MEM_WRITE,
+                    0x0079_1794,
+                    0x0079_1794,
+                    move |uc, _access, address, size, value| {
+                        record_resource_global_write(
+                            &resource_ready_watch,
+                            uc,
+                            "resource_ready_global_write",
+                            address as u32,
+                            size,
+                            value,
+                        );
+                        true
+                    },
+                )
+                .map_err(|err| Error::Backend(format!(
+                    "install resource-ready watch hook: {err:?}"
+                )))
+            );
         }
         if let Some(addr) = stack_write_trace_addr {
             let end = addr
                 .saturating_add(stack_write_trace_len.saturating_sub(1))
                 .max(addr);
-            uc.add_mem_hook(
+            pre_entry_try!(uc.add_mem_hook(
                 HookType::MEM_WRITE,
                 u64::from(addr),
                 u64::from(end),
@@ -10140,9 +10209,9 @@ impl UnicornMips {
                     true
                 },
             )
-            .map_err(|err| Error::Backend(format!("install stack write trace hook: {err:?}")))?;
+            .map_err(|err| Error::Backend(format!("install stack write trace hook: {err:?}"))));
         }
-        uc.add_mem_hook(
+        pre_entry_try!(uc.add_mem_hook(
             HookType::MEM_UNMAPPED | HookType::MEM_PROT,
             1,
             0,
@@ -10182,62 +10251,67 @@ impl UnicornMips {
                 false
             },
         )
-        .map_err(|err| Error::Backend(format!("install memory fault hook: {err:?}")))?;
+        .map_err(|err| Error::Backend(format!("install memory fault hook: {err:?}"))));
 
         // ── Interrupt + invalid-instruction probes ────────────────────────────────
         let interrupt_probe = Rc::new(RefCell::new(None));
         let interrupt_probe_hook = Rc::clone(&interrupt_probe);
         let interrupt_last_code_probe = Rc::clone(&last_code_probe);
-        uc.add_intr_hook(move |uc, intno| {
-            let last_code = *interrupt_last_code_probe.borrow();
-            let (native_gprs, native_hi, native_lo, return_words, return_indirect_call) =
-                capture_interrupt_native_diagnostics(uc);
-            *interrupt_probe_hook.borrow_mut() = Some(UnicornInterruptProbe {
-                pc: read_mips_reg(uc, RegisterMIPS::PC),
-                ra: read_mips_reg(uc, RegisterMIPS::RA),
-                sp: read_mips_reg(uc, RegisterMIPS::SP),
-                v0: read_mips_reg(uc, RegisterMIPS::V0),
-                v1: read_mips_reg(uc, RegisterMIPS::V1),
-                a0: read_mips_reg(uc, RegisterMIPS::A0),
-                a1: read_mips_reg(uc, RegisterMIPS::A1),
-                a2: read_mips_reg(uc, RegisterMIPS::A2),
-                a3: read_mips_reg(uc, RegisterMIPS::A3),
-                s0: read_mips_reg(uc, RegisterMIPS::S0),
-                s1: read_mips_reg(uc, RegisterMIPS::S1),
-                s2: read_mips_reg(uc, RegisterMIPS::S2),
-                s3: read_mips_reg(uc, RegisterMIPS::S3),
-                s4: read_mips_reg(uc, RegisterMIPS::S4),
-                s5: read_mips_reg(uc, RegisterMIPS::S5),
-                s6: read_mips_reg(uc, RegisterMIPS::S6),
-                s7: read_mips_reg(uc, RegisterMIPS::S7),
-                fp: read_mips_reg(uc, RegisterMIPS::FP),
-                t9: read_mips_reg(uc, RegisterMIPS::T9),
-                intno: intno as u32,
-                last_code_pc: last_code.map(|(pc, _)| pc),
-                last_code_instruction: last_code.and_then(|(_, instruction)| instruction),
-                native_gprs,
-                native_hi,
-                native_lo,
-                return_words,
-                return_indirect_call,
-            });
-            let _ = uc.emu_stop();
-        })
-        .map_err(|err| Error::Backend(format!("install interrupt probe: {err:?}")))?;
+        pre_entry_try!(
+            uc.add_intr_hook(move |uc, intno| {
+                let last_code = *interrupt_last_code_probe.borrow();
+                let (native_gprs, native_hi, native_lo, return_words, return_indirect_call) =
+                    capture_interrupt_native_diagnostics(uc);
+                *interrupt_probe_hook.borrow_mut() = Some(UnicornInterruptProbe {
+                    pc: read_mips_reg(uc, RegisterMIPS::PC),
+                    ra: read_mips_reg(uc, RegisterMIPS::RA),
+                    sp: read_mips_reg(uc, RegisterMIPS::SP),
+                    v0: read_mips_reg(uc, RegisterMIPS::V0),
+                    v1: read_mips_reg(uc, RegisterMIPS::V1),
+                    a0: read_mips_reg(uc, RegisterMIPS::A0),
+                    a1: read_mips_reg(uc, RegisterMIPS::A1),
+                    a2: read_mips_reg(uc, RegisterMIPS::A2),
+                    a3: read_mips_reg(uc, RegisterMIPS::A3),
+                    s0: read_mips_reg(uc, RegisterMIPS::S0),
+                    s1: read_mips_reg(uc, RegisterMIPS::S1),
+                    s2: read_mips_reg(uc, RegisterMIPS::S2),
+                    s3: read_mips_reg(uc, RegisterMIPS::S3),
+                    s4: read_mips_reg(uc, RegisterMIPS::S4),
+                    s5: read_mips_reg(uc, RegisterMIPS::S5),
+                    s6: read_mips_reg(uc, RegisterMIPS::S6),
+                    s7: read_mips_reg(uc, RegisterMIPS::S7),
+                    fp: read_mips_reg(uc, RegisterMIPS::FP),
+                    t9: read_mips_reg(uc, RegisterMIPS::T9),
+                    intno: intno as u32,
+                    last_code_pc: last_code.map(|(pc, _)| pc),
+                    last_code_instruction: last_code.and_then(|(_, instruction)| instruction),
+                    native_gprs,
+                    native_hi,
+                    native_lo,
+                    return_words,
+                    return_indirect_call,
+                });
+                let _ = uc.emu_stop();
+            })
+            .map_err(|err| Error::Backend(format!("install interrupt probe: {err:?}")))
+        );
 
         let invalid_instruction_probe = Rc::new(RefCell::new(None));
         let invalid_instruction_probe_hook = Rc::clone(&invalid_instruction_probe);
-        uc.add_insn_invalid_hook(move |uc| {
-            let pc = read_mips_reg(uc, RegisterMIPS::PC);
-            *invalid_instruction_probe_hook.borrow_mut() = Some(UnicornInvalidInstructionProbe {
-                pc,
-                ra: read_mips_reg(uc, RegisterMIPS::RA),
-                sp: read_mips_reg(uc, RegisterMIPS::SP),
-                instruction: read_unicorn_u32(uc, pc),
-            });
-            false
-        })
-        .map_err(|err| Error::Backend(format!("install invalid-instruction probe: {err:?}")))?;
+        pre_entry_try!(
+            uc.add_insn_invalid_hook(move |uc| {
+                let pc = read_mips_reg(uc, RegisterMIPS::PC);
+                *invalid_instruction_probe_hook.borrow_mut() =
+                    Some(UnicornInvalidInstructionProbe {
+                        pc,
+                        ra: read_mips_reg(uc, RegisterMIPS::RA),
+                        sp: read_mips_reg(uc, RegisterMIPS::SP),
+                        instruction: read_unicorn_u32(uc, pc),
+                    });
+                false
+            })
+            .map_err(|err| Error::Backend(format!("install invalid-instruction probe: {err:?}")))
+        );
 
         // ── Run ───────────────────────────────────────────────────────────────────
         let slice_hooks_elapsed = slice_profile.elapsed();
@@ -10252,32 +10326,34 @@ impl UnicornMips {
         // maps add their own guard before the fault/import callback resumes.
         for recorded in mapped_kernel_memory.borrow().private_pages.values() {
             let page = recorded.identity.page_base();
-            let owner = native_owner_birth.ok_or_else(|| {
+            let owner = pre_entry_try!(native_owner_birth.ok_or_else(|| {
                 Error::Backend("private slab page has no captured process birth".to_owned())
-            })?;
-            let pin = kernel
-                .memory
-                .private_page_pin(owner, page)
-                .filter(|pin| {
-                    pin.identity() == recorded.identity
-                        && pin.native_ptr() as usize == recorded.host_address
-                        && kernel.memory.contains_private_page_pin(pin)
-                })
-                .ok_or_else(|| {
-                    Error::Backend(format!(
-                        "private slab page 0x{page:08x} changed before native execution"
-                    ))
-                })?;
-            let guard = pin.begin_native_execution().map_err(|err| {
+            }));
+            let pin = pre_entry_try!(
+                kernel
+                    .memory
+                    .private_page_pin(owner, page)
+                    .filter(|pin| {
+                        pin.identity() == recorded.identity
+                            && pin.native_ptr() as usize == recorded.host_address
+                            && kernel.memory.contains_private_page_pin(pin)
+                    })
+                    .ok_or_else(|| {
+                        Error::Backend(format!(
+                            "private slab page 0x{page:08x} changed before native execution"
+                        ))
+                    })
+            );
+            let guard = pre_entry_try!(pin.begin_native_execution().map_err(|err| {
                 Error::Backend(format!("fence private slab page 0x{page:08x}: {err:?}"))
-            })?;
+            }));
             active_private_page_guards
                 .borrow_mut()
                 .insert(recorded.identity, guard);
         }
         // This checked ordinal is diagnostic correlation, never a Task or
         // native-handle identity. Allocate only when a primary start is next.
-        report.attempt_id = Some(DiagnosticAttemptId::next()?);
+        report.attempt_id = Some(pre_entry_try!(DiagnosticAttemptId::next()));
         report.start_thread_id = Some(native_start_tid);
         report.start_pc = Some(start_pc);
         let result = uc.emu_start(
@@ -57192,7 +57268,9 @@ mod unicorn_tests {
             },
         );
         let report = execution.report;
-        let err = execution.result.expect_err("held page fence must reject pre-entry setup");
+        let err = execution
+            .result
+            .expect_err("held page fence must reject pre-entry setup");
         assert!(format!("{err:#}").contains("fence private slab page"));
         assert_eq!(report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
         assert_eq!(report.attempt_id(), None);
