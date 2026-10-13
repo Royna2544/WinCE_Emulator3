@@ -579,6 +579,36 @@ open. The first reason observed by this hook wins when both arise before
 the safe stop; the type is not a post-hoc inference from elapsed time or
 proof of which real-world condition happened first.
 
+## E-20 Process birth and private VA owner controls (2026-10-13, expected red)
+
+Two new ignored, test-only controls expose distinct Stage 2 ownership gaps.
+`pending_child_birth_survives_last_public_process_handle_close` queues a
+child, closes its last public process handle while its pending launch and
+primary thread handle remain, then expects a PID lookup to reopen it. The
+focused run exited 1 at `open_process_handle(child_pid) == None`: process
+birth is still discoverable only through public handle aliases. The other
+control, `public_private_virtual_alloc_and_query_follow_process_rotation`,
+uses public COREDLL `VirtualAlloc` and `CreateProcessW`; its focused run
+exited 1 because the selected child could not allocate the same private VA
+(`0x52000000`) already held by the parent. Later parent-free and both query
+assertions were not reached. Neither test executes the child or validates
+native private bytes. They remain ignored in default suites, not accepted.
+
+On `kernel.rs` SHA-256 `78B2A04E…B0A6B` and `coredll.rs` SHA-256
+`D2020A00…F9926558`, the default release library suite passed **697 passed,
+0 failed, 5 ignored**; the full release suite exited 0 with **1,634 passed,
+0 failed, 6 ignored** across binaries. One additional ignored binary requires
+the external eVC4 MIPSII toolchain. The focused reds were each one failed,
+zero passed. Raw logs were not saved for E-20; commands, full source hashes,
+observed failures and limits are in local
+`evidence/e20-process-vm-owner-20261013.receipt.md` (receipt SHA-256
+`449B6FD9…7CFA86`). A first `VirtualAllocEx`
+draft stopped at an unresolved static ordinal and is not the same-VA red.
+The target EXE directly imports `VirtualAlloc`, `VirtualFree`, and three file
+mapping functions; the ROM Ex-family export-index gap is separate, and
+dynamic imports are not ruled out. E-18 private-byte coherence, O-P4 fresh
+default, full O-M1, Stage 2, and live iNavi acceptance all remain open.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
