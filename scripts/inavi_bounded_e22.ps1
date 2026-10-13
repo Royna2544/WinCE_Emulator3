@@ -55,6 +55,36 @@ function Test-ExpectedHash([string]$Path, [string]$Expected) {
     }
 }
 
+function Assert-NoReparseMounts([object[]]$Backups) {
+    # The guest path mapper joins names lexically. A junction in any writable
+    # root could move guest writes outside the three archived trees.
+    $entryCount = 0
+    foreach ($item in $Backups) {
+        $root = [string]$item.Source
+        $ancestor = [System.IO.DirectoryInfo]::new($root)
+        while ($null -ne $ancestor -and $ancestor.FullName -ne 'D:\') {
+            if (-not $ancestor.Exists) { throw "Mounted path disappeared: $($ancestor.FullName)" }
+            if ($ancestor.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                throw "Mounted path contains a reparse-point ancestor: $($ancestor.FullName)"
+            }
+            $ancestor = $ancestor.Parent
+        }
+        $pending = [System.Collections.Generic.Stack[string]]::new()
+        $pending.Push($root)
+        while ($pending.Count -ne 0) {
+            $directory = $pending.Pop()
+            foreach ($child in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
+                $entryCount++
+                if ($entryCount -gt 100000) { throw 'Mounted reparse scan exceeded its 100,000-entry safety bound.' }
+                if ($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    throw "Writable mount contains a reparse point: $($child.FullName)"
+                }
+                if ($child.PSIsContainer) { $pending.Push($child.FullName) }
+            }
+        }
+    }
+}
+
 function Test-OriginalMountPreflight([string]$Repository) {
     # Exact verified archives from evidence/e22-pre-live-mounted-data-20261013.receipt.md.
     $backups = @(
@@ -68,6 +98,7 @@ function Test-OriginalMountPreflight([string]$Repository) {
         }
         Test-ExpectedHash $item.Archive $item.Hash
     }
+    Assert-NoReparseMounts $backups
     Test-ExpectedHash (Join-Path $Repository 'mounts.toml') '6E9CD6F405E2945C8CB949B1B53A0AAC8821EA2A2EF5434053F578B1A495B0B0'
     Test-ExpectedHash (Join-Path $Repository 'serial_devices.json') '9384CE7409CA547C51B5805755B09BC745B544AA2297589CA2CBE5B4110A6F28'
     Test-ExpectedHash (Join-Path $Repository 'registry.reg') '3DD0A53EC23BFB2F36A65E53CFEC262D8D0A0527F78AA5F9A9256EA3E38A6DCE'
@@ -302,68 +333,130 @@ function Get-MatchingProcess([int]$TargetProcessId, [long]$StartUtcTicks) {
     return $candidate
 }
 
+function Stop-ExactApp([int]$TargetProcessId, [long]$StartUtcTicks) {
+    $candidate = Get-MatchingProcess $TargetProcessId $StartUtcTicks
+    if ($null -eq $candidate) { return }
+    $candidate.Kill()
+    if (-not $candidate.WaitForExit(10000)) {
+        throw "Exact emulator PID $TargetProcessId did not terminate within 10 seconds."
+    }
+}
+
 function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
     Assert-WorkerDirectory $Directory
+    $requestPath = Join-Path $Directory 'launch-request.json'
     $descriptorPath = Join-Path $Directory 'process.json'
     $readyPath = Join-Path $Directory 'monitor-worker-ready.json'
+    $abortPath = Join-Path $Directory 'abort-request.json'
     $samples = Join-Path $Directory 'memory.jsonl'
     $resultPath = Join-Path $Directory 'monitor-result.json'
     $stdoutPath = Join-Path $Directory 'app.stdout.raw.txt'
     $stderrPath = Join-Path $Directory 'app.stderr.raw.txt'
-    Write-AtomicJsonFile $readyPath @{ readyUtc = [DateTime]::UtcNow.ToString('O'); watchdogSeconds = 390; rssLimitMiB = $LimitMiB }
+    $ppmPath = Join-Path $Directory 'terminal-frame.ppm'
+    $self = Get-Process -Id $PID -ErrorAction Stop
+    Write-AtomicJsonFile $readyPath @{
+        readyUtc = [DateTime]::UtcNow.ToString('O'); monitorPid = $PID
+        monitorStartUtcTicks = $self.StartTime.ToUniversalTime().Ticks
+        watchdogSeconds = 390; rssLimitMiB = $LimitMiB
+    }
     $waitStarted = [System.Diagnostics.Stopwatch]::GetTimestamp()
-    while (-not (Test-Path -LiteralPath $descriptorPath)) {
+    while (-not (Test-Path -LiteralPath $requestPath)) {
         if (([System.Diagnostics.Stopwatch]::GetTimestamp() - $waitStarted) -ge (30L * $frequency)) {
-            throw 'No process descriptor arrived within 30 seconds of monitor readiness.'
+            throw 'No launch request arrived within 30 seconds of monitor readiness.'
         }
         Start-Sleep -Milliseconds 100
     }
-    $descriptor = Get-Content -LiteralPath $descriptorPath -Raw | ConvertFrom-Json
-    $processId = [int]$descriptor.processId
-    $startUtcTicks = [long]$descriptor.startUtcTicks
-    $launchTicks = [long]$descriptor.launchTicks
+    $request = Get-Content -LiteralPath $requestPath -Raw | ConvertFrom-Json
+    if (-not (Test-Path -LiteralPath (Join-Path $Directory 'observer-worker-ready.json'))) {
+        throw 'Observer was not ready at monitor-owned launch.'
+    }
+    if ((Get-Sha256 ([string]$request.executable)) -ne [string]$request.executableSha256) {
+        throw 'Executable hash changed between build and monitor-owned launch.'
+    }
+    if ([string]$request.repository -ne 'D:\GitHub\Wince_emulation_v3') {
+        throw 'Monitor launch request has the wrong checkout.'
+    }
+    $arguments = @($request.arguments | ForEach-Object { [string]$_ })
+    $launchTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $app = $null
     $nextSample = $launchTicks
-    $reason = 'normal-exit'
+    $reason = 'launch-failure'
     $fired = $false
-    while ($true) {
-        $process = Get-MatchingProcess $processId $startUtcTicks
-        if ($null -eq $process -or $process.HasExited) { break }
-        $nowTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
-        if ($nowTicks -ge $nextSample) {
-            $process.Refresh()
-            Add-JsonLine $samples @{
-                utc = [DateTime]::UtcNow.ToString('O'); elapsedSeconds = ($nowTicks - $launchTicks) / [double]$frequency
-                processId = $processId; workingSetBytes = $process.WorkingSet64
-                privateBytes = $process.PrivateMemorySize64; virtualBytes = $process.VirtualMemorySize64
-                cpuMilliseconds = $process.TotalProcessorTime.TotalMilliseconds
-            }
-            $nextSample = $nowTicks + (2L * $frequency)
-            if ($process.WorkingSet64 -gt ([long]$LimitMiB * 1MB)) {
-                $reason = 'rss-limit'; $fired = $true
-                $process.Kill()
+    $monitorError = $null
+    $appExitCode = $null
+    $terminationConfirmed = $false
+    try {
+        $app = Start-Process -FilePath ([string]$request.executable) -ArgumentList $arguments `
+            -WorkingDirectory ([string]$request.repository) -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        Write-AtomicJsonFile $descriptorPath @{
+            processId = $app.Id; startUtcTicks = $app.StartTime.ToUniversalTime().Ticks
+            launchTicks = $launchTicks; launchedUtc = [DateTime]::UtcNow.ToString('O')
+            executableSha256 = [string]$request.executableSha256
+        }
+        $reason = 'normal-exit'
+        while ($true) {
+            $app.Refresh()
+            if ($app.HasExited) { break }
+            $nowTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            if (Test-Path -LiteralPath $abortPath) {
+                $reason = 'driver-abort-request'; $fired = $true
+                $app.Kill()
                 break
             }
-            foreach ($streamPath in @($stdoutPath, $stderrPath)) {
-                if ((Test-Path -LiteralPath $streamPath -PathType Leaf) -and
-                    (Get-Item -LiteralPath $streamPath).Length -gt 512MB) {
-                    $reason = 'raw-log-limit'; $fired = $true
-                    $process.Kill()
+            if ($nowTicks -ge $nextSample) {
+                Add-JsonLine $samples @{
+                    utc = [DateTime]::UtcNow.ToString('O'); elapsedSeconds = ($nowTicks - $launchTicks) / [double]$frequency
+                    processId = $app.Id; workingSetBytes = $app.WorkingSet64
+                    privateBytes = $app.PrivateMemorySize64; virtualBytes = $app.VirtualMemorySize64
+                    cpuMilliseconds = $app.TotalProcessorTime.TotalMilliseconds
+                }
+                $nextSample = $nowTicks + (2L * $frequency)
+                if ($app.WorkingSet64 -gt ([long]$LimitMiB * 1MB)) {
+                    $reason = 'rss-limit'; $fired = $true
+                    $app.Kill()
                     break
                 }
+                foreach ($streamPath in @($stdoutPath, $stderrPath)) {
+                    if ((Test-Path -LiteralPath $streamPath -PathType Leaf) -and
+                        (Get-Item -LiteralPath $streamPath).Length -gt 512MB) {
+                        $reason = 'raw-log-limit'; $fired = $true
+                        $app.Kill()
+                        break
+                    }
+                }
+                if ($fired) { break }
             }
-            if ($fired) { break }
+            if ($nowTicks -ge ($launchTicks + (390L * $frequency))) {
+                $reason = '390-second-watchdog'; $fired = $true
+                $app.Kill()
+                break
+            }
+            Start-Sleep -Milliseconds 200
         }
-        if ($nowTicks -ge ($launchTicks + (390L * $frequency))) {
-            $reason = '390-second-watchdog'; $fired = $true
-            $process.Kill()
-            break
+    } catch {
+        $monitorError = $_.Exception.Message
+        $reason = 'monitor-error'; $fired = $true
+    } finally {
+        if ($null -ne $app) {
+            $app.Refresh()
+            if (-not $app.HasExited) {
+                try { $app.Kill() } catch { $monitorError = "kill failed: $($_.Exception.Message); $monitorError" }
+            }
+            $terminationConfirmed = $app.WaitForExit(10000)
+            if ($terminationConfirmed) { $appExitCode = $app.ExitCode }
         }
-        Start-Sleep -Milliseconds 200
+        $endedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+        Write-JsonFile $resultPath @{
+            endedUtc = [DateTime]::UtcNow.ToString('O'); endedTicks = $endedTicks
+            appElapsedSeconds = ($endedTicks - $launchTicks) / [double]$frequency
+            processId = if ($null -ne $app) { $app.Id } else { $null }
+            fired = $fired; reason = $reason; rssLimitMiB = $LimitMiB
+            appExitCode = $appExitCode; terminationConfirmed = $terminationConfirmed
+            error = $monitorError; stdout = $stdoutPath; stderr = $stderrPath; terminalPpm = $ppmPath
+        }
     }
-    Write-JsonFile $resultPath @{
-        endedUtc = [DateTime]::UtcNow.ToString('O'); processId = $processId
-        fired = $fired; reason = $reason; rssLimitMiB = $LimitMiB
-    }
+    if ($null -ne $monitorError -or -not $terminationConfirmed) { throw "Monitor failed to confirm app termination: $monitorError" }
 }
 
 function Get-NmeaLine([string]$Body) {
@@ -427,19 +520,23 @@ if (Test-Path -LiteralPath $runDirectory) { throw "Evidence path already exists:
 [void][System.IO.Directory]::CreateDirectory($runDirectory)
 $env:LIBCLANG_PATH = 'C:\Program Files\doxygen\bin'
 $previousDirectory = Get-Location
-$observerJob = $null; $monitorJob = $null; $process = $null; $client = $null
-$endedByScript = $null; $driveError = $null; $exitCode = $null
+$observerJob = $null; $monitorProcess = $null; $appDescriptor = $null; $client = $null
+$endedByScript = $null; $driveError = $null; $exitCode = $null; $exitStatus = 1
 try {
     Set-Location -LiteralPath $repository
-    & cargo build -j 1 --release --features unicorn,trace,win32-desktop *> (Join-Path $runDirectory 'build.raw.txt')
+    $targetTriple = 'x86_64-pc-windows-msvc'
+    $env:CARGO_TARGET_DIR = Join-Path $repository 'target'
+    $buildStartedUtc = [DateTime]::UtcNow.ToString('O')
+    & cargo build -j 1 --release --target $targetTriple --features unicorn,trace,win32-desktop *> (Join-Path $runDirectory 'build.raw.txt')
     if ($LASTEXITCODE -ne 0) { throw "Release build failed: exit $LASTEXITCODE" }
     # A build can take minutes; do not trust only the earlier mount/marker check.
     $backups = Test-OriginalMountPreflight $repository
-    $exe = Join-Path $repository 'target\release\wince_emulation_v3.exe'
+    $exe = Join-Path $env:CARGO_TARGET_DIR "$targetTriple\release\wince_emulation_v3.exe"
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Release executable is missing: $exe" }
     $manifest = @{
         runTag = $tag; createdUtc = [DateTime]::UtcNow.ToString('O'); repository = $repository
         executable = $exe; executableSha256 = Get-Sha256 $exe
+        cargoTargetDirectory = $env:CARGO_TARGET_DIR; cargoTargetTriple = $targetTriple; buildStartedUtc = $buildStartedUtc
         app = 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe'; appSha256 = Get-Sha256 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe'
         scriptSha256 = Get-Sha256 $PSCommandPath
         registrySha256 = Get-Sha256 (Join-Path $repository 'registry.reg')
@@ -454,20 +551,27 @@ try {
     Write-JsonFile (Join-Path $runDirectory 'manifest.json') $manifest
     $beforeCount = Write-MountedInventory $backups (Join-Path $runDirectory 'mounted-before.jsonl')
     Assert-RemoteEndpointAvailable
-    # Jobs are initialized before launch. The observer performs GETs only.
+    # The observer is GET-only. The detached monitor, not this driver, owns
+    # the app launch and enforces the 390-second/2-GiB bounds if this driver dies.
     $observerJob = Start-Job -Name "e22-observer-$tag" -ScriptBlock {
         param($scriptPath, $directory)
         & $scriptPath -ObserverWorker -RunDirectory $directory
     } -ArgumentList $PSCommandPath, $runDirectory
-    $monitorJob = Start-Job -Name "e22-monitor-$tag" -ScriptBlock {
-        param($scriptPath, $directory, $limit)
-        & $scriptPath -MonitorWorker -RunDirectory $directory -MaxWorkingSetMiB $limit
-    } -ArgumentList $PSCommandPath, $runDirectory, $MaxWorkingSetMiB
+    $monitorProcess = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') `
+        -ArgumentList @('-NoProfile', '-File', $PSCommandPath, '-MonitorWorker', '-RunDirectory', $runDirectory, '-MaxWorkingSetMiB', [string]$MaxWorkingSetMiB) `
+        -WorkingDirectory $repository -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $runDirectory 'monitor-worker.stdout.raw.txt') `
+        -RedirectStandardError (Join-Path $runDirectory 'monitor-worker.stderr.raw.txt')
     $jobWait = [System.Diagnostics.Stopwatch]::GetTimestamp()
     while (-not ((Test-Path -LiteralPath (Join-Path $runDirectory 'observer-worker-ready.json')) -and (Test-Path -LiteralPath (Join-Path $runDirectory 'monitor-worker-ready.json')))) {
-        if ($observerJob.State -eq 'Failed' -or $monitorJob.State -eq 'Failed') { throw 'Observer or monitor failed before launch.' }
+        if ($observerJob.State -eq 'Failed' -or $monitorProcess.HasExited) { throw 'Observer or detached monitor failed before launch.' }
         if (([System.Diagnostics.Stopwatch]::GetTimestamp() - $jobWait) -ge (15L * $frequency)) { throw 'Observer/monitor did not become ready in 15 seconds.' }
         Start-Sleep -Milliseconds 100
+    }
+    $monitorReady = Get-Content -LiteralPath (Join-Path $runDirectory 'monitor-worker-ready.json') -Raw | ConvertFrom-Json
+    if ([int]$monitorReady.monitorPid -ne $monitorProcess.Id -or
+        [long]$monitorReady.monitorStartUtcTicks -ne $monitorProcess.StartTime.ToUniversalTime().Ticks) {
+        throw 'Detached monitor readiness descriptor did not match the launched process.'
     }
     $stdout = Join-Path $runDirectory 'app.stdout.raw.txt'
     $stderr = Join-Path $runDirectory 'app.stderr.raw.txt'
@@ -480,22 +584,33 @@ try {
         '--cpu-wall-clock-limit-ms', '330000', '--cpu-instruction-limit', '1000000',
         '--framebuffer-dump', $ppm
     )
-    $launchTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
-    $process = Start-Process -FilePath $exe -ArgumentList $arguments -WorkingDirectory $repository -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    Write-AtomicJsonFile (Join-Path $runDirectory 'process.json') @{
-        processId = $process.Id; startUtcTicks = $process.StartTime.ToUniversalTime().Ticks
-        launchTicks = $launchTicks; launchedUtc = [DateTime]::UtcNow.ToString('O')
-        executableSha256 = $manifest.executableSha256
+    # The full archive/config/hash preflight ran after build. Recheck junctions
+    # immediately before launch without consuming the observer's 420 s window
+    # rehashing multi-GB ZIPs. This cannot prevent a concurrent later change.
+    Assert-NoReparseMounts $backups
+    Write-AtomicJsonFile (Join-Path $runDirectory 'launch-request.json') @{
+        executable = $exe; executableSha256 = $manifest.executableSha256
+        repository = $repository; arguments = $arguments
     }
+    $launchWait = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    while (-not (Test-Path -LiteralPath (Join-Path $runDirectory 'process.json'))) {
+        if ($monitorProcess.HasExited) { throw 'Detached monitor exited without an app process descriptor.' }
+        if (([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchWait) -ge (20L * $frequency)) {
+            throw 'Detached monitor did not publish the app descriptor within 20 seconds.'
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    $appDescriptor = Get-Content -LiteralPath (Join-Path $runDirectory 'process.json') -Raw | ConvertFrom-Json
+    if ([string]$appDescriptor.executableSha256 -ne [string]$manifest.executableSha256) {
+        throw 'Launched app descriptor does not match the built executable.'
+    }
+    $launchTicks = [long]$appDescriptor.launchTicks
     $client = New-HttpClient
     $inputLog = Join-Path $runDirectory 'input-post.jsonl'
     $ready = $null; $nextGps = 0; $lastGpsTicks = 0L; $tapSent = $false
-    while (-not $process.HasExited) {
-        if ($observerJob.State -eq 'Failed' -or $monitorJob.State -eq 'Failed') {
+    while ($null -ne (Get-MatchingProcess ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks))) {
+        if ($observerJob.State -eq 'Failed' -or $monitorProcess.HasExited) {
             $endedByScript = 'required-worker-failed'; break
-        }
-        if ($monitorJob.State -eq 'Completed') {
-            $endedByScript = 'independent-monitor-ended-before-app'; break
         }
         if ($null -eq $ready -and (Test-Path -LiteralPath (Join-Path $runDirectory 'input-ready.json'))) {
             try { $ready = Get-Content -LiteralPath (Join-Path $runDirectory 'input-ready.json') -Raw | ConvertFrom-Json } catch { }
@@ -524,19 +639,37 @@ try {
             }
         }
         Start-Sleep -Milliseconds 100
-        $process.Refresh()
     }
-    if ($null -ne $endedByScript -and -not $process.HasExited) {
-        $process.Kill()
+    if ($null -ne $endedByScript) {
+        Write-AtomicJsonFile (Join-Path $runDirectory 'abort-request.json') @{
+            utc = [DateTime]::UtcNow.ToString('O'); reason = $endedByScript
+        }
+        if ($monitorProcess.HasExited) {
+            # A dead monitor cannot honor the abort request. The driver is
+            # still alive here, so terminate only the verified app identity.
+            Stop-ExactApp ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks)
+        }
     }
-    $process.WaitForExit()
-    $exitCode = $process.ExitCode
-    $appElapsedSeconds = ([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchTicks) / [double]$frequency
-    [void](Wait-Job -Job $monitorJob -Timeout 5)
+    if (-not $monitorProcess.WaitForExit(15000)) {
+        # A live app is never left to an unresponsive monitor. Preserve exact
+        # PID/start-time identity before the driver performs a fallback kill.
+        Stop-ExactApp ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks)
+        $monitorProcess.Kill()
+        if (-not $monitorProcess.WaitForExit(10000)) { throw 'Detached monitor did not terminate after fallback app kill.' }
+        $endedByScript = 'detached-monitor-timeout-fallback-kill'
+    }
     $monitor = if (Test-Path -LiteralPath (Join-Path $runDirectory 'monitor-result.json')) {
         Get-Content -LiteralPath (Join-Path $runDirectory 'monitor-result.json') -Raw | ConvertFrom-Json
     } else { $null }
-    $earlyFailure = ($exitCode -ne 0 -or $null -ne $endedByScript -or $appElapsedSeconds -lt 300 -or $null -eq $monitor -or $monitor.fired)
+    $appElapsedSeconds = if ($null -ne $monitor) {
+        [double]$monitor.appElapsedSeconds
+    } else {
+        ([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchTicks) / [double]$frequency
+    }
+    if ($null -ne $monitor) { $exitCode = $monitor.appExitCode }
+    $earlyFailure = ($exitCode -ne 0 -or $null -ne $endedByScript -or $appElapsedSeconds -lt 300 -or
+        $null -eq $monitor -or $monitor.fired -or -not $monitor.terminationConfirmed -or
+        $null -eq $ready -or $nextGps -ne 16 -or -not $tapSent)
     if ($earlyFailure) {
         Write-AtomicJsonFile (Join-Path $runDirectory 'observer-stop-request.json') @{
             utc = [DateTime]::UtcNow.ToString('O'); reason = 'app-failed-or-ended-before-requested-horizon'
@@ -571,36 +704,79 @@ try {
     # made from cached debug GET text.
     $guestCpuExceptionText = [bool](Select-String -LiteralPath $stderr -Pattern 'Unicorn run stopped on guest CPU exception' -Quiet)
     $zeroPcText = [bool](Select-String -LiteralPath $stderr -Pattern 'pc=0x00000000|invalid_pc=0x00000000' -Quiet)
+    $ppmProduced = Test-Path -LiteralPath $ppm -PathType Leaf
+    $observerResultPresent = Test-Path -LiteralPath (Join-Path $runDirectory 'observer-result.json') -PathType Leaf
+    $observerResult = if ($observerResultPresent) {
+        Get-Content -LiteralPath (Join-Path $runDirectory 'observer-result.json') -Raw | ConvertFrom-Json
+    } else { $null }
+    $earlyFailure = ($earlyFailure -or $guestCpuExceptionText -or $zeroPcText -or
+        -not $ppmProduced -or -not $observerResultPresent -or
+        $observerJob.State -ne 'Completed' -or -not $observerResult.completedHorizon -or
+        $null -ne $inventoryError)
     Write-JsonFile (Join-Path $runDirectory 'result.json') @{
-        endedUtc = [DateTime]::UtcNow.ToString('O'); processId = $process.Id; exitCode = $exitCode
+        endedUtc = [DateTime]::UtcNow.ToString('O'); processId = $appDescriptor.processId; exitCode = $exitCode
         appElapsedSeconds = $appElapsedSeconds; earlyFailure = $earlyFailure
         guestCpuExceptionTextInStderr = $guestCpuExceptionText; zeroPcTextInStderr = $zeroPcText
         scriptStop = $endedByScript; monitor = $monitor
         inputReady = $ready; nmeaPostsAttempted = $nextGps; tapAttempted = $tapSent
         stdoutSha256 = Get-Sha256 $stdout; stderrSha256 = Get-Sha256 $stderr
-        terminalPpmProduced = (Test-Path -LiteralPath $ppm -PathType Leaf)
-        terminalPpmSha256 = if (Test-Path -LiteralPath $ppm -PathType Leaf) { Get-Sha256 $ppm } else { $null }
-        observerResultPresent = (Test-Path -LiteralPath (Join-Path $runDirectory 'observer-result.json') -PathType Leaf)
+        terminalPpmProduced = $ppmProduced
+        terminalPpmSha256 = if ($ppmProduced) { Get-Sha256 $ppm } else { $null }
+        observerResultPresent = $observerResultPresent
         mountedBeforeEntries = $beforeCount; mountedAfterEntries = $afterCount
         mountedChangedEntries = $mountChanges; mountedInventoryError = $inventoryError
         observationAndAckDoNotProveGuestConsumption = $true
     }
     Write-Output "Retained run evidence: $runDirectory"
     Write-Output "App exit=$exitCode; monitor=$($monitor.reason); scriptStop=$endedByScript; NMEA attempts=$nextGps; tap attempted=$tapSent"
+    $exitStatus = if ($earlyFailure) { 1 } else { 0 }
 } catch {
     $driveError = $_.Exception.Message
     Write-JsonFile (Join-Path $runDirectory 'harness-error.json') @{ utc = [DateTime]::UtcNow.ToString('O'); error = $driveError }
     throw
 } finally {
     if ($null -ne $client) { $client.Dispose() }
-    if ($null -ne $process -and -not $process.HasExited) {
-        $process.Kill()
+    if ($null -ne $appDescriptor) {
+        try {
+            if ($null -ne (Get-MatchingProcess ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks))) {
+                if (-not (Test-Path -LiteralPath (Join-Path $runDirectory 'abort-request.json'))) {
+                    Write-AtomicJsonFile (Join-Path $runDirectory 'abort-request.json') @{
+                        utc = [DateTime]::UtcNow.ToString('O'); reason = 'driver-finally-cleanup'
+                    }
+                }
+                if ($null -ne $monitorProcess) { [void]$monitorProcess.WaitForExit(10000) }
+                Stop-ExactApp ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks)
+            }
+        } catch {
+            $exitStatus = 1
+            Write-JsonFile (Join-Path $runDirectory 'cleanup-error.json') @{
+                utc = [DateTime]::UtcNow.ToString('O'); error = $_.Exception.Message
+            }
+        }
     }
-    foreach ($job in @($observerJob, $monitorJob)) {
-        if ($null -eq $job) { continue }
-        if ($job.State -in @('NotStarted', 'Running')) { Stop-Job -Job $job }
-        Receive-Job -Job $job -Keep *> (Join-Path $runDirectory "$($job.Name).worker.raw.txt")
-        Remove-Job -Job $job -Force
+    if ($null -ne $monitorProcess -and -not $monitorProcess.HasExited) {
+        if ($null -ne $appDescriptor) {
+            # The exact app identity has been checked/killed above; a live
+            # monitor is now only an orphaned helper and may be retired.
+            if ($null -eq (Get-MatchingProcess ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks))) {
+                $monitorProcess.Kill()
+                [void]$monitorProcess.WaitForExit(10000)
+            }
+        } else {
+            # A launch request can race with descriptor publication. Never
+            # kill the sole independent watchdog without an app identity;
+            # it will self-timeout prelaunch or stop the app at its bound.
+            Write-JsonFile (Join-Path $runDirectory 'monitor-left-detached.json') @{
+                utc = [DateTime]::UtcNow.ToString('O'); monitorPid = $monitorProcess.Id
+                reason = 'driver-has-no-verified-app-descriptor'
+            }
+        }
+    }
+    if ($null -ne $observerJob) {
+        if ($observerJob.State -in @('NotStarted', 'Running')) { Stop-Job -Job $observerJob }
+        Receive-Job -Job $observerJob -Keep *> (Join-Path $runDirectory "$($observerJob.Name).worker.raw.txt")
+        Remove-Job -Job $observerJob -Force
     }
     Set-Location $previousDirectory
 }
+exit $exitStatus
