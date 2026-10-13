@@ -6212,6 +6212,10 @@ impl UnicornMips {
         );
 
         let slice_profile = Instant::now();
+        // The leased CPU belongs to this process throughout its native
+        // attempt, even if deferred child launches temporarily select another
+        // process in the Kernel.
+        let native_owner_pid = kernel.current_process_id();
         let mut uc = self
             .native_engine
             .lease()
@@ -6231,7 +6235,7 @@ impl UnicornMips {
             sync_persisted_blobs_to_native(&mut uc, &self.mapped_blobs, native_engine_reused)?;
         // Refresh shared file-mapping views from their canonical mapping data so
         // this process observes writes other processes made since its last slice.
-        let _ = sync_file_mapping_views_to_unicorn(&mut uc, kernel);
+        sync_file_mapping_views_to_unicorn(&mut uc, kernel, native_owner_pid)?;
         let slice_setup_elapsed = slice_profile.elapsed();
         let restoring_saved_context = self.saved_context.is_some();
         let mut native_context_restored = false;
@@ -6285,6 +6289,8 @@ impl UnicornMips {
         // snapshot. Only a checked safe-PC write and emu_stop may set it.
         let native_hook_stop_reason = Rc::new(Cell::new(None::<NativeHookStopReason>));
         let native_hook_control_error = Rc::new(RefCell::new(None::<String>));
+        let immediate_process_sync_error = Rc::new(RefCell::new(None::<Error>));
+        let immediate_process_sync_error_hook = Rc::clone(&immediate_process_sync_error);
         let host_wall_clock_limit = (limits.wall_clock_limit_ms != 0)
             .then(|| Duration::from_millis(limits.wall_clock_limit_ms));
         let host_wall_clock_started = Instant::now();
@@ -9530,15 +9536,32 @@ impl UnicornMips {
                         && result != 0
                 });
                 if successful_create_process && !live_pump {
-                    let _ = run_pending_process_launches(
+                    let sync_result = run_pending_process_launches(
                         memory.uc,
                         unsafe { &mut *kernel_ptr },
+                        native_owner_pid,
                         unsafe { &mut *framebuffer_ptr },
                         limits,
                         &process_dll_search_dirs,
                         &parked_child_processes_hook,
-                    );
-                    let _ = sync_file_mapping_views_to_unicorn(memory.uc, unsafe { &*kernel_ptr });
+                    )
+                    .and_then(|()| {
+                        sync_file_mapping_views_to_unicorn(
+                            memory.uc,
+                            unsafe { &*kernel_ptr },
+                            native_owner_pid,
+                        )
+                    });
+                    if let Err(err) = sync_result {
+                        let err = match memory.uc.emu_stop() {
+                            Ok(()) => err,
+                            Err(stop_err) => Error::Backend(format!(
+                                "immediate process view sync failed: {err}; stop native attempt: {stop_err:?}"
+                            )),
+                        };
+                        *immediate_process_sync_error_hook.borrow_mut() = Some(err);
+                        return;
+                    }
                 }
                 if let Some(trap) = trap.as_ref() {
                     let trace_import =
@@ -9967,7 +9990,7 @@ impl UnicornMips {
         } else {
             limits.wall_clock_limit_ms.saturating_mul(1_000)
         };
-        let native_start_pid = kernel.current_process_id();
+        let native_start_pid = native_owner_pid;
         let native_start_tid = *current_thread_id.borrow();
         let result = uc.emu_start(
             u64::from(start_pc),
@@ -10011,6 +10034,7 @@ impl UnicornMips {
                 .as_ref()
                 .map(|probe| probe.pc)
         });
+        let immediate_process_sync_failure = immediate_process_sync_error.borrow_mut().take();
         let slice_run_elapsed = slice_profile.elapsed();
         self.run_slice_generation = self.run_slice_generation.wrapping_add(1);
         let native_requested_pc_stop = limits.stop_pc.filter(|target| {
@@ -10024,7 +10048,8 @@ impl UnicornMips {
         self.last_native_slice_outcome = NativeStopEvidence {
             native_error: result.is_err() || native_timeout_query.is_err(),
             capture_error: native_capture_result.is_err(),
-            hook_control_error: native_hook_control_error.borrow().is_some(),
+            hook_control_error: native_hook_control_error.borrow().is_some()
+                || immediate_process_sync_failure.is_some(),
             requested_pc_stop: native_requested_pc_stop.is_some(),
             native_deadline_expired,
             hook_stop_reason: native_hook_stop_reason.get(),
@@ -10036,11 +10061,13 @@ impl UnicornMips {
             && native_timeout_query.is_ok()
             && native_capture_result.is_ok()
             && native_hook_control_error.borrow().is_none()
+            && immediate_process_sync_failure.is_none()
             && deferred_process_launch.get()
         {
             deferred_launch_error = run_pending_process_launches(
                 &mut uc,
                 kernel,
+                native_owner_pid,
                 framebuffer,
                 limits,
                 &deferred_process_dll_search_dirs,
@@ -10049,7 +10076,7 @@ impl UnicornMips {
             .err();
             if deferred_launch_error.is_none() {
                 deferred_view_sync_error =
-                    sync_file_mapping_views_to_unicorn(&mut uc, kernel).err();
+                    sync_file_mapping_views_to_unicorn(&mut uc, kernel, native_owner_pid).err();
             }
         }
         if result.is_ok()
@@ -10291,6 +10318,7 @@ impl UnicornMips {
             native_capture_result = ?native_capture_result,
             snapshot_context_error = ?snapshot_context_result.as_ref().err(),
             mapped_blob_sync_error = ?mapped_blob_sync_error,
+            immediate_process_sync_error = ?immediate_process_sync_failure.as_ref(),
             native_memory_fault = ?native_memory_fault,
             native_interrupt = ?native_interrupt,
             native_invalid_pc = ?native_invalid_pc,
@@ -10304,6 +10332,7 @@ impl UnicornMips {
             && native_capture_result.is_ok()
             && snapshot_context_result.is_ok()
             && native_hook_control_error.borrow().is_none()
+            && immediate_process_sync_failure.is_none()
             && deferred_launch_error.is_none()
             && deferred_view_sync_error.is_none()
             && mapped_blob_sync_error.is_none()
@@ -10318,7 +10347,7 @@ impl UnicornMips {
                 .filter(|_| post_native_state_ready)
             {
                 if !Self::terminate_decoded_kernel_process(kernel, &exit) {
-                    let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+                    let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
                     return Err(Error::Backend(format!(
                         "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
                         exit.process, exit.exit_code
@@ -10329,7 +10358,9 @@ impl UnicornMips {
                 }
                 self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
                 self.persist_run_state(&run_state, kernel);
-                if let Err(err) = sync_file_mapping_views_from_unicorn(&mut uc, kernel) {
+                if let Err(err) =
+                    sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                {
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     return Err(err);
                 }
@@ -10342,16 +10373,22 @@ impl UnicornMips {
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
             self.persist_run_state(&run_state, kernel);
             return Err(Error::Backend(format!(
-                "Unicorn run failed: {err:?}; {snapshot}"
+                "Unicorn run failed: {err:?}; immediate process sync error: {immediate_process_sync_failure:?}; {snapshot}"
             )));
         }
         if let Err(err) = native_timeout_query {
             self.last_native_slice_outcome = NativeSliceOutcome::NativeError;
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(format!(
                 "query native timeout after Unicorn run failed: {err:?}"
             )));
+        }
+        if let Some(err) = immediate_process_sync_failure {
+            self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            self.persist_run_state(&run_state, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            return Err(err);
         }
         if self
             .last_debug
@@ -10360,7 +10397,7 @@ impl UnicornMips {
         {
             if let Some(exit) = decoded_kernel_exit.filter(|_| post_native_state_ready) {
                 if !Self::terminate_decoded_kernel_process(kernel, &exit) {
-                    let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+                    let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
                     return Err(Error::Backend(format!(
                         "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
                         exit.process, exit.exit_code
@@ -10371,7 +10408,9 @@ impl UnicornMips {
                 }
                 self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
                 self.persist_run_state(&run_state, kernel);
-                if let Err(err) = sync_file_mapping_views_from_unicorn(&mut uc, kernel) {
+                if let Err(err) =
+                    sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                {
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     return Err(err);
                 }
@@ -10391,7 +10430,7 @@ impl UnicornMips {
         if let Err(err) = native_capture_result {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(format!(
                 "capture native task context after Unicorn run failed: {err:?}"
             )));
@@ -10399,7 +10438,7 @@ impl UnicornMips {
         if let Err(err) = snapshot_context_result {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(format!(
                 "capture repaired scalar task context after Unicorn run failed: {err:?}"
             )));
@@ -10407,31 +10446,31 @@ impl UnicornMips {
         if let Some(err) = native_hook_control_error.borrow_mut().take() {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(err));
         }
         if let Some(err) = deferred_launch_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(err);
         }
         if let Some(err) = deferred_view_sync_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(err);
         }
         if let Some(err) = mapped_blob_sync_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(err);
         }
         if let Some(err) = framebuffer_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(err);
         }
         if native_requested_pc_stop.is_some_and(|target| {
@@ -10451,7 +10490,9 @@ impl UnicornMips {
             // address space, so it must not run after an explicit debugger stop.
             // Native errors and blob synchronization failures were checked above.
             self.persist_run_state_handles(&run_state);
-            if let Err(err) = sync_file_mapping_views_from_unicorn(&mut uc, kernel) {
+            if let Err(err) =
+                sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+            {
                 self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                 return Err(err);
             }
@@ -10486,9 +10527,9 @@ impl UnicornMips {
         let _ = self.clear_orphaned_direct_send_callouts(kernel);
         let _ = self.clear_orphaned_send_depths(kernel);
         // `uc` still owns the outgoing process. Read its shared views back
-        // before a handoff changes the Kernel's selected process: the sync
-        // helper filters views by that selected PID.
-        if let Err(err) = sync_file_mapping_views_from_unicorn(&mut uc, kernel) {
+        // before a handoff; the sync helper uses this attempt's captured
+        // owner rather than the Kernel's mutable process selector.
+        if let Err(err) = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid) {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             return Err(err);
         }
@@ -12926,18 +12967,64 @@ fn insert_guest_range_pages(
 }
 
 #[cfg(feature = "unicorn")]
+fn ensure_unambiguous_file_view_lazy_seeds(kernel: &CeKernel) -> Result<()> {
+    // MemorySystem still keys lazy initial bytes by base alone. Until virtual
+    // allocations are address-space-owned, one base cannot safely seed two
+    // distinct views even when their native CPUs are synchronized separately.
+    let mut seeded_bases = HashSet::new();
+    for mapping in kernel.handles.file_mappings() {
+        for view in &mapping.views {
+            if kernel.memory.virtual_allocation(view.base).is_some()
+                && !seeded_bases.insert(view.base)
+            {
+                return Err(Error::Backend(format!(
+                    "ambiguous lazy file-view seed at 0x{:08x}; address-space-owned allocations required",
+                    view.base
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn ensure_unique_file_views_for_owner(kernel: &CeKernel, owner_pid: u32) -> Result<()> {
+    let mut owner_bases = HashSet::new();
+    for mapping in kernel.handles.file_mappings() {
+        for view in mapping
+            .views
+            .iter()
+            .filter(|view| view.process_id == owner_pid)
+        {
+            if !owner_bases.insert(view.base) {
+                return Err(Error::Backend(format!(
+                    "ambiguous native file views for process {owner_pid} at 0x{:08x}",
+                    view.base
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
 fn sync_file_mapping_views_from_unicorn<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
+    owner_pid: u32,
 ) -> Result<()> {
     // Only the owning process's view pages carry authoritative bytes: other
     // processes hold stale snapshot copies of the same guest addresses, and
     // reading those back would clobber data the owner wrote into the mapping.
-    let current_process_id = kernel.current_process_id();
+    ensure_unambiguous_file_view_lazy_seeds(kernel)?;
+    ensure_unique_file_views_for_owner(kernel, owner_pid)?;
     let mut updates = Vec::new();
-    for mapping in kernel.handles.file_mappings() {
+    for (mapping_handle, object) in kernel.handles.iter() {
+        let crate::ce::object::KernelObject::FileMapping(mapping) = object else {
+            continue;
+        };
         for view in mapping.views.iter().copied() {
-            if view.process_id != current_process_id {
+            if view.process_id != owner_pid {
                 continue;
             }
             let size = view.size.min(mapping.size.saturating_sub(view.offset)) as usize;
@@ -12945,21 +13032,44 @@ fn sync_file_mapping_views_from_unicorn<D>(
             uc.mem_read(u64::from(view.base), &mut bytes)
                 .map_err(|err| {
                     Error::Backend(format!(
-                        "read mapped view 0x{:08x} before process launch: {err:?}",
-                        view.base
+                        "read process {owner_pid} mapped view 0x{:08x}: {err:?}",
+                        view.base,
                     ))
                 })?;
-            updates.push((view.base, view.offset as usize, bytes));
+            updates.push((mapping_handle, view, bytes));
         }
     }
-    for (base, offset, bytes) in updates {
-        if let Some((mapping, _view)) = kernel.handles.file_mapping_by_view_mut(base) {
-            let end = offset.saturating_add(bytes.len());
-            if end > mapping.data.len() {
-                mapping.data.resize(end, 0);
-            }
-            mapping.data[offset..end].copy_from_slice(&bytes);
+    for (mapping_handle, view, bytes) in updates {
+        // The object remains in the table while a closed handle still has live
+        // views. Do not resolve by guest base: another process may use it too.
+        let object = kernel.handles.get_mut(mapping_handle).map_err(|err| {
+            Error::Backend(format!(
+                "stale file-mapping object 0x{mapping_handle:08x} for process {owner_pid}: {err:?}"
+            ))
+        })?;
+        let crate::ce::object::KernelObject::FileMapping(mapping) = object else {
+            return Err(Error::Backend(format!(
+                "file-mapping object 0x{mapping_handle:08x} changed type during native readback"
+            )));
+        };
+        if mapping
+            .views
+            .iter()
+            .filter(|candidate| **candidate == view)
+            .count()
+            != 1
+        {
+            return Err(Error::Backend(format!(
+                "stale or duplicate process {owner_pid} file view at 0x{:08x} in object 0x{mapping_handle:08x}",
+                view.base
+            )));
         }
+        let offset = view.offset as usize;
+        let end = offset.saturating_add(bytes.len());
+        if end > mapping.data.len() {
+            mapping.data.resize(end, 0);
+        }
+        mapping.data[offset..end].copy_from_slice(&bytes);
     }
     // Refresh every view's lazy-map seed bytes from the canonical mapping data
     // so any process that maps (or re-maps) a view page next sees the latest
@@ -12978,7 +13088,13 @@ fn sync_file_mapping_views_from_unicorn<D>(
         })
         .collect();
     for (base, bytes) in seeds {
-        kernel.memory.set_virtual_initial_bytes(base, bytes);
+        if kernel.memory.virtual_allocation(base).is_some()
+            && !kernel.memory.set_virtual_initial_bytes(base, bytes)
+        {
+            return Err(Error::Backend(format!(
+                "refresh file-view lazy seed at 0x{base:08x} failed"
+            )));
+        }
     }
     Ok(())
 }
@@ -12987,9 +13103,20 @@ fn sync_file_mapping_views_from_unicorn<D>(
 fn sync_file_mapping_views_to_unicorn<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &CeKernel,
+    owner_pid: u32,
 ) -> Result<()> {
+    ensure_unambiguous_file_view_lazy_seeds(kernel)?;
+    ensure_unique_file_views_for_owner(kernel, owner_pid)?;
+    let native_regions = uc.mem_regions().map_err(|err| {
+        Error::Backend(format!(
+            "inspect process {owner_pid} native regions before file-view seed: {err:?}"
+        ))
+    })?;
     for mapping in kernel.handles.file_mappings() {
         for view in mapping.views.iter().copied() {
+            if view.process_id != owner_pid {
+                continue;
+            }
             let start = view.offset as usize;
             let end = start
                 .saturating_add(view.size as usize)
@@ -13000,7 +13127,34 @@ fn sync_file_mapping_views_to_unicorn<D>(
             // A view page may not be mapped in this process yet (kernel
             // allocations map lazily on the first import); the lazy map seeds
             // from the canonical initial bytes instead.
-            let _ = uc.mem_write(u64::from(view.base), &mapping.data[start..end]);
+            let bytes = &mapping.data[start..end];
+            let end_address = u64::from(view.base)
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(|| Error::Backend("file-view seed range overflow".to_owned()))?;
+            let overlaps_native_ram = native_regions
+                .iter()
+                .any(|region| region.begin < end_address && region.end >= u64::from(view.base));
+            if !overlaps_native_ram {
+                let has_canonical_lazy_seed = kernel
+                    .memory
+                    .virtual_allocation(view.base)
+                    .is_some_and(|allocation| {
+                        allocation.initial_bytes.get(..bytes.len()) == Some(bytes)
+                    });
+                if has_canonical_lazy_seed {
+                    continue;
+                }
+                return Err(Error::Backend(format!(
+                    "process {owner_pid} file view 0x{:08x} is unmapped without its canonical lazy seed",
+                    view.base
+                )));
+            }
+            uc.mem_write(u64::from(view.base), bytes).map_err(|err| {
+                Error::Backend(format!(
+                    "seed process {owner_pid} file view 0x{:08x}: {err:?}",
+                    view.base
+                ))
+            })?;
         }
     }
     Ok(())
@@ -13032,6 +13186,7 @@ fn sync_mapped_blobs_from_unicorn<D>(
 fn run_pending_process_launches<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
+    parent_owner_pid: u32,
     framebuffer: &mut dyn Framebuffer,
     limits: UnicornRunLimits,
     dll_search_dirs: &[std::path::PathBuf],
@@ -13041,7 +13196,7 @@ fn run_pending_process_launches<D>(
     if launches.is_empty() {
         return Ok(());
     }
-    sync_file_mapping_views_from_unicorn(parent_uc, kernel)?;
+    sync_file_mapping_views_from_unicorn(parent_uc, kernel, parent_owner_pid)?;
     for launch in launches {
         let Some(path) = resolve_process_launch_path(kernel, &launch)? else {
             kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
