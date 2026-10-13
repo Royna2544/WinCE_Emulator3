@@ -782,7 +782,7 @@ fn run_cpu_loop(
             run_started.elapsed(),
             args.desktop,
             args.remote_server.is_some(),
-            host_idle_message_poll_slice(cpu, args.desktop),
+            host_idle_message_poll_slice(cpu, kernel, args.desktop),
             cpu.active_process_has_visible_receiver_work(kernel)
                 || cpu.active_process_has_receiver_work(kernel),
         );
@@ -1230,12 +1230,16 @@ fn should_run_active_receiver_work_for_live_message_waiter(
     live_pump_slice && message_waiter && active_receiver_work
 }
 
-fn host_idle_message_poll_slice(cpu: &UnicornMips, desktop: DesktopMode) -> bool {
+fn host_idle_message_poll_slice(
+    cpu: &UnicornMips,
+    kernel: &CeKernel,
+    desktop: DesktopMode,
+) -> bool {
     should_use_host_idle_message_poll_slice(
         desktop,
         cpu.has_saved_context(),
         cpu.last_debug_snapshot()
-            .is_some_and(snapshot_is_idle_message_wait_only),
+            .is_some_and(|snapshot| snapshot_is_live_idle_message_wait_only(snapshot, kernel)),
     )
 }
 
@@ -1259,7 +1263,7 @@ fn should_idle_host_message_pump(
     desktop == DesktopMode::Host
         && cpu
             .last_debug_snapshot()
-            .is_some_and(snapshot_has_saved_get_message_waiter)
+            .is_some_and(|snapshot| snapshot_has_live_saved_get_message_waiter(snapshot, kernel))
         && !cpu.has_ready_parked_send_unblock(kernel)
         && !cpu.has_ready_parked_wait_unblock(kernel)
         && !cpu.has_parked_child_processes()
@@ -1277,6 +1281,16 @@ fn snapshot_has_saved_get_message_waiter(snapshot: &UnicornDebugSnapshot) -> boo
         .active_blocked_waits
         .iter()
         .any(|wait| wait.kind == "get_message")
+}
+
+fn snapshot_has_live_saved_get_message_waiter(
+    snapshot: &UnicornDebugSnapshot,
+    kernel: &CeKernel,
+) -> bool {
+    snapshot
+        .active_blocked_waits
+        .iter()
+        .any(|wait| wait.kind == "get_message" && kernel.blocked_waiter(wait.id).is_some())
 }
 
 fn snapshot_has_non_message_blocked_wait(snapshot: &UnicornDebugSnapshot) -> bool {
@@ -1342,10 +1356,7 @@ fn snapshot_has_live_blocked_message_waiter(
     kernel: &CeKernel,
 ) -> bool {
     snapshot_has_blocked_get_message(snapshot)
-        && snapshot
-            .active_blocked_waits
-            .iter()
-            .any(|wait| wait.kind == "get_message" && kernel.blocked_waiter(wait.id).is_some())
+        && snapshot_has_live_saved_get_message_waiter(snapshot, kernel)
 }
 
 fn snapshot_has_live_non_message_blocked_wait(
@@ -1376,8 +1387,18 @@ fn snapshot_has_only_stale_owned_blocked_waits(
     owned_waits != 0
 }
 
+#[cfg(test)]
 fn snapshot_is_idle_message_wait_only(snapshot: &UnicornDebugSnapshot) -> bool {
     snapshot_has_blocked_get_message(snapshot) && !snapshot_has_non_message_blocked_wait(snapshot)
+}
+
+fn snapshot_is_live_idle_message_wait_only(
+    snapshot: &UnicornDebugSnapshot,
+    kernel: &CeKernel,
+) -> bool {
+    snapshot_has_blocked_get_message(snapshot)
+        && snapshot_has_live_saved_get_message_waiter(snapshot, kernel)
+        && !snapshot_has_live_non_message_blocked_wait(snapshot, kernel)
 }
 
 fn remote_live_run_slice_ms() -> u64 {
@@ -4696,6 +4717,71 @@ mod tests {
         snapshot.trap_ordinal = Some(wince_emulation_v3::ce::coredll_ordinals::ORD_MESSAGE_BOX_W);
         assert!(!snapshot_has_blocked_get_message(&snapshot));
         assert!(!snapshot_is_idle_message_wait_only(&snapshot));
+    }
+
+    #[test]
+    fn idle_poll_requires_a_live_get_message_waiter() {
+        let mut kernel = CeKernel::boot(
+            RuntimeConfig::load_default().expect("runtime config loads for idle waiter test"),
+        );
+        let wait_id = kernel.register_blocked_waiter(
+            7,
+            0x120,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            10,
+            u32::MAX,
+        );
+        let mut snapshot = UnicornDebugSnapshot::default();
+        snapshot.active_blocked_waits.push(
+            wince_emulation_v3::emulator::cpu::UnicornBlockedWaitSnapshot {
+                id: wait_id,
+                thread_id: 7,
+                thread_handle: 0x120,
+                kind: "get_message".to_owned(),
+                wait_started_ms: 10,
+                timeout_ms: u32::MAX,
+                handles: Vec::new(),
+            },
+        );
+        assert!(snapshot_is_idle_message_wait_only(&snapshot));
+        assert!(snapshot_is_live_idle_message_wait_only(&snapshot, &kernel));
+        assert!(snapshot_has_live_saved_get_message_waiter(
+            &snapshot, &kernel
+        ));
+        assert!(snapshot_has_live_blocked_message_waiter(&snapshot, &kernel));
+        snapshot.trap_address = Some(0x7fff_2a00);
+        assert!(snapshot_has_live_saved_get_message_waiter(
+            &snapshot, &kernel
+        ));
+        assert!(!snapshot_has_live_blocked_message_waiter(
+            &snapshot, &kernel
+        ));
+        snapshot.trap_address = None;
+        snapshot.active_blocked_waits.push(
+            wince_emulation_v3::emulator::cpu::UnicornBlockedWaitSnapshot {
+                id: wait_id + 1,
+                thread_id: 7,
+                thread_handle: 0x120,
+                kind: "sleep".to_owned(),
+                wait_started_ms: 10,
+                timeout_ms: u32::MAX,
+                handles: Vec::new(),
+            },
+        );
+        assert!(snapshot_is_live_idle_message_wait_only(&snapshot, &kernel));
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        assert!(!snapshot_is_live_idle_message_wait_only(&snapshot, &kernel));
+        assert!(!snapshot_has_live_saved_get_message_waiter(
+            &snapshot, &kernel
+        ));
+        assert!(!snapshot_has_live_blocked_message_waiter(
+            &snapshot, &kernel
+        ));
     }
 
     #[test]
