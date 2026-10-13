@@ -343,7 +343,8 @@ was `(55667789, 55667789, 55667788, 55667789, 55667789, 55667788)`; required
 was `(11223345, 11223345, 55667788, 55667789, 11223345, 55667789)`.
 All-view native seeding gave the parent the child's bytes; base-only readback
 then applied the child's write to the parent mapping, leaving the child's
-canonical bytes unchanged. The test stays ignored until a checked fix passes.
+canonical bytes unchanged. The test was left ignored at this red baseline;
+E-16 records the later checked fix that unignored it.
 
 Post-format SHA-256: `unicorn.rs`
 `E6E27273514557E271AC1A73C7DE9ECD1E1078AD8756EEDD1A021522B3E16FB0`;
@@ -443,7 +444,7 @@ Unicorn-only and Unicorn+desktop/no-trace release checks exited 0; the
 no-feature suite passed **1,239 passed, 0 failed, 1 ignored**. Exact commands,
 source/executable hashes, all focused/broad raw logs and limits are in local
 `evidence/stage2-o-m1-same-va-20261013/owner-qualified-native-view.receipt.md`
- (receipt SHA-256 `10939F07…4D14E`). These results belong to that frozen O-M1
+(receipt SHA-256 `10939F07…4D14E`). These results belong to that frozen O-M1
 source, not any later source revision.
 
 The fixture still injects views at an already mapped VA because public
