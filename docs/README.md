@@ -43,6 +43,7 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Guest networking | [network](subsystems/network.md) | winsock, host sockets/readiness |
 | Resources/shell/COM | [resources](subsystems/resources-shell-com.md) | resource, shell, COM/OLE, helper libraries |
 | Remote ingress/observation | [remote](subsystems/remote-observability.md) | remote_server, ce/remote, debug publication |
+| Native-attempt diagnostics | [attempt observability](subsystems/native-attempt-observability.md) | CPU raw report, host trace writer, optional executed-event collector |
 | Verification/bring-up | [verification](subsystems/verification.md) | raw/native fixtures, real app evidence |
 | Artifacts/reproduction | [artifact lifecycle](subsystems/artifact-lifecycle.md) | one build directory, preserved evidence, cleanup receipts |
 
