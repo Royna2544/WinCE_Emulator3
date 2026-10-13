@@ -10,7 +10,7 @@ use wince_emulation_v3::{
     Result,
     ce::{framebuffer::VirtualFramebuffer, kernel::CeKernel},
     config::RuntimeConfig,
-    emulator::cpu::{CpuBackend as _, UnicornMips, UnicornRunLimits},
+    emulator::cpu::{UnicornMips, UnicornRunLimits},
     pe::PeImage,
 };
 

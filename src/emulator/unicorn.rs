@@ -69,6 +69,7 @@ struct NativeStopEvidence {
     native_error: bool,
     capture_error: bool,
     hook_control_error: bool,
+    count_stop_requested: bool,
     requested_pc_stop: bool,
     native_deadline_expired: bool,
     hook_stop_reason: Option<NativeHookStopReason>,
@@ -81,6 +82,15 @@ impl NativeStopEvidence {
             NativeSliceOutcome::NativeError
         } else if self.capture_error || self.hook_control_error {
             NativeSliceOutcome::BackendError
+        } else if self.count_stop_requested {
+            if self.requested_pc_stop
+                || self.native_deadline_expired
+                || self.hook_stop_reason.is_some()
+            {
+                NativeSliceOutcome::UnknownNormalStop
+            } else {
+                NativeSliceOutcome::CountLimit
+            }
         } else if self.requested_pc_stop {
             NativeSliceOutcome::RequestedPcStop
         } else if self.native_deadline_expired {
@@ -10164,10 +10174,12 @@ impl UnicornMips {
             native_timeout_us,
             limits.instruction_limit,
         );
-        active_private_page_guards.borrow_mut().clear();
-        // Query this primary attempt before capture or deferred work can touch
-        // the native owner. A failed query is a hard outcome, not "not timed out".
+        // Both queries belong to this primary native lease and must precede
+        // capture or deferred child execution. A failed query is a hard
+        // outcome, never evidence that the stop simply did not happen.
+        let native_count_stop_query = uc.query(unicorn_engine::unicorn_const::Query::COUNT_STOP);
         let native_timeout_query = uc.query(unicorn_engine::unicorn_const::Query::TIMEOUT);
+        active_private_page_guards.borrow_mut().clear();
         // Preserve native-only registers and branch metadata only for the
         // authentic context produced by this attempt. Any subsequent scalar
         // repair, callback preparation or thread selection invalidates its key.
@@ -10179,6 +10191,8 @@ impl UnicornMips {
         let native_profile_debug_enabled =
             tracing::enabled!(target: "ce.slice_profile", tracing::Level::DEBUG);
         let native_result_err = result.as_ref().err();
+        let native_count_stop_requested =
+            matches!(&native_count_stop_query, Ok(requested) if *requested != 0);
         let native_deadline_expired = matches!(&native_timeout_query, Ok(expired) if *expired != 0);
         // Outer None means uncollected; Some(None) means this primary
         // attempt had no such fault. Keep these bounded summaries tied
@@ -10213,10 +10227,13 @@ impl UnicornMips {
                 && read_mips_reg(&uc, RegisterMIPS::PC) == *target
         });
         self.last_native_slice_outcome = NativeStopEvidence {
-            native_error: result.is_err() || native_timeout_query.is_err(),
+            native_error: result.is_err()
+                || native_count_stop_query.is_err()
+                || native_timeout_query.is_err(),
             capture_error: native_capture_result.is_err(),
             hook_control_error: native_hook_control_error.borrow().is_some()
                 || immediate_process_sync_failure.is_some(),
+            count_stop_requested: native_count_stop_requested,
             requested_pc_stop: native_requested_pc_stop.is_some(),
             native_deadline_expired,
             hook_stop_reason: native_hook_stop_reason.get(),
@@ -10225,6 +10242,7 @@ impl UnicornMips {
         let mut deferred_launch_error = None;
         let mut deferred_view_sync_error = None;
         if result.is_ok()
+            && native_count_stop_query.is_ok()
             && native_timeout_query.is_ok()
             && native_capture_result.is_ok()
             && native_hook_control_error.borrow().is_none()
@@ -10525,6 +10543,7 @@ impl UnicornMips {
             native_start_pid,
             native_start_tid,
             native_configured_timeout_us = native_timeout_us,
+            native_count_stop_query = ?native_count_stop_query,
             native_timeout_query = ?native_timeout_query,
             native_result_err = ?native_result_err,
             native_capture_result = ?native_capture_result,
@@ -10540,7 +10559,8 @@ impl UnicornMips {
             "slice profile"
         );
         let framebuffer_error = framebuffer_tick_error.borrow_mut().take();
-        let post_native_state_ready = native_timeout_query.is_ok()
+        let post_native_state_ready = native_count_stop_query.is_ok()
+            && native_timeout_query.is_ok()
             && native_capture_result.is_ok()
             && snapshot_context_result.is_ok()
             && native_hook_control_error.borrow().is_none()
@@ -10667,6 +10687,19 @@ impl UnicornMips {
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(format!(
                 "query native timeout after Unicorn run failed: {err:?}"
+            )));
+        }
+        if let Err(err) = native_count_stop_query {
+            self.last_native_slice_outcome = NativeSliceOutcome::NativeError;
+            if diagnostic_private {
+                reject_private_attempt!(Error::Backend(format!(
+                    "query native count stop after Unicorn run failed: {err:?}"
+                )));
+            }
+            self.persist_run_state(&run_state, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            return Err(Error::Backend(format!(
+                "query native count stop after Unicorn run failed: {err:?}"
             )));
         }
         if self
@@ -55756,8 +55789,8 @@ mod unicorn_tests {
         let first_written = first.regs.regs[9];
         assert_eq!(
             cpu.last_native_slice_outcome(),
-            super::NativeSliceOutcome::UnknownNormalStop,
-            "first slice must stop normally, not by native deadline"
+            super::NativeSliceOutcome::CountLimit,
+            "first slice must have the count witness, not a native deadline"
         );
         assert!(
             cpu.last_debug_snapshot()
@@ -55802,8 +55835,8 @@ mod unicorn_tests {
         assert_eq!(second.pc, entry + 6 * 4, "the second guest load completed");
         assert_eq!(
             cpu.last_native_slice_outcome(),
-            super::NativeSliceOutcome::UnknownNormalStop,
-            "second slice must stop normally, not by native deadline"
+            super::NativeSliceOutcome::CountLimit,
+            "second slice must have the count witness, not a native deadline"
         );
         assert!(
             cpu.last_debug_snapshot()
@@ -55914,11 +55947,15 @@ mod unicorn_tests {
         let actually_expired = uc
             .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
             .unwrap();
+        let count_stopped = uc
+            .query(unicorn_engine::unicorn_const::Query::COUNT_STOP)
+            .unwrap();
         eprintln!(
             "native_timeout_query count_stop configured_us=1000000 configured_ns={configured_ns} actually_expired={actually_expired}"
         );
         assert_eq!(configured_ns, 1_000_000_000);
         assert_eq!(actually_expired, 0);
+        assert_eq!(count_stopped, 1);
     }
 
     #[test]
@@ -55939,6 +55976,9 @@ mod unicorn_tests {
         let actually_expired = uc
             .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
             .unwrap();
+        let count_stopped = uc
+            .query(unicorn_engine::unicorn_const::Query::COUNT_STOP)
+            .unwrap();
         eprintln!(
             "native_timeout_query voluntary_stop configured_us=1000000 configured_ns={configured_ns} actually_expired={actually_expired} pc={:#x}",
             uc.reg_read(RegisterMIPS::PC).unwrap()
@@ -55948,6 +55988,7 @@ mod unicorn_tests {
         assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap(), 0);
         assert_eq!(configured_ns, 1_000_000_000);
         assert_eq!(actually_expired, 0);
+        assert_eq!(count_stopped, 0);
     }
 
     #[test]
@@ -55960,17 +56001,96 @@ mod unicorn_tests {
         let actually_expired = uc
             .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
             .unwrap();
+        let count_stopped = uc
+            .query(unicorn_engine::unicorn_const::Query::COUNT_STOP)
+            .unwrap();
         eprintln!(
             "native_timeout_query expired configured_us=2000 configured_ns={configured_ns} actually_expired={actually_expired}"
         );
         assert_eq!(configured_ns, 2_000_000);
         assert_eq!(actually_expired, 1);
+        assert_eq!(count_stopped, 0);
+    }
+
+    #[test]
+    fn native_count_stop_query_resets_before_a_no_count_run() {
+        let mut uc = native_timeout_query_loop();
+        uc.emu_start(0x1000, 0, 1_000_000, 1).unwrap();
+        assert_eq!(
+            uc.query(unicorn_engine::unicorn_const::Query::COUNT_STOP)
+                .unwrap(),
+            1
+        );
+        uc.add_code_hook(1, 0, |uc, _, _| {
+            uc.emu_stop().unwrap();
+        })
+        .unwrap();
+        uc.emu_start(0x1000, 0, 1_000_000, 0).unwrap();
+        assert_eq!(
+            uc.query(unicorn_engine::unicorn_const::Query::COUNT_STOP)
+                .unwrap(),
+            0,
+            "a later explicit stop must not inherit the prior count witness"
+        );
+    }
+
+    #[test]
+    fn native_count_stop_classification_requires_uncontested_success() {
+        let clean = super::NativeStopEvidence {
+            count_stop_requested: true,
+            ..Default::default()
+        };
+        assert_eq!(clean.outcome(), super::NativeSliceOutcome::CountLimit);
+        for competing in [
+            super::NativeStopEvidence {
+                requested_pc_stop: true,
+                ..clean
+            },
+            super::NativeStopEvidence {
+                native_deadline_expired: true,
+                ..clean
+            },
+            super::NativeStopEvidence {
+                hook_stop_reason: Some(super::NativeHookStopReason::HostWallBudget),
+                ..clean
+            },
+        ] {
+            assert_eq!(
+                competing.outcome(),
+                super::NativeSliceOutcome::UnknownNormalStop,
+                "competing successful stop facts are not a proven count limit"
+            );
+        }
+        assert_eq!(
+            super::NativeStopEvidence {
+                native_error: true,
+                ..clean
+            }
+            .outcome(),
+            super::NativeSliceOutcome::NativeError
+        );
+        for failed_tail in [
+            super::NativeStopEvidence {
+                capture_error: true,
+                ..clean
+            },
+            super::NativeStopEvidence {
+                hook_control_error: true,
+                ..clean
+            },
+        ] {
+            assert_eq!(
+                failed_tail.outcome(),
+                super::NativeSliceOutcome::BackendError
+            );
+        }
     }
 
     #[test]
     fn failed_host_budget_control_is_backend_error_unless_native_failed_first() {
         let stopped = super::NativeStopEvidence {
             hook_control_error: true,
+            count_stop_requested: false,
             requested_pc_stop: true,
             native_deadline_expired: true,
             hook_stop_reason: Some(super::NativeHookStopReason::HostWallBudget),
@@ -56031,7 +56151,7 @@ mod unicorn_tests {
 
         assert_eq!(
             cpu.last_native_slice_outcome(),
-            super::NativeSliceOutcome::UnknownNormalStop
+            super::NativeSliceOutcome::CountLimit
         );
         assert!(cpu.last_native_slice_outcome().is_service_boundary());
         assert!(

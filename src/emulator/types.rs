@@ -48,6 +48,9 @@ pub enum NativeSliceOutcome {
     /// Successful normal return without a proven stop cause. A positive
     /// instruction count alone is not a native count-limit witness.
     UnknownNormalStop,
+    /// The native count hook requested a stop, with no competing stop cause.
+    /// This is a host service boundary, not proof of a CE task quantum.
+    CountLimit,
     HookStop(NativeHookStopReason),
     NativeDeadline,
     RequestedPcStop,
@@ -60,7 +63,7 @@ impl NativeSliceOutcome {
     pub fn is_service_boundary(self) -> bool {
         matches!(
             self,
-            Self::UnknownNormalStop | Self::HookStop(_) | Self::NativeDeadline
+            Self::UnknownNormalStop | Self::CountLimit | Self::HookStop(_) | Self::NativeDeadline
         )
     }
 }
@@ -72,6 +75,7 @@ mod native_slice_outcome_tests {
     #[test]
     fn only_successful_service_outcomes_allow_scheduler_handoff() {
         assert!(NativeSliceOutcome::UnknownNormalStop.is_service_boundary());
+        assert!(NativeSliceOutcome::CountLimit.is_service_boundary());
         assert!(
             NativeSliceOutcome::HookStop(NativeHookStopReason::HostWallBudget)
                 .is_service_boundary()
