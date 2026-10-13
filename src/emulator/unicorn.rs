@@ -54151,6 +54151,152 @@ mod unicorn_tests {
     }
 
     #[test]
+    #[ignore = "expected red: ledger E-14, Stage 2 O-M1 same-VA file-view ownership"]
+    fn native_two_process_same_va_distinct_file_views_keep_mapping_owners() -> crate::Result<()> {
+        const PARENT_BYTES: u32 = 0x1122_3344;
+        const CHILD_BYTES: u32 = 0x5566_7788;
+
+        // Test-only view injection is required because MemorySystem currently
+        // allocates virtual addresses from one global cursor. Both process
+        // slices below still execute real guest MIPS on their own native CPU.
+        let mut kernel = phase1_kernel("same-va-parent.exe")?;
+        let parent_mapping =
+            kernel
+                .handles
+                .create_file_mapping(Some("same-va-parent".to_owned()), 4, 4, None);
+        let child_mapping =
+            kernel
+                .handles
+                .create_file_mapping(Some("same-va-child".to_owned()), 4, 4, None);
+        assert_ne!(parent_mapping, child_mapping);
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\same-va-child.exe".to_owned()), None);
+        assert!(
+            kernel
+                .take_pending_process_launches()
+                .iter()
+                .any(|queued| queued.process_id == launch.process_id)
+        );
+        for (handle, process_id, initial) in [
+            (parent_mapping, 1, PARENT_BYTES),
+            (child_mapping, launch.process_id, CHILD_BYTES),
+        ] {
+            let mapping = kernel.handles.file_mapping_mut(handle)?;
+            mapping.data[..4].copy_from_slice(&initial.to_le_bytes());
+            mapping.views.push(crate::ce::object::FileMappingView {
+                base: PHASE1_COUNTER_ADDRESS,
+                size: 4,
+                offset: 0,
+                process_id,
+            });
+        }
+
+        let make_reader_writer = |name: &str| -> crate::Result<super::UnicornMips> {
+            let mut bytes = tiny_mips_spinner_pe();
+            write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
+            let words = [
+                0x3c08_0000 | (PHASE1_COUNTER_ADDRESS >> 16), // lui t0,view_hi
+                0x3508_0000 | (PHASE1_COUNTER_ADDRESS & 0xffff), // ori t0,t0,view_lo
+                0x8d09_0000,                                  // lw t1,0(t0)
+                0x2529_0001,                                  // addiu t1,t1,1
+                0xad09_0000,                                  // sw t1,0(t0)
+                0x1000_ffff, // terminal spinner, not reached by five-count run
+                0,
+            ];
+            for (index, word) in words.into_iter().enumerate() {
+                write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+            }
+            let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
+            let mut cpu = super::UnicornMips::new()?;
+            cpu.load_pe_image(&image)?;
+            Ok(cpu)
+        };
+        let mut parent = make_reader_writer("same-va-parent.exe")?;
+        let mut child = make_reader_writer("same-va-child.exe")?;
+        child.set_initial_thread_id(launch.thread_id);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 5,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+
+        parent.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        )?;
+        let parent_seen = parent
+            .saved_context
+            .as_ref()
+            .expect("parent's real native slice saved MIPS registers")
+            .regs
+            .regs[9];
+        let parent_data_after_parent = u32::from_le_bytes(
+            kernel.handles.file_mapping(parent_mapping)?.data[..4]
+                .try_into()
+                .unwrap(),
+        );
+        let child_data_after_parent = u32::from_le_bytes(
+            kernel.handles.file_mapping(child_mapping)?.data[..4]
+                .try_into()
+                .unwrap(),
+        );
+
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_path("\\Test\\same-va-child.exe");
+        kernel.set_process_module_host_path(std::path::PathBuf::from("same-va-child.exe"));
+        child.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        )?;
+        let child_seen = child
+            .saved_context
+            .as_ref()
+            .expect("child's real native slice saved MIPS registers")
+            .regs
+            .regs[9];
+        let parent_data_after_child = u32::from_le_bytes(
+            kernel.handles.file_mapping(parent_mapping)?.data[..4]
+                .try_into()
+                .unwrap(),
+        );
+        let child_data_after_child = u32::from_le_bytes(
+            kernel.handles.file_mapping(child_mapping)?.data[..4]
+                .try_into()
+                .unwrap(),
+        );
+
+        let observed = (
+            parent_seen,
+            parent_data_after_parent,
+            child_data_after_parent,
+            child_seen,
+            parent_data_after_child,
+            child_data_after_child,
+        );
+        let expected = (
+            PARENT_BYTES + 1,
+            PARENT_BYTES + 1,
+            CHILD_BYTES,
+            CHILD_BYTES + 1,
+            PARENT_BYTES + 1,
+            CHILD_BYTES + 1,
+        );
+        assert_eq!(
+            observed, expected,
+            "each actual native PID slice must read and write only its own mapping at the same guest VA"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn preflight_rotation_clears_incoming_stale_native_outcome() -> crate::Result<()> {
         let mut kernel = phase1_kernel("idle-parent.exe")?;
         let parent_state = kernel.current_process_state();
