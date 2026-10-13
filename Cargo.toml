@@ -35,7 +35,7 @@ win32-audio = []
 [profile.release]
 debug = true
 
-# Windows without symlink privilege cannot build the registry CMake post-build
-# alias. This vendored 2.1.5 source changes only that alias to a file copy.
+# Local Unicorn 2.1.5 patches: a Windows-safe CMake alias copy and an additive
+# native count-stop query. See vendor/unicorn-engine-sys/PATCHES.md.
 [patch.crates-io]
 unicorn-engine-sys = { path = "vendor/unicorn-engine-sys" }
