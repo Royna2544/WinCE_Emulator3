@@ -10706,6 +10706,11 @@ impl UnicornMips {
                 self.saved_context = None;
                 self.last_native_slice_outcome = $outcome;
                 report.failure_operation = Some($operation);
+                // The live run queues were taken from this CPU before the
+                // native attempt. A failed private attempt cannot resume,
+                // but it must not strand Kernel wait IDs without their CPU
+                // records or discard partially executed callback state.
+                self.persist_run_state_handles(&run_state);
                 return Err(match uc.abort_close() {
                     Ok(()) => cause,
                     Err(cleanup) => Error::Backend(format!(
@@ -10768,6 +10773,7 @@ impl UnicornMips {
                         self.saved_context = None;
                         self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                         report.failure_operation = Some("finish decoded process exit");
+                        self.persist_run_state_handles(&run_state);
                         return Err(Error::Backend(format!(
                             "finish private slab process exit: {err:?}"
                         )));
@@ -10777,6 +10783,7 @@ impl UnicornMips {
                         self.saved_context = None;
                         self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                         report.failure_operation = Some("terminate decoded process exit");
+                        self.persist_run_state_handles(&run_state);
                         return Err(Error::Backend(format!(
                             "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
                             exit.process, exit.exit_code
@@ -10916,6 +10923,7 @@ impl UnicornMips {
                         self.saved_context = None;
                         self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                         report.failure_operation = Some("finish decoded process exit");
+                        self.persist_run_state_handles(&run_state);
                         return Err(Error::Backend(format!(
                             "finish private slab process exit: {err:?}"
                         )));
@@ -10925,6 +10933,7 @@ impl UnicornMips {
                         self.saved_context = None;
                         self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                         report.failure_operation = Some("terminate decoded process exit");
+                        self.persist_run_state_handles(&run_state);
                         return Err(Error::Backend(format!(
                             "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
                             exit.process, exit.exit_code
@@ -11109,6 +11118,7 @@ impl UnicornMips {
                 if diagnostic_private {
                     self.private_slab_attempt_poisoned = true;
                     self.saved_context = None;
+                    self.persist_run_state_handles(&run_state);
                 }
                 return Err(Error::Backend(format!(
                     "release native slice hooks: {err:?}"
@@ -11145,6 +11155,7 @@ impl UnicornMips {
                 self.private_slab_attempt_poisoned = true;
                 self.saved_context = None;
                 self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                self.persist_run_state_handles(&run_state);
                 return Err(Error::Backend(format!(
                     "finish private slab native slice: {err:?}"
                 )));
@@ -57146,6 +57157,57 @@ mod unicorn_tests {
                 .iter()
                 .all(|wait| wait.id != wait_id)
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn private_pre_entry_fence_failure_preserves_executed_thread_wait() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("private-pre-entry-fence-wait.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let private_base = kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("enable diagnostic private native path");
+        let private_pin = kernel
+            .memory
+            .private_page_pin(owner, private_base)
+            .expect("committed private page");
+        let held_guard = private_pin
+            .begin_native_execution()
+            .expect("hold the page fence through pre-entry validation");
+        let mut cpu = phase1_counter_cpu(0x1000, "private-pre-entry-fence-wait.exe")?;
+        let wait_id = phase1_seed_executed_thread_sleep_wait(&mut kernel, &mut cpu);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 20,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        let report = execution.report;
+        let err = execution.result.expect_err("held page fence must reject pre-entry setup");
+        assert!(format!("{err:#}").contains("fence private slab page"));
+        assert_eq!(report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
+        assert_eq!(report.attempt_id(), None);
+        assert!(matches!(
+            report.native_result(),
+            super::AttemptObservation::Uncollected
+        ));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert!(
+            cpu.blocked_wait_threads
+                .iter()
+                .any(|wait| wait.wait_id == wait_id),
+            "pre-entry failure must not lose the CPU-side wait moved into run-state handles"
+        );
+        drop(held_guard);
         Ok(())
     }
 
