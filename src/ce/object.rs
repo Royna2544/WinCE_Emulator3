@@ -703,7 +703,14 @@ impl HandleTable {
     }
 
     pub fn open_process(&mut self, process_id: u32) -> Option<u32> {
-        let incarnation = self.processes.get(&process_id)?.incarnation;
+        let process = self.processes.get(&process_id)?;
+        // A termination request can precede the scheduler's execution cleanup.
+        // Its birth remains pinned internally, but after the last public alias
+        // closes the terminated PID must not become externally reopenable.
+        if process.signaled && process.aliases.is_empty() {
+            return None;
+        }
+        let incarnation = process.incarnation;
         Some(self.insert(KernelObject::Process(ProcessHandleObject {
             process_id,
             incarnation,
@@ -711,7 +718,11 @@ impl HandleTable {
     }
 
     pub fn process_snapshots(&self) -> Vec<ProcessObject> {
-        self.processes.values().cloned().collect()
+        self.processes
+            .values()
+            .filter(|process| !process.signaled || !process.aliases.is_empty())
+            .cloned()
+            .collect()
     }
 
     fn process_for_alias(&self, alias: &ProcessHandleObject) -> Option<&ProcessObject> {
@@ -1016,13 +1027,21 @@ impl HandleTable {
         let Some(process_id) = self.process_id(handle) else {
             return false;
         };
-        let process = self
-            .processes
-            .get_mut(&process_id)
-            .expect("validated process birth");
+        self.mark_process_exited_by_id(process_id, exit_code)
+            .is_some()
+    }
+
+    /// Mark the canonical birth signaled without claiming its CPU execution is
+    /// already retired. `finish_process_execution_by_id` releases that pin.
+    pub fn mark_process_exited_by_id(
+        &mut self,
+        process_id: u32,
+        exit_code: u32,
+    ) -> Option<Vec<u32>> {
+        let process = self.processes.get_mut(&process_id)?;
         process.exit_code = exit_code;
         process.signaled = true;
-        true
+        Some(process.aliases.iter().copied().collect())
     }
 
     pub fn process_exit_code(&self, handle: u32) -> Option<u32> {
@@ -1036,7 +1055,9 @@ impl HandleTable {
     }
 
     pub fn process_id_exists(&self, process_id: u32) -> bool {
-        self.processes.contains_key(&process_id)
+        self.processes
+            .get(&process_id)
+            .is_some_and(|process| !process.signaled || !process.aliases.is_empty())
     }
 
     pub fn process_debugger_thread_id(&self, process_id: u32) -> Option<u32> {

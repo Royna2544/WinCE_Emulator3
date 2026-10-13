@@ -6648,6 +6648,14 @@ impl CeKernel {
             self.destroy_process_windows(self.current_process_id, 0);
             self.current_process_exit_code = exit_code;
             self.current_process_signaled = true;
+            if let Some(aliases) = self
+                .handles
+                .mark_process_exited_by_id(self.current_process_id, exit_code)
+            {
+                for alias in aliases {
+                    self.queue_object_wake_candidates(alias);
+                }
+            }
             self.queue_object_wake_candidates(handle);
             return true;
         }
@@ -10944,12 +10952,48 @@ mod tests {
             }),
             Some(wait_id)
         );
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
 
         assert!(kernel.close_handle(first_alias)?);
         assert!(kernel.handles.process_id_exists(launch.process_id));
         assert!(kernel.close_handle(second_alias)?);
         assert!(!kernel.handles.process_id_exists(launch.process_id));
         assert_eq!(kernel.open_process_handle(launch.process_id), None);
+        Ok(())
+    }
+
+    #[test]
+    fn terminated_child_pid_cannot_reopen_after_last_alias_closes() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
+        let alias = kernel
+            .open_process_handle(launch.process_id)
+            .expect("live child");
+        assert!(kernel.terminate_process(launch.process_handle, 9));
+        assert_eq!(kernel.process_exit_code(alias), Some(9));
+        assert_eq!(kernel.is_wait_ready(alias, 1), Some(true));
+        assert!(kernel.close_handle(launch.process_handle)?);
+        assert!(kernel.close_handle(alias)?);
+        assert!(!kernel.handles.process_id_exists(launch.process_id));
+        assert_eq!(kernel.open_process_handle(launch.process_id), None);
+        // Completion still addresses the internal birth after public aliases end.
+        kernel.mark_process_launch_exited(&launch, 9);
+        assert_eq!(kernel.open_process_handle(launch.process_id), None);
+        Ok(())
+    }
+
+    #[test]
+    fn selected_child_pseudo_termination_signals_public_alias() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
+        kernel.set_current_process_id(launch.process_id);
+        assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 11));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(11));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(true));
+        kernel.set_current_process_id(1);
+        assert!(kernel.close_handle(launch.process_handle)?);
+        assert_eq!(kernel.open_process_handle(launch.process_id), None);
+        kernel.mark_process_launch_exited(&launch, 11);
         Ok(())
     }
 
