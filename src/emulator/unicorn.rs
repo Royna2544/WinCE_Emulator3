@@ -19,7 +19,12 @@ use super::cpu_mips::{
     mips_halfword_jump_table_ranges, mips_patch_rva_overlaps_data_ranges, normal_branch_stub_words,
 };
 #[cfg(feature = "unicorn")]
-use super::native_engine::ProcessNativeEngine;
+use super::native_engine::{NativeMappingPins, ProcessNativeEngine};
+#[cfg(feature = "unicorn")]
+use crate::ce::memory::{
+    PrivatePageIdentity, StablePrivatePageExecutionGuard, StablePrivatePagePin,
+    VirtualAllocationBacking, STABLE_PRIVATE_PAGE_SIZE,
+};
 #[cfg(all(test, feature = "unicorn"))]
 use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, USER_KDATA_PAGE_BASE, user_kdata_page};
 use crate::{
@@ -110,6 +115,9 @@ pub struct UnicornMips {
     last_debug: Option<UnicornDebugSnapshot>,
     last_wall_clock_debug: Option<UnicornDebugSnapshot>,
     last_native_slice_outcome: NativeSliceOutcome,
+    // An E18 diagnostic pointer-map failure cannot resume from an older CPU
+    // snapshot or silently restart at process entry on a later call.
+    private_slab_attempt_poisoned: bool,
     /// Count of completed guest run slices; used to reject escaped-callout
     /// recovery based on stop evidence captured before the callout was pushed.
     run_slice_generation: u64,
@@ -1204,6 +1212,7 @@ impl UnicornMips {
             last_debug: None,
             last_wall_clock_debug: None,
             last_native_slice_outcome: NativeSliceOutcome::NoAttempt,
+            private_slab_attempt_poisoned: false,
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
@@ -5734,6 +5743,9 @@ impl UnicornMips {
                 last_debug: self.last_debug.take(),
                 last_wall_clock_debug: self.last_wall_clock_debug.take(),
                 last_native_slice_outcome: std::mem::take(&mut self.last_native_slice_outcome),
+                private_slab_attempt_poisoned: std::mem::take(
+                    &mut self.private_slab_attempt_poisoned,
+                ),
                 run_slice_generation: self.run_slice_generation,
                 visible_callout_push_generation: self.visible_callout_push_generation,
                 slice_end_rotation_pending: false,
@@ -6034,6 +6046,11 @@ impl UnicornMips {
         framebuffer: &mut dyn Framebuffer,
         limits: UnicornRunLimits,
     ) -> Result<()> {
+        if self.private_slab_attempt_poisoned {
+            return Err(Error::Backend(
+                "private slab native attempt is poisoned; a fresh machine is required".to_owned(),
+            ));
+        }
         let info = framebuffer.info();
         kernel.remote.set_framebuffer_size(info.width, info.height);
         for string in &self.resource_strings {
@@ -6216,30 +6233,87 @@ impl UnicornMips {
         // attempt, even if deferred child launches temporarily select another
         // process in the Kernel.
         let native_owner_pid = kernel.current_process_id();
+        let native_owner_birth = kernel.current_process_birth_key().ok_or_else(|| {
+            Error::Backend(format!(
+                "native attempt has no live process birth for pid {native_owner_pid}"
+            ))
+        })?;
+        let diagnostic_private = kernel.memory.has_stable_private_slabs();
+        // Once a pointer-backed page can be installed in native memory, any
+        // fallible exit (including context restore or hook installation below)
+        // must prevent a later run from reusing an older continuation. Keep
+        // the incoming context locally until this attempt finishes cleanly.
+        let incoming_private_context = if diagnostic_private {
+            self.private_slab_attempt_poisoned = true;
+            self.saved_context.take()
+        } else {
+            None
+        };
         let mut uc = self
             .native_engine
             .lease()
             .map_err(|err| Error::Backend(format!("lease process CPU engine: {err:?}")))?;
         let native_engine_reused = uc.reused();
+        let native_mapping_pins = uc.mapping_pins();
         let mut persisted_kernel_mappings = uc
             .take_metadata()
             .unwrap_or_else(|| KernelMemoryMappings::new(&self.mapped_blobs));
-        reclaim_stale_virtual_memory_pages(&mut uc, kernel, &mut persisted_kernel_mappings)?;
-        persisted_kernel_mappings.ranges = reconcile_persistent_native_memory(
-            &mut uc,
-            &self.memory,
-            &self.mapped_blobs,
-            &persisted_kernel_mappings.virtual_pages,
-        )?;
-        let native_blob_write_bytes =
-            sync_persisted_blobs_to_native(&mut uc, &self.mapped_blobs, native_engine_reused)?;
-        // Refresh shared file-mapping views from their canonical mapping data so
-        // this process observes writes other processes made since its last slice.
-        sync_file_mapping_views_to_unicorn(&mut uc, kernel, native_owner_pid)?;
+        let setup_result = (|| -> Result<u64> {
+            reclaim_stale_virtual_memory_pages(&mut uc, kernel, &mut persisted_kernel_mappings)?;
+            reclaim_stale_private_slab_pages(
+                &mut uc,
+                kernel,
+                &mut persisted_kernel_mappings,
+                native_owner_birth,
+            )?;
+            persisted_kernel_mappings.ranges = reconcile_persistent_native_memory_with_private(
+                &mut uc,
+                &self.memory,
+                &self.mapped_blobs,
+                &persisted_kernel_mappings.virtual_pages,
+                &persisted_kernel_mappings.private_pages,
+            )?;
+            map_private_slab_pages(
+                &mut uc,
+                kernel,
+                &mut persisted_kernel_mappings,
+                native_owner_birth,
+                &native_mapping_pins,
+                None,
+            )?;
+            let written =
+                sync_persisted_blobs_to_native(&mut uc, &self.mapped_blobs, native_engine_reused)?;
+            // Refresh shared views from canonical data before guest entry.
+            sync_file_mapping_views_to_unicorn(&mut uc, kernel, native_owner_pid)?;
+            Ok(written)
+        })();
+        let native_blob_write_bytes = match setup_result {
+            Ok(written) => written,
+            Err(err) if diagnostic_private => {
+                self.private_slab_attempt_poisoned = true;
+                self.saved_context = None;
+                self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                return Err(match uc.abort_close() {
+                    Ok(()) => err,
+                    Err(cleanup) => Error::Backend(format!(
+                        "{err}; abort private slab native setup: {cleanup:?}"
+                    )),
+                });
+            }
+            Err(err) => return Err(err),
+        };
         let slice_setup_elapsed = slice_profile.elapsed();
-        let restoring_saved_context = self.saved_context.is_some();
+        let restoring_saved_context = if diagnostic_private {
+            incoming_private_context.is_some()
+        } else {
+            self.saved_context.is_some()
+        };
         let mut native_context_restored = false;
-        let mut start_pc = if let Some(saved) = self.saved_context.as_ref() {
+        let mut start_pc = if let Some(saved) = if diagnostic_private {
+            incoming_private_context.as_ref()
+        } else {
+            self.saved_context.as_ref()
+        } {
             native_context_restored = uc
                 .restore_if_exact(&(self.current_thread_id, saved.clone()))
                 .map_err(|err| Error::Backend(format!("restore native task context: {err:?}")))?;
@@ -6291,6 +6365,11 @@ impl UnicornMips {
         let native_hook_control_error = Rc::new(RefCell::new(None::<String>));
         let immediate_process_sync_error = Rc::new(RefCell::new(None::<Error>));
         let immediate_process_sync_error_hook = Rc::clone(&immediate_process_sync_error);
+        let active_private_page_guards = Rc::new(RefCell::new(BTreeMap::new()));
+        let active_private_page_guards_import = Rc::clone(&active_private_page_guards);
+        let active_private_page_guards_fault = Rc::clone(&active_private_page_guards);
+        let native_mapping_pins_import = native_mapping_pins.clone();
+        let native_mapping_pins_fault = native_mapping_pins.clone();
         let host_wall_clock_limit = (limits.wall_clock_limit_ms != 0)
             .then(|| Duration::from_millis(limits.wall_clock_limit_ms));
         let host_wall_clock_started = Instant::now();
@@ -9522,15 +9601,22 @@ impl UnicornMips {
                     return;
                 };
                 let result = import_return.v0;
-                if map_kernel_memory_allocations(
+                if let Err(err) = map_kernel_memory_allocations_for_owner(
                     memory.uc,
                     unsafe { &*kernel_ptr },
                     &mut mapped_kernel_memory_hook.borrow_mut(),
                     unsafe { &mut *mapped_blobs_ptr },
-                )
-                .is_err()
-                {
-                    let _ = memory.uc.emu_stop();
+                    Some(native_owner_birth),
+                    Some(&native_mapping_pins_import),
+                    Some(active_private_page_guards_import.as_ref()),
+                ) {
+                    let err = match memory.uc.emu_stop() {
+                        Ok(()) => err,
+                        Err(stop_err) => Error::Backend(format!(
+                            "native import map failed: {err}; stop native attempt: {stop_err:?}"
+                        )),
+                    };
+                    *immediate_process_sync_error_hook.borrow_mut() = Some(err);
                     return;
                 }
                 #[cfg(feature = "trace")]
@@ -9778,6 +9864,7 @@ impl UnicornMips {
         let memory_fault = Rc::new(RefCell::new(None));
         let memory_fault_hook = Rc::clone(&memory_fault);
         let mapped_kernel_memory_fault_hook = Rc::clone(&mapped_kernel_memory);
+        let immediate_process_sync_error_fault = Rc::clone(&immediate_process_sync_error);
         #[cfg(feature = "trace")]
         if inavi_slot_trace_enabled && let Some(addr) = inavi_slot_static_watch_addr {
             let slot_watch = Rc::clone(&inavi_render_milestones);
@@ -9924,16 +10011,29 @@ impl UnicornMips {
             0,
             move |uc, access, address, size, value| {
                 let access_name = format!("{access:?}");
-                if access_name.contains("UNMAPPED")
-                    && repair_missing_virtual_page_for_fault(
+                if access_name.contains("UNMAPPED") {
+                    match repair_missing_virtual_page_for_fault(
                         uc,
                         unsafe { &*kernel_ptr },
                         &mut mapped_kernel_memory_fault_hook.borrow_mut(),
                         address as u32,
-                    )
-                    .unwrap_or(false)
-                {
-                    return true;
+                        native_owner_birth,
+                        &native_mapping_pins_fault,
+                        active_private_page_guards_fault.as_ref(),
+                    ) {
+                        Ok(true) => return true,
+                        Ok(false) => {}
+                        Err(err) => {
+                            let err = match uc.emu_stop() {
+                                Ok(()) => err,
+                                Err(stop_err) => Error::Backend(format!(
+                                    "native fault map failed: {err}; stop native attempt: {stop_err:?}"
+                                )),
+                            };
+                            *immediate_process_sync_error_fault.borrow_mut() = Some(err);
+                            return false;
+                        }
+                    }
                 }
                 *memory_fault_hook.borrow_mut() = Some(UnicornMemoryFault {
                     access: access_name,
@@ -10011,12 +10111,37 @@ impl UnicornMips {
         };
         let native_start_pid = native_owner_pid;
         let native_start_tid = *current_thread_id.borrow();
+        // All pointer-mapped pages are fenced before the guest runs. Hook-time
+        // maps add their own guard before the fault/import callback resumes.
+        for recorded in mapped_kernel_memory.borrow().private_pages.values() {
+            let page = recorded.identity.page_base();
+            let pin = kernel
+                .memory
+                .private_page_pin(native_owner_birth, page)
+                .filter(|pin| {
+                    pin.identity() == recorded.identity
+                        && pin.native_ptr() as usize == recorded.host_address
+                        && kernel.memory.contains_private_page_pin(pin)
+                })
+                .ok_or_else(|| {
+                    Error::Backend(format!(
+                        "private slab page 0x{page:08x} changed before native execution"
+                    ))
+                })?;
+            let guard = pin.begin_native_execution().map_err(|err| {
+                Error::Backend(format!("fence private slab page 0x{page:08x}: {err:?}"))
+            })?;
+            active_private_page_guards
+                .borrow_mut()
+                .insert(recorded.identity, guard);
+        }
         let result = uc.emu_start(
             u64::from(start_pc),
             0,
             native_timeout_us,
             limits.instruction_limit,
         );
+        active_private_page_guards.borrow_mut().clear();
         // Query this primary attempt before capture or deferred work can touch
         // the native owner. A failed query is a hard outcome, not "not timed out".
         let native_timeout_query = uc.query(unicorn_engine::unicorn_const::Query::TIMEOUT);
@@ -10326,7 +10451,10 @@ impl UnicornMips {
             self.last_wall_clock_debug = Some(snapshot.clone());
         }
         self.orphaned_wndproc_returns = last_wndproc_returns.borrow().clone();
-        self.saved_context = snapshot_context_result.as_ref().ok().cloned();
+        let staged_saved_context = snapshot_context_result.as_ref().ok().cloned();
+        if !diagnostic_private {
+            self.saved_context = staged_saved_context.clone();
+        }
         uc.set_metadata(mapped_kernel_memory.borrow().clone());
         let slice_snapshot_elapsed = slice_profile.elapsed();
         // Capture secondary synchronization failure, but report the primary
@@ -10399,15 +10527,77 @@ impl UnicornMips {
             && deferred_view_sync_error.is_none()
             && mapped_blob_sync_error.is_none()
             && framebuffer_error.is_none();
+        macro_rules! reject_private_attempt {
+            ($cause:expr) => {{
+                let cause: Error = $cause;
+                self.private_slab_attempt_poisoned = true;
+                self.saved_context = None;
+                self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                return Err(match uc.abort_close() {
+                    Ok(()) => cause,
+                    Err(cleanup) => Error::Backend(format!(
+                        "{cause}; abort private slab native attempt: {cleanup:?}"
+                    )),
+                });
+            }};
+        }
         let decoded_kernel_exit = self
             .last_debug
             .as_ref()
             .and_then(|snapshot| self.decode_encoded_kernel_exit(snapshot));
+        // A hook-time map failure is a typed backend failure even when Unicorn
+        // also reports a generic memory fault. Reject it before decoded exits
+        // or any diagnostic private continuation can be published.
+        if let Some(err) = immediate_process_sync_failure {
+            self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(err);
+            } else {
+                self.persist_run_state(&run_state, kernel);
+                let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            }
+            return Err(match uc.abort_close() {
+                Ok(()) => err,
+                Err(cleanup) => Error::Backend(format!(
+                    "{err}; abort failed native mapping attempt: {cleanup:?}"
+                )),
+            });
+        }
         if let Err(err) = result {
             if let Some(exit) = decoded_kernel_exit
                 .clone()
                 .filter(|_| post_native_state_ready)
             {
+                if diagnostic_private {
+                    if let Err(err) =
+                        sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                    {
+                        reject_private_attempt!(err);
+                    }
+                    if let Err(err) = uc.finish() {
+                        self.private_slab_attempt_poisoned = true;
+                        self.saved_context = None;
+                        return Err(Error::Backend(format!(
+                            "finish private slab process exit: {err:?}"
+                        )));
+                    }
+                    if !Self::terminate_decoded_kernel_process(kernel, &exit) {
+                        self.private_slab_attempt_poisoned = true;
+                        self.saved_context = None;
+                        return Err(Error::Backend(format!(
+                            "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
+                            exit.process, exit.exit_code
+                        )));
+                    }
+                    if let Some(snapshot) = self.last_debug.as_mut() {
+                        snapshot.encoded_kernel_exit = Some(exit);
+                    }
+                    self.saved_context = staged_saved_context.clone();
+                    self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
+                    self.persist_run_state(&run_state, kernel);
+                    self.private_slab_attempt_poisoned = false;
+                    return Ok(());
+                }
                 if !Self::terminate_decoded_kernel_process(kernel, &exit) {
                     let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
                     return Err(Error::Backend(format!(
@@ -10433,24 +10623,28 @@ impl UnicornMips {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
+            if diagnostic_private {
+                reject_private_attempt!(Error::Backend(format!(
+                    "Unicorn run failed: {err:?}; {snapshot}"
+                )));
+            }
             self.persist_run_state(&run_state, kernel);
             return Err(Error::Backend(format!(
-                "Unicorn run failed: {err:?}; immediate process sync error: {immediate_process_sync_failure:?}; {snapshot}"
+                "Unicorn run failed: {err:?}; {snapshot}"
             )));
         }
         if let Err(err) = native_timeout_query {
             self.last_native_slice_outcome = NativeSliceOutcome::NativeError;
+            if diagnostic_private {
+                reject_private_attempt!(Error::Backend(format!(
+                    "query native timeout after Unicorn run failed: {err:?}"
+                )));
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(format!(
                 "query native timeout after Unicorn run failed: {err:?}"
             )));
-        }
-        if let Some(err) = immediate_process_sync_failure {
-            self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-            self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
-            return Err(err);
         }
         if self
             .last_debug
@@ -10458,6 +10652,36 @@ impl UnicornMips {
             .is_some_and(|snapshot| snapshot.interrupt_probe.is_some())
         {
             if let Some(exit) = decoded_kernel_exit.filter(|_| post_native_state_ready) {
+                if diagnostic_private {
+                    if let Err(err) =
+                        sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                    {
+                        reject_private_attempt!(err);
+                    }
+                    if let Err(err) = uc.finish() {
+                        self.private_slab_attempt_poisoned = true;
+                        self.saved_context = None;
+                        return Err(Error::Backend(format!(
+                            "finish private slab process exit: {err:?}"
+                        )));
+                    }
+                    if !Self::terminate_decoded_kernel_process(kernel, &exit) {
+                        self.private_slab_attempt_poisoned = true;
+                        self.saved_context = None;
+                        return Err(Error::Backend(format!(
+                            "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
+                            exit.process, exit.exit_code
+                        )));
+                    }
+                    if let Some(snapshot) = self.last_debug.as_mut() {
+                        snapshot.encoded_kernel_exit = Some(exit);
+                    }
+                    self.saved_context = staged_saved_context.clone();
+                    self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
+                    self.persist_run_state(&run_state, kernel);
+                    self.private_slab_attempt_poisoned = false;
+                    return Ok(());
+                }
                 if !Self::terminate_decoded_kernel_process(kernel, &exit) {
                     let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
                     return Err(Error::Backend(format!(
@@ -10483,6 +10707,11 @@ impl UnicornMips {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
+            if diagnostic_private {
+                reject_private_attempt!(Error::Backend(format!(
+                    "Unicorn run stopped on guest CPU exception; {snapshot}"
+                )));
+            }
             self.persist_run_state(&run_state, kernel);
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             return Err(Error::Backend(format!(
@@ -10491,6 +10720,11 @@ impl UnicornMips {
         }
         if let Err(err) = native_capture_result {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(Error::Backend(format!(
+                    "capture native task context after Unicorn run failed: {err:?}"
+                )));
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(format!(
@@ -10499,6 +10733,11 @@ impl UnicornMips {
         }
         if let Err(err) = snapshot_context_result {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(Error::Backend(format!(
+                    "capture repaired scalar task context after Unicorn run failed: {err:?}"
+                )));
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(format!(
@@ -10507,36 +10746,54 @@ impl UnicornMips {
         }
         if let Some(err) = native_hook_control_error.borrow_mut().take() {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(Error::Backend(err));
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(err));
         }
         if let Some(err) = post_run_pc_repair_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(Error::Backend(err));
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(err));
         }
         if let Some(err) = deferred_launch_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(err);
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(err);
         }
         if let Some(err) = deferred_view_sync_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(err);
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(err);
         }
         if let Some(err) = mapped_blob_sync_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(err);
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(err);
         }
         if let Some(err) = framebuffer_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if diagnostic_private {
+                reject_private_attempt!(err);
+            }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(err);
@@ -10551,24 +10808,42 @@ impl UnicornMips {
                 .last_debug
                 .as_ref()
                 .is_some_and(|snapshot| snapshot.pc == target)
-                && self.saved_context_pc() == Some(target)
+                && if diagnostic_private {
+                    staged_saved_context.as_ref().map(|context| context.pc) == Some(target)
+                } else {
+                    self.saved_context_pc() == Some(target)
+                }
         }) {
             // Preserve the exact context produced by this native attempt. The
             // ordinary callback/scheduler maintenance below can select another
             // address space, so it must not run after an explicit debugger stop.
             // Native errors and blob synchronization failures were checked above.
-            self.persist_run_state_handles(&run_state);
+            if !diagnostic_private {
+                self.persist_run_state_handles(&run_state);
+            }
             if let Err(err) =
                 sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
             {
                 self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                if diagnostic_private {
+                    reject_private_attempt!(err);
+                }
                 return Err(err);
             }
             if let Err(err) = uc.finish() {
                 self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                if diagnostic_private {
+                    self.private_slab_attempt_poisoned = true;
+                    self.saved_context = None;
+                }
                 return Err(Error::Backend(format!(
                     "release native slice hooks: {err:?}"
                 )));
+            }
+            if diagnostic_private {
+                self.saved_context = staged_saved_context.clone();
+                self.persist_run_state_handles(&run_state);
+                self.private_slab_attempt_poisoned = false;
             }
             return Ok(());
         }
@@ -10582,6 +10857,40 @@ impl UnicornMips {
             } else {
                 NativeSliceOutcome::UnknownNormalStop
             };
+        }
+        if diagnostic_private {
+            // For the pointer-backed diagnostic, publish neither the saved
+            // continuation nor a scheduler handoff until outgoing view sync
+            // and native hook teardown have both completed successfully.
+            if let Err(err) =
+                sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+            {
+                reject_private_attempt!(err);
+            }
+            if let Err(err) = uc.finish() {
+                self.private_slab_attempt_poisoned = true;
+                self.saved_context = None;
+                self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                return Err(Error::Backend(format!(
+                    "finish private slab native slice: {err:?}"
+                )));
+            }
+            self.saved_context = staged_saved_context;
+            self.persist_run_state(&run_state, kernel);
+            let _ = self.complete_orphaned_active_send_wait(kernel);
+            let _ = self.complete_orphaned_parked_send_wait(kernel);
+            self.clear_orphaned_blocked_get_message_state(kernel);
+            let _ = self.complete_escaped_saved_get_message_sent_callout(kernel);
+            let _ = self.complete_escaped_direct_send_message_callout(kernel);
+            if self.clear_escaped_visible_message_callouts(kernel) {
+                tracing::debug!(target: "ce.gwe", "escaped visible-message callout cleared at slice end");
+            }
+            let _ = self.clear_orphaned_direct_send_callouts(kernel);
+            let _ = self.clear_orphaned_send_depths(kernel);
+            self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
+            self.prune_exited_and_active_processes_from_parked(kernel);
+            self.private_slab_attempt_poisoned = false;
+            return Ok(());
         }
         self.persist_run_state(&run_state, kernel);
         let _ = self.complete_orphaned_active_send_wait(kernel);
@@ -10755,6 +11064,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             running_guest_thread: None,
             guest_thread_stack_slots: std::collections::BTreeMap::new(),
             saved_context: None,
+            private_slab_attempt_poisoned: false,
         })
     }
 
@@ -11071,6 +11381,23 @@ fn reconcile_persistent_native_memory<D>(
     blobs: &[MappedBlob],
     virtual_pages: &HashSet<u32>,
 ) -> Result<Vec<(u32, u32)>> {
+    reconcile_persistent_native_memory_with_private(
+        uc,
+        memory,
+        blobs,
+        virtual_pages,
+        &BTreeMap::new(),
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn reconcile_persistent_native_memory_with_private<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    memory: &MemoryMap,
+    blobs: &[MappedBlob],
+    virtual_pages: &HashSet<u32>,
+    private_pages: &BTreeMap<u32, NativePrivatePageRecord>,
+) -> Result<Vec<(u32, u32)>> {
     let mut desired = BTreeMap::<u32, u32>::new();
     for region in memory.regions() {
         let perms = unicorn_perms(region.perms).0 as u32;
@@ -11121,6 +11448,24 @@ fn reconcile_persistent_native_memory<D>(
             ))
         })?;
         desired.entry(*page).or_insert(perms);
+    }
+    for (page, recorded) in private_pages {
+        if desired.contains_key(page) || virtual_pages.contains(page) {
+            return Err(Error::Backend(format!(
+                "private slab page 0x{page:08x} collides with persisted native RAM"
+            )));
+        }
+        let actual_perms = actual.get(page).copied().ok_or_else(|| {
+            Error::Backend(format!(
+                "private slab page 0x{page:08x} is missing from its reused native owner"
+            ))
+        })?;
+        if actual_perms != recorded.perms {
+            return Err(Error::Backend(format!(
+                "private slab page 0x{page:08x} changed protection in its reused native owner"
+            )));
+        }
+        desired.insert(*page, recorded.perms);
     }
     let stale = actual
         .iter()
@@ -12766,10 +13111,21 @@ fn apply_dll_lifecycle_return_side_effects(
 }
 
 #[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativePrivatePageRecord {
+    identity: PrivatePageIdentity,
+    host_address: usize,
+    perms: u32,
+}
+
+#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone)]
 struct KernelMemoryMappings {
     ranges: Vec<(u32, u32)>,
     virtual_pages: HashSet<u32>,
+    // Observed pointer mappings only. The native lease separately retains
+    // strong page pins before FFI and across all metadata transfers.
+    private_pages: BTreeMap<u32, NativePrivatePageRecord>,
     heap_spill_cursor: u32,
     heap_generation: u64,
     virtual_generation: u64,
@@ -12803,11 +13159,162 @@ impl KernelMemoryMappings {
         Self {
             ranges,
             virtual_pages: HashSet::new(),
+            private_pages: BTreeMap::new(),
             heap_spill_cursor,
             heap_generation: u64::MAX,
             virtual_generation: u64::MAX,
         }
     }
+}
+
+#[cfg(feature = "unicorn")]
+type ActivePrivatePageGuards =
+    RefCell<BTreeMap<PrivatePageIdentity, StablePrivatePageExecutionGuard>>;
+
+#[cfg(feature = "unicorn")]
+fn native_page_perms<D>(uc: &unicorn_engine::Unicorn<'_, D>, page: u32) -> Result<Option<u32>> {
+    let begin = u64::from(page);
+    let end = begin + STABLE_PRIVATE_PAGE_SIZE as u64 - 1;
+    let mut found = None;
+    for region in uc
+        .mem_regions()
+        .map_err(|err| Error::Backend(format!("inspect native page 0x{page:08x}: {err:?}")))?
+    {
+        if region.begin > end || region.end < begin {
+            continue;
+        }
+        if region.begin > begin || region.end < end || found.is_some() {
+            return Err(Error::Backend(format!(
+                "native page 0x{page:08x} has a partial or duplicate mapping"
+            )));
+        }
+        found = Some(region.perms);
+    }
+    Ok(found)
+}
+
+#[cfg(feature = "unicorn")]
+fn map_private_slab_page<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    mapped: &mut KernelMemoryMappings,
+    owner: crate::ce::object::ProcessBirthKey,
+    pin: StablePrivatePagePin,
+    native_pins: &NativeMappingPins,
+    active_guards: Option<&ActivePrivatePageGuards>,
+) -> Result<()> {
+    let identity = pin.identity();
+    let page = identity.page_base();
+    if identity.owner() != owner
+        || page as usize % STABLE_PRIVATE_PAGE_SIZE != 0
+        || (pin.native_ptr() as usize) % STABLE_PRIVATE_PAGE_SIZE != 0
+        || !kernel.memory.contains_private_page_pin(&pin)
+    {
+        return Err(Error::Backend(format!(
+            "stale or unaligned private slab page 0x{page:08x} for process {}",
+            owner.process_id()
+        )));
+    }
+    let allocation = kernel
+        .memory
+        .virtual_allocation(owner, identity.allocation_base())
+        .ok_or_else(|| Error::Backend(format!("private slab allocation for 0x{page:08x} vanished")))?;
+    if allocation.backing != VirtualAllocationBacking::StablePrivateSlab
+        || allocation.incarnation != identity.allocation_incarnation()
+    {
+        return Err(Error::Backend(format!(
+            "private slab identity for 0x{page:08x} changed before native map"
+        )));
+    }
+    let perms = unicorn_perms(virtual_allocation_perms(allocation.protect));
+    let expected = NativePrivatePageRecord {
+        identity,
+        host_address: pin.native_ptr() as usize,
+        perms: perms.0 as u32,
+    };
+    let native_perms = native_page_perms(uc, page)?;
+    if let Some(existing) = mapped.private_pages.get(&page) {
+        if *existing != expected || native_perms != Some(expected.perms) {
+            return Err(Error::Backend(format!(
+                "private slab page 0x{page:08x} differs from its native owner ledger"
+            )));
+        }
+        return Ok(());
+    }
+    if native_perms.is_some() || is_guest_page_mapped(mapped, page) {
+        return Err(Error::Backend(format!(
+            "private slab page 0x{page:08x} collides with an unowned native mapping"
+        )));
+    }
+    // The lease owns a strong pin before entering the raw pointer-map FFI.
+    // If mapping fails, its abort/drop path quarantines that pin until the
+    // unchecked upstream uc_close cannot leave a dangling host pointer.
+    native_pins.pin(pin.clone());
+    if let Some(guards) = active_guards {
+        let mut guards = guards.borrow_mut();
+        if !guards.contains_key(&identity) {
+            let guard = pin.begin_native_execution().map_err(|err| {
+                Error::Backend(format!("fence private slab 0x{page:08x}: {err:?}"))
+            })?;
+            guards.insert(identity, guard);
+        }
+    }
+    // SAFETY: the page is exactly 4 KiB, fixed, writable and page-aligned;
+    // `native_pins` retains it for at least the lifetime of this native owner.
+    // Active execution is fenced by `active_guards` through emu_start.
+    unsafe {
+        uc.mem_map_ptr(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64, perms, pin.native_ptr())
+    }
+    .map_err(|err| Error::Backend(format!("map private slab page 0x{page:08x}: {err:?}")))?;
+    mapped.private_pages.insert(page, expected);
+    mapped.ranges.push((page, STABLE_PRIVATE_PAGE_SIZE as u32));
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn map_private_slab_pages<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    mapped: &mut KernelMemoryMappings,
+    owner: crate::ce::object::ProcessBirthKey,
+    native_pins: &NativeMappingPins,
+    active_guards: Option<&ActivePrivatePageGuards>,
+) -> Result<()> {
+    for pin in kernel.memory.private_page_pins_for(owner) {
+        map_private_slab_page(uc, kernel, mapped, owner, pin, native_pins, active_guards)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn reclaim_stale_private_slab_pages<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    mapped: &mut KernelMemoryMappings,
+    owner: crate::ce::object::ProcessBirthKey,
+) -> Result<()> {
+    for (page, recorded) in mapped.private_pages.clone() {
+        if recorded.identity.owner() != owner {
+            return Err(Error::Backend(format!(
+                "native private slab owner changed at 0x{page:08x}"
+            )));
+        }
+        let current = kernel.memory.private_page_pin(owner, page);
+        if current.as_ref().is_some_and(|pin| {
+            pin.identity() == recorded.identity
+                && pin.native_ptr() as usize == recorded.host_address
+                && kernel.memory.contains_private_page_pin(pin)
+        }) {
+            continue;
+        }
+        uc.mem_unmap(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64)
+            .map_err(|err| {
+                Error::Backend(format!("unmap stale private slab page 0x{page:08x}: {err:?}"))
+            })?;
+        mapped.private_pages.remove(&page);
+        remove_mapped_guest_page(mapped, page);
+    }
+    Ok(())
 }
 
 #[cfg(feature = "unicorn")]
@@ -12817,6 +13324,24 @@ fn map_kernel_memory_allocations<D>(
     mapped: &mut KernelMemoryMappings,
     mapped_blobs: &mut Vec<MappedBlob>,
 ) -> Result<()> {
+    map_kernel_memory_allocations_for_owner(uc, kernel, mapped, mapped_blobs, None, None, None)
+}
+
+#[cfg(feature = "unicorn")]
+fn map_kernel_memory_allocations_for_owner<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    mapped: &mut KernelMemoryMappings,
+    mapped_blobs: &mut Vec<MappedBlob>,
+    owner: Option<crate::ce::object::ProcessBirthKey>,
+    native_pins: Option<&NativeMappingPins>,
+    active_guards: Option<&ActivePrivatePageGuards>,
+) -> Result<()> {
+    if owner.is_none() && kernel.memory.has_stable_private_slabs() {
+        return Err(Error::Backend(
+            "private slab mapping requires a captured process birth".to_owned(),
+        ));
+    }
     if mapped.heap_generation != kernel.memory.heap_generation() {
         map_heap_spillover(uc, kernel, mapped, mapped_blobs)?;
         mapped.heap_generation = kernel.memory.heap_generation();
@@ -12824,7 +13349,17 @@ fn map_kernel_memory_allocations<D>(
 
     if mapped.virtual_generation != kernel.memory.virtual_generation() {
         reclaim_stale_virtual_memory_pages(uc, kernel, mapped)?;
-        for allocation in kernel.memory.virtual_allocations() {
+        if let Some(owner) = owner {
+            reclaim_stale_private_slab_pages(uc, kernel, mapped, owner)?;
+        }
+        let allocations: Vec<_> = match owner {
+            Some(owner) => kernel.memory.virtual_allocations_visible_to(owner).collect(),
+            None => kernel.memory.virtual_allocations().collect(),
+        };
+        for allocation in allocations {
+            if allocation.backing == VirtualAllocationBacking::StablePrivateSlab {
+                continue;
+            }
             let newly_mapped = map_guest_range(
                 uc,
                 mapped,
@@ -12844,6 +13379,12 @@ fn map_kernel_memory_allocations<D>(
                         ))
                     })?;
             }
+        }
+        if let Some(owner) = owner {
+            let native_pins = native_pins.ok_or_else(|| {
+                Error::Backend("private slab mapping has no native pin registry".to_owned())
+            })?;
+            map_private_slab_pages(uc, kernel, mapped, owner, native_pins, active_guards)?;
         }
         mapped.virtual_generation = kernel.memory.virtual_generation();
     }
@@ -12955,7 +13496,11 @@ fn remove_mapped_guest_page(mapped: &mut KernelMemoryMappings, page: u32) {
 #[cfg(feature = "unicorn")]
 fn live_virtual_memory_pages(kernel: &CeKernel) -> Result<HashSet<u32>> {
     let mut pages = HashSet::new();
-    for allocation in kernel.memory.virtual_allocations() {
+    for allocation in kernel
+        .memory
+        .virtual_allocations()
+        .filter(|allocation| allocation.backing == VirtualAllocationBacking::LegacySeed)
+    {
         insert_guest_range_pages(
             &mut pages,
             allocation.base,
@@ -12972,13 +13517,32 @@ fn repair_missing_virtual_page_for_fault<D>(
     kernel: &CeKernel,
     mapped: &mut KernelMemoryMappings,
     address: u32,
+    owner: crate::ce::object::ProcessBirthKey,
+    native_pins: &NativeMappingPins,
+    active_guards: &ActivePrivatePageGuards,
 ) -> Result<bool> {
-    let Some(allocation) = kernel.memory.virtual_allocations().find(|allocation| {
+    let Some(allocation) = kernel.memory.virtual_allocations_visible_to(owner).find(|allocation| {
         address >= allocation.base && address < allocation.base.saturating_add(allocation.size)
     }) else {
         return Ok(false);
     };
     let page_base = address & !0xfff;
+    if allocation.backing == VirtualAllocationBacking::StablePrivateSlab {
+        let Some(pin) = kernel.memory.private_page_pin(owner, page_base) else {
+            // Reserved but not committed: preserve the guest memory fault.
+            return Ok(false);
+        };
+        map_private_slab_page(
+            uc,
+            kernel,
+            mapped,
+            owner,
+            pin,
+            native_pins,
+            Some(active_guards),
+        )?;
+        return Ok(true);
+    }
     remove_mapped_guest_page(mapped, page_base);
     mapped.virtual_pages.remove(&page_base);
     let newly_mapped = map_guest_range(
@@ -54860,9 +55424,8 @@ mod unicorn_tests {
         let boot_owner = kernel.current_process_birth_key().expect("boot birth");
         let private_base = kernel
             .memory
-            .virtual_alloc(
+            .virtual_alloc_private_slab_for_test(
                 boot_owner,
-                crate::ce::memory::VirtualAllocationSource::Private,
                 0,
                 0x1000,
                 MEM_COMMIT | MEM_RESERVE,
@@ -54919,6 +55482,17 @@ mod unicorn_tests {
         assert!(
             cpu.last_debug_snapshot()
                 .is_some_and(|snapshot| snapshot.memory_fault.is_none())
+        );
+        let private_pin = kernel
+            .memory
+            .private_page_pin(boot_owner, private_base)
+            .expect("diagnostic private page remains committed");
+        let mut canonical = [0; 4];
+        private_pin.read_bytes(0, &mut canonical).expect("read canonical slab");
+        assert_eq!(
+            canonical,
+            (INITIAL + 1).to_le_bytes(),
+            "first guest store must reach canonical private bytes before owner closure"
         );
         if let Some(bytes) = cpu
             .native_engine
@@ -58263,7 +58837,8 @@ mod unicorn_tests {
             "one callback return must reach the real guest jalr continuation"
         );
 
-        // Another bounded native slice must not replay a consumed return stub.
+        // A later scheduling opportunity may park the child again; inspect its
+        // own state rather than treating an old per-attempt trace as new work.
         run_to(&mut cpu, &mut kernel, &mut framebuffer, None)?;
         let child_after = phase1_actor_cpu(&cpu, &kernel, launch.process_id);
         assert!(child_after.pending_wndproc_returns.is_empty());
@@ -58274,18 +58849,6 @@ mod unicorn_tests {
         assert_eq!(
             child_after.saved_context.as_ref().unwrap().regs.regs[17],
             0x1234
-        );
-        assert_eq!(
-            child_after
-                .last_debug_snapshot()
-                .unwrap()
-                .last_wndproc_returns
-                .iter()
-                .filter(|record| record.source == "DispatchMessageW"
-                    && record.msg == crate::ce::gwe::WM_ACTIVATE)
-                .count(),
-            0,
-            "a later slice must not report a second WNDPROC return"
         );
         Ok(())
     }
