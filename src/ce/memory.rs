@@ -31,13 +31,16 @@ pub struct MemorySystem {
     process_heap: u32,
     next_heap: u32,
     next_heap_ptr: u32,
+    // Owner high-water marks are authoritative metadata. The global floor is
+    // retained until native virtual pages are mapped by owner rather than VA.
     next_virtual_ptr: u32,
+    next_virtual_ptr_by_owner: BTreeMap<ProcessBirthKey, u32>,
     heap_generation: u64,
     virtual_generation: u64,
     next_virtual_incarnation: u64,
     heaps: BTreeMap<u32, Heap>,
     allocations: BTreeMap<u32, MemoryAllocation>,
-    virtual_allocations: BTreeMap<u32, VirtualAllocation>,
+    virtual_allocations: BTreeMap<(ProcessBirthKey, u32), VirtualAllocation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +172,7 @@ impl Default for MemorySystem {
             next_heap: PROCESS_HEAP_HANDLE + 0x1000,
             next_heap_ptr: HEAP_PTR_BASE,
             next_virtual_ptr: VIRTUAL_PTR_BASE,
+            next_virtual_ptr_by_owner: BTreeMap::new(),
             heap_generation: 0,
             virtual_generation: 0,
             next_virtual_incarnation: 1,
@@ -487,24 +491,36 @@ impl MemorySystem {
         }
         let incarnation = self.next_virtual_incarnation;
         let next_incarnation = incarnation.checked_add(1)?;
-        let (base, size) = if address == 0 {
+        let (base, size, next_cursor) = if address == 0 {
             let size = align_up(size, VIRTUAL_ALIGN)?;
-            let base = self.next_virtual_ptr;
-            self.next_virtual_ptr = self.next_virtual_ptr.checked_add(size)?;
-            (base, size)
+            let base = self
+                .next_virtual_ptr_by_owner
+                .get(&owner)
+                .copied()
+                .unwrap_or(VIRTUAL_PTR_BASE)
+                .max(self.next_virtual_ptr);
+            let next_cursor = base.checked_add(size)?;
+            (base, size, Some(next_cursor))
         } else {
             let base = align_down(address, VIRTUAL_ALIGN);
             let end = address.checked_add(size)?;
             let aligned_end = align_up(end, VIRTUAL_ALIGN)?;
             let size = aligned_end.checked_sub(base)?;
-            (base, size)
+            (base, size, None)
         };
+        // Native virtual-page ownership is still global/VA-only. Do not
+        // publish a second same-VA region merely because its metadata key is
+        // distinct: the native mapper would otherwise silently alias it.
         if self.virtual_overlaps(base, size) {
             return None;
         }
+        if let Some(next_cursor) = next_cursor {
+            self.next_virtual_ptr_by_owner.insert(owner, next_cursor);
+            self.next_virtual_ptr = next_cursor;
+        }
         self.next_virtual_incarnation = next_incarnation;
         self.virtual_allocations.insert(
-            base,
+            (owner, base),
             VirtualAllocation {
                 base,
                 size,
@@ -520,8 +536,13 @@ impl MemorySystem {
         Some(base)
     }
 
-    pub fn set_virtual_initial_bytes(&mut self, base: u32, bytes: Vec<u8>) -> bool {
-        let Some(allocation) = self.virtual_allocations.get_mut(&base) else {
+    pub fn set_virtual_initial_bytes(
+        &mut self,
+        owner: ProcessBirthKey,
+        base: u32,
+        bytes: Vec<u8>,
+    ) -> bool {
+        let Some(allocation) = self.virtual_allocations.get_mut(&(owner, base)) else {
             return false;
         };
         allocation.initial_bytes = bytes;
@@ -529,10 +550,21 @@ impl MemorySystem {
         true
     }
 
-    pub fn virtual_free(&mut self, address: u32, size: u32, free_type: u32) -> bool {
+    pub fn virtual_free(
+        &mut self,
+        owner: ProcessBirthKey,
+        address: u32,
+        size: u32,
+        free_type: u32,
+    ) -> bool {
         match free_type {
             MEM_RELEASE => {
-                if size != 0 || self.virtual_allocations.remove(&address).is_none() {
+                if size != 0
+                    || self
+                        .virtual_allocations
+                        .remove(&(owner, address))
+                        .is_none()
+                {
                     return false;
                 }
                 self.bump_virtual_generation();
@@ -540,7 +572,7 @@ impl MemorySystem {
             }
             MEM_DECOMMIT => self
                 .virtual_allocations
-                .get(&address)
+                .get(&(owner, address))
                 .is_some_and(|allocation| size <= allocation.size),
             _ => false,
         }
@@ -558,12 +590,34 @@ impl MemorySystem {
         self.heaps.values().filter(|heap| !heap.destroyed)
     }
 
-    pub fn virtual_allocation(&self, base: u32) -> Option<&VirtualAllocation> {
-        self.virtual_allocations.get(&base)
+    pub fn virtual_allocation(
+        &self,
+        owner: ProcessBirthKey,
+        base: u32,
+    ) -> Option<&VirtualAllocation> {
+        self.virtual_allocations.get(&(owner, base))
+    }
+
+    /// VA-only lookup for legacy native mapping/view synchronization. The
+    /// global overlap fence above guarantees this is unambiguous for now.
+    /// Remove this path when native mappings become owner-qualified.
+    pub fn virtual_allocation_by_base_legacy(&self, base: u32) -> Option<&VirtualAllocation> {
+        self.virtual_allocations
+            .values()
+            .find(|allocation| allocation.base == base)
     }
 
     pub fn virtual_allocations(&self) -> impl Iterator<Item = &VirtualAllocation> {
         self.virtual_allocations.values()
+    }
+
+    pub fn virtual_allocations_for(
+        &self,
+        owner: ProcessBirthKey,
+    ) -> impl Iterator<Item = &VirtualAllocation> {
+        self.virtual_allocations
+            .range((owner, 0)..=(owner, u32::MAX))
+            .map(|(_, allocation)| allocation)
     }
 
     pub fn heap_high_water_mark(&self) -> u32 {
@@ -578,7 +632,7 @@ impl MemorySystem {
         self.virtual_generation
     }
 
-    pub fn contains_allocated_range(&self, ptr: u32, size: u32) -> bool {
+    pub fn contains_allocated_range(&self, owner: ProcessBirthKey, ptr: u32, size: u32) -> bool {
         if size == 0 {
             return true;
         }
@@ -590,11 +644,29 @@ impl MemorySystem {
                 return false;
             };
             ptr >= allocation.ptr && end <= allocation_end
-        }) || self.virtual_allocations.values().any(|allocation| {
+        }) || self.virtual_allocations_for(owner).any(|allocation| {
             let Some(allocation_end) = allocation.base.checked_add(allocation.size) else {
                 return false;
             };
             ptr >= allocation.base && end <= allocation_end
+        })
+    }
+
+    pub fn intersects_foreign_virtual_allocation(
+        &self,
+        owner: ProcessBirthKey,
+        ptr: u32,
+        size: u32,
+    ) -> bool {
+        let Some(end) = ptr.checked_add(size) else {
+            return true;
+        };
+        self.virtual_allocations.values().any(|allocation| {
+            allocation.owner != owner
+                && allocation
+                    .base
+                    .checked_add(allocation.size)
+                    .is_some_and(|other_end| ptr < other_end && end > allocation.base)
         })
     }
 
