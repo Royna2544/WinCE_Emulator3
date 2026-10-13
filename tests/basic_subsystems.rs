@@ -3868,9 +3868,13 @@ fn audio_volume_pitch_rate_position_and_complete_buffer_ops() {
 fn memory_system_allocation_accessors_and_generation_counters() {
     use wince_emulation_v3::ce::memory::{
         MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, MemorySystem, PROCESS_HEAP_HANDLE,
+        VirtualAllocationSource,
     };
 
     let mut mem = MemorySystem::default();
+    let owner = CeKernel::boot(RuntimeConfig::load_default().unwrap())
+        .current_process_birth_key()
+        .expect("boot birth");
 
     // heap_high_water_mark starts at the base (0x3000_0000).
     let hwm0 = mem.heap_high_water_mark();
@@ -3898,7 +3902,14 @@ fn memory_system_allocation_accessors_and_generation_counters() {
 
     // Virtual allocation round-trip.
     let vbase = mem
-        .virtual_alloc(0, 0x1_0000, MEM_COMMIT | MEM_RESERVE, 4)
+        .virtual_alloc(
+            owner,
+            VirtualAllocationSource::Private,
+            0,
+            0x1_0000,
+            MEM_COMMIT | MEM_RESERVE,
+            4,
+        )
         .unwrap();
     assert!(mem.virtual_generation() > vgen0);
 
