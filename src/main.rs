@@ -39,7 +39,10 @@ use wince_emulation_v3::{
         DEFAULT_DEVICES_PATH, DEFAULT_MOUNT_CONFIG_PATH, DEFAULT_REGISTRY_PATH, RuntimeConfig,
     },
     emulator::{
-        cpu::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
+        cpu::{
+            AttemptExecution, UnicornDebugSnapshot, UnicornMips, UnicornRunLimits,
+            UnicornWindowSnapshot,
+        },
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         memory::MemoryPerms,
     },
@@ -329,7 +332,7 @@ fn main() -> Result<()> {
 
     let _companions = launch_delayed_companion_processes(&args)?;
     if args.run_cpu {
-        run_cpu_loop(&mut cpu, &mut kernel, &mut desktop, &args)?;
+        run_cpu_loop(&mut cpu, &mut kernel, &mut desktop, &args, None)?;
         write_requested_tracefiles(&cpu, &args.tracefiles)?;
     }
     if args.monitor {
@@ -348,6 +351,7 @@ fn run_cpu_loop(
     kernel: &mut CeKernel,
     desktop: &mut DesktopRuntime,
     args: &Args,
+    mut attempt_observer: Option<&mut dyn FnMut(&AttemptExecution)>,
 ) -> Result<()> {
     enqueue_startup_taps(kernel, &args.startup_taps)?;
     let mut reported_blocked_message_wait = false;
@@ -791,7 +795,7 @@ fn run_cpu_loop(
             live_pump_slice,
             std::env::var_os("WINCE_EMU_FAST_START").is_some(),
         );
-        if let Err(err) = desktop.run_cpu_until(
+        let execution = desktop.run_cpu_until_report(
             cpu,
             kernel,
             UnicornRunLimits {
@@ -800,7 +804,11 @@ fn run_cpu_loop(
                 stop_pc: args.cpu_stop_pc,
                 live_pump: live_pump_slice,
             },
-        ) {
+        );
+        if let Some(observer) = attempt_observer.as_mut() {
+            observer(&execution);
+        }
+        if let Err(err) = execution.result {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {}", snapshot.summary());
             }
@@ -2385,6 +2393,7 @@ fn monitor_run_once(
     desktop: &mut DesktopRuntime,
     limits: UnicornRunLimits,
     framebuffer_dump: Option<&Path>,
+    mut attempt_observer: Option<&mut dyn FnMut(&AttemptExecution)>,
 ) -> Result<()> {
     let input_before = enqueue_desktop_input(desktop, kernel)?;
     if input_before != 0 {
@@ -2400,7 +2409,11 @@ fn monitor_run_once(
             ),
             ..limits
         };
-        if let Err(err) = desktop.run_cpu_until(cpu, kernel, current_limits) {
+        let execution = desktop.run_cpu_until_report(cpu, kernel, current_limits);
+        if let Some(observer) = attempt_observer.as_mut() {
+            observer(&execution);
+        }
+        if let Err(err) = execution.result {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {}", snapshot.summary());
             }
@@ -2562,7 +2575,7 @@ fn monitor_run_and_report(
     limits: UnicornRunLimits,
     framebuffer_dump: Option<&Path>,
 ) {
-    if let Err(err) = monitor_run_once(cpu, kernel, desktop, limits, framebuffer_dump) {
+    if let Err(err) = monitor_run_once(cpu, kernel, desktop, limits, framebuffer_dump, None) {
         if cpu.last_debug_snapshot().is_some() {
             eprintln!("  stopped; use regs or trace for detail");
         } else {
@@ -3249,15 +3262,6 @@ impl DesktopRuntime {
             }
         }
         Ok(())
-    }
-
-    fn run_cpu_until(
-        &mut self,
-        cpu: &mut UnicornMips,
-        kernel: &mut CeKernel,
-        limits: UnicornRunLimits,
-    ) -> Result<()> {
-        self.run_cpu_until_report(cpu, kernel, limits).result
     }
 
     /// Preserve the native attempt's detached evidence across desktop
@@ -4349,6 +4353,120 @@ mod tests {
         assert!(wall_clock_limit_expired(500, Duration::from_millis(500)));
         assert!(wall_clock_limit_expired(500, Duration::from_secs(10)));
         assert!(!wall_clock_limit_expired(0, Duration::from_secs(10)));
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    #[test]
+    fn monitor_no_feature_error_publishes_outgoing_no_attempt_report() {
+        use wince_emulation_v3::emulator::cpu::{
+            AttemptExecution, AttemptObservation, NativeSliceOutcome,
+        };
+
+        let mut kernel = CeKernel::boot(
+            RuntimeConfig::load_default().expect("runtime config loads for monitor attempt test"),
+        );
+        let mut cpu = UnicornMips::new().expect("stub CPU initializes for monitor attempt test");
+        let mut desktop = DesktopRuntime::Virtual(
+            VirtualDesktop::default_primary().expect("virtual desktop initializes"),
+        );
+        let mut observed = Vec::new();
+        let result = {
+            let mut observe = |execution: &AttemptExecution| {
+                observed.push((execution.report.clone(), execution.result.is_err()));
+            };
+            monitor_run_once(
+                &mut cpu,
+                &mut kernel,
+                &mut desktop,
+                UnicornRunLimits {
+                    wall_clock_limit_ms: 100,
+                    ..Default::default()
+                },
+                None,
+                Some(&mut observe),
+            )
+        };
+
+        let error = result.expect_err("the no-feature CPU must reject execution");
+        assert!(
+            error.to_string().contains("without the `unicorn` feature"),
+            "monitor should reach the CPU, not fail during setup: {error}"
+        );
+        assert_eq!(
+            observed.len(),
+            1,
+            "monitor must publish the outgoing report before returning the CPU error"
+        );
+        let (report, result_was_error) = &observed[0];
+        assert!(*result_was_error);
+        assert_eq!(report.final_outcome(), NativeSliceOutcome::NoAttempt);
+        assert_eq!(report.failure_operation(), Some("unsupported_cpu_backend"));
+        assert_eq!(report.attempt_id(), None);
+        assert_eq!(report.native_result(), &AttemptObservation::Uncollected);
+        assert_eq!(report.count_stop_query(), &AttemptObservation::Uncollected);
+        assert_eq!(report.timeout_query(), &AttemptObservation::Uncollected);
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    #[test]
+    fn live_no_feature_error_publishes_outgoing_no_attempt_report() {
+        use wince_emulation_v3::emulator::cpu::{AttemptExecution, NativeSliceOutcome};
+
+        let args = Args {
+            registry: PathBuf::from(DEFAULT_REGISTRY_PATH),
+            devices: PathBuf::from(DEFAULT_DEVICES_PATH),
+            image: None,
+            companion_images: Vec::new(),
+            dll_search_dirs: Vec::new(),
+            mount_config: None,
+            framebuffer_dump: None,
+            tracefiles: Vec::new(),
+            desktop: DesktopMode::Virtual,
+            cpu_instruction_limit: 0,
+            cpu_wall_clock_limit_ms: 1_000,
+            cpu_stop_pc: None,
+            startup_taps: Vec::new(),
+            remote_server: None,
+            run_cpu: true,
+            monitor: false,
+            verbose: false,
+        };
+        let mut kernel = CeKernel::boot(
+            RuntimeConfig::load_default().expect("runtime config loads for live attempt test"),
+        );
+        let mut cpu = UnicornMips::new().expect("stub CPU initializes for live attempt test");
+        let mut desktop = DesktopRuntime::Virtual(
+            VirtualDesktop::default_primary().expect("virtual desktop initializes"),
+        );
+        let mut observed = Vec::new();
+        let result = {
+            let mut observe = |execution: &AttemptExecution| {
+                observed.push((execution.report.clone(), execution.result.is_err()));
+            };
+            run_cpu_loop(
+                &mut cpu,
+                &mut kernel,
+                &mut desktop,
+                &args,
+                Some(&mut observe),
+            )
+        };
+
+        let error = result.expect_err("the no-feature CPU must reject execution");
+        assert!(
+            error.to_string().contains("without the `unicorn` feature"),
+            "live loop should reach the CPU, not fail during setup: {error}"
+        );
+        assert_eq!(
+            observed.len(),
+            1,
+            "live loop must publish before error return"
+        );
+        let (report, result_was_error) = &observed[0];
+        assert!(*result_was_error);
+        assert_eq!(report.final_outcome(), NativeSliceOutcome::NoAttempt);
+        assert_eq!(report.failure_operation(), Some("unsupported_cpu_backend"));
+        assert_eq!(report.attempt_id(), None);
     }
 
     #[test]
