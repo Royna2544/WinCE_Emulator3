@@ -152,6 +152,21 @@ impl<K, P> ProcessNativeEngine<K, P> {
             .map(|engine| engine.get_handle() as usize)
     }
 
+    /// Observe a completed owner's RAM without creating a diagnostic lease.
+    /// Fresh-by-default engines have already closed and return None.
+    #[cfg(test)]
+    pub(crate) fn idle_owner_bytes_for_test(
+        &self,
+        address: u64,
+        size: usize,
+    ) -> Option<Result<Vec<u8>, uc_error>> {
+        let slot = self.slot.borrow();
+        assert!(!slot.leased, "cannot inspect a live native lease");
+        slot.engine
+            .as_ref()
+            .map(|owner| owner.mem_read_as_vec(address, size))
+    }
+
     /// Isolate fresh-owner tests without changing the production lifetime.
     /// A completed lease may retain a portable CPU snapshot, but the next
     /// lease must derive its blank context and mapping ledger from a new owner.

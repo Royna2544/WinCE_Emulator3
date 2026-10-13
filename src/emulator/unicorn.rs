@@ -54654,6 +54654,16 @@ mod unicorn_tests {
             cpu.last_debug_snapshot()
                 .is_some_and(|snapshot| snapshot.memory_fault.is_none())
         );
+        if let Some(bytes) = cpu
+            .native_engine
+            .idle_owner_bytes_for_test(u64::from(private_base), 4)
+        {
+            assert_eq!(
+                bytes.expect("read completed native store before owner closure"),
+                (INITIAL + 1).to_le_bytes(),
+                "the first guest store reached native private RAM"
+            );
+        }
 
         // The current production policy retains an idle owner. Force only
         // this completed fixture's next lease to be genuinely fresh. Once
