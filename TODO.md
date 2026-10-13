@@ -75,8 +75,8 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      both applicable no-trace release checks and the no-feature suite (E-16).
      After remaining source fixes, repeat the applicable profiles, then one
      bounded 330 s live run against BED2.
-     Record any newly exposed native errors in KNOWN_BUGS; neither the latest
-     1,631-pass O-M1 dirty-source suite nor the decorative splash closes
+     Record any newly exposed native errors in KNOWN_BUGS; neither the frozen
+     1,631-pass O-M1 source suite nor the decorative splash closes
      Stage 2.
 - Parallel Stage 8 native lane (diagnostic only, never gates Stages 2-6):
   the evidence is in ledger E-3 to E-6. Before any production budget change,
