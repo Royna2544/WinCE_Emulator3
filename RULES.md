@@ -39,9 +39,12 @@ Mounted iNavi launch preference:
 - Include `--remote-server 192.168.0.39:8765` on emulator process launches
   unless the user explicitly overrides the remote endpoint.
 
-LLVM Tools for target=MIPS: `D:\GitHub\llvm-proj\build-mips-objdump\bin`
+LLVM Tools for target=MIPS: `D:\GitHub\llvm-proj\build\bin`
 
 eVC4 toolchain for testsuite: `C:\Program Files (x86)\Microsoft eMbedded C++ 4.0\EVC\wce420\bin`
+
+The SDK headers/libs are present, but that compiler directory is currently
+missing (verified 2026-10-12); eVC4 guest fixture validation remains unavailable.
 
 ImageMagick for framebuffer/image conversion: `C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe`
 

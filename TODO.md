@@ -1,84 +1,162 @@
 # TODO
 
-Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
+Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
+- Begin the user-authorized scheduler-core rewrite within the staged
+  plan-first/common-anchor gates. Read reviewed
+  `docs/ARCHITECTURE.md`, `docs/PLAN.md` and the relevant subsystem page;
+  name ownership/consumers/failure/test gates before code. Phase 1 was
+  authorized, but the first persistent-owner 650 trial host-crashed at
+  129.108 s and 1.62 GiB RSS despite 1,618 passing tests. BED2 is restored;
+  dirty source is experimental.
+  Per D-003, finish the Stage 2 fresh-engine stop taxonomy/default-owner and
+  same-VA/shared-view coherence gates; then migrate one connected
+  Task/object authority slice. Do not use the persistent-owner success path as
+  a substitute for that gate.
+- **Stage 2, now, in this repo** (source map:
+  `docs/subsystems/cpu-engine.md`, "Stage 2 source map"):
+  0. D-007's in-repo Unicorn dependency patch is present. The post-order
+     serial full release suite in the sole D: target passed 1,623 tests, with
+     0 failures and 3 ignored before the E-12 repaired-PC change; this is a
+     historical dirty persistent-owner checkpoint, not fresh-engine
+     acceptance. Top-level run
+     evidence and release EXE/PDB originals were hash-preserved and removed
+     after approval. Classify remaining nested target artifacts before treating
+     the whole build directory as disposable; retire old mirrors separately.
+  1. Continue fresh-engine lifetime policy work only in this repo. The E-7
+     count-stop and native-error controls passed both focused and post-order
+     full release validation, with exact receipts. The separately run ignored
+     closed-owner control remains expected red at the final owner-closure
+     assertion. Resolve O-P4 closed-owner Context transfer and O-M1
+     private/shared guest-byte coherence here.
+  2. The current typed `NativeSliceOutcome` uses actual `Query::TIMEOUT` and
+     routes native errors to failure except validated guest exits, but
+     `ServiceBoundary` still combines possible count stops, hook yields and
+     unknown normal stops. Complete the O-P1 reason split with a genuine
+     native count-stop witness and hook/unknown controls; `Ok` with a positive
+     count but no recorded hook reason is not proof of count exhaustion. Keep
+     the 1M-instruction scheduling policy unchanged.
+  2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
+     fresh-owner control: expected red before the change, then focused green
+     with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR
+     success/failure controls (ledger E-13). Keep the native snapshot for
+     exact raw continuations; writing a synthesized PC into it can retain
+     stale branch `hflags`. Closed-owner exact-key Context transfer, guest
+     `VirtualAlloc` coherence and the broader Stage 2 gates remain open.
+  3. Run the remaining feature profiles, repeat the full release suite after
+     further source edits, then one bounded 330 s live run against BED2.
+     Record any newly exposed native errors in KNOWN_BUGS; the pre-E-12
+     1,623-pass persistent-owner suite and decorative splash do not close
+     Stage 2.
+- Parallel Stage 8 native lane (diagnostic only, never gates Stages 2-6):
+  the evidence is in ledger E-3 to E-6. Before any production budget change,
+  the remaining open items are concurrent in-flight VEH teardown, VEH
+  reentrancy, normal translated-page boundaries, full-backend
+  context/FlatView and the real-app budget. Do not spend Stage 2 time here.
+- Then follow dependency order: CPU stop/VM coherence on fresh engines,
+  canonical task/object identity
+  with alias/execution/wait pins, full continuation ownership, explicit outcomes
+  with CE6 priorities/quantum, and one guest clock/live event fence. Full Task
+  state, virtual time and splash-to-map bring-up remain open. Thirteen
+  Task/alias controls have run in private copies: one close-source positive
+  control and twelve expected reds, including final-public-handle loss,
+  alias-indexed wake and registered-wait target loss (ledger E-8/E-11). Keep
+  the fixtures as the Task migration baseline; add genuine native
+  last-public-handle execution, wait acquisition and continuation controls
+  before claiming lifecycle acceptance. Native wait/exit FPU controls remain staged;
+  the actual-backend count-stop and nonzero-unmapped-error controls were the
+  expected-red E-7 mirror baseline; their preliminary D-source passes do not
+  close the broader Stage 2 gate.
+
+- Carry forward the validated entry-only and safe-yield guards (EE18/89F9),
+  1,593 tests and the clean330.234s BED2 actual workload, still on splash.
+  Native preguard fixtures reproduce
+  PC0 with a valid IAT and duplicate-delay replay; do not claim live crash
+  attribution or universal native context safety from those synthetic tests.
+- Finish per-primary-native-attempt outcome/actual expiry/fault telemetry under
+  existing profile logging; summary and terminal retained snapshots cannot
+  establish whole-run native behavior. The typed D-source outcome has
+  preliminary focused coverage, but final stop taxonomy, full-backend
+  ownership/rotation and live controls remain open. Four native counted replay
+  tests over64 boundaries already pass.
+- Diagnose/fix the actual normal-run PC0 at260s before claiming the new build
+  stable. Preserve hard-failure handling; trace signaled pool wait4029/TID10
+  return0xe6de4 versus native JALR target and authentic context. Do not infer
+  corruption from profile startPC/endTID mismatch or force a guessed resume.
+- Follow the second startup initializer at 0x31970/return 0x2be44 with the
+  validated exact-stop debugger after authentic callback restoration. Retain
+  invocation/thread/stack identity; distinguish setup failure from lost return.
+  Global-hook diagnostic timing is not normal boot timing.
+- Revalidate the native GetMessage/sent/SetWindowPos boundary after the observed
+  late pool-worker CPU failure is diagnosed. FIFO/wait/context, sent identity
+  and 28-byte MSG output protection pass regressions; actual GPS/tap worked
+  before the failure, but neither tests nor HTTP ACK establish map/stability.
+- Bind the live MDC object and stack chain through method 0x12e15c, engine
+  return 0x12e180 and pool return 0xe6da4. Binary evidence permits persistent
+  repeats; do not equate one finite cache lookup with whole-job completion.
+- Before heap reuse, establish authoritative allocation owner, original reserved
+  footprint and unique incarnation (avoid prepared-token ABA) with CE evidence
+  and measured need. The checked initial byte boundary now passes 1,571 tests;
+  it does not justify global same-handle reuse or page reclamation.
+- Profile actual boot/frame/input latency and host RSS/private memory from
+  before launch, then through splash-to-map bring-up. First-splash timing is
+  not full application readiness; keep captures phase-aligned and bounded.
+- Bounded read-only windows pass 1,527 tests and lower the 330 s sampled peak
+  RSS from 1,299.8 to 562.3 MiB. Measure remaining guest pages/native engine,
+  trace capacity and any writable buffers before changing another policy;
+  ordinary process rotation moves owners rather than cloning full kernels.
+  The new reallocation-prerequisite repeat peaks at RSS 566.0 MiB; it is not
+  a late-footprint improvement over the bounded-file baseline.
+- Investigate the shared monotonic heap high-water mark mirrored into each
+  process's spillover backing. Record actual byte ownership/capacity and read
+  CE HeapAlloc/HeapFree evidence before introducing reuse or page reclamation.
+  Never unmap a guessed free range or collapse independent process contexts.
+- Reduce tap-delivery lag using actual queue/slice
+  evidence. DOWN-before-UP and sustained positive GPS payload reads are now
+  proven on BED2; its single tap takes0.397s (prior0.835/1.3-1.6s), not a controlled
+  gain or proof of map readiness/responsive navigation.
 - Continue the live launch loop past `resmapi_800x480.bin` map-skin decode
   with real visible-message delivery (post `2fcc365f`/`dbaf4791`/`265e751a`):
   confirm the map screen presents, then re-validate `COM7:`/`MFS1:`/`SMB1:`
   opens, GPS drain, and touch-driven map navigation on this baseline.
-- Scope the per-instruction code hook (the boot-speed lever, ~25 min skin
-  decode today). Settled design:
-  1. Move wall-clock stop checks, framebuffer tick, and remote drain into
-     the scheduler timeslice BLOCK hook (it already captures
-     `host_wall_clock_stop_timeslice_hook`, limits, and kernel); gate by the
-     existing block counter. Block-boundary stops are delay-slot safe by TB
-     construction — only defer when the block-start pc lies inside a
-     trampoline range or the import-trap page.
-  2. Install the code hook per-range instead of globally: trampoline ranges
-     + import-trap page + 4 KB pages containing jr/jalr/sentinel sites
-     (reuse `fast_start_indirect_transfer_sites`/`fast_start_hook_ranges`).
-     Cache the per-blob site scan on `UnicornMips` keyed by blob name+len —
-     scanning 43 MB every slice would cost tens of ms.
-  3. Runtime DLL loads mid-slice: instead of adding hooks from inside the
-     import hook, set the host wall-clock stop pending flag after a
-     successful `runtime_load_guest_dll_from_path`; the slice ends at a safe
-     pc and the next slice's fresh engine scans and hooks the new module's
-     pages. This is the fix for the historical `WINCE_EMU_FAST_START`
-     mfcce400 stall (its site enumeration never covered runtime loads).
-  4. Gate the scoped mode behind `WINCE_EMU_SCOPED_HOOKS=1` for A/B until a
-     2-minute single-shot boot proves the decode runs several times faster
-     and the live loop stays correct, then flip the default and remove the
-     gate.
-  IMPLEMENTED (2026-07-05, `69fa4633`): patched origins now carry a direct
-  architectural `j stub; nop` whenever the stub shares the origin's 256 MB
-  region (per-region stub windows make this true for boot DLLs too), and
-  `WINCE_EMU_SCOPED_HOOKS=1` activates a hookless mode (verified via the
-  "hookless trampoline mode" debug line): no per-instruction/per-page code
-  hooks, import-trap page keeps the single remaining code hook, block hook
-  carries wall-clock stops, framebuffer ticks, and host-input drains.
-  A/B INTERIM: hookless boots correctly, but the skin-decode wall time at
-  the 14-minute checkpoint matches the global-hook baseline — the
-  per-instruction hook is NOT the decode bottleneck (consistent with June's
-  30-second boots having run WITH the global hook). Next diagnostic:
-  measure instructions-per-slice hookless vs global to compare execution
-  efficiency directly, and host-profile a decode-phase slice (flamegraph)
-  to find where the ~1 s of run time actually goes.
-  A/B RESULT (2026-07-04): page-granular scoping is a NEGATIVE — the live
-  scoped run was 2-3x slower to the window cascade than the fair baseline.
-  Root cause is structural: hot compute loops share their 4 KB page with
-  their own `jr $ra` epilogue, so the page stays hooked and the loop still
-  executes as 1-instruction blocks, while thousands of per-page
-  `add_code_hook` registrations add per-slice setup cost. The
-  runtime-load slice-restart fix is still valid (the old
-  `WINCE_EMU_FAST_START` mfcce400 stall no longer reproduces; a gated
-  2-minute single-shot completed normally). Next design ideas for the real
-  win: per-site hook boundaries (one hook per jr/jalr word, needs unicorn
-  registration-count/overhead measurement), or patching jr sites into
-  trap-page thunks so no code hook is needed at all outside trampolines.
+- Guest throughput (Phase 0 landed/pending, see PROGRESS.md 2026-10-12): the
+  amortized block hook and hookless trampoline mode (default;
+  `WINCE_EMU_GLOBAL_CODE_HOOK=1` restores the global code hook) took iNavi
+  from ~1 MIPS to 22-34 MIPS in busy slices. The previous "scope the code hook
+  by pages/regions" plan is closed: page-granular scoping was a negative A/B
+  and hookless mode superseded it. Remaining throughput levers, in order:
+  1. Replace the 1M-instruction `emu_start` count (Unicorn per-instruction
+     counting hook, and the de facto round-robin tick) with a real time-based
+     scheduler quantum, then set `LIVE_PUMP_RUN_SLICE_INSTRUCTIONS` to 0
+     (busy slices reach 30-106 MIPS). CreateProcess replay and block sampling
+     are fixed; validate remaining helper starvation and asynchronous native
+     timeout branch-state preservation before changing the default.
+  2. Persistent per-process engines (per-slice fixed cost is 15-25% at current
+     slice lengths, plus a cold translation cache every slice).
+  3. Virtual time with idle fast-forward: guest waits of 5-30 s (and 1 s
+     import-trap idle slices) now dominate wall time.
+  Always report guest MIPS and instructions per slice (`ce.slice_profile`),
+  not time to a milestone.
 - Investigate the 2026-07-04 silent desktop-run exit at 13:22:22Z (log ended
   mid-operation, no WER record; stderr was not captured for that run — the
-  relaunched run captures both streams).
-- Identify the completion condition iNavi's command-flag loop
-  (`iNavi.exe+0x2f7298..0x2f8338`, slot flags 0x4000/0x2000/0x100/0x80)
-  waits on before switching splash to map: sample the flag word writers,
-  correlate with `happyway_win`'s ~1 s retry cycle (self-posted msg 0x405,
-  import called with 0x3e8 — likely Sleep/timer), and check whether the
-  retry is waiting on a device/file/socket the emulator leaves unavailable.
+  relaunched run captures both streams). The prior October
+  `prog_new_default_b.log` also ended silently at 110.47 s; future launch
+  wrappers must capture the process exit code as well as both streams.
+- Continue tracing the real startup frontier after normal sensor samples and
+  GPS reads. The prior callback crash, pre-run livelock, worker-identity loss,
+  and sensor -15 causes are corrected and regression-tested. No forced app
+  readiness, invented command-flag handshake, or painted map is allowed.
 - Watch the SD image for re-created zero-byte probe artifacts during longer
   live runs (route/traffic phases); if any reappear, find and fix the
   emulator path that materializes files on read-only existence probes.
-- Continue live driving after the quantum-rotation handoff fix and confirm
-  whether `COM7:`, `MFS1:`, and `SMB1:` open again before the final map
-  presentation gate; queued GPS still cannot drain until the guest opens
-  `COM7:`.
+- COM7/MFS1/SMB1 opens and positive GPS ReadFile are now proven on the latest
+  build; parsed-position handling and the final map presentation remain open.
 - The hot guest PCs around `0x00339c00-0x00339da8` are confirmed pixel-format
-  conversion work (RGB565/555 + alpha planes), not a readiness wait. If boot
-  needs to go faster, the next perf lever is region-scoped code hooks
-  (trampoline ranges + import-trap region only) so QEMU can build multi-
-  instruction translation blocks for such loops; keep trampoline dispatch
-  load-bearing per the fast-start lesson.
+  conversion work (RGB565/555 + alpha planes), not a readiness wait; they run
+  at hookless speed now, so re-measure the skin decode before assuming it is
+  still the boot bottleneck.
 - Extend `SendMessageTimeout` and message-wait coverage for broader reentrant
   waits, nested sends, timeout cleanup, `ReplyMessage`, abort-if-hung behavior,
   and live modal-loop interaction.
@@ -118,6 +196,14 @@ Refreshed on 2026-07-04. This file is limited to active, plan-aligned work.
 
 ## Cleanup Queue
 
+- Keep the five-file small-intermediate recovery archive/receipt. Larger cache
+  cleanup requires fresh ownership/idle checks; D debug/build showed other
+  editor/compiler activity. The five inventoried legacy paths were retired
+  after separate approval, with selected source, patch and EXE/PDB evidence
+  preserved and verified again under D: `evidence/` (post-order retirement
+  receipt). Do not infer that other mirrors, hardlinked installed outputs,
+  unique binaries/symbols/run evidence, synced references or SD files are
+  disposable from that scoped approval.
 - Keep `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md` short and current.
 - Do not reintroduce historical ledgers into roadmap files.
 - Keep `SOURCE_REFERENCES.md` as a compact index of active source evidence, not
