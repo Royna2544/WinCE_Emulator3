@@ -5139,6 +5139,21 @@ impl Gwe {
         self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg)
     }
 
+    pub(crate) fn peek_sent_message_filtered(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<(u64, Message)> {
+        self.sent_queues.get(&thread_id)?.iter().find_map(|id| {
+            self.sent_messages
+                .get(id)
+                .filter(|sent| message_matches(&sent.message, hwnd, min_msg, max_msg))
+                .map(|sent| (*id, sent.message.clone()))
+        })
+    }
+
     pub fn peek_message_filtered(
         &mut self,
         thread_id: u32,

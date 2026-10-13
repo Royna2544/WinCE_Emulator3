@@ -26,6 +26,47 @@ pub struct UnicornRunLimits {
     pub live_pump: bool,
 }
 
+/// Result of the most recent native CPU attempt for this process. A service
+/// boundary permits scheduler maintenance; it does not prove that an
+/// instruction-count limit or a CE task quantum expired.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeSliceOutcome {
+    #[default]
+    NoAttempt,
+    ServiceBoundary,
+    NativeDeadline,
+    RequestedPcStop,
+    GuestProcessExit,
+    NativeError,
+    BackendError,
+}
+
+impl NativeSliceOutcome {
+    pub fn is_service_boundary(self) -> bool {
+        matches!(self, Self::ServiceBoundary | Self::NativeDeadline)
+    }
+}
+
+#[cfg(test)]
+mod native_slice_outcome_tests {
+    use super::NativeSliceOutcome;
+
+    #[test]
+    fn only_successful_service_outcomes_allow_scheduler_handoff() {
+        assert!(NativeSliceOutcome::ServiceBoundary.is_service_boundary());
+        assert!(NativeSliceOutcome::NativeDeadline.is_service_boundary());
+        for stop in [
+            NativeSliceOutcome::NoAttempt,
+            NativeSliceOutcome::RequestedPcStop,
+            NativeSliceOutcome::GuestProcessExit,
+            NativeSliceOutcome::NativeError,
+            NativeSliceOutcome::BackendError,
+        ] {
+            assert!(!stop.is_service_boundary(), "{stop:?}");
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnicornDebugSnapshot {
     pub pc: u32,
@@ -450,7 +491,7 @@ pub struct UnicornCrossProcessSendYield {
     pub msg: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnicornInterruptProbe {
     pub pc: u32,
     pub ra: u32,
@@ -474,6 +515,92 @@ pub struct UnicornInterruptProbe {
     pub intno: u32,
     pub last_code_pc: Option<u32>,
     pub last_code_instruction: Option<u32>,
+    /// Checked exception-time native reads; unlike legacy scalar fields,
+    /// an unreadable register is not represented as zero.
+    pub native_gprs: [Option<u32>; 32],
+    pub native_hi: Option<u32>,
+    pub native_lo: Option<u32>,
+    pub return_words: Vec<(i32, Option<u32>)>,
+    pub return_indirect_call: Option<UnicornInterruptIndirectCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornInterruptIndirectCall {
+    pub call_pc: u32,
+    pub instruction: u32,
+    pub target_register: u32,
+    pub current_target: Option<u32>,
+    pub nearest_load: Option<UnicornInterruptTargetLoad>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornInterruptTargetLoad {
+    pub load_pc: u32,
+    pub instruction: u32,
+    pub base_register: u32,
+    pub current_base: Option<u32>,
+    pub current_address: Option<u32>,
+    pub current_word: Option<u32>,
+}
+
+impl UnicornInterruptProbe {
+    pub(crate) fn native_diagnostics(&self) -> String {
+        use std::fmt::Write;
+        let word = |value: Option<u32>| {
+            value
+                .map(|value| format!("0x{value:08x}"))
+                .unwrap_or_else(|| "unreadable".to_owned())
+        };
+        let mut out = String::from("interrupt_native_gprs=[");
+        for (index, value) in self.native_gprs.iter().enumerate() {
+            if index != 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "r{index}={}", word(*value));
+        }
+        let _ = write!(
+            out,
+            "] interrupt_native_hi={} interrupt_native_lo={} interrupt_ra_words=[",
+            word(self.native_hi),
+            word(self.native_lo)
+        );
+        for (index, (offset, value)) in self.return_words.iter().take(13).enumerate() {
+            if index != 0 {
+                out.push(',');
+            }
+            let _ = write!(out, "{offset:+}={}", word(*value));
+        }
+        out.push(']');
+        if let Some(call) = &self.return_indirect_call {
+            let _ = write!(
+                out,
+                " interrupt_ra_jalr=pc:0x{:08x}/insn:0x{:08x}/r{}/current_target:{}",
+                call.call_pc,
+                call.instruction,
+                call.target_register,
+                word(call.current_target)
+            );
+            if let Some(load) = &call.nearest_load {
+                let _ = write!(
+                    out,
+                    "/nearest_lw_pc:0x{:08x}/lw_insn:0x{:08x}/base_r{}/current_base:{}/current_address:{}/current_word:{}",
+                    load.load_pc,
+                    load.instruction,
+                    load.base_register,
+                    word(load.current_base),
+                    load.current_address
+                        .map(|address| format!("0x{address:08x}"))
+                        .unwrap_or_else(|| "unresolved".to_owned()),
+                    word(load.current_word)
+                );
+            } else {
+                out.push_str("/nearest_lw:none");
+            }
+        } else {
+            out.push_str(" interrupt_ra_jalr=none");
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -562,6 +689,11 @@ pub struct UnicornMessageRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornWndProcReturn {
+    /// Original stack pointer of an archived, unfinished host callout.
+    /// Completed historical trace entries have no restorable caller context.
+    pub return_sp: Option<u32>,
+    /// Original caller GPRs, HI and LO, retained only from a real saved callout.
+    pub caller_context: Option<([u32; 32], u32, u32)>,
     pub source: &'static str,
     pub hwnd: u32,
     pub msg: u32,

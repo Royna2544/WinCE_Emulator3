@@ -28,6 +28,10 @@ pub struct UnicornMips {
 }
 
 impl UnicornMips {
+    pub fn last_native_slice_outcome(&self) -> NativeSliceOutcome {
+        NativeSliceOutcome::NoAttempt
+    }
+
     fn apply_pe_load_result(&mut self, result: PeLoadResult) -> Result<()> {
         self.loaded_modules.clear();
         for (base, size, perms, name) in result.memory_regions {
@@ -63,6 +67,10 @@ impl UnicornMips {
 
     pub fn has_saved_context(&self) -> bool {
         false
+    }
+
+    pub fn saved_context_pc(&self) -> Option<u32> {
+        None
     }
 
     pub fn has_running_guest_thread(&self) -> bool {

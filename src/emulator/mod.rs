@@ -8,6 +8,8 @@ pub mod cpu_mips;
 pub mod dll_search;
 pub mod imports;
 pub mod memory;
+#[cfg(feature = "unicorn")]
+mod native_engine;
 pub mod pe_loader;
 #[cfg(not(feature = "unicorn"))]
 pub mod stub;

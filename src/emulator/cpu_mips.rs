@@ -6,7 +6,7 @@ use crate::{
     pe::PeImage,
 };
 use std::collections::{HashMap, HashSet};
-use unicorn_engine::{RegisterMIPS, Unicorn};
+use unicorn_engine::{RegisterMIPS, Unicorn, unicorn_const::uc_error};
 
 use super::arch::ArchHooks;
 use super::pe_loader::align_up_4k;
@@ -31,6 +31,8 @@ pub(crate) struct MipsGuestContext {
     pub regs: [u32; 32],
     pub hi: u32,
     pub lo: u32,
+    pub fprs: [u64; 32],
+    pub fcsr: u32,
 }
 
 impl MipsGuestContext {
@@ -40,6 +42,8 @@ impl MipsGuestContext {
             regs: [0; 32],
             hi: 0,
             lo: 0,
+            fprs: [0; 32],
+            fcsr: 0,
         }
     }
 
@@ -1093,6 +1097,8 @@ pub(crate) fn read_mips_gpr<D>(uc: &Unicorn<'_, D>, register: u32) -> Option<u32
         23 => Some(read_mips_reg(uc, RegisterMIPS::S7)),
         24 => Some(read_mips_reg(uc, RegisterMIPS::T8)),
         25 => Some(read_mips_reg(uc, RegisterMIPS::T9)),
+        26 => Some(read_mips_reg(uc, RegisterMIPS::K0)),
+        27 => Some(read_mips_reg(uc, RegisterMIPS::K1)),
         28 => Some(read_mips_reg(uc, RegisterMIPS::GP)),
         29 => Some(read_mips_reg(uc, RegisterMIPS::SP)),
         30 => Some(read_mips_reg(uc, RegisterMIPS::FP)),
@@ -1129,6 +1135,8 @@ pub(crate) fn write_mips_gpr<D>(uc: &mut Unicorn<'_, D>, register: u32, value: u
         23 => RegisterMIPS::S7,
         24 => RegisterMIPS::T8,
         25 => RegisterMIPS::T9,
+        26 => RegisterMIPS::K0,
+        27 => RegisterMIPS::K1,
         28 => RegisterMIPS::GP,
         29 => RegisterMIPS::SP,
         30 => RegisterMIPS::FP,
@@ -1183,10 +1191,18 @@ pub(crate) fn capture_mips_gprs<D>(uc: &Unicorn<'_, D>) -> MipsGuestContext {
     for register in 1..32 {
         regs[register as usize] = read_mips_gpr(uc, register).unwrap_or(0);
     }
+    let mut fprs = [0; 32];
+    for (index, fpr) in fprs.iter_mut().enumerate() {
+        *fpr = uc
+            .reg_read(RegisterMIPS::F0 as i32 + index as i32)
+            .unwrap_or(0);
+    }
     MipsGuestContext {
         regs,
         hi: uc.reg_read(RegisterMIPS::HI).unwrap_or(0) as u32,
         lo: uc.reg_read(RegisterMIPS::LO).unwrap_or(0) as u32,
+        fprs,
+        fcsr: uc.reg_read(RegisterMIPS::FCSR).unwrap_or(0) as u32,
     }
 }
 
@@ -1196,6 +1212,118 @@ pub(crate) fn restore_mips_gprs<D>(uc: &mut Unicorn<'_, D>, context: &MipsGuestC
     }
     let _ = uc.reg_write(RegisterMIPS::HI, u64::from(context.hi));
     let _ = uc.reg_write(RegisterMIPS::LO, u64::from(context.lo));
+    for (index, fpr) in context.fprs.iter().enumerate() {
+        let _ = uc.reg_write(RegisterMIPS::F0 as i32 + index as i32, *fpr);
+    }
+    let _ = uc.reg_write(RegisterMIPS::FCSR, u64::from(context.fcsr));
+}
+
+/// Checked slice-boundary capture. Legacy hook/callout helpers above remain
+/// infallible for now; a native continuation must never turn a failed read
+/// into a zero register value.
+pub(crate) fn capture_mips_context_checked<D>(
+    uc: &Unicorn<'_, D>,
+) -> std::result::Result<MipsGuestContext, uc_error> {
+    let mut regs = [0; 32];
+    for register in 1..32 {
+        regs[register] = uc.reg_read(RegisterMIPS::R0 as i32 + register as i32)? as u32;
+    }
+    let mut fprs = [0; 32];
+    for (index, fpr) in fprs.iter_mut().enumerate() {
+        *fpr = uc.reg_read(RegisterMIPS::F0 as i32 + index as i32)?;
+    }
+    Ok(MipsGuestContext {
+        regs,
+        hi: uc.reg_read(RegisterMIPS::HI)? as u32,
+        lo: uc.reg_read(RegisterMIPS::LO)? as u32,
+        fprs,
+        fcsr: uc.reg_read(RegisterMIPS::FCSR)? as u32,
+    })
+}
+
+/// Checked scalar restore after an exact native key misses. The caller has
+/// already reset the engine to a blank CPU, so hidden branch state is not
+/// transplanted to a synthesized PC.
+pub(crate) fn restore_mips_context_checked<D>(
+    uc: &mut Unicorn<'_, D>,
+    context: &MipsGuestContext,
+) -> std::result::Result<(), uc_error> {
+    for register in 1..32 {
+        uc.reg_write(
+            RegisterMIPS::R0 as i32 + register as i32,
+            u64::from(context.regs[register]),
+        )?;
+    }
+    uc.reg_write(RegisterMIPS::HI, u64::from(context.hi))?;
+    uc.reg_write(RegisterMIPS::LO, u64::from(context.lo))?;
+    for (index, fpr) in context.fprs.iter().enumerate() {
+        uc.reg_write(RegisterMIPS::F0 as i32 + index as i32, *fpr)?;
+    }
+    uc.reg_write(RegisterMIPS::FCSR, u64::from(context.fcsr))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+    use unicorn_engine::{Arch, Mode};
+
+    #[test]
+    fn mips_context_capture_restore_preserves_native_k0_k1() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.reg_write(RegisterMIPS::K0, 0x1234_5678).unwrap();
+        uc.reg_write(RegisterMIPS::K1, 0x89ab_cdef).unwrap();
+        let saved = capture_mips_gprs(&uc);
+        assert_eq!(saved.regs[26], 0x1234_5678);
+        assert_eq!(saved.regs[27], 0x89ab_cdef);
+        assert_eq!(write_mips_gpr(&mut uc, 26, 0), Some(()));
+        assert_eq!(write_mips_gpr(&mut uc, 27, 0), Some(()));
+        assert_eq!(read_mips_gpr(&uc, 26), Some(0));
+        assert_eq!(read_mips_gpr(&uc, 27), Some(0));
+        restore_mips_gprs(&mut uc, &saved);
+        assert_eq!(uc.reg_read(RegisterMIPS::K0).unwrap(), 0x1234_5678);
+        assert_eq!(uc.reg_read(RegisterMIPS::K1).unwrap(), 0x89ab_cdef);
+        assert_eq!(capture_mips_gprs(&uc), saved);
+    }
+
+    #[test]
+    fn checked_mips_context_preserves_full_fprs_fcsr_and_hilo() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        const F0: u64 = 0x1122_3344_5566_7788;
+        const F31: u64 = 0x8877_6655_4433_2211;
+        uc.reg_write(RegisterMIPS::F0, F0).unwrap();
+        uc.reg_write(RegisterMIPS::F31, F31).unwrap();
+        // Rounding mode 1, sticky flag and pending cause without its enable.
+        uc.reg_write(RegisterMIPS::FCSR, 0x1005).unwrap();
+        uc.reg_write(RegisterMIPS::HI, 0x1234_5678).unwrap();
+        uc.reg_write(RegisterMIPS::LO, 0x9abc_def0).unwrap();
+        let saved = capture_mips_context_checked(&uc).unwrap();
+        assert_eq!(saved.fprs[0], F0);
+        assert_eq!(saved.fprs[31], F31);
+        assert_eq!(saved.fcsr, 0x1005);
+        assert_eq!(saved, capture_mips_gprs(&uc));
+
+        uc.reg_write(RegisterMIPS::F0, 0).unwrap();
+        uc.reg_write(RegisterMIPS::F31, 0).unwrap();
+        uc.reg_write(RegisterMIPS::FCSR, 0).unwrap();
+        uc.reg_write(RegisterMIPS::HI, 0).unwrap();
+        uc.reg_write(RegisterMIPS::LO, 0).unwrap();
+        restore_mips_context_checked(&mut uc, &saved).unwrap();
+        assert_eq!(capture_mips_context_checked(&uc).unwrap(), saved);
+    }
+
+    #[test]
+    fn checked_mips_context_rejects_unrestorable_fcsr_cause() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut saved = capture_mips_context_checked(&uc).unwrap();
+        // Unicorn rejects an enabled pending FP cause. A synthesized context
+        // cannot silently clear either bit just to make restoration succeed.
+        saved.fcsr = (1 << 12) | (1 << 7);
+        assert!(matches!(
+            restore_mips_context_checked(&mut uc, &saved),
+            Err(uc_error::EXCEPTION)
+        ));
+    }
 }
 
 // ── delay-slot and control-flow analysis ─────────────────────────────────────

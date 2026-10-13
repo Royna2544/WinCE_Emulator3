@@ -41,7 +41,6 @@ use wince_emulation_v3::{
     emulator::{
         cpu::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
-        imports::ImportModuleKind,
         memory::MemoryPerms,
     },
     pe::PeImage,
@@ -49,12 +48,19 @@ use wince_emulation_v3::{
 };
 
 const FAST_START_RUN_SLICE_INSTRUCTIONS: usize = 250_000;
+// Live-pump slice length, in guest instructions. This doubles as the
+// round-robin tick between processes. A non-zero `emu_start` count makes
+// Unicorn install a per-instruction counting hook, so 0 (unbounded; time-bound
+// by the native timeout and wall-clock stops) is ~2x faster on busy slices, but
+// it changes scheduling dynamics (parked helpers can starve), so the default
+// stays until a real time-based quantum and native-timeout context preservation
+// are validated. The env override below accepts 0 for A/B runs.
 const LIVE_PUMP_RUN_SLICE_INSTRUCTIONS: usize = 1_000_000;
 const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
 const HOST_IDLE_MESSAGE_POLL_SLICE_MS: u64 = 100;
 const LIVE_VISIBLE_WORK_RUN_SLICE_MS: u64 = 100;
 const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 30_000;
-// Long busy slices: the in-run code hook already drains remote control
+// Long busy slices: the in-run hooks already drain remote control
 // messages and ticks the framebuffer while the guest executes, and a fully
 // blocked guest exits the run on its own, so short forced exits only paid the
 // fresh-Unicorn restart cost (blob copy + retranslation) every second.
@@ -347,6 +353,14 @@ fn run_cpu_loop(
     let mut reported_blocked_message_wait = false;
     let run_started = Instant::now();
     loop {
+        // Scheduler maintenance can rotate/continue without a CPU slice.
+        // The requested bound applies to that host work as well as emu_start.
+        if wall_clock_limit_expired(args.cpu_wall_clock_limit_ms, run_started.elapsed()) {
+            if let Some(snapshot) = cpu.last_debug_snapshot() {
+                print_unicorn_stop(snapshot);
+            }
+            break;
+        }
         cpu.prune_exited_and_active_processes_from_parked_with_framebuffer(
             kernel,
             Some(desktop.framebuffer_mut()),
@@ -616,7 +630,6 @@ fn run_cpu_loop(
             continue;
         }
         if (remote_drained.handled != 0 || desktop_queued != 0)
-            && !kernel_has_unreturned_parked_process(kernel)
             && !cpu.active_process_has_visible_receiver_work(kernel)
             && cpu.rotate_to_receiver_parked_process_with_framebuffer(
                 kernel,
@@ -628,6 +641,7 @@ fn run_cpu_loop(
             continue;
         }
         if args.remote_server.is_some()
+            && !cpu.slice_end_rotation_pending()
             && remote_drained.handled == 0
             && desktop_queued == 0
             && !cpu.active_process_has_visible_windows(kernel)
@@ -642,9 +656,9 @@ fn run_cpu_loop(
             continue;
         }
         if args.remote_server.is_some()
+            && !cpu.slice_end_rotation_pending()
             && remote_drained.handled == 0
             && desktop_queued == 0
-            && !active_has_pending_parked_create_process(cpu, kernel)
             && should_rotate_idle_remote_receiver_parked_process(
                 cpu.active_process_has_receiver_work(kernel),
                 cpu.active_process_has_visible_receiver_work(kernel),
@@ -659,7 +673,7 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if !kernel_has_unreturned_parked_process(kernel)
+        if !cpu.slice_end_rotation_pending()
             && cpu.rotate_to_ready_parked_wait_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
@@ -669,18 +683,8 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if args.remote_server.is_some()
-            && remote_drained.handled == 0
-            && desktop_queued == 0
-            && active_has_pending_parked_create_process(cpu, kernel)
-            && cpu.has_runnable_parked_process(kernel)
-            && cpu.rotate_to_next_parked_process(kernel)
-        {
-            reported_blocked_message_wait = false;
-            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
-            continue;
-        }
-        if !cpu.active_process_has_visible_windows(kernel)
+        if !cpu.slice_end_rotation_pending()
+            && !cpu.active_process_has_visible_windows(kernel)
             && !cpu.active_process_has_visible_receiver_work(kernel)
             && cpu.has_runnable_parked_process(kernel)
             && cpu.rotate_to_next_parked_process(kernel)
@@ -810,6 +814,20 @@ fn run_cpu_loop(
             }
             return Err(err);
         }
+        if requested_pc_stop_reached(
+            args.cpu_stop_pc,
+            cpu.last_debug_snapshot(),
+            cpu.saved_context_pc(),
+        ) {
+            // A debugger stop owns the selected context before post-run input,
+            // callback maintenance, or normal scheduler handoff can replace it.
+            desktop.present()?;
+            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+            if let Some(snapshot) = cpu.last_debug_snapshot() {
+                print_unicorn_stop(snapshot);
+            }
+            break;
+        }
         if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
             reported_blocked_message_wait = false;
         }
@@ -879,7 +897,6 @@ fn run_cpu_loop(
             continue;
         }
         if !cpu.slice_end_rotation_pending()
-            && !kernel_has_unreturned_parked_process(kernel)
             && cpu.rotate_to_ready_parked_wait_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
@@ -890,17 +907,8 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if args.remote_server.is_some()
-            && active_has_pending_parked_create_process(cpu, kernel)
-            && cpu.has_runnable_parked_process(kernel)
-            && cpu.rotate_to_next_parked_process(kernel)
-        {
-            tracing::debug!(target: "ce.quantum", "post-run rotated for pending parked create process");
-            reported_blocked_message_wait = false;
-            publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
-            continue;
-        }
-        if !cpu.active_process_has_visible_receiver_work(kernel)
+        if !cpu.slice_end_rotation_pending()
+            && !cpu.active_process_has_visible_receiver_work(kernel)
             && !cpu.active_process_has_visible_windows(kernel)
             && cpu.rotate_to_receiver_parked_process_with_framebuffer(
                 kernel,
@@ -994,14 +1002,17 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
+        let native_service_boundary = cpu.last_native_slice_outcome().is_service_boundary();
         let snapshot_state = cpu.last_debug_snapshot().map(|snapshot| {
             (
-                snapshot_can_rotate_on_wall_stop(snapshot),
+                native_service_boundary,
                 snapshot_has_live_blocked_message_waiter(snapshot, kernel),
                 snapshot_has_live_non_message_blocked_wait(snapshot, kernel),
             )
         });
-        if let Some((host_wall_clock_stop, message_waiter, non_message_waiter)) = snapshot_state {
+        if let Some((native_service_boundary, message_waiter, non_message_waiter)) =
+            snapshot_state.filter(|_| !cpu.slice_end_rotation_pending())
+        {
             let has_runnable_parked_process = cpu.has_runnable_parked_process(kernel);
             let should_rotate_process = should_rotate_parked_process(
                 cpu.has_parked_child_processes(),
@@ -1010,7 +1021,7 @@ fn run_cpu_loop(
                 cpu.has_ready_parked_send_unblock(kernel),
                 cpu.has_ready_parked_wait_unblock(kernel),
                 message_waiter,
-                host_wall_clock_stop,
+                native_service_boundary,
                 live_pump_slice,
                 wall_clock_limit_ms == HOST_IDLE_MESSAGE_POLL_SLICE_MS,
             );
@@ -1018,7 +1029,7 @@ fn run_cpu_loop(
                 && !cpu.slice_end_rotation_pending()
                 && cpu.rotate_to_next_parked_process(kernel)
             {
-                tracing::debug!(target: "ce.quantum", "pre-run rotated on wall-stop snapshot state");
+                tracing::debug!(target: "ce.quantum", "pre-run rotated on native service boundary");
                 reported_blocked_message_wait = false;
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
@@ -1052,7 +1063,7 @@ fn run_cpu_loop(
                     continue;
                 }
             }
-            if live_pump_slice && host_wall_clock_stop {
+            if live_pump_slice && native_service_boundary {
                 if rotate_idle_active_to_visible_parked(cpu, kernel, desktop) {
                     reported_blocked_message_wait = false;
                     continue;
@@ -1092,19 +1103,22 @@ fn run_cpu_loop(
         }
         if args.remote_server.is_some()
             && live_pump_slice
+            && !cpu.slice_end_rotation_pending()
             && rotate_idle_active_to_visible_parked(cpu, kernel, desktop)
         {
             reported_blocked_message_wait = false;
             continue;
         }
-        if should_rotate_idle_saved_remote_active(
-            args.remote_server.is_some(),
-            cpu.has_saved_context(),
-            cpu.has_running_guest_thread(),
-            cpu.active_process_has_visible_queued_receiver_work(kernel),
-            cpu.active_process_has_visible_windows(kernel),
-            cpu.has_runnable_parked_process(kernel),
-        ) && cpu.rotate_to_visible_window_parked_process(kernel)
+        if !cpu.slice_end_rotation_pending()
+            && should_rotate_idle_saved_remote_active(
+                args.remote_server.is_some(),
+                cpu.has_saved_context(),
+                cpu.has_running_guest_thread(),
+                cpu.active_process_has_visible_queued_receiver_work(kernel),
+                cpu.active_process_has_visible_windows(kernel),
+                cpu.has_runnable_parked_process(kernel),
+            )
+            && cpu.rotate_to_visible_window_parked_process(kernel)
         {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
@@ -1185,7 +1199,7 @@ fn should_rotate_parked_process(
     has_ready_parked_send_unblock: bool,
     has_ready_parked_wait_unblock: bool,
     message_waiter: bool,
-    host_wall_clock_stop: bool,
+    native_service_boundary: bool,
     live_pump_slice: bool,
     _idle_message_poll_slice: bool,
 ) -> bool {
@@ -1196,8 +1210,8 @@ fn should_rotate_parked_process(
         && ((!live_pump_slice && has_runnable_parked_process)
             || has_ready_parked_send_unblock
             || has_ready_parked_wait_unblock);
-    let ready_live_wall_stop = live_pump_slice
-        && host_wall_clock_stop
+    let ready_live_service_boundary = live_pump_slice
+        && native_service_boundary
         && (has_runnable_parked_process
             || has_live_pump_priority_parked_process
             || has_ready_parked_send_unblock
@@ -1205,7 +1219,7 @@ fn should_rotate_parked_process(
             || message_waiter);
     let ready_live_message_waiter =
         live_pump_slice && message_waiter && has_runnable_parked_process;
-    ready_message_waiter || ready_live_wall_stop || ready_live_message_waiter
+    ready_message_waiter || ready_live_service_boundary || ready_live_message_waiter
 }
 
 fn should_run_active_receiver_work_for_live_message_waiter(
@@ -1258,10 +1272,6 @@ fn snapshot_has_blocked_get_message(snapshot: &UnicornDebugSnapshot) -> bool {
     snapshot.blocked_get_message.is_some() || snapshot_has_saved_get_message_waiter(snapshot)
 }
 
-fn snapshot_can_rotate_on_wall_stop(snapshot: &UnicornDebugSnapshot) -> bool {
-    snapshot.host_wall_clock_stop.is_some()
-}
-
 fn snapshot_has_saved_get_message_waiter(snapshot: &UnicornDebugSnapshot) -> bool {
     snapshot
         .active_blocked_waits
@@ -1284,41 +1294,6 @@ fn snapshot_has_orphaned_cross_process_send(
         .cross_process_send_yield
         .as_ref()
         .is_some_and(|yielded| kernel.gwe.sent_message(yielded.send_id).is_none())
-}
-
-fn active_stopped_in_create_process_w(cpu: &UnicornMips) -> bool {
-    cpu.saved_context_at_import(
-        ImportModuleKind::Coredll,
-        wince_emulation_v3::ce::coredll_ordinals::ORD_CREATE_PROCESS_W,
-    ) || cpu
-        .preferred_trace_snapshot()
-        .is_some_and(snapshot_is_create_process_w_stop)
-        || cpu
-            .last_debug_snapshot()
-            .is_some_and(snapshot_is_create_process_w_stop)
-}
-
-fn active_has_pending_parked_create_process(cpu: &UnicornMips, kernel: &CeKernel) -> bool {
-    should_rotate_for_pending_parked_create_process(
-        cpu.has_runnable_parked_process(kernel),
-        cpu.active_process_has_visible_receiver_work(kernel),
-        cpu.active_process_has_visible_windows(kernel),
-        active_stopped_in_create_process_w(cpu),
-        kernel_has_unreturned_parked_process(kernel),
-    )
-}
-
-fn should_rotate_for_pending_parked_create_process(
-    has_runnable_parked_process: bool,
-    active_has_visible_receiver_work: bool,
-    active_has_visible_windows: bool,
-    active_stopped_in_create_process_w: bool,
-    kernel_has_unreturned_parked_process: bool,
-) -> bool {
-    has_runnable_parked_process
-        && !active_has_visible_receiver_work
-        && !active_has_visible_windows
-        && (active_stopped_in_create_process_w || kernel_has_unreturned_parked_process)
 }
 
 fn should_rotate_remote_input_receiver_parked_process(
@@ -1360,33 +1335,6 @@ fn switch_completed_active_context(cpu: &mut UnicornMips, kernel: &mut CeKernel)
     } else {
         cpu.switch_to_next_parked_child_process(kernel)
     }
-}
-
-fn snapshot_is_create_process_w_stop(snapshot: &UnicornDebugSnapshot) -> bool {
-    snapshot.trap_module_kind == Some(ImportModuleKind::Coredll)
-        && snapshot.trap_ordinal
-            == Some(wince_emulation_v3::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
-}
-
-fn kernel_has_unreturned_parked_process(kernel: &CeKernel) -> bool {
-    let mut parked_process_ids = Vec::new();
-    for record in kernel.recent_process_ops() {
-        let Some(process_id) = record.process_id else {
-            continue;
-        };
-        match record.op {
-            "CreateProcessChildParked" => {
-                if !parked_process_ids.contains(&process_id) {
-                    parked_process_ids.push(process_id);
-                }
-            }
-            "CreateProcessChildReturned" | "CreateProcessChildError" | "CreateProcessExited" => {
-                parked_process_ids.retain(|id| *id != process_id);
-            }
-            _ => {}
-        }
-    }
-    !parked_process_ids.is_empty()
 }
 
 fn snapshot_has_live_blocked_message_waiter(
@@ -1444,7 +1392,6 @@ fn live_pump_run_slice_instructions() -> usize {
     std::env::var(LIVE_PUMP_RUN_SLICE_INSTRUCTIONS_ENV)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value != 0)
         .unwrap_or(LIVE_PUMP_RUN_SLICE_INSTRUCTIONS)
 }
 
@@ -2407,6 +2354,13 @@ fn monitor_run_once(
             }
             return Err(err);
         }
+        if requested_pc_stop_reached(
+            limits.stop_pc,
+            cpu.last_debug_snapshot(),
+            cpu.saved_context_pc(),
+        ) {
+            break;
+        }
         desktop.present()?;
         let wall_expired =
             wall_clock_limit_expired(limits.wall_clock_limit_ms, run_started.elapsed());
@@ -2420,9 +2374,15 @@ fn monitor_run_once(
             break;
         }
     }
-    let input_after = enqueue_desktop_input(desktop, kernel)?;
-    if input_after != 0 {
-        println!("  drained {input_after} host input event(s)");
+    if !requested_pc_stop_reached(
+        limits.stop_pc,
+        cpu.last_debug_snapshot(),
+        cpu.saved_context_pc(),
+    ) {
+        let input_after = enqueue_desktop_input(desktop, kernel)?;
+        if input_after != 0 {
+            println!("  drained {input_after} host input event(s)");
+        }
     }
     desktop.present()?;
     if let Some(snapshot) = cpu.last_debug_snapshot() {
@@ -2442,6 +2402,13 @@ fn monitor_continue_process_handoff(
     limits: UnicornRunLimits,
     continued: &mut usize,
 ) -> bool {
+    if requested_pc_stop_reached(
+        limits.stop_pc,
+        cpu.last_debug_snapshot(),
+        cpu.saved_context_pc(),
+    ) {
+        return false;
+    }
     const MAX_MONITOR_CONTINUATIONS: usize = 16;
     if *continued >= MAX_MONITOR_CONTINUATIONS {
         return false;
@@ -2481,7 +2448,7 @@ fn monitor_continue_process_handoff(
     let Some(snapshot) = cpu.last_debug_snapshot() else {
         return false;
     };
-    let host_wall_clock_stop = snapshot.host_wall_clock_stop.is_some();
+    let native_service_boundary = cpu.last_native_slice_outcome().is_service_boundary();
     let message_waiter = snapshot_has_live_blocked_message_waiter(snapshot, kernel);
     let should_rotate_process = should_rotate_parked_process(
         cpu.has_parked_child_processes(),
@@ -2490,7 +2457,7 @@ fn monitor_continue_process_handoff(
         cpu.has_ready_parked_send_unblock(kernel),
         cpu.has_ready_parked_wait_unblock(kernel),
         message_waiter,
-        host_wall_clock_stop,
+        native_service_boundary,
         limits.live_pump,
         false,
     );
@@ -2509,6 +2476,24 @@ fn monitor_has_immediate_process_handoff(cpu: &UnicornMips) -> bool {
         || cpu
             .last_debug_snapshot()
             .is_some_and(|snapshot| snapshot.cross_process_send_yield.is_some())
+}
+
+fn requested_pc_stop_reached(
+    requested_pc: Option<u32>,
+    snapshot: Option<&UnicornDebugSnapshot>,
+    saved_pc: Option<u32>,
+) -> bool {
+    requested_pc.is_some_and(|target| {
+        target != 0
+            && saved_pc == Some(target)
+            && snapshot.is_some_and(|snapshot| {
+                snapshot.pc == target
+                    && snapshot
+                        .pc_stop
+                        .as_ref()
+                        .is_some_and(|stop| stop.pc == target)
+            })
+    })
 }
 
 fn monitor_run_and_report(
@@ -4171,6 +4156,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn requested_pc_stop_requires_matching_fresh_stop_and_retained_context() {
+        let target = 0x0040_1004;
+        let mut snapshot = UnicornDebugSnapshot {
+            pc: target,
+            pc_stop: Some(wince_emulation_v3::emulator::cpu::UnicornPcStop {
+                pc: target,
+                ra: 0x0040_2000,
+                sp: 0x7fff_f000,
+                instruction: Some(0),
+            }),
+            ..Default::default()
+        };
+        assert!(requested_pc_stop_reached(
+            Some(target),
+            Some(&snapshot),
+            Some(target),
+        ));
+        assert!(!requested_pc_stop_reached(
+            None,
+            Some(&snapshot),
+            Some(target)
+        ));
+        assert!(!requested_pc_stop_reached(Some(target), None, Some(target)));
+        assert!(!requested_pc_stop_reached(
+            Some(target),
+            Some(&snapshot),
+            None
+        ));
+        assert!(!requested_pc_stop_reached(
+            Some(target),
+            Some(&snapshot),
+            Some(target + 4),
+        ));
+        snapshot.pc = target + 4;
+        assert!(!requested_pc_stop_reached(
+            Some(target),
+            Some(&snapshot),
+            Some(target),
+        ));
+        snapshot.pc = target;
+        snapshot.pc_stop.as_mut().unwrap().pc = target + 4;
+        assert!(!requested_pc_stop_reached(
+            Some(target),
+            Some(&snapshot),
+            Some(target),
+        ));
+        snapshot.pc_stop = None;
+        assert!(!requested_pc_stop_reached(
+            Some(target),
+            Some(&snapshot),
+            Some(target),
+        ));
+        snapshot.pc = 0;
+        snapshot.pc_stop = Some(wince_emulation_v3::emulator::cpu::UnicornPcStop {
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            instruction: None,
+        });
+        assert!(!requested_pc_stop_reached(
+            Some(0),
+            Some(&snapshot),
+            Some(0)
+        ));
+    }
+
+    #[test]
     fn maps_image_under_configured_mount_to_ce_mount_path() {
         let mut config = RuntimeConfig::load_default().unwrap();
         config
@@ -4211,6 +4263,8 @@ mod tests {
         );
         assert!(!wall_clock_limit_expired(500, Duration::from_millis(499)));
         assert!(wall_clock_limit_expired(500, Duration::from_millis(500)));
+        assert!(wall_clock_limit_expired(500, Duration::from_secs(10)));
+        assert!(!wall_clock_limit_expired(0, Duration::from_secs(10)));
     }
 
     #[test]
@@ -4432,7 +4486,7 @@ mod tests {
     }
 
     #[test]
-    fn live_wall_stop_rotates_only_for_ready_work() {
+    fn live_service_boundary_rotates_only_for_ready_work() {
         assert!(!should_rotate_parked_process(
             true, false, false, false, false, false, true, true, false
         ));
@@ -4540,28 +4594,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_create_process_handoff_preserves_active_visible_ui_work() {
-        assert!(should_rotate_for_pending_parked_create_process(
-            true, false, false, true, false
-        ));
-        assert!(should_rotate_for_pending_parked_create_process(
-            true, false, false, false, true
-        ));
-        assert!(!should_rotate_for_pending_parked_create_process(
-            true, true, false, true, true
-        ));
-        assert!(!should_rotate_for_pending_parked_create_process(
-            true, false, true, true, true
-        ));
-        assert!(!should_rotate_for_pending_parked_create_process(
-            false, false, false, true, true
-        ));
-        assert!(!should_rotate_for_pending_parked_create_process(
-            true, false, false, false, false
-        ));
-    }
-
-    #[test]
     fn idle_poll_detects_saved_get_message_waiter() {
         let mut snapshot = UnicornDebugSnapshot::default();
         assert!(!snapshot_has_blocked_get_message(&snapshot));
@@ -4587,18 +4619,6 @@ mod tests {
         snapshot.trap_ordinal = Some(wince_emulation_v3::ce::coredll_ordinals::ORD_MESSAGE_BOX_W);
         assert!(!snapshot_has_blocked_get_message(&snapshot));
         assert!(!snapshot_is_idle_message_wait_only(&snapshot));
-        assert!(!snapshot_can_rotate_on_wall_stop(&snapshot));
-
-        snapshot.host_wall_clock_stop = Some(
-            wince_emulation_v3::emulator::cpu::UnicornHostWallClockStop {
-                pc: 0x7fff_2a00,
-                ra: 0x1000,
-                sp: 0x7fff_f000,
-                instruction: Some(0),
-                elapsed_ms: 24_000,
-            },
-        );
-        assert!(snapshot_can_rotate_on_wall_stop(&snapshot));
     }
 
     #[test]

@@ -7268,12 +7268,7 @@ impl CeKernel {
     }
 
     pub fn remove_blocked_waiters_for_thread(&mut self, thread_id: u32) -> usize {
-        let wait_ids = self
-            .scheduler
-            .blocked_waits()
-            .filter(|wait| wait.thread_id == thread_id)
-            .map(|wait| wait.id)
-            .collect::<Vec<_>>();
+        let wait_ids = self.scheduler.waiter_ids_for_thread(thread_id);
         for wait_id in &wait_ids {
             let _ = self.remove_blocked_waiter(*wait_id);
         }
@@ -8135,6 +8130,50 @@ impl CeKernel {
         max_msg: u32,
     ) -> Option<Message> {
         self.expire_timed_out_send_messages();
+        let message = self
+            .gwe
+            .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
+        self.gwe
+            .record_thread_dispatched(thread_id, self.timers.tick_count());
+        self.record_message_op(
+            "dispatch_sent_message",
+            thread_id,
+            &message,
+            Some(1),
+            Some(format_filter_detail(hwnd, min_msg, max_msg)),
+        );
+        Some(message)
+    }
+
+    pub(crate) fn peek_ready_sent_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<(u64, Message)> {
+        self.expire_timed_out_send_messages();
+        self.gwe
+            .peek_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)
+    }
+
+    pub(crate) fn take_ready_sent_message_w_filtered_if_id(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        expected_send_id: u64,
+    ) -> Option<Message> {
+        self.expire_timed_out_send_messages();
+        if self
+            .gwe
+            .peek_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?
+            .0
+            != expected_send_id
+        {
+            return None;
+        }
         let message = self
             .gwe
             .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
