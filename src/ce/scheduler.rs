@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use crate::ce::task_wait::{TaskWaitRecord, TaskWaitStore, TickDeadline};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedulerWaitKind {
     Single,
@@ -104,12 +106,22 @@ pub struct SchedulerBlockedWait {
     sequence: u64,
 }
 
+impl TaskWaitRecord for SchedulerBlockedWait {
+    fn wait_id(&self) -> u64 {
+        self.id
+    }
+
+    fn owner_thread_id(&self) -> u32 {
+        self.thread_id
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Scheduler {
     stats: SchedulerStats,
     next_wait_id: u64,
     next_wait_sequence: u64,
-    blocked_waits: BTreeMap<u64, SchedulerBlockedWait>,
+    blocked_waits: TaskWaitStore<SchedulerBlockedWait>,
     wait_queues: BTreeMap<u32, VecDeque<u64>>,
     message_wait_queues: BTreeMap<u32, VecDeque<u64>>,
     serial_read_queues: BTreeMap<u32, VecDeque<u64>>,
@@ -305,6 +317,13 @@ impl Scheduler {
         self.blocked_waits.len()
     }
 
+    /// Compatibility task-owned wait IDs, including legacy reentrant frames.
+    /// Kernel cancellation must still use remove_blocked_wait so all derived
+    /// subscriptions and pulse/comm-event bookkeeping are retired normally.
+    pub fn waiter_ids_for_thread(&self, thread_id: u32) -> Vec<u64> {
+        self.blocked_waits.wait_ids_for_thread(thread_id)
+    }
+
     pub fn waiter_ids_for_handle(&self, handle: u32) -> Vec<u64> {
         let mut ids = BTreeSet::new();
         if let Some(queue) = self.wait_queues.get(&handle) {
@@ -466,13 +485,116 @@ impl Scheduler {
 }
 
 pub fn blocked_wait_timed_out(wait: &SchedulerBlockedWait, now_ms: u32) -> bool {
-    wait.timeout_ms != crate::ce::timer::INFINITE
-        && now_ms.wrapping_sub(wait.wait_started_ms) >= wait.timeout_ms
+    TickDeadline::from_legacy(wait.wait_started_ms, wait.timeout_ms).expired(now_ms)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Scheduler, SchedulerBlockedWaitKind, blocked_wait_timed_out};
+
+    #[test]
+    fn scheduler_task_owned_cancellation_preserves_other_tasks_and_cleans_subscriptions() {
+        let mut scheduler = Scheduler::default();
+        let first = scheduler.register_blocked_wait(
+            7,
+            0x107,
+            vec![0x200],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            u32::MAX,
+        );
+        let nested = scheduler.register_blocked_wait(
+            7,
+            0x107,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            0,
+            u32::MAX,
+        );
+        let serial = scheduler.register_blocked_wait(
+            8,
+            0x108,
+            Vec::new(),
+            SchedulerBlockedWaitKind::SerialRead { handle: 0x300 },
+            0,
+            u32::MAX,
+        );
+        let neighbor = scheduler.register_blocked_wait(
+            9,
+            0x109,
+            vec![0x200],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            u32::MAX,
+        );
+        scheduler.queue_pending_wake_ids([first, nested, serial, neighbor]);
+        assert_eq!(scheduler.waiter_ids_for_thread(7), [first, nested]);
+        assert_eq!(scheduler.message_waiter_ids_for_thread(7), [nested]);
+        // Same cancellation shape as CeKernel: ownership lookup, then the
+        // existing removal boundary, never deleting records behind indexes.
+        for id in scheduler.waiter_ids_for_thread(7) {
+            scheduler.remove_blocked_wait(id).unwrap();
+        }
+        assert!(scheduler.waiter_ids_for_thread(7).is_empty());
+        assert!(scheduler.message_waiter_ids_for_thread(7).is_empty());
+        assert_eq!(scheduler.waiter_ids_for_handle(0x200), [neighbor]);
+        assert_eq!(scheduler.serial_read_waiter_ids_for_handle(0x300), [serial]);
+        assert_eq!(scheduler.waiter_count(), 2);
+        assert_eq!(scheduler.stats().waiter_remove_count, 2);
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(0, 0, |_| true, |_| 20),
+            Some(serial),
+        );
+    }
+
+    #[test]
+    fn scheduler_task_storage_keeps_global_wait_id_order() {
+        let mut scheduler = Scheduler::default();
+        let first = scheduler.register_blocked_wait(
+            20,
+            0x120,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Sleep,
+            100,
+            25,
+        );
+        let second = scheduler.register_blocked_wait(
+            1,
+            0x101,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Sleep,
+            100,
+            25,
+        );
+        let third = scheduler.register_blocked_wait(
+            20,
+            0x120,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Sleep,
+            100,
+            25,
+        );
+        assert_eq!(scheduler.waiter_ids_for_thread(20), [first, third]);
+        assert_eq!(
+            scheduler
+                .blocked_waits()
+                .map(|wait| wait.id)
+                .collect::<Vec<_>>(),
+            [first, second, third],
+        );
+        assert!(!blocked_wait_timed_out(
+            scheduler.blocked_wait(first).unwrap(),
+            124
+        ));
+        assert!(blocked_wait_timed_out(
+            scheduler.blocked_wait(first).unwrap(),
+            125
+        ));
+    }
 
     #[test]
     fn scheduler_registers_waits_under_each_handle_and_removes_them() {
