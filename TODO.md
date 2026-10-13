@@ -16,10 +16,10 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
   same-VA/shared-view coherence gates; then migrate one connected
   Task/object authority slice. Do not use the persistent-owner success path as
   a substitute for that gate.
-- Add a focused child `WM_ACTIVATE` return/park/resume control for E-22's
-  repeated `happyway_win` completed-stub loop. Assert continuation PC and
-  absence of a second no-pending WNDPROC return before changing recovery;
-  the loop's role in the splash stall remains unproven.
+- E-27's test-only child `WM_ACTIVATE` park/resume and healthy/pending-loss
+  real-MIPS controls now pass. The controlled stale-stub replay is not tied
+  to the 2,518 live warnings or splash stall; any recovery change still needs
+  identity-matched live evidence ([ledger E-27](docs/evidence/ledger.md)).
 - **Stage 2, now, in this repo** (source map:
   `docs/subsystems/cpu-engine.md`, "Stage 2 source map"):
   0. D-007's in-repo Unicorn dependency patch is present. The post-order
@@ -94,27 +94,25 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
       connected migration. Add end-to-end immediate CreateProcess sync-error
       fault injection; its error latch is source-reviewed only. Measure host
       RSS/private and guest busy work on matched runs before claiming benefit.
-  2. O-P1 now reports `UnknownNormalStop` for unproven successful stops,
-     `HookStop(HostWallBudget)` from one checked elapsed-budget path (E-15),
-     and `HookStop(VisibleParkedPeerYield)` from one checked hookless live-pump
-     path (E-17). The peer gate passed three real-backend repetitions with
-     `Query::TIMEOUT = 0`, safe PC, peer handoff and no host-wall marker.
-     E-19 now types deferred global code-hook `RemoteControlService` or
-     `HostWallBudget` from the first observed cause; two real-backend controls
-     passed together in three serial runs with safe PC and native timeout 0.
-     Finish remaining sparse/hookless remote and peer reasons, move restart-PC
-     repair to typed provenance, and obtain an independent native count-stop
-     witness before reporting `CountLimit`; `Ok` with positive count is not
-     proof. Add end-to-end failed PC-write/stop API injection. Keep the
-     1M-instruction scheduling policy unchanged. Frozen E-19 source passed
-     1,634 release tests (0 failed, 4 ignored), both no-trace release checks
-     and 1,239 no-feature tests (0 failed, 1 ignored); exact source/log hashes
-     are in local
-     `evidence/op1-global-code-hook-20261013/post-global-stop-validation.receipt.md`.
-     The E-18 private-byte red was explicitly reconfirmed on this source and
-     remains ignored in the default suite. E-16 same-VA green belongs to its
-     separate frozen source. Later edits and the bounded live gate require
-     independent validation.
+  2. O-P1's E-28 native count-stop query and typed `CountLimit` adapter now
+     pass focused real-MIPS controls and source-bound broad validation:
+     **1,671/0/16 ignored** release, **1,259/0/14 ignored** no-feature,
+     no-trace release check and format green
+     ([adapter](evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md),
+     [broad](evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md),
+     [native C seam](evidence/e28-count-witness-audit-20261014/native-c-seam.receipt.md),
+     [vendor patches](vendor/unicorn-engine-sys/PATCHES.md)). The new fact
+     witnesses an accepted count-stop request, not an exclusive cause or CE
+     quantum; the existing 1M-instruction service-boundary policy is unchanged.
+     Next seal one immutable owner/frame-qualified attempt report through
+     outgoing byte/view sync and checked `uc.finish()` **before** process
+     handoff ([finish-order plan](evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)).
+     Add native nested-start, stop-reversal, forced query-error and
+     same-instruction competing-hook controls; preserve native-query failure
+     provenance in the diagnostic-private rejection path. Remaining
+     sparse/hookless stop reasons, typed restart-PC repair and failed
+     PC-write/stop injection also remain. Do not close O-P1, Stage 2 or S3-A
+     or infer a scheduler-core rewrite from the count-only adapter.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR

@@ -256,8 +256,8 @@ references for historical reconstruction.
   copy-mirror receipts remain historical; current-source fixture hashes,
   complete raw logs and exit codes are in local
   `evidence/e26-stage3-red-20261014/{port-and-compile,executed-red}.receipt.md`
-  (ledger E-26). No production Task migration, full-suite rerun or Stage 3
-  acceptance follows.
+  (ledger E-26). No production Task migration or Stage 3 acceptance follows;
+  the later E-28 broad suite includes these default test targets.
 - A second bounded iNavi run on the corrected E-25 runtime-source boundary
   was analyzed as E-27. Its newly built release executable SHA-256
   `90A944B9…A6F4F` exited 0 after 330.430 s at the configured cap, without
@@ -277,6 +277,31 @@ references for historical reconstruction.
   missing full-tree digest limitation, and run observations are in local
   `evidence/e22-live-20261013T182442Z/analysis.receipt.md` (ledger E-27).
   Public VM, fresh-default ownership, Stage 2 and map acceptance remain open.
+- A later E-27 test-only real-MIPS discriminator passed the existing child
+  park/resume control plus healthy repeated-callback and controlled
+  pending-loss replay controls. It observed two separate stale-stub warning
+  events with no new guest dispatch/entry/continuation progress, but does not
+  identity-match the live warnings or establish the splash cause
+  ([receipt](evidence/e27-orphan-discriminator-20261014/receipt.md)).
+- E-28 connected an additive vendored Unicorn native count-stop query to the
+  Rust backend and now reports typed `CountLimit` only for an uncontested
+  successful count-stop request. It is a request witness, not a retired-
+  instruction total or CE quantum expiry; the one-million-instruction tick
+  and existing service-boundary rotation policy did not change. The focused
+  real-MIPS adapter controls passed
+  ([adapter receipt](evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md));
+  the native C change is recorded separately in the
+  [seam receipt](evidence/e28-count-witness-audit-20261014/native-c-seam.receipt.md)
+  and [vendor patch inventory](vendor/unicorn-engine-sys/PATCHES.md).
+  Source-bound broad validation passed **1,671 release tests, 0 failed,
+  16 ignored** and **1,259 no-feature tests, 0 failed, 14 ignored**; no-trace
+  release check and format check also exited 0
+  ([broad receipt](evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md)).
+  The [finish-order audit](evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)
+  remains a plan: immutable owner/frame-qualified final reports, fallible
+  finish-before-handoff ordering, nested/revert/query-error controls and
+  diagnostic-private query-error provenance are still open. This is not
+  O-P1, Stage 2, S3-A, or live-app acceptance (ledger E-28).
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial
