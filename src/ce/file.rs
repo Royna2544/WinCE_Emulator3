@@ -3,8 +3,6 @@ use std::{
     fmt, fs,
     io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
-    sync::Arc,
-    time::SystemTime,
 };
 
 use crate::{
@@ -51,7 +49,6 @@ pub struct HostFileSystem {
     open_files: BTreeMap<u32, OpenFile>,
     open_finds: BTreeMap<u32, OpenFind>,
     file_locks: BTreeMap<PathBuf, Vec<FileLock>>,
-    read_only_cache: BTreeMap<PathBuf, ReadOnlyCacheEntry>,
     io_stats: FileIoStats,
 }
 
@@ -96,13 +93,6 @@ impl GuestVolumePath {
     fn is_mount_root(&self) -> bool {
         self.is_mount_root
     }
-}
-
-#[derive(Debug, Clone)]
-struct ReadOnlyCacheEntry {
-    bytes: Arc<Vec<u8>>,
-    modified: Option<SystemTime>,
-    len: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,10 +174,7 @@ impl OpenFile {
     }
 
     pub fn is_memory_backed(&self) -> bool {
-        matches!(
-            self.backing,
-            FileBacking::Memory(_) | FileBacking::ReadOnlyMemory(_)
-        )
+        matches!(self.backing, FileBacking::Memory(_))
     }
 
     pub fn is_host_file_backed(&self) -> bool {
@@ -197,7 +184,6 @@ impl OpenFile {
     pub fn memory_len(&self) -> usize {
         match &self.backing {
             FileBacking::Memory(bytes) => bytes.len(),
-            FileBacking::ReadOnlyMemory(bytes) => bytes.len(),
             FileBacking::HostFile(_) => 0,
         }
     }
@@ -206,23 +192,14 @@ impl OpenFile {
     where
         F: FnMut(&[u8]) -> Result<()>,
     {
+        // A zero-byte request must not clear a preceding short-read EOF state.
+        // This also keeps the former memory-backed read-only behavior intact.
+        if requested == 0 {
+            write(&[])?;
+            return Ok((0, self.is_host_file_backed()));
+        }
         match &mut self.backing {
             FileBacking::Memory(bytes) => {
-                if self.cursor >= self.file_len {
-                    write(&[])?;
-                    if requested != 0 {
-                        self.eof = true;
-                    }
-                    return Ok((0, false));
-                }
-                let start = self.cursor;
-                let end = self.cursor.saturating_add(requested).min(self.file_len);
-                write(&bytes[start..end])?;
-                self.cursor = end;
-                self.eof = end - start < requested;
-                Ok(((end - start) as u32, false))
-            }
-            FileBacking::ReadOnlyMemory(bytes) => {
                 if self.cursor >= self.file_len {
                     write(&[])?;
                     if requested != 0 {
@@ -257,13 +234,6 @@ impl OpenFile {
     fn read_at(&mut self, offset: usize, requested: usize) -> Result<(Vec<u8>, bool)> {
         match &mut self.backing {
             FileBacking::Memory(bytes) => {
-                if offset >= self.file_len {
-                    return Ok((Vec::new(), false));
-                }
-                let end = offset.saturating_add(requested).min(self.file_len);
-                Ok((bytes[offset..end].to_vec(), false))
-            }
-            FileBacking::ReadOnlyMemory(bytes) => {
                 if offset >= self.file_len {
                     return Ok((Vec::new(), false));
                 }
@@ -308,12 +278,6 @@ impl OpenFile {
                 data[offset..end].copy_from_slice(bytes);
                 self.file_len = data.len();
             }
-            FileBacking::ReadOnlyMemory(_) => {
-                return Err(Error::AccessDenied(format!(
-                    "file is read-only: {}",
-                    self.guest_path
-                )));
-            }
             FileBacking::HostFile(file) => {
                 file.seek(SeekFrom::Start(offset as u64))
                     .map_err(|source| Error::Io {
@@ -349,7 +313,6 @@ impl OpenFile {
                 })?;
                 self.file_len = data.len();
             }
-            FileBacking::ReadOnlyMemory(_) => {}
             FileBacking::HostFile(file) => {
                 if self.writable {
                     file.sync_all().map_err(|source| Error::Io {
@@ -366,7 +329,6 @@ impl OpenFile {
 
 enum FileBacking {
     Memory(Vec<u8>),
-    ReadOnlyMemory(Arc<Vec<u8>>),
     HostFile(fs::File),
 }
 
@@ -374,7 +336,6 @@ impl Clone for FileBacking {
     fn clone(&self) -> Self {
         match self {
             Self::Memory(bytes) => Self::Memory(bytes.clone()),
-            Self::ReadOnlyMemory(bytes) => Self::ReadOnlyMemory(Arc::clone(bytes)),
             Self::HostFile(file) => {
                 Self::HostFile(file.try_clone().expect("clone open host file handle"))
             }
@@ -387,10 +348,6 @@ impl fmt::Debug for FileBacking {
         match self {
             Self::Memory(bytes) => f
                 .debug_tuple("Memory")
-                .field(&format_args!("{} bytes", bytes.len()))
-                .finish(),
-            Self::ReadOnlyMemory(bytes) => f
-                .debug_tuple("ReadOnlyMemory")
                 .field(&format_args!("{} bytes", bytes.len()))
                 .finish(),
             Self::HostFile(_) => f.write_str("HostFile(<open>)"),
@@ -477,7 +434,6 @@ impl HostFileSystem {
             open_files: BTreeMap::new(),
             open_finds: BTreeMap::new(),
             file_locks: BTreeMap::new(),
-            read_only_cache: BTreeMap::new(),
             io_stats: FileIoStats::default(),
         }
     }
@@ -886,7 +842,7 @@ impl HostFileSystem {
                     )));
                 }
                 CREATE_NEW | CREATE_ALWAYS => {
-                    self.invalidate_read_only_cache(&host_path);
+                    self.invalidate_file_read_cache(&host_path);
                     let file =
                         create_host_file(&host_path, creation_disposition == CREATE_NEW, true)?;
                     (FileBacking::HostFile(file), 0, requested_writable)
@@ -903,17 +859,13 @@ impl HostFileSystem {
                     })?;
                     let file_len = metadata.len().try_into().unwrap_or(usize::MAX);
                     if !requested_writable {
-                        if let Some(backing) =
-                            self.read_only_memory_backing(&host_path, &metadata, file_len)?
-                        {
-                            (backing, file_len, false)
-                        } else {
-                            let (file, writable) =
-                                open_existing_host_file(&host_path, requested_writable)?;
-                            (FileBacking::HostFile(file), file_len, writable)
-                        }
+                        // Retain only a bounded read window, not the entire
+                        // contents of every file the guest happens to open.
+                        let (file, writable) =
+                            open_existing_host_file(&host_path, requested_writable)?;
+                        (FileBacking::HostFile(file), file_len, writable)
                     } else {
-                        self.invalidate_read_only_cache(&host_path);
+                        self.invalidate_file_read_cache(&host_path);
                         let (file, writable) =
                             open_existing_host_file(&host_path, requested_writable)?;
                         if writable {
@@ -930,12 +882,12 @@ impl HostFileSystem {
                     }
                 }
                 OPEN_ALWAYS => {
-                    self.invalidate_read_only_cache(&host_path);
+                    self.invalidate_file_read_cache(&host_path);
                     let file = create_host_file(&host_path, false, false)?;
                     (FileBacking::HostFile(file), 0, requested_writable)
                 }
                 TRUNCATE_EXISTING if exists && requested_writable => {
-                    self.invalidate_read_only_cache(&host_path);
+                    self.invalidate_file_read_cache(&host_path);
                     let file = create_host_file(&host_path, false, true)?;
                     (FileBacking::HostFile(file), 0, true)
                 }
@@ -956,10 +908,7 @@ impl HostFileSystem {
                 }
             }
         };
-        let is_memory_backed = matches!(
-            backing,
-            FileBacking::Memory(_) | FileBacking::ReadOnlyMemory(_)
-        );
+        let is_memory_backed = matches!(backing, FileBacking::Memory(_));
         let is_host_file_backed = matches!(backing, FileBacking::HostFile(_));
 
         let id = self.next_id;
@@ -1112,7 +1061,7 @@ impl HostFileSystem {
             )));
         }
         let host_path = self.translate_guest_path(guest_path)?;
-        self.invalidate_read_only_cache(&host_path);
+        self.invalidate_file_read_cache(&host_path);
         fs::remove_file(&host_path).map_err(|source| Error::Io {
             path: host_path,
             source,
@@ -1134,8 +1083,8 @@ impl HostFileSystem {
         }
         let existing = self.translate_guest_path(existing_path)?;
         let new = self.translate_guest_path(new_path)?;
-        self.invalidate_read_only_cache(&existing);
-        self.invalidate_read_only_cache(&new);
+        self.invalidate_file_read_cache(&existing);
+        self.invalidate_file_read_cache(&new);
         let existing_metadata = existing.metadata().map_err(|source| Error::Io {
             path: existing.clone(),
             source,
@@ -1207,8 +1156,8 @@ impl HostFileSystem {
         }
         let old = self.translate_guest_path(old_path)?;
         let new = self.translate_guest_path(new_path)?;
-        self.invalidate_read_only_cache(&old);
-        self.invalidate_read_only_cache(&new);
+        self.invalidate_file_read_cache(&old);
+        self.invalidate_file_read_cache(&new);
         let new_metadata = new.metadata().map_err(|source| Error::Io {
             path: new.clone(),
             source,
@@ -1241,7 +1190,7 @@ impl HostFileSystem {
         }
         let existing = self.translate_guest_path(existing_path)?;
         let new = self.translate_guest_path(new_path)?;
-        self.invalidate_read_only_cache(&new);
+        self.invalidate_file_read_cache(&new);
         if fail_if_exists && new.exists() {
             return Err(Error::InvalidArgument(format!(
                 "destination exists: {new_path}"
@@ -1302,7 +1251,7 @@ impl HostFileSystem {
             file.write_current(bytes)?;
             file.host_path.clone()
         };
-        self.invalidate_read_only_cache(&host_path);
+        self.invalidate_file_read_cache(&host_path);
         Ok(FileIoResult {
             success: true,
             bytes_transferred: bytes.len() as u32,
@@ -1322,7 +1271,7 @@ impl HostFileSystem {
             file.write_at(offset, bytes)?;
             file.host_path.clone()
         };
-        self.invalidate_read_only_cache(&host_path);
+        self.invalidate_file_read_cache(&host_path);
         Ok(FileIoResult {
             success: true,
             bytes_transferred: bytes.len() as u32,
@@ -1459,9 +1408,6 @@ impl HostFileSystem {
                 FileBacking::Memory(data) => {
                     data.resize(new_len, 0);
                 }
-                FileBacking::ReadOnlyMemory(_) => {
-                    return Ok(false);
-                }
                 FileBacking::HostFile(f) => {
                     f.set_len(new_len as u64).map_err(|source| Error::Io {
                         path: file.host_path.clone(),
@@ -1475,7 +1421,7 @@ impl HostFileSystem {
             file.dirty = true;
             file.host_path.clone()
         };
-        self.invalidate_read_only_cache(&host_path);
+        self.invalidate_file_read_cache(&host_path);
         Ok(true)
     }
 
@@ -1538,9 +1484,19 @@ impl HostFileSystem {
     }
 
     pub fn flush(&mut self, id: u32) -> Result<()> {
-        let file = self.open_file_mut(id)?;
-        if file.dirty {
-            file.flush()?;
+        let flushed_path = {
+            let file = self.open_file_mut(id)?;
+            if file.dirty {
+                file.flush()?;
+                Some(file.host_path.clone())
+            } else {
+                None
+            }
+        };
+        if let Some(host_path) = flushed_path {
+            // A private writable buffer becomes visible to host-backed readers
+            // only at flush; discard windows refilled before that point too.
+            self.invalidate_file_read_cache(&host_path);
         }
         Ok(())
     }
@@ -1656,39 +1612,13 @@ impl HostFileSystem {
         self.open_files.get_mut(&id).ok_or(Error::InvalidHandle(id))
     }
 
-    fn read_only_memory_backing(
-        &mut self,
-        host_path: &Path,
-        metadata: &fs::Metadata,
-        file_len: usize,
-    ) -> Result<Option<FileBacking>> {
-        if !memory_backing_bounds().contains(&file_len) {
-            return Ok(None);
-        }
-
-        let modified = metadata.modified().ok();
-        if let Some(entry) = self.read_only_cache.get(host_path) {
-            if entry.len == file_len && entry.modified == modified {
-                return Ok(Some(FileBacking::ReadOnlyMemory(Arc::clone(&entry.bytes))));
+    fn invalidate_file_read_cache(&mut self, host_path: &Path) {
+        for file in self.open_files.values_mut() {
+            if file.host_path == host_path {
+                file.read_cache.clear();
+                file.read_cache_start = 0;
             }
         }
-
-        let bytes = fs::read(host_path).map_err(|source| Error::Io {
-            path: host_path.to_path_buf(),
-            source,
-        })?;
-        let entry = ReadOnlyCacheEntry {
-            len: bytes.len(),
-            modified,
-            bytes: Arc::new(bytes),
-        };
-        let backing = FileBacking::ReadOnlyMemory(Arc::clone(&entry.bytes));
-        self.read_only_cache.insert(host_path.to_path_buf(), entry);
-        Ok(Some(backing))
-    }
-
-    fn invalidate_read_only_cache(&mut self, host_path: &Path) {
-        self.read_only_cache.remove(host_path);
     }
 
     fn unlock_file_ranges_owned_by(&mut self, id: u32, host_path: &Path) {
@@ -2813,7 +2743,7 @@ mod tests {
     }
 
     #[test]
-    fn read_only_medium_host_files_use_shared_memory_backing() {
+    fn read_only_medium_host_files_use_bounded_read_windows() {
         let root =
             std::env::temp_dir().join(format!("wince_file_read_cache_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -2832,18 +2762,23 @@ mod tests {
             .create_file_w("\\pack.bin", GENERIC_READ, OPEN_EXISTING)
             .unwrap();
 
-        assert!(fs.open_file(first).unwrap().is_memory_backed());
-        assert!(fs.open_file(second).unwrap().is_memory_backed());
-        assert_eq!(fs.open_file(first).unwrap().memory_len(), bytes.len());
+        assert!(fs.open_file(first).unwrap().is_host_file_backed());
+        assert!(fs.open_file(second).unwrap().is_host_file_backed());
+        assert_eq!(fs.open_file(first).unwrap().memory_len(), 0);
+        assert_eq!(fs.open_file(first).unwrap().read_cache.capacity(), 0);
+        assert_eq!(fs.open_file(second).unwrap().read_cache.capacity(), 0);
         assert_eq!(fs.read_file(first, 16).unwrap(), &bytes[..16]);
         assert_eq!(
             fs.read_at(second, bytes.len() - 16, 16).unwrap(),
             bytes[bytes.len() - 16..]
         );
         let stats = fs.io_stats();
-        assert_eq!(stats.memory_backed_open_count, 2);
-        assert_eq!(stats.host_file_open_count, 0);
-        assert_eq!(stats.host_file_read_count, 0);
+        assert_eq!(stats.memory_backed_open_count, 0);
+        assert_eq!(stats.host_file_open_count, 2);
+        assert_eq!(stats.host_file_read_count, 2);
+        for id in [first, second] {
+            assert!(fs.open_file(id).unwrap().read_cache.capacity() <= HOST_READ_CACHE_CHUNK);
+        }
 
         fs.close(first).unwrap();
         fs.close(second).unwrap();
@@ -2857,7 +2792,7 @@ mod tests {
         let reread = fs
             .create_file_w("\\pack.bin", GENERIC_READ, OPEN_EXISTING)
             .unwrap();
-        assert!(fs.open_file(reread).unwrap().is_memory_backed());
+        assert!(fs.open_file(reread).unwrap().is_host_file_backed());
         assert_eq!(fs.read_file(reread, 1).unwrap(), b"Z");
 
         fs.close(reread).unwrap();
@@ -2865,15 +2800,20 @@ mod tests {
     }
 
     #[test]
-    fn read_only_large_host_files_use_shared_memory_backing() {
+    fn read_only_large_host_files_do_not_preload_contents() {
         let root = std::env::temp_dir().join(format!(
             "wince_file_large_read_cache_{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        let bytes: Vec<u8> = (0..=255).cycle().take(9 * 1024 * 1024).collect();
-        fs::write(root.join("large.bin"), &bytes).unwrap();
+        let file_len = 9 * 1024 * 1024;
+        let path = root.join("large.bin");
+        let mut file = fs::File::create(&path).unwrap();
+        file.set_len(file_len as u64).unwrap();
+        file.seek(SeekFrom::Start((file_len - 4) as u64)).unwrap();
+        file.write_all(b"tail").unwrap();
+        drop(file);
 
         let mut fs = HostFileSystem::new(&root);
         let first = fs
@@ -2883,19 +2823,220 @@ mod tests {
             .create_file_w("\\large.bin", GENERIC_READ, OPEN_EXISTING)
             .unwrap();
 
-        assert!(fs.open_file(first).unwrap().is_memory_backed());
-        assert!(fs.open_file(second).unwrap().is_memory_backed());
-        assert_eq!(
-            fs.read_at(second, bytes.len() - 4096, 4096).unwrap(),
-            bytes[bytes.len() - 4096..]
-        );
+        assert!(fs.open_file(first).unwrap().is_host_file_backed());
+        assert!(fs.open_file(second).unwrap().is_host_file_backed());
+        assert_eq!(fs.open_file(first).unwrap().memory_len(), 0);
+        assert_eq!(fs.open_file(first).unwrap().read_cache.capacity(), 0);
+        assert_eq!(fs.open_file(second).unwrap().read_cache.capacity(), 0);
+        assert_eq!(fs.read_at(second, file_len - 4, 4).unwrap(), b"tail");
         let stats = fs.io_stats();
-        assert_eq!(stats.memory_backed_open_count, 2);
-        assert_eq!(stats.host_file_open_count, 0);
-        assert_eq!(stats.host_file_read_count, 0);
+        assert_eq!(stats.memory_backed_open_count, 0);
+        assert_eq!(stats.host_file_open_count, 2);
+        assert_eq!(stats.host_file_read_count, 1);
+        assert_eq!(fs.open_file(second).unwrap().cursor(), 0);
+        assert!(fs.open_file(second).unwrap().read_cache.capacity() <= HOST_READ_CACHE_CHUNK);
 
         fs.close(first).unwrap();
         fs.close(second).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_only_medium_duplicate_preserves_existing_cursors_seek_and_eof() {
+        let root = std::env::temp_dir().join(format!(
+            "wince_file_bounded_duplicate_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bytes: Vec<u8> = (0..MEMORY_BACKING_MIN_BYTES + 257)
+            .map(|index| ((index / 67 + index) % 251) as u8)
+            .collect();
+        fs::write(root.join("cursor.bin"), &bytes).unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let first = fs
+            .create_file_w("\\cursor.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        assert_eq!(fs.read_file(first, 17).unwrap(), bytes[..17]);
+        let duplicate = fs.duplicate_open_file(first).unwrap();
+        assert_eq!(fs.file_cursor(duplicate).unwrap(), 17);
+        assert!(fs.open_file(duplicate).unwrap().is_host_file_backed());
+        assert!(fs.open_file(duplicate).unwrap().read_cache.capacity() <= HOST_READ_CACHE_CHUNK);
+
+        // Keep the pre-existing per-OpenFile logical cursor behavior. The
+        // underlying duplicated host handles are always sought before refill.
+        fs.set_file_pointer(first, HOST_READ_CACHE_CHUNK - 3)
+            .unwrap();
+        assert_eq!(
+            fs.read_file(first, 8).unwrap(),
+            bytes[HOST_READ_CACHE_CHUNK - 3..HOST_READ_CACHE_CHUNK + 5]
+        );
+        assert_eq!(fs.file_cursor(duplicate).unwrap(), 17);
+        assert_eq!(
+            fs.read_at(duplicate, HOST_READ_CACHE_CHUNK + 255, 6)
+                .unwrap(),
+            bytes[HOST_READ_CACHE_CHUNK + 255..HOST_READ_CACHE_CHUNK + 261]
+        );
+        assert_eq!(fs.file_cursor(duplicate).unwrap(), 17);
+        assert!(!fs.file_is_eof(duplicate).unwrap());
+        assert_eq!(fs.read_file(duplicate, 8).unwrap(), bytes[17..25]);
+        fs.close(first).unwrap();
+
+        fs.set_file_pointer(duplicate, bytes.len() - 3).unwrap();
+        assert_eq!(
+            fs.read_file(duplicate, 5).unwrap(),
+            bytes[bytes.len() - 3..]
+        );
+        assert!(fs.file_is_eof(duplicate).unwrap());
+        assert_eq!(fs.file_cursor(duplicate).unwrap(), bytes.len());
+        assert!(fs.read_file(duplicate, 0).unwrap().is_empty());
+        assert!(fs.file_is_eof(duplicate).unwrap());
+        assert_eq!(fs.read_at(duplicate, 0, 2).unwrap(), bytes[..2]);
+        assert_eq!(fs.file_cursor(duplicate).unwrap(), bytes.len());
+        assert!(fs.file_is_eof(duplicate).unwrap());
+
+        fs.set_file_pointer(duplicate, bytes.len() + 4).unwrap();
+        assert!(!fs.file_is_eof(duplicate).unwrap());
+        assert!(fs.read_file(duplicate, 1).unwrap().is_empty());
+        assert_eq!(fs.file_cursor(duplicate).unwrap(), bytes.len() + 4);
+        assert!(fs.file_is_eof(duplicate).unwrap());
+        fs.set_file_pointer(duplicate, 0).unwrap();
+        assert_eq!(fs.read_file(duplicate, 11).unwrap(), bytes[..11]);
+        assert!(!fs.file_is_eof(duplicate).unwrap());
+        let denied = fs.write_file(duplicate, b"not writable").unwrap();
+        assert!(!denied.success);
+        assert_eq!(denied.bytes_transferred, 0);
+        assert!(fs.open_file(duplicate).unwrap().read_cache.capacity() <= HOST_READ_CACHE_CHUNK);
+
+        fs.close(duplicate).unwrap();
+        assert!(fs.open_files.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_only_medium_large_reads_stream_bounded_chunks() {
+        let root =
+            std::env::temp_dir().join(format!("wince_file_bounded_chunks_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bytes: Vec<u8> = (0..MEMORY_BACKING_MIN_BYTES + 257)
+            .map(|index| ((index / 67 + index) % 251) as u8)
+            .collect();
+        fs::write(root.join("stream.bin"), &bytes).unwrap();
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w("\\stream.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        assert_eq!(fs.read_file(id, 1).unwrap(), bytes[..1]);
+        fs.set_file_pointer(id, HOST_READ_CACHE_CHUNK - 1).unwrap();
+        let mut position = HOST_READ_CACHE_CHUNK - 1;
+        let mut chunk_sizes = Vec::new();
+        let requested = HOST_READ_CACHE_CHUNK * 2 + 7;
+        assert_eq!(
+            fs.read_file_into(id, requested as u32, |chunk| {
+                assert_eq!(chunk, &bytes[position..position + chunk.len()]);
+                position += chunk.len();
+                chunk_sizes.push(chunk.len());
+                Ok(())
+            })
+            .unwrap() as usize,
+            requested
+        );
+        assert_eq!(
+            chunk_sizes,
+            [HOST_READ_CACHE_CHUNK, HOST_READ_CACHE_CHUNK, 7]
+        );
+        assert_eq!(fs.file_cursor(id).unwrap(), position);
+        assert!(fs.open_file(id).unwrap().read_cache.capacity() <= HOST_READ_CACHE_CHUNK);
+        assert_eq!(fs.open_file(id).unwrap().memory_len(), 0);
+        fs.close(id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn flush_invalidates_read_windows_refilled_after_buffered_write() {
+        let root =
+            std::env::temp_dir().join(format!("wince_file_bounded_flush_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("flush.bin");
+        let mut file = fs::File::create(&path).unwrap();
+        file.set_len((MEMORY_BACKING_MIN_BYTES + 4096) as u64)
+            .unwrap();
+        file.write_all(b"old").unwrap();
+        drop(file);
+        let mut fs = HostFileSystem::new(&root);
+        let reader = fs
+            .create_file_w("\\flush.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        assert_eq!(fs.read_file(reader, 3).unwrap(), b"old");
+        let duplicate = fs.duplicate_open_file(reader).unwrap();
+        let writer = fs
+            .create_file_w("\\flush.bin", GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING)
+            .unwrap();
+        // Writable memory backing is intentionally unchanged by this fix.
+        assert!(fs.open_file(writer).unwrap().is_memory_backed());
+        fs.write_at(writer, 0, b"new").unwrap();
+        // The private writer has not flushed its bytes to the host yet.
+        assert_eq!(fs.read_at(reader, 0, 3).unwrap(), b"old");
+        assert_eq!(fs.read_at(duplicate, 0, 3).unwrap(), b"old");
+        fs.flush(writer).unwrap();
+        assert!(fs.open_file(reader).unwrap().read_cache.is_empty());
+        assert!(fs.open_file(duplicate).unwrap().read_cache.is_empty());
+        assert_eq!(fs.read_at(reader, 0, 3).unwrap(), b"new");
+        assert_eq!(fs.read_at(duplicate, 0, 3).unwrap(), b"new");
+        assert_eq!(fs.file_cursor(reader).unwrap(), 3);
+        assert_eq!(fs.file_cursor(duplicate).unwrap(), 3);
+        fs.close(writer).unwrap();
+
+        let truncater = fs
+            .create_file_w("\\flush.bin", GENERIC_WRITE, CREATE_ALWAYS)
+            .unwrap();
+        assert!(fs.open_file(reader).unwrap().read_cache.is_empty());
+        assert!(fs.read_at(reader, 0, 3).unwrap().is_empty());
+        fs.write_file(truncater, b"short").unwrap();
+        fs.close(truncater).unwrap();
+        assert_eq!(fs.read_at(reader, 0, 8).unwrap(), b"short");
+        fs.close(reader).unwrap();
+        fs.close(duplicate).unwrap();
+        let reopened = fs
+            .create_file_w("\\flush.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        assert_eq!(fs.file_size(reopened).unwrap(), 5);
+        assert_eq!(fs.read_file(reopened, 8).unwrap(), b"short");
+        fs.close(reopened).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn closing_read_only_medium_files_retains_no_file_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "wince_file_bounded_lifetime_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut fs = HostFileSystem::new(&root);
+        for index in 0..4 {
+            let name = format!("opened-{index}.bin");
+            let mut file = std::fs::File::create(root.join(&name)).unwrap();
+            file.set_len((MEMORY_BACKING_MIN_BYTES * 4) as u64).unwrap();
+            file.write_all(&[index]).unwrap();
+            drop(file);
+            let id = fs
+                .create_file_w(&name, GENERIC_READ, OPEN_EXISTING)
+                .unwrap();
+            assert_eq!(fs.open_file(id).unwrap().read_cache.capacity(), 0);
+            assert_eq!(fs.read_file(id, 1).unwrap(), [index]);
+            assert!(fs.open_file(id).unwrap().is_host_file_backed());
+            assert!(fs.open_file(id).unwrap().read_cache.capacity() <= HOST_READ_CACHE_CHUNK);
+            fs.close(id).unwrap();
+            assert!(fs.open_files.is_empty());
+        }
+        // No global whole-file cache remains to own closed files' contents.
+        assert_eq!(fs.io_stats().memory_backed_open_count, 0);
+        assert_eq!(fs.io_stats().host_file_open_count, 4);
         fs::remove_dir_all(root).unwrap();
     }
 
