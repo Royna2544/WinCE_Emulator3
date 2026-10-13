@@ -86,7 +86,7 @@ function Assert-NoReparseMounts([object[]]$Backups) {
 }
 
 function Test-OriginalMountPreflight([string]$Repository) {
-    # Exact verified archives from evidence/e22-pre-live-mounted-data-20261013.receipt.md.
+    # Current-state archives verified by evidence/pre-live-mount-backup-20261013T210234Z/manifest.json.
     $backups = @(
         @{ Source = 'D:\INAVI_Emulator\INAVI'; Archive = 'D:\INAVI_Emulator\INAVI-pre-live-20261013T210234Z.zip'; Hash = 'A21B352E06366A4E36A6A1F631EBCA2173F28633C327B8DFAD756771DBB7368C' },
         @{ Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Archive = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash-pre-live-20261013T210234Z.zip'; Hash = 'BA5A0E21A175779C733824EE7755A49E7BBD692AE5F95AEC139E388F5E148427' },
