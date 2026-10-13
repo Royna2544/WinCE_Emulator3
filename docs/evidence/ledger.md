@@ -1060,9 +1060,13 @@ queue. The combined source restores that queue on pre-entry errors and moves
 ready resume after fallible hook/fence setup. Its
 [focused release validation](../../evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md)
 passed the two fence controls **2/0** and the executed-wait filter **5/0**,
-with format and diff checks. Ready GetMessage against a guarded private page,
-other preflight/tail errors, and state consistency after ready-resume followed
-by a native-entry failure remain untested; no rollback semantics are claimed.
+with format and diff checks. The later
+[ready GetMessage/private-slab integration](../../evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)
+passed **1/0**, with those two filters rerun **2/0** and **5/0** on the same
+rebuilt binary. Its guard-active claim rests on checked source order rather
+than a runtime guard-state probe. Other ready-resume families, preflight/tail
+errors, and state consistency after ready-resume followed by a native-entry
+failure remain untested; no rollback semantics are claimed.
 These controls do not close
 Task/Frame authority, O-P1, Stage 2, S3-A, or live-app map readiness. E-29
 used an earlier executable and cannot validate them.
