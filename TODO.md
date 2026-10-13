@@ -20,6 +20,14 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
   real-MIPS controls now pass. The controlled stale-stub replay is not tied
   to the 2,518 live warnings or splash stall; any recovery change still needs
   identity-matched live evidence ([ledger E-27](docs/evidence/ledger.md)).
+- E-29's bounded run still ends on the real splash despite positive guest
+  `COM7:` reads and dequeued/returned tap messages. Before changing scheduling
+  or window policy, make a bounded +100-to-180 s diagnostic joining native
+  attempt PID/birth/TID/count/stop/PC/time to TID 1's callback continuation
+  and visibility changes on splash window `0x00020008`; record the any/all
+  mode and event generation of the apparently signaled TID 10 wait. Static
+  service counters, a busy host CPU, and the hidden map-window hierarchy are
+  leads, not a proven cause ([E-29 receipt](evidence/e22-live-20261013T211230Z/analysis.receipt.md)).
 - **Stage 2, now, in this repo** (source map:
   `docs/subsystems/cpu-engine.md`, "Stage 2 source map"):
   0. D-007's in-repo Unicorn dependency patch is present. The post-order

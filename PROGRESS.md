@@ -339,6 +339,22 @@ references for historical reconstruction.
   [query-adapter controls](evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)).
   Genuine C query-error/competing-hook and full tail/consumer gates remain
   open; this is not O-P1, Stage 2, S3-A, or live-app acceptance (ledger E-28).
+- E-29 ran the subsequent D: release executable (`8A8B9C7E…57AFB3E094A`)
+  against the three original ZIP-backed read/write mounts. It exited 0 at
+  its configured 330 s cap (330.395 s), without watchdog trip or stderr.
+  The final settled iNavi splash repeated for 151 successful frame polls
+  through +329.030 s; no map appeared. Sixteen raw-NMEA HTTP posts were
+  ACKed, and the retained guest file trace contains 10 positive `COM7:`
+  reads totaling 2,784 B; the +153 s tap was dequeued and returned by the
+  guest window path, without visible navigation. Peak sampled host RSS and
+  private bytes were 1,527.3/1,540.8 MiB; last sampled CPU was 255.313 s.
+  The nominally similar E-27 run used a different binary and is not an
+  established exact-input/host-load match, so its lower sampled CPU/memory
+  and more orphan-return warnings do not establish causality. Mount entry
+  count and file hashes stayed unchanged; four entries changed timestamps
+  only. The pre-run current-state ZIP manifest and complete run limits are in
+  [the E-29 receipt](evidence/e22-live-20261013T211230Z/analysis.receipt.md)
+  (ledger E-29). O-P1, Stage 2, S3-A, and map acceptance remain open.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

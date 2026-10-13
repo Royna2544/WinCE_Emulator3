@@ -355,6 +355,15 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   earliest visible splash interval. The current post-COM7 path reaches GPS and
   sensor devices plus map-era child windows, but final map presentation remains
   gated while the framebuffer still shows the iNavi splash artwork.
+- E-29's next bounded 330 s run again stayed on the splash despite 10 retained
+  positive guest `COM7:` reads (2,784 B) and down/up touch return records.
+  The full-screen splash window `0x00020008` remained visible over 23 hidden,
+  update-pending controls. Service counters stopped changing by about +120 s
+  while sampled host CPU kept increasing; the previous E-27 run also reached
+  a service-counter plateau. A blocked TID 10 wait has one signaled component,
+  but its any/all mode is absent from the trace. Neither CPU spin, missed wake,
+  splash callback failure, nor loader failure is established; trace these
+  identities/causes before altering policy (ledger E-29).
 - Startup profiling still reaches real `happyway_win.exe` table/traffic
   preparation loops, but the scheduler no longer leaves an idle visible helper
   process ahead of a runnable visible parked UI process outside the live-pump
