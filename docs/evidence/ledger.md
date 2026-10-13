@@ -1,0 +1,346 @@
+# Evidence ledger
+
+Status: evidence only. This file records what was observed, with run
+conditions and limits. It does not define design; contracts live in the
+[architecture anchor](../ARCHITECTURE.md) and sequencing in the
+[plan](../PLAN.md). Other pages cite entries here (for example "ledger E-2")
+instead of repeating the narrative. Add new evidence as a new entry; do not
+copy it into design pages.
+
+Conventions: "executed" means compiled and run with the result recorded here;
+"staged" means a test design exists but was not run. Hashes are abbreviated
+(`first8…last6`). Durations are guest-run wall seconds unless noted. An entry
+never upgrades itself into acceptance: acceptance is defined only by the plan's
+stage gates.
+
+## E-1 Installed baseline BED2
+
+- Executable `BED2F559…276E4F` completed a bounded 330.234 s GPS/tap run
+  (exit 0, no watchdog). Its two-second host samples peaked at RSS
+  582,623,232 B and private 595,992,576 B; these are sampled peaks, not a
+  complete allocation breakdown.
+- The frame stayed on the decorative iNavi splash. It is not a full CE boot or
+  an interactive map, so it is a safe fallback, not an accepted runtime.
+- The first observed splash frame was at app +4.358 s; the last observed
+  image change was +24.752 s, and the terminal 800×480 frame was still the
+  splash. The retained files snapshot contained 146 positive `COM7:` reads
+  totaling 35,148 B; one delivered tap reached the guest DOWN handler
+  0.397 s after HTTP ACK, without a frame change. These are one-run observations,
+  not parsed-position, navigation responsiveness or controlled latency proof.
+- Preserved with its symbols; the `pre_scheduler_core_1013` fallback is kept
+  beside it (see [artifact lifecycle](../subsystems/artifact-lifecycle.md)).
+
+## E-2 Persistent-owner 650 run (failed)
+
+Build `65054E88…877F5` (first scheduler-core migration with a process-owned
+native engine). Exact executable, matching PDB and source are preserved; the
+source remains uncommitted in D: and is also recoverable from the verified
+chat-project source archive recorded under E-11 (see
+[DECISIONS D-004](../DECISIONS.md)).
+
+| Fact | Value |
+| --- | --- |
+| Unit suite | 1,618 passed, 0 failed, 1 fixture ignored; build/feature/fmt/diff checks passed |
+| Normal 330 s workload | host access violation `0xC0000005` at 129.108 s; no watchdog; empty stderr |
+| Memory | peak RSS 1,662.59 MiB (1,743,351,808 B), peak private 1,663.40 MiB; RSS 373.5 MiB at +5 s, 1,662.6 MiB at +128 s |
+| Crash site | WER RVA `0x85e757`, `tb_gen_code_mipsel`, translate-all.c:1764, TranslationBlock jump-reset initialization (GUID-matched symbols and disassembly) |
+| Earlier mislabel | a subpage label came from the adjacent BED2 PDB and was wrong; always verify the PDB GUID+age actually loaded |
+| Artifacts | no terminal PPM and no full trace were produced despite result filenames |
+
+App-side observations from the same run: first decorative splash at +4.800 s;
+last successful splash frame at +128.892 s (0.217 s before the crash); input
+helper started 16.075 s after the app; the "+93 s" GPS feed was app +109.108 s;
+16 GPS ACKs, but the only retained files-full response showed 56 zero-byte
+COM7 reads, so positive guest consumption is unproven; the tap failed after the
+app died. The splash is HWND `0x20008`, class `afx:10000:3:0:b5000:0`; authentic
+caller `0x5237` (SP `0x7ffdf578`) was recovered, with no later `0x5237`/wParam
+`0xa`, `0x56d0` or splash teardown in retained logs. Observer processes
+27984/15496 were stopped by the parent around 02:30 and exited -1 without a
+graceful finish record.
+
+Limits: the memory growth correlates with the crash but does not establish
+cause; no dump survives; no evidence implicates a particular shim or loader.
+
+## E-3 Translation-arena retention mechanism (source-confirmed)
+
+- Pinned Unicorn 2.1.5, 64-bit TCG: default arena 1 GiB per engine; Windows
+  reserves it and commits touched pages in roughly 4 MiB chunks.
+- Hook deletion invalidates recorded TB regions but does not rewind arena
+  allocation. A full TB flush resets the region cursor but does not decommit.
+- Therefore persistent owners plus hook churn can retain translated-code
+  commitment that fresh-engine destruction used to release.
+- Status: mechanism read from source, not measured attribution of E-2.
+
+## E-4 Stage 0 native-owner controls (executed, isolated fixture)
+
+Six separately compiled controls: stable, repeated lease, repeated hook scope,
+mapping churn (aligned 4 KiB topology), combined churn, real in-block churn.
+2,048 counted attempts of 768 MIPS instructions each; actual timeout query 0;
+checked final PC/counter; initial arena queried as 1,073,741,824 B in all six.
+
+| Case family | Sampled retained RSS |
+| --- | --- |
+| stable, repeated lease, mapping-only | about 7 MiB |
+| hook-containing (hook-only, combined, in-block) | about 243 MiB until owner close, then released |
+
+Limits: one bounded owner workload; no production mapping reconciler, Task/FPU
+transfer, backend stop/error matrix or app run; the fixture time includes
+native timeout service, so it says nothing about application throughput or
+cache speed; it does not identify which hook retains memory.
+
+## E-5 Pre-init arena budget differential (executed, diagnostic)
+
+Four fresh processes requested 8 MiB, default, 1 MiB and 2 MiB before native
+initialization. 1 MiB and 2 MiB exited `0xC0000005` during the first size query
+(matched RSDS/PDB: `tcg_out8`, RVA `0xA2D31`) and never returned a size.
+8 MiB and default passed a four-instruction MIPS smoke (after correcting the
+fixture's last-PC expectation to `0x100c`); actual sizes 8,388,608 B and
+1,073,741,824 B. The pinned Windows 4 MiB commit handler's tail calculation is
+a source defect candidate consistent with the small-reservation fault. No dump
+gives the fault address. This is separate from the E-2 site.
+
+## E-6 Commit-tail repair controls (executed, copied source, isolated)
+
+- Copied-source bounds repair passed the 1/2/8 MiB/default tiny controls; an
+  8 MiB distinct-PC probe committed second-half pages before any TB flush. The
+  matching pristine handler AVed on 1/2 MiB and before tail observation.
+- An in-handler telemetry variant stack-overflowed and is excluded.
+- Win64 2x2 handler matrix: 24/24 owned controls passed; telemetry cells
+  recorded the clipped second-half VEH request (fault offset 4,194,328;
+  remaining/request 4,194,280 B) and a successful commit.
+- A leaf-tail-jump thunk passed seven fresh-process small/tail controls with
+  matching direct tail counters.
+- A synthetic logical 4 MiB+1 final-byte touch passed twice: one-byte clipped
+  commit, the next host page left free. TCG's guard prevents normal translation
+  there, so this is not a translated-tail budget gate.
+- Sequential leaf-thunk lifecycle: two runs closed/recreated eight owner pairs
+  each, verified handler and mapping removal, and translated through the
+  survivor's clipped tail.
+
+Open: concurrent VEH/teardown with an in-flight callback, normal translated-page
+boundaries, exact handler request/return in the full backend, x64 trampoline
+unwind safety, a real-app budget. No production native source or cache setting
+was changed.
+
+## E-7 Full-backend Stage 2 controls (executed)
+
+- Mapping/context control passed twice in owned release unit-test processes:
+  three counted slices on the same engine, guest code loaded a newly mapped
+  page, native F0 survived re-entry, the value persisted, the page was removed
+  before the third slice; actual timeout query 0. One synthetic page/owner only.
+- Expected red (preserved as failing controls): a counted stop with actual
+  `Query::TIMEOUT` = 0 fabricates a host-wall record; a nonzero
+  `READ_UNMAPPED` native fault returns Ok under a positive configured timeout.
+- `ctl_get_timeout` returns the configured duration, not actual expiry.
+- Staged and unexecuted: in-slice FPU wait→resume→exit; native wait/exit FPU.
+
+The two failures above are the preserved **fresh-HEAD red baseline**, not the
+current D: source result. In the sole D: checkout, the connected stop/error
+fix built in the repo `target/` with `unicorn,trace,win32-desktop` release
+features; four isolated final tests passed (count/no fabricated deadline,
+nonzero `READ_UNMAPPED` hard failure, typed service handoff, main-loop
+rotation). The final library/main test EXE SHA-256 values were
+`8BC19FE0…9DCDC3` / `BA66B07F…38C54D`; exact source hashes, PIDs, stdout,
+stderr and the private red test patch are in local
+`evidence/stage2-e7-stop-20261013/receipt.md`. This proves only those controls
+on the then-current dirty persistent-owner checkout. O-P1's complete reason
+taxonomy, O-P4 fresh default, O-M1 guest-byte/view ownership, other feature
+profiles and a bounded app run remain open. Later source edits require their own
+validation; the E-7 executable hash does not identify them.
+
+After outgoing file-view readback moved before PID rotation and stale typed
+outcomes were cleared on preflight swaps, the sole D: checkout's serial full
+release suite exited 0 with **1,623 passed, 0 failed, 3 ignored**. This was
+before the later E-13 repaired-PC change. Its log
+SHA-256 is `5DB8C9DF…AFA530C181B9`; the library test EXE SHA-256 is
+`8543991F…EF72ADE1`. The exact command, full hashes and logs are in local
+`evidence/stage2-e7-stop-20261013/post-order-and-retirement.receipt.md`.
+This is a later result on dirty persistent-owner source, not fresh-engine
+acceptance, a complete stop taxonomy or a bounded Windows CE app run.
+
+Two earlier ignored isolated native probes used the focused-control library
+EXE cited above. A
+Box-backed `mem_map_ptr` slab survived guest stores, partial protection,
+unmapping and new-owner remap (exit 0, 1 pass); this is native API viability,
+not the production VM strategy. An earlier closed-owner Context fixture failed
+at a terminal-PC/count assertion (`0x100c` versus `0x1010`, exit 101), after
+its restored FPU/HI/LO/PC/T0 checks; the closure assertion was then unreached
+(`native-probes.receipt.md`). After adjustment, the ignored fixture was run
+separately under a 45-second watchdog and exited 101 in 0.02 seconds at its
+intended final assertion: the current default does not close the native owner.
+Its preceding guest store and native no-timeout checks passed. This is the
+expected-red O-P4 gate, not a full-suite failure or fresh-owner acceptance;
+the later raw logs and exact scope are in the post-order receipt above.
+
+## E-8 Task and handle ownership baseline (executed, expected red)
+
+Eight actual-Kernel controls in a source-matching copy mirror: one
+close-source preservation pass, seven expected failures (alias priority/suspend/
+exit coherence, creation owner, primary identity, trace-independent primary
+lookup, checkpoint isolation). Two raw-API controls also failed as predicted:
+`OpenThread` returns the existing public handle instead of a new alias;
+`GetProcessIdOfThread` returned the selected PID 1 instead of child creation
+PID 66. Total: 10 controls, 1 pass, 9 failures. Later assertions in several red
+cases were not reached; last-public-handle and wait-pin controls are still to
+add. This is a red baseline, not a passed gate.
+
+## E-9 Hot-path throughput and slicing (2026-10-12, executed)
+
+Two-minute live runs, `--desktop virtual`, clean SD image, same host, using the
+`ce.slice_profile` fields `guest_insns`/`mips` (commit `fc8c8384`). Full
+conditions and numbers: [PROGRESS.md](../../PROGRESS.md), 2026-10-12 section.
+
+- Raw Unicorn MIPS loop on this host: about 3,200 MIPS unhooked, 1,900 with a
+  trivial block hook, 400 with a trivial per-instruction hook.
+- iNavi: 1.05 MIPS at the pre-change `HEAD` (a per-block hook that queried
+  kernel/GWE state, about 15 µs per block); 7.3 average with polling amortized;
+  22-34 MIPS in busy slices with hookless trampolines (13 with the global hook).
+- Fixed per-slice cost: 3.6% / 14.9% / 25.5% of slice time at average slices of
+  302 / 143 / 65 ms.
+- `emu_start(count = 1_000_000)` is the de facto round-robin tick and installs
+  Unicorn's per-instruction counting hook; count 0 reached 30-106 MIPS but
+  exposed a respawn storm (with a 100 ms native timeout, repeated
+  `CreateProcessW(happyway_win.exe)` in 3 of 4 runs, PIDs 67-82). A later
+  session traced it to the live-pump `CreateProcessW` replay (child executed
+  inside the parent's import hook before the return was committed), fixed it,
+  and measured 84.56 busy-slice MIPS with count 0 ([PROGRESS.md](../../PROGRESS.md)).
+- After the speedup, wall time was dominated by guest waits (15, 20, 25, 30 s in
+  5 s steps, and 1 s idle slices at an import trap). A later session identified
+  the growing 5/10/15/20 s sleeps as sensor-initialization retries (caller VA
+  `0x000e69b8`, retry count x 5000 ms) and fixed the sensor command/packed-sample
+  path ([PROGRESS.md](../../PROGRESS.md)). The 1 s import-trap idle slices have
+  not been re-attributed.
+- Scheduling is bimodal for one build (`happyway_win` 170-300 slices versus 1-7).
+- Debug-endpoint counters stayed stale for minutes and are not a progress metric.
+
+## E-10 Cross-owner same-VA/FPU control (2026-10-13, executed)
+
+Two fresh, bounded release-test processes (PIDs 35920 and 28296, exits 0)
+exercised two distinct `UnicornMips` native owners at the same guest VA
+`0x20000000`. The parent and child retained independent page values
+`0x11223344` / `0xa1b2c3d4` and F0 markers `0x7300` / `0x7400` over six
+counted 20-instruction slices and four explicit selected/parked swaps. Guest
+LW/MFC1 stores, owner, PC, F0 and page checks passed; actual native
+`Query::TIMEOUT` was 0. The fixture source was `F90427EB…3C782` in a private
+copy mirror; executable `76F53DF9…3B0` and matching PDB `F4F023F6…B9C3` were
+preserved. No watchdog fired; observed RSS was about 99 MiB.
+
+Limits: synthetic PEs and test-created pages, explicit slice selection and
+manual fulfillment of queued launch; no real Kernel `VirtualAlloc`, native
+wait/exit continuation, long churn or application frame. This ran against the
+experimental persistent-owner code, so it is a **parallel Stage 8 diagnostic**
+of the same-VA/FPU shape, not acceptance of the Stage 2 fresh-engine VM gate
+under [D-003](../DECISIONS.md). A Kernel-owned `VirtualAlloc` fault/release
+fixture is staged and reviewed but has not compiled or run.
+
+## E-11 Task lifetime and alias-wake baseline (2026-10-13, executed, expected red)
+
+Three no-Unicorn release controls in a private source-matching copy ran in
+one bounded owned process (PID 2960, 0.01 s, exit 101): **0 passed, 3 failed
+at the intended assertions**. Closing the final public handle lost an
+unsignaled live task snapshot; exiting through one alias queued zero rather
+than one waiter indexed on a sibling alias; and a registered wait did not
+retain an exited target after both public aliases closed. The test-only
+fixture was `5B450F24…E7DC`; the compiled test executable was
+`84557AD5…D2186`. No D production source or installed binary changed.
+
+These add to the earlier ten controls in E-8 (one pass, nine expected red),
+giving thirteen distinct Task/alias controls with one pass and twelve red.
+This is not full wait acquisition, genuine native worker exit, stale-key
+rejection, failed-publish cleanup, clone isolation or Stage 3 acceptance.
+
+## E-12 Persistent-owner full-backend FPU/churn diagnostic (2026-10-13, executed)
+
+Two bounded release-test processes used a synthetic MIPS PE and the full
+`UnicornMips` backend with the experimental persistent owner. The stable
+case completed 128 counted slices with guest loop/page progress (PID 33408,
+2.243 s, 70,832,128 B peak RSS), but final F0 was 0 instead of the seeded
+`0x6300`. The map/unmap attempt (PID 35672, 0.214 s, 55,222,272 B peak RSS)
+failed at its **first mapped phase**; 64 cycles were not completed. Both were
+test failures, not acceptance passes.
+
+A short `cfg(test)`-instrumented replay (PID 35436, 0.509 s) established the
+loss path: the native context was captured with `(TID 1, PC 0x402020)` and
+F0 `0x6300`, but post-run repair saved scalar PC `0x401078`. The next
+`restore_if_exact` missed that key and the blank/GPR-only fallback left F0
+at 0. The next exact restore preserved 0; the first failing safe boundary
+still read the mapped guest page correctly. Executable/PDB pairs and full
+logs are archived and stream-hash verified in the separate ChatGPT project
+workspace. This proves the pre-repair key/post-repair PC mismatch on this
+path, **not** all stop paths or a causal account of the 650 app crash.
+
+Under [D-003](../DECISIONS.md), these pre-repair E-12 runs are Stage 8
+diagnostics, not the fresh-engine Stage 2 VM/FPU gate or a scheduler-core
+acceptance result. The page mapping used test-owned RAM, not guest
+`VirtualAlloc`. The lifetime-independent scalar loss was subsequently
+reproduced and repaired under the focused E-13 control below.
+
+## E-13 Repaired-PC fresh-owner FPU continuation (2026-10-13, executed)
+
+The deterministic full-backend fixture ran two native NOPs in a synthetic
+trampoline, captured raw context, used the production restart-PC helper,
+closed the original native owner, then resumed on a fresh owner through the
+mismatched-key scalar fallback. It seeded full-width F0 and FCSR, checked
+HI/LO and PC, and verified host registers plus guest `mfc1`/`cfc1` readback.
+The native attempt used a 100 ms timeout and two-instruction count; this is
+not an application run.
+
+Before repair the explicitly run ignored control failed as expected (exit 1,
+one failure): after PC and HI/LO passed, observed `(F0,FCSR)` was `(0,0)`
+instead of `(1234605616436508552,1)`. Red executable SHA-256
+`D8BB0B21…4DE2B`; pre-repair `unicorn.rs`/`cpu_mips.rs` hashes
+`E3381CF7…3F39B2` / `DF111899…1AE962`. The earlier bindgen failure without
+`LIBCLANG_PATH` was setup-only, not this red result.
+
+The repair extends `MipsGuestContext` with 64-bit F0-F31 and FCSR, uses
+checked primary/post-repair capture and checked scalar restore onto a blank
+engine when the native key differs, and preserves primary native-result error
+precedence. The final focused release run passed (exit 0, one passed, 690
+filtered), including guest FPU readback. Two checked-context controls passed
+on that same final executable (two passed, 689 filtered): valid FCSR `0x1005`
+round-tripped; enabled pending cause `0x1080` returned `UC_ERR_EXCEPTION`.
+Final executable SHA-256 `66B6319E…154711`; final `unicorn.rs`/`cpu_mips.rs`
+hashes `9914D621…6F041C` / `708E25D2…0F25C62`. Format and scoped diff
+checks passed. Full commands, hashes and preserved binaries are in local
+`evidence/e12-repaired-pc-20261013.receipt.md`.
+
+This proves the repaired-PC mismatched-key loss is fixed in this focused
+fresh-owner fixture, not closed-owner exact-key native Context portability,
+guest `VirtualAlloc` byte coherence, callback/o32 floating returns,
+CP0_STATUS FP-mode transfer, full scheduler behavior or iNavi readiness.
+Legacy in-hook register helpers still suppress some read/write errors. Full
+release/feature suites and bounded app runs remain separate gates.
+
+## Chat-project validation notes (not in this repository)
+
+The pages cite the following notes by name. Their originals are available in
+the separate ChatGPT project workspace under `validation/`; they have not yet
+been imported into this repository. Until then, this ledger is the portable
+summary, not a substitute for the full run receipts. If importing the notes,
+place them in `docs/evidence/notes/` and link each matching entry.
+
+| Note | Summarized in |
+| --- | --- |
+| `20261013-stage0-arena-initialization-differential.md` | E-5 |
+| `20261013-stage0-native-commit-tail-differential.md` | E-6 |
+| `native-tail-veh-abi-matrix-1013/REPORT.md` | E-6 |
+| `native-tail-leaf-thunk-1013/README.md` | E-6 |
+| `native-tail-page-rounding-1013/README.md` | E-6 |
+| `native-tail-veh-lifecycle-1013/README.md` | E-6 |
+| `20261013-leaf-full-backend-integration-gate.md` (design only) | E-6 |
+| `stage2-full-backend-1013/mapping-context-1` | E-7 |
+| `20261013-stage2-full-backend-mapping-stop-context-controls.md` | E-7 |
+| `run-outcome-consumer-map-1013.md` (design only) | E-7 |
+| `20261013-task-ownership-expected-red-baseline.md` | E-8 |
+| `20261013-task-identity-api-expected-red-baseline.md` | E-8 |
+| `20261013-task-first-production-slice-audit.md` (design only) | [tasks](../subsystems/tasks-scheduler.md) |
+| `20261013-stage2-cross-process-same-va-fpu-control.md` | E-10 |
+| `20261013-stage2-kernel-virtual-page-staged.md` (design only) | E-10 |
+| `20261013-task-pin-expected-red-receipt.md` | E-11 |
+| `task_pin_expected_red_1013.rs` (test-only fixture) | E-11 |
+| `20261013-task-directory-decisions-proposal.md` (design only) | [tasks](../subsystems/tasks-scheduler.md) |
+| `20261013-fresh-engine-vm-coherence-review.md` (design only) | [memory](../subsystems/guest-memory.md) |
+| `20261013-fresh-default-policy-design.md` (read-only source audit; no tests run) | [CPU](../subsystems/cpu-engine.md), [memory](../subsystems/guest-memory.md), [O-P4/O-M1](../DECISIONS.md) |
+| `20261013-stage8-full-backend-churn-control.md` | E-12 |
+| `20261013-fresh-engine-source-delta-audit.md` (read-only porting map) | [plan](../PLAN.md) |
+| `validation/paint`, `validation/end-paint` | [GDI](../subsystems/gdi-framebuffer.md) |
