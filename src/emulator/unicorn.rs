@@ -7600,6 +7600,8 @@ impl UnicornMips {
                     Err(cause) => {
                         let cause: Error = cause;
                         self.persist_run_state_handles(&run_state);
+                        self.orphaned_wndproc_returns =
+                            std::mem::take(&mut *last_wndproc_returns.borrow_mut());
                         let abort = uc.abort_close();
                         // Pointer-backed pages remain fenced through close.
                         active_private_page_guards.borrow_mut().clear();
@@ -7615,90 +7617,6 @@ impl UnicornMips {
         }
         let mapped_kernel_memory = Rc::new(RefCell::new(persisted_kernel_mappings));
         let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
-        if running_guest_thread.borrow().is_none() {
-            let active_thread_id = *current_thread_id.borrow();
-            if try_resume_blocked_wait_with_active_pc(
-                kernel,
-                &mut uc,
-                active_thread_id,
-                &current_thread_id,
-                &blocked_wait_threads,
-                &suspended_guest_thread,
-                Some(&suspended_guest_thread_queue),
-                &running_guest_thread,
-                None,
-                false,
-            ) || try_resume_blocked_get_message_with_active_pc(
-                kernel,
-                &mut uc,
-                active_thread_id,
-                &current_thread_id,
-                &blocked_guest_thread,
-                &displaced_blocked_get_messages,
-                &suspended_guest_thread,
-                Some(&suspended_guest_thread_queue),
-                &running_guest_thread,
-                &pending_wndproc_returns,
-                None,
-                false,
-                Some(UnicornHeapMapping {
-                    mapped: mapped_kernel_memory.as_ref(),
-                    mapped_blobs: mapped_blobs_ptr,
-                }),
-            ) || try_resume_blocked_modal_message_box(
-                kernel,
-                &mut uc,
-                Some(&mut *framebuffer),
-                active_thread_id,
-                &current_thread_id,
-                &blocked_modal_message_box,
-                &blocked_get_message,
-                &blocked_guest_thread,
-                &suspended_guest_thread,
-                Some(&suspended_guest_thread_queue),
-                &running_guest_thread,
-                None,
-                false,
-            ) || try_resume_blocked_popup_menu_modal(
-                kernel,
-                &mut uc,
-                active_thread_id,
-                &current_thread_id,
-                &blocked_popup_menu_modal,
-                &blocked_get_message,
-                &suspended_guest_thread,
-                Some(&suspended_guest_thread_queue),
-                &running_guest_thread,
-                None,
-                false,
-            ) || try_resume_blocked_send_message_timeout(
-                kernel,
-                &mut uc,
-                active_thread_id,
-                &current_thread_id,
-                &blocked_send_message_timeout,
-                &suspended_guest_thread,
-                Some(&suspended_guest_thread_queue),
-                &running_guest_thread,
-                None,
-                false,
-            ) || try_resume_blocked_clipboard_data(
-                kernel,
-                &mut uc,
-                mapped_kernel_memory.as_ref(),
-                mapped_blobs_ptr,
-                active_thread_id,
-                &current_thread_id,
-                &blocked_clipboard_data,
-                &suspended_guest_thread,
-                Some(&suspended_guest_thread_queue),
-                &running_guest_thread,
-                None,
-                false,
-            ) {
-                start_pc = read_mips_reg(&uc, RegisterMIPS::PC);
-            }
-        }
         // ── Scheduler timeslice hook: context-switch at safe MIPS branch boundaries ──
         let scheduler_timeslice_counter = Rc::new(Cell::new(0u32));
         let scheduler_timeslice_counter_hook = Rc::clone(&scheduler_timeslice_counter);
@@ -10314,14 +10232,12 @@ impl UnicornMips {
         );
 
         // ── Run ───────────────────────────────────────────────────────────────────
-        let slice_hooks_elapsed = slice_profile.elapsed();
         let native_timeout_us = if limits.live_pump {
             live_pump_native_timeout_us()
         } else {
             limits.wall_clock_limit_ms.saturating_mul(1_000)
         };
         let native_start_pid = native_owner_pid;
-        let native_start_tid = *current_thread_id.borrow();
         // All pointer-mapped pages are fenced before the guest runs. Hook-time
         // maps add their own guard before the fault/import callback resumes.
         for recorded in mapped_kernel_memory.borrow().private_pages.values() {
@@ -10354,6 +10270,94 @@ impl UnicornMips {
         // This checked ordinal is diagnostic correlation, never a Task or
         // native-handle identity. Allocate only when a primary start is next.
         report.attempt_id = Some(pre_entry_try!(DiagnosticAttemptId::next()));
+        // A ready wait may consume kernel state and switch the selected thread.
+        // Defer that choice until all fallible pre-entry setup has succeeded.
+        if running_guest_thread.borrow().is_none() {
+            let active_thread_id = *current_thread_id.borrow();
+            if try_resume_blocked_wait_with_active_pc(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_wait_threads,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
+            ) || try_resume_blocked_get_message_with_active_pc(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_guest_thread,
+                &displaced_blocked_get_messages,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                &pending_wndproc_returns,
+                None,
+                false,
+                Some(UnicornHeapMapping {
+                    mapped: mapped_kernel_memory.as_ref(),
+                    mapped_blobs: mapped_blobs_ptr,
+                }),
+            ) || try_resume_blocked_modal_message_box(
+                kernel,
+                &mut uc,
+                Some(&mut *framebuffer),
+                active_thread_id,
+                &current_thread_id,
+                &blocked_modal_message_box,
+                &blocked_get_message,
+                &blocked_guest_thread,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
+            ) || try_resume_blocked_popup_menu_modal(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_popup_menu_modal,
+                &blocked_get_message,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
+            ) || try_resume_blocked_send_message_timeout(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_send_message_timeout,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
+            ) || try_resume_blocked_clipboard_data(
+                kernel,
+                &mut uc,
+                mapped_kernel_memory.as_ref(),
+                mapped_blobs_ptr,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_clipboard_data,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
+            ) {
+                start_pc = read_mips_reg(&uc, RegisterMIPS::PC);
+            }
+        }
+        let slice_hooks_elapsed = slice_profile.elapsed();
+        let native_start_tid = *current_thread_id.borrow();
         report.start_thread_id = Some(native_start_tid);
         report.start_pc = Some(start_pc);
         let result = uc.emu_start(
