@@ -9,8 +9,9 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
   `docs/ARCHITECTURE.md`, `docs/PLAN.md` and the relevant subsystem page;
   name ownership/consumers/failure/test gates before code. Phase 1 was
   authorized, but the first persistent-owner 650 trial host-crashed at
-  129.108 s and 1.62 GiB RSS despite 1,618 passing tests. BED2 is restored;
-  dirty source is experimental.
+  129.108 s and 1.62 GiB RSS despite 1,618 passing tests. BED2 is a
+  hash-preserved measured fallback, not the current release EXE; current
+  source remains experimental despite the later E-19 suite.
   Per D-003, finish the Stage 2 fresh-engine stop taxonomy/default-owner and
   same-VA/shared-view coherence gates; then migrate one connected
   Task/object authority slice. Do not use the persistent-owner success path as
@@ -47,17 +48,22 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
       not close any of those gates. The ignored E-18 control is now expected
       red: guest MIPS wrote `0x11223345` to an internal private allocation,
       but after a test-only idle-owner closure the fresh engine loaded stale
-      seed `0x11223344` at the correct PC without a fault. Establish checked
-      outgoing private-byte readback and owner-qualified canonical backing:
-      distinguish owner, backing kind and allocation incarnation; read exact
-      mapped pages before owner finish/rotation and stage failures before
-      publishing `saved_context`. A read-only source audit also found whole-
-      `initial_bytes` reseeding on page map and possible stale native bytes
-      after free/reallocation at one VA; prove those boundaries separately.
-      Turn E-18 green without retaining the old engine or suppressing native
-      errors. Then cover public COREDLL `VirtualAlloc` separately. Add
-      end-to-end immediate CreateProcess
-      sync-error fault injection; its error latch is source-reviewed only.
+      seed `0x11223344` at the correct PC without a fault. D-008 now selects
+      AddressSpace-owned committed-page host slabs as the private-page target,
+      not outgoing private-page copy-back. First introduce one canonical
+      machine-owned process-birth directory independent of public handles,
+      then connect owner-scoped reservation/allocation incarnation and remote
+      queries to it. Stage 3 extends that same directory. Then migrate
+      private pages with exact pinned native maps, checked failure/publication
+      and no whole-`initial_bytes` reseed for that family. A failed unmap must
+      retain its pin and fail the attempt, not recycle a stale VA. Turn E-18
+      green without retaining the old engine or suppressing native errors;
+      also prove public COREDLL `VirtualAlloc`, two-PID same-VA isolation,
+      free/reallocation, protect/decommit and independent clones. Unmigrated
+      view/blob families retain an explicit checked copy boundary until their
+      connected migration. Add end-to-end immediate CreateProcess sync-error
+      fault injection; its error latch is source-reviewed only. Measure host
+      RSS/private and guest busy work on matched runs before claiming benefit.
   2. O-P1 now reports `UnknownNormalStop` for unproven successful stops,
      `HookStop(HostWallBudget)` from one checked elapsed-budget path (E-15),
      and `HookStop(VisibleParkedPeerYield)` from one checked hookless live-pump
@@ -104,7 +110,8 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      suite (1,239/0/1 ignored). These
      counts do not turn E-18 green or supersede its expected-red diagnosis.
      After remaining source fixes, repeat the applicable profiles, then one
-     bounded 330 s live run against BED2.
+     bounded 330 s live run of a frozen candidate, compared with the
+     hash-preserved BED2 baseline.
      Record any newly exposed native errors in KNOWN_BUGS; neither the frozen
      1,634-pass E-19 source suite nor the decorative splash closes
      Stage 2.

@@ -12,10 +12,10 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   and was wrong.
   No surviving dump or final native Result/profile establishes root cause.
   Terminal PPM/full traces are absent. Failed650/PDB and evidence are preserved;
-  installed BED2 is restored, but current dirty source still builds experimental
-  ownership. Do not install it as stable merely because dirty-source full
-  release suites passed 1,623 tests before E-12 and 1,626 after it (both
-  0 failed, 3 ignored).
+  BED2 is a hash-preserved measured fallback, not the current `target/release`
+  EXE. Current source still builds experimental ownership; do not treat it as
+  stable merely because historical suites passed 1,623/0/3 ignored before
+  E-12, 1,626/0/3 after it, or frozen E-19 passed 1,634/0/4 ignored.
   Pinned native translation arenas retain touched Windows pages through hook
   invalidation/flush. Six isolated Stage 0 cases queried a 1 GiB initial arena;
   three hook-churn cases retained about 243 MiB sampled RSS until owner close,

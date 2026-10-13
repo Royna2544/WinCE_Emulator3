@@ -150,6 +150,19 @@ references for historical reconstruction.
   network delivery, every safe-PC shape or failing Unicorn API injection.
   Sparse/hookless remaining causes, native count witness, typed restart-PC
   repair, E-18 private red, O-P4/O-M1, Stage 2 and live acceptance stay open.
+- Design decision D-008 selected one stable host-byte authority for each
+  migrated committed page: AddressSpace-owned private slabs and canonical
+  mapping-owned shared slabs, pinned through exact native owner leases. Local
+  CE6 `NK/KERNEL/vm.c` confirms reserve/commit, decommit/release, protection
+  and shared-heap operations are distinct; dumped-app use remains to measure.
+  Independent source review found no canonical birth record today, per-handle
+  copied process objects, global VA-only virtual allocations, startup native
+  remapping that could bypass slabs, and CPU snapshot publication before some
+  outgoing byte sync. The revised anchor/Stage 2 design requires one birth
+  directory that Stage 3 extends, owner-qualified region/overlap and public Ex
+  controls, pin-before-map/close-before-unpin, clone isolation, and an all-
+  family checked slice commit. This is design/source review only: no O-M1
+  implementation, fresh-default acceptance, new live run or performance gain.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial
