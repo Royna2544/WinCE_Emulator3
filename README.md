@@ -16,10 +16,13 @@ remote-control HTTP/WebSocket surface.
   implement the latest plan-first documentation direction, not finished runtime
   architecture. The earlier persistent-owner freeze passed 1,618 tests but its
   first normal trial host-crashed at 129.108 s/0xC0000005 with 1.62 GiB RSS.
-  The later dirty-source post-order full release suite passed 1,623 tests
-  (0 failed, 3 ignored); the isolated closed-owner test remains expected red
-  at its final closure assertion. This does not accept fresh-owner execution
-  or the real application.
+  An intermediate dirty-source post-order full release suite passed 1,623
+  tests (0 failed, 3 ignored). After the repaired-PC change, the dirty source
+  passed 1,626 release tests (0 failed, 3 ignored), Unicorn-only and
+  Unicorn+desktop/no-trace release checks, and 1,239 no-feature tests
+  (0 failed, 1 ignored). The isolated closed-owner test remains expected red
+  at its final closure assertion. This does not accept fresh-owner default
+  execution, O-P1/O-P4/O-M1, Stage 2 or the real application.
   Exact failed executable/symbols are preserved; installed BED2 is restored.
   Rebuilding the dirty source does not reproduce that fallback. Crash/cache
   diagnostics continue in parallel; the fresh-engine Stage 2 gates precede
@@ -34,7 +37,7 @@ remote-control HTTP/WebSocket surface.
 - Earlier BED2 bounded 330 s runs exited cleanly but remained on splash.
   Bounded read-only file windows reduce sampled peak host RSS from about
   1,300 to 562 MiB;
-  the latest validated guard build passes 1,593 tests (one fixture ignored).
+  the installed BED2 guard build passed 1,593 tests (one fixture ignored).
   Reallocation preserves old bytes on failure; authenticated callback recovery
   restores the original caller stack in the real app. The earlier BC 330 s run
   peaks at about 493 MiB and delivers the test tap after 0.835 s, but remains

@@ -21,7 +21,11 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      serial full release suite in the sole D: target passed 1,623 tests, with
      0 failures and 3 ignored before the E-12 repaired-PC change; this is a
      historical dirty persistent-owner checkpoint, not fresh-engine
-     acceptance. Top-level run
+     acceptance. The post-E-12 suite passed 1,626 tests (0 failed, 3 ignored);
+     Unicorn-only and Unicorn+desktop/no-trace release checks and the
+     no-feature suite (1,239 passed, 0 failed, 1 ignored) also passed. These
+     remain dirty-source validation, not Stage 2 acceptance (ledger E-13).
+     Top-level run
      evidence and release EXE/PDB originals were hash-preserved and removed
      after approval. Classify remaining nested target artifacts before treating
      the whole build directory as disposable; retire old mirrors separately.
@@ -45,11 +49,10 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      exact raw continuations; writing a synthesized PC into it can retain
      stale branch `hflags`. Closed-owner exact-key Context transfer, guest
      `VirtualAlloc` coherence and the broader Stage 2 gates remain open.
-  3. Run the remaining feature profiles, repeat the full release suite after
+  3. Repeat the full release suite and applicable feature profiles after
      further source edits, then one bounded 330 s live run against BED2.
-     Record any newly exposed native errors in KNOWN_BUGS; the pre-E-12
-     1,623-pass persistent-owner suite and decorative splash do not close
-     Stage 2.
+     Record any newly exposed native errors in KNOWN_BUGS; neither the current
+     1,626-pass dirty-source suite nor the decorative splash closes Stage 2.
 - Parallel Stage 8 native lane (diagnostic only, never gates Stages 2-6):
   the evidence is in ledger E-3 to E-6. Before any production budget change,
   the remaining open items are concurrent in-flight VEH teardown, VEH
@@ -67,8 +70,8 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
   last-public-handle execution, wait acquisition and continuation controls
   before claiming lifecycle acceptance. Native wait/exit FPU controls remain staged;
   the actual-backend count-stop and nonzero-unmapped-error controls were the
-  expected-red E-7 mirror baseline; their preliminary D-source passes do not
-  close the broader Stage 2 gate.
+  expected-red E-7 mirror baseline; their D-source controls pass the current
+  full suite but do not close the broader Stage 2 gate.
 
 - Carry forward the validated entry-only and safe-yield guards (EE18/89F9),
   1,593 tests and the clean330.234s BED2 actual workload, still on splash.

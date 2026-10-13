@@ -13,8 +13,9 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   No surviving dump or final native Result/profile establishes root cause.
   Terminal PPM/full traces are absent. Failed650/PDB and evidence are preserved;
   installed BED2 is restored, but current dirty source still builds experimental
-  ownership. Do not install it as stable merely because the pre-E-12-repair
-  dirty-source full release suite passed 1,623 tests (0 failures, 3 ignored).
+  ownership. Do not install it as stable merely because dirty-source full
+  release suites passed 1,623 tests before E-12 and 1,626 after it (both
+  0 failed, 3 ignored).
   Pinned native translation arenas retain touched Windows pages through hook
   invalidation/flush. Six isolated Stage 0 cases queried a 1 GiB initial arena;
   three hook-churn cases retained about 243 MiB sampled RSS until owner close,
@@ -110,10 +111,11 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   reported actual expiry. A counted stop with `Query::TIMEOUT = 0` fabricated a
   host-wall record, and a nonzero `READ_UNMAPPED` fault returned Ok under a
   configured positive timeout. The current D: source queries actual expiry,
-  records a typed native outcome and passed the pre-E-12-repair post-order full
-  release suite (1,623 passed, 0 failed, 3 ignored) on the dirty persistent-
-  owner checkout.
-  Other feature profiles and a bounded app run remain pending. `ServiceBoundary`
+  records a typed native outcome and passed the post-E-12 full release suite
+  (1,626 passed, 0 failed, 3 ignored) on the dirty persistent-owner checkout.
+  Unicorn-only and Unicorn+desktop/no-trace release checks and the no-feature
+  suite (1,239 passed, 0 failed, 1 ignored) also passed; a bounded app run
+  remains pending. `ServiceBoundary`
   still conflates possible count stops, hook yield and unknown normal stops;
   O-P1 classification and fresh-owner Stage 2 acceptance remain open, and the
   1M-instruction tick remains intact.

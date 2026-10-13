@@ -30,8 +30,16 @@ references for historical reconstruction.
   `UC_ERR_EXCEPTION`. Exact source/executable hashes and outputs are in local
   `evidence/e12-repaired-pc-20261013.receipt.md` (ledger E-13). This fixes the
   demonstrated repaired-PC scalar-fallback loss, not exact-key native Context
-  transfer after owner closure, guest `VirtualAlloc` coherence, full suites,
-  scheduler behavior or app readiness.
+  transfer after owner closure, guest `VirtualAlloc` coherence, scheduler
+  behavior or app readiness.
+- Post-E-12 serial validation on the same dirty persistent-owner checkout
+  passed the full release suite (**1,626 passed, 0 failed, 3 ignored**),
+  Unicorn-only and Unicorn+desktop/no-trace release checks, and the no-feature
+  suite (**1,239 passed, 0 failed, 1 ignored**). Format and diff checks passed.
+  Exact commands, source/executable/log hashes and limits are in local
+  `evidence/e12-repaired-pc-green-20261013/post-e12-validation.receipt.md`
+  (ledger E-13). This is not fresh-engine default ownership, O-P1/O-P4/O-M1,
+  Stage 2, bounded live-app or map/input acceptance.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial
@@ -40,17 +48,19 @@ references for historical reconstruction.
   PID rotation and stale typed outcomes were cleared on preflight swaps, the
   serial full release suite passed **1,623 tests, 0 failures, 3 ignored** in
   this dirty persistent-owner checkout before the E-12 repair above. The
-  separately run ignored closed-
-  owner fixture reached its intended final assertion and failed because the
+  separately run ignored closed-owner fixture reached its intended final
+  assertion and failed because the
   default still retains the native owner; its preceding guest store and native
-  no-timeout checks passed. Other feature profiles, O-P1/O-P4/O-M1 and a
-  bounded app run remain open; this is not fresh-engine Stage 2 acceptance.
+  no-timeout checks passed. O-P1/O-P4/O-M1 and a bounded app run remain open;
+  this intermediate checkpoint is not fresh-engine Stage 2 acceptance.
   Exact log/binary hashes and the expected-red receipt are in local
   `evidence/stage2-e7-stop-20261013/post-order-and-retirement.receipt.md`.
   The 243 immediate target-root run-evidence files and 28 release EXE/PDB
   files were separately copied and hash-verified under local `evidence/`
   receipts. After explicit approval, those 271 originals were
   reverified and removed by exact paths; nested target directories remain intact.
+  The root-only `/evidence/` ignore rule keeps large local artifacts ignored
+  while `docs/evidence/ledger.md` is Git-visible.
 - After separate explicit approval, five inventoried old source/build copies
   were retired by exact path; the listed auxiliary Git worktree's branch was
   preserved. The selected unique source ZIP, exact fresh-HEAD red-test patch
