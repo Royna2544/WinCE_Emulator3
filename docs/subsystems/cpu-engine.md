@@ -34,7 +34,12 @@ evidence through native execution and a possible child handoff, including
 `NoAttempt` on preflight. Its frame is `LegacyUnbound`, not a canonical
 Task/Frame-qualified `RunOutcome`; the app loop still discards it and
 service-boundary rotation still reads selected-CPU compatibility state.
-O-P1, Stage 2 and S3-A remain open, with the same rotation policy.
+The completed [current-source validation](../../evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)
+passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature;
+three check profiles, format and diff checks exited 0. Three focused
+[post-real-query Rust adapter-error controls](../../evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)
+passed, without proving a failing C query. O-P1, Stage 2 and S3-A remain
+open, with the same rotation policy; the bounded app run is pending.
 
 ## Current implementation
 

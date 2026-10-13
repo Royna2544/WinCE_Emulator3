@@ -993,10 +993,16 @@ and [consumer audit](../../evidence/e28-run-outcome-20261014/main-report-consume
 No expected-red report run was captured; the test assertions and
 implementation landed together. The app loop still discards this report via
 its compatibility `Result<()>` wrapper, and the scheduler still reads the
-mutable selected-CPU outcome. The broad run on this newer source was
-interrupted for error-precedence repair and proves nothing. Forced query
-failure, competing hooks, full fallible-tail/partial-effect validation,
-Task/Frame authority, Stage 2 and a bounded app run remain open.
+mutable selected-CPU outcome. An earlier broad run on this source was
+interrupted for error-precedence repair. The subsequent completed
+[current-source validation](../../evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)
+passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature,
+with three check profiles, format and diff checks exiting 0. Three focused
+real-MIPS [query-adapter error controls](../../evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)
+passed after the real native query returned; their one-shot Rust substitution
+is not a C `uc_query` failure or nested-start proof. Genuine C query failure,
+competing hooks, full fallible-tail/partial-effect validation, Task/Frame
+authority, Stage 2 and a bounded app run remain open.
 
 ## Chat-project validation notes (not in this repository)
 

@@ -33,7 +33,14 @@ preflight. It is not a canonical Task/Frame seal: its frame is
 compatibility state still drives scheduling. Complete fallible-tail sealing,
 real C query-error and competing-hook controls remain open; O-P1, Stage 2
 and scheduler migration are not claimed. The broad counts above belong to
-the prior source.
+the prior source. The subsequently completed
+[current-source validation](../../evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)
+passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature,
+plus three check profiles, format and diff checks. Three focused real-MIPS
+[adapter-error controls](../../evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)
+passed after a real count query, but substitute a test-only Rust error rather
+than proving a failing C `uc_query`. The bounded app run remains separate and
+pending.
 This narrows [Architecture A3](../ARCHITECTURE.md#a3-execution-and-continuation-boundary),
 [PLAN Stages 2-3](../PLAN.md#migration-sequence-and-acceptance-gates) and
 [O-P1](../DECISIONS.md) into the outcome prerequisite for the
