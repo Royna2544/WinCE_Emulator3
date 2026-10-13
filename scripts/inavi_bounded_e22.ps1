@@ -88,9 +88,9 @@ function Assert-NoReparseMounts([object[]]$Backups) {
 function Test-OriginalMountPreflight([string]$Repository) {
     # Exact verified archives from evidence/e22-pre-live-mounted-data-20261013.receipt.md.
     $backups = @(
-        @{ Source = 'D:\INAVI_Emulator\INAVI'; Archive = 'D:\INAVI_Emulator\INAVI-pre-live-20261013T150935Z.zip'; Hash = 'EFF0321F98896D04A12B401ACE1E38369C931BB8646FE11ECA506F7D56F62C48' },
-        @{ Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Archive = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash-pre-live-20261013T150914Z.zip'; Hash = '30E5EA4A2938AB75AB5C331CED45D7A71F780128F8C78B9D8D28B0F508829180' },
-        @{ Source = 'D:\INAVI_Emulator\EmulatorRoot'; Archive = 'D:\INAVI_Emulator\EmulatorRoot-pre-live-20261013T150834Z.zip'; Hash = 'FB6A238384FC748D67BC7F34E1809900CCDF85C20C5D0AE81D38B99220A1927A' }
+        @{ Source = 'D:\INAVI_Emulator\INAVI'; Archive = 'D:\INAVI_Emulator\INAVI-pre-live-20261013T210234Z.zip'; Hash = 'A21B352E06366A4E36A6A1F631EBCA2173F28633C327B8DFAD756771DBB7368C' },
+        @{ Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Archive = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash-pre-live-20261013T210234Z.zip'; Hash = 'BA5A0E21A175779C733824EE7755A49E7BBD692AE5F95AEC139E388F5E148427' },
+        @{ Source = 'D:\INAVI_Emulator\EmulatorRoot'; Archive = 'D:\INAVI_Emulator\EmulatorRoot-pre-live-20261013T210234Z.zip'; Hash = 'B3B9FD3C165D0DD6F379339743E6AB541B9C4B905A0D792ED11571D6C4BB54CA' }
     )
     foreach ($item in $backups) {
         if (-not (Test-Path -LiteralPath $item.Source -PathType Container)) {
