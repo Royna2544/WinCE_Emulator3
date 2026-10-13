@@ -563,35 +563,20 @@ impl MemorySystem {
         size: u32,
         free_type: u32,
     ) -> bool {
-        // Private regions require the exact birth key. The other producers
-        // still use the old global compatibility path until file views and
-        // shared memory receive their own backing/ownership migration.
-        let key = self
-            .virtual_allocations
-            .get_key_value(&(owner, address))
-            .map(|(key, _)| *key)
-            .or_else(|| {
-                self.virtual_allocations
-                    .iter()
-                    .find(|(_, allocation)| {
-                        allocation.base == address && !allocation.source.is_private()
-                    })
-                    .map(|(key, _)| *key)
-            });
+        // Reads of legacy regions remain globally visible, but releasing or
+        // decommitting any region requires its exact birth-key owner.
+        let key = (owner, address);
         match free_type {
             MEM_RELEASE => {
-                if size != 0
-                    || key
-                        .and_then(|key| self.virtual_allocations.remove(&key))
-                        .is_none()
-                {
+                if size != 0 || self.virtual_allocations.remove(&key).is_none() {
                     return false;
                 }
                 self.bump_virtual_generation();
                 true
             }
-            MEM_DECOMMIT => key
-                .and_then(|key| self.virtual_allocations.get(&key))
+            MEM_DECOMMIT => self
+                .virtual_allocations
+                .get(&key)
                 .is_some_and(|allocation| size <= allocation.size),
             _ => false,
         }
@@ -1130,7 +1115,10 @@ mod tests {
             )
             .unwrap();
         assert!(memory.contains_allocated_range(child, legacy_base, 4));
-        assert!(memory.virtual_free(child, legacy_base, 0, MEM_RELEASE));
+        assert!(!memory.virtual_free(child, legacy_base, 0, MEM_RELEASE));
+        assert!(!memory.virtual_free(child, legacy_base, 4, MEM_DECOMMIT));
+        assert!(memory.virtual_allocation(parent, legacy_base).is_some());
+        assert!(memory.virtual_free(parent, legacy_base, 0, MEM_RELEASE));
         assert!(memory.virtual_allocation(parent, legacy_base).is_none());
     }
 

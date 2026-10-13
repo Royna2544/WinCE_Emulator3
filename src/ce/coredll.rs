@@ -29953,12 +29953,32 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
     base: u32,
     bytes_to_commit: Option<u32>,
 ) -> Option<(Option<u32>, FileMappingView, Vec<u8>)> {
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return None;
+    };
     let Some((mapping, view)) = kernel.handles.file_mapping_view(base) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return None;
     };
+    // A VA-only guest read can otherwise copy another process's stale bytes
+    // into the mapping. DIB section views may have no virtual-allocation
+    // record, but a record that exists must belong to this process birth.
+    if view.process_id != kernel.current_process_id()
+        || kernel
+            .memory
+            .virtual_allocation_by_base_legacy(base)
+            .is_some_and(|allocation| allocation.owner != owner)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
     let file_id = mapping.file_id;
     let count = bytes_to_commit.unwrap_or(view.size).min(view.size);
     let bytes = read_guest_bytes(kernel, memory, thread_id, base, count)?;
@@ -30010,6 +30030,16 @@ fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
+    if !kernel
+        .memory
+        .virtual_allocation(owner, base)
+        .is_some_and(|allocation| allocation.source == VirtualAllocationSource::FileViewLegacy)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
     let Some((file_id, view, bytes)) =
         commit_file_mapping_view_from_guest(kernel, memory, thread_id, base, None)
     else {
@@ -69855,6 +69885,119 @@ mod tests {
                 .source,
             VirtualAllocationSource::PrivateExCompatibility
         );
+        Ok(())
+    }
+
+    #[test]
+    fn public_file_view_flush_unmap_and_free_reject_foreign_process() -> Result<()> {
+        let table = CoredllExportTable::default();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let mut memory = UnitGuestMemory::default();
+        let parent = kernel.current_process_birth_key().expect("parent birth");
+        let parent_thread = 1;
+        let mapping = kernel.handles.create_file_mapping(None, 0x1000, 4, None);
+        let mapped = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            parent_thread,
+            ORD_MAP_VIEW_OF_FILE,
+            [mapping, 0, 0, 0, 4],
+        );
+        let base = match mapped {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(base),
+                ..
+            } if base != 0 => base,
+            other => panic!("parent MapViewOfFile failed: {other:?}"),
+        };
+        memory.map_bytes(base, 4);
+        memory.write_u8(base, 0xa5)?;
+        assert_eq!(kernel.handles.file_mapping(mapping)?.data[0], 0);
+
+        let child = kernel.queue_process_launch(Some("\\Windows\\child.exe".to_owned()), None);
+        kernel.set_current_process_id(child.process_id);
+        let child_thread = child.thread_id;
+        let child_owner = kernel.current_process_birth_key().expect("child birth");
+        let query_buf = 0x0001_2000;
+        memory.map_bytes(query_buf, 28);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                child_thread,
+                ORD_VIRTUAL_QUERY,
+                [base, query_buf, 28],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(28),
+                ..
+            }
+        ));
+        assert_eq!(memory.read_u32(query_buf + 16)?, MEM_COMMIT_FLAG);
+
+        for (ordinal, args) in [
+            (ORD_UNMAP_VIEW_OF_FILE, vec![base]),
+            (ORD_FLUSH_VIEW_OF_FILE, vec![base, 4]),
+            (ORD_VIRTUAL_FREE, vec![base, 0, MEM_RELEASE]),
+        ] {
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    child_thread,
+                    ordinal,
+                    args,
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(false),
+                    ..
+                }
+            ));
+            assert_eq!(
+                kernel.threads.get_last_error(child_thread),
+                ERROR_INVALID_PARAMETER
+            );
+            assert!(kernel.handles.file_mapping_view(base).is_some());
+            assert!(kernel.memory.virtual_allocation(parent, base).is_some());
+            assert!(
+                kernel
+                    .memory
+                    .virtual_allocation(child_owner, base)
+                    .is_none()
+            );
+            assert_eq!(kernel.handles.file_mapping(mapping)?.data[0], 0);
+        }
+
+        kernel.set_current_process_id(parent.process_id());
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                parent_thread,
+                ORD_FLUSH_VIEW_OF_FILE,
+                [base, 4],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(kernel.handles.file_mapping(mapping)?.data[0], 0xa5);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                parent_thread,
+                ORD_UNMAP_VIEW_OF_FILE,
+                [base],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert!(kernel.handles.file_mapping_view(base).is_none());
+        assert!(kernel.memory.virtual_allocation(parent, base).is_none());
         Ok(())
     }
 
