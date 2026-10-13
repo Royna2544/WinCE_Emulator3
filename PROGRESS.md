@@ -54,17 +54,27 @@ references for historical reconstruction.
 - A later narrow O-P1 source slice replaced the successful
   `ServiceBoundary` residual with `UnknownNormalStop`, and one scheduler
   block-hook path now reports `HookStop(HostWallBudget)` only after a safe,
-  checked PC write and successful stop request. Seven final-source focused
-  release controls passed: actual MIPS host-budget stop, failed hook-control
+  checked PC write and successful stop request. Seven focused release controls
+  passed on the first O-P1 source: actual MIPS host-budget stop, failed hook-control
   precedence, counted unknown boundary, native error, explicit PC stop,
   actual native deadline and unchanged service-handoff policy. The host-budget
   control observed `Query::TIMEOUT = 0`; the deadline control observed 1.
-  Source/binary hashes and raw logs are in local
+  Review then closed a source-level error-precedence hole: both decoded
+  guest-exit branches now require no pending hook-control error. Two
+  host-budget focused controls passed on that follow-up source; no real
+  PC-write/stop failure plus encoded-exit injection was run. Source/binary
+  hashes and raw logs are in local
   `evidence/op1-stop-taxonomy-20261013/focused-controls.receipt.md`
+  and `evidence/op1-stop-taxonomy-20261013/encoded-exit-mask.receipt.md`
   (ledger E-15). Six other debug host-wall writers remain untyped, and native
-  count exhaustion has no independent witness. Typed restart-PC repair, full
-  suite/feature validation on this source, O-P1 completion, Stage 2 and live
-  acceptance remain open. The 1,626-pass suite above predates this slice.
+  count exhaustion has no independent witness. The final follow-up source
+  passed the full release suite (**1,628 passed, 0 failed, 4 ignored**); the
+  fourth ignored test is the expected-red E-14 same-VA fixture. Exact raw log
+  SHA-256 `8946D073…1E041` is in local
+  `evidence/op1-stop-taxonomy-20261013/full-release-suite-final.log`.
+  Typed restart-PC repair, alternate feature profiles on this source, O-P1
+  completion, Stage 2 and live acceptance remain open. The 1,626-pass suite
+  above predates this slice.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

@@ -48,14 +48,17 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
       `evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md`).
   2. The narrow O-P1 slice now reports `UnknownNormalStop` for unproven
      successful stops and `HookStop(HostWallBudget)` from one checked scheduler
-     block-hook path; seven final-source focused release controls passed
-     (ledger E-15; local
-     `evidence/op1-stop-taxonomy-20261013/focused-controls.receipt.md`).
+     block-hook path; seven focused release controls passed on its first
+     source, then two host-budget controls passed after a decoded-exit
+     error-precedence guard (ledger E-15; local
+     `evidence/op1-stop-taxonomy-20261013/encoded-exit-mask.receipt.md`).
      Complete the other hook reasons and typed restart-PC repair, then add a
      genuine native count-stop witness before reporting `CountLimit`.
+     Add end-to-end fault injection for failed PC-write/stop plus encoded exit.
      `Ok` with a positive count alone is not proof. Keep the 1M-instruction
-     scheduling policy unchanged and repeat full suite/feature gates after
-     this source change; the earlier 1,626-pass suite predates O-P1.
+     scheduling policy unchanged. The final-source full release suite passed
+     1,628 tests (0 failed, 4 ignored); repeat the alternate feature profiles
+     and bounded live gate. The earlier 1,626-pass suite predates O-P1.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR
@@ -63,8 +66,9 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      exact raw continuations; writing a synthesized PC into it can retain
      stale branch `hflags`. Closed-owner exact-key Context transfer, guest
      `VirtualAlloc` coherence and the broader Stage 2 gates remain open.
-  3. Repeat the full release suite and applicable feature profiles after
-     further source edits, then one bounded 330 s live run against BED2.
+  3. The O-P1 final-source full release suite passed (1,628/0/4 ignored).
+     Repeat applicable feature profiles after this source change, then one
+     bounded 330 s live run against BED2.
      Record any newly exposed native errors in KNOWN_BUGS; neither the current
      1,626-pass dirty-source suite nor the decorative splash closes Stage 2.
 - Parallel Stage 8 native lane (diagnostic only, never gates Stages 2-6):

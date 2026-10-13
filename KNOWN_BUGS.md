@@ -124,8 +124,13 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   remains pending. A later focused O-P1 slice changed the successful residual
   to `UnknownNormalStop` and proved `HookStop(HostWallBudget)` at one checked
   block-hook site (ledger E-15); six other debug host-wall writers remain
-  untyped, and no independent native count-stop witness exists. Its seven
-  focused controls passed, but the full suite above predates that source.
+  untyped, and no independent native count-stop witness exists. Seven
+  focused controls passed on the first O-P1 source; a follow-up guard kept
+  hook-control failures from being masked by decoded guest exit and passed
+  two host-budget controls. Real hook-control-failure/encoded-exit injection
+  was not run. The final follow-up source passed the full release suite
+  (1,628 passed, 0 failed, 4 ignored); the four ignored tests, including E-14,
+  did not become passes. The 1,626-pass suite above is historical.
   Complete O-P1 classification and fresh-owner Stage 2 acceptance remain
   open, and the 1M-instruction tick remains intact.
 - HeapFree does not reuse addresses or release per-process spillover pages.
