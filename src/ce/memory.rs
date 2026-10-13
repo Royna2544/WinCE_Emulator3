@@ -199,6 +199,9 @@ pub enum PrivatePageAccessError {
 /// The only owner of private page bytes. UnsafeCell permits the synchronous
 /// native engine to mutate the stable address; host access is copied through
 /// bounded methods and forbidden while a native execution guard is held.
+// The native pointer refers to `bytes` at offset zero. Rc allocates this
+// object at its declared alignment, so Unicorn receives a page-aligned slab.
+#[repr(C, align(4096))]
 struct StablePrivatePage {
     bytes: UnsafeCell<[u8; STABLE_PRIVATE_PAGE_SIZE]>,
     native_execution_active: Cell<bool>,
@@ -858,10 +861,14 @@ impl MemorySystem {
         base: u32,
         bytes: Vec<u8>,
     ) -> bool {
-        let Some(allocation) = self.virtual_allocations.get(&(owner, base)) else {
+        let Some((backing, incarnation, reservation_size)) = self
+            .virtual_allocations
+            .get(&(owner, base))
+            .map(|allocation| (allocation.backing, allocation.incarnation, allocation.size))
+        else {
             return false;
         };
-        if allocation.backing == VirtualAllocationBacking::LegacySeed {
+        if backing == VirtualAllocationBacking::LegacySeed {
             self.virtual_allocations
                 .get_mut(&(owner, base))
                 .expect("allocation was just found")
@@ -869,14 +876,34 @@ impl MemorySystem {
             self.bump_virtual_generation();
             return true;
         }
-        let incarnation = allocation.incarnation;
         let Some(end) = u32::try_from(bytes.len())
             .ok()
             .and_then(|len| base.checked_add(len))
         else {
             return false;
         };
-        if end > base.saturating_add(allocation.size) {
+        if end > base.saturating_add(reservation_size) {
+            return false;
+        }
+        // A 64-KiB reservation may contain only one committed 4-KiB page.
+        // Reject crossing the committed extent before the per-page preflight
+        // below, which also detects any future holes in that extent.
+        let committed_end = self
+            .stable_private_pages
+            .keys()
+            .filter(|identity| {
+                identity.owner == owner
+                    && identity.allocation_base == base
+                    && identity.allocation_incarnation == incarnation
+            })
+            .filter_map(|identity| {
+                identity
+                    .page_base
+                    .checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)
+            })
+            .max()
+            .unwrap_or(base);
+        if end > committed_end {
             return false;
         }
         let mut writes = Vec::new();
@@ -1047,6 +1074,29 @@ impl MemorySystem {
         };
         let page = Rc::clone(self.stable_private_pages.get(&identity)?);
         Some(StablePrivatePagePin { identity, page })
+    }
+
+    /// Current committed slab pages for exactly one process birth. Reservation
+    /// holes and legacy copy-backed allocations are never returned.
+    pub fn private_page_pins_for(&self, owner: ProcessBirthKey) -> Vec<StablePrivatePagePin> {
+        self.stable_private_pages
+            .iter()
+            .filter_map(|(identity, page)| {
+                if identity.owner != owner {
+                    return None;
+                }
+                let allocation = self.virtual_allocation(owner, identity.allocation_base)?;
+                if allocation.backing != VirtualAllocationBacking::StablePrivateSlab
+                    || allocation.incarnation != identity.allocation_incarnation
+                {
+                    return None;
+                }
+                Some(StablePrivatePagePin {
+                    identity: *identity,
+                    page: Rc::clone(page),
+                })
+            })
+            .collect()
     }
 
     /// Revalidate the exact VM record and strong backing identity before a
@@ -1595,6 +1645,7 @@ mod tests {
         );
         assert!(!memory.has_stable_private_slabs());
         assert!(memory.private_page_pin(owner, base).is_none());
+        assert!(memory.private_page_pins_for(owner).is_empty());
         assert!(memory.set_virtual_initial_bytes(owner, base, vec![1, 2, 3, 4]));
         assert_eq!(
             memory
@@ -1624,6 +1675,14 @@ mod tests {
         };
         assert!(memory.has_stable_private_slabs());
         assert!(memory.private_page_pin(owner, base + 0x1000).is_none());
+        assert_eq!(memory.private_page_pins_for(owner).len(), 1);
+        // The reservation has another 60 KiB, but the seed may touch only
+        // the single committed page. A failed preflight leaves zero bytes.
+        assert!(!memory.set_virtual_initial_bytes(
+            owner,
+            base,
+            vec![0xa5; STABLE_PRIVATE_PAGE_SIZE + 1]
+        ));
         assert!(memory.set_virtual_initial_bytes(
             owner,
             base,
@@ -1635,6 +1694,7 @@ mod tests {
         assert_eq!(pin.identity().allocation_incarnation(), incarnation);
         assert_eq!(pin.identity().page_base(), base);
         assert!(!pin.native_ptr().is_null());
+        assert_eq!((pin.native_ptr() as usize) % STABLE_PRIVATE_PAGE_SIZE, 0);
         assert_eq!(pin.native_ptr(), pin.clone().native_ptr());
         assert!(memory.contains_private_page_pin(&pin));
         assert!(pin.read_bytes(STABLE_PRIVATE_PAGE_SIZE, &mut [0]).is_err());
@@ -1668,6 +1728,10 @@ mod tests {
         assert!(memory.set_virtual_initial_bytes(owner, base, seed));
         let first = memory.private_page_pin(owner, base).unwrap();
         let second = memory.private_page_pin(owner, base + 0x1000).unwrap();
+        let pins = memory.private_page_pins_for(owner);
+        assert_eq!(pins.len(), 2);
+        assert_eq!(pins[0].identity().page_base(), base);
+        assert_eq!(pins[1].identity().page_base(), base + 0x1000);
         let mut bytes = [0; 4];
         first
             .read_bytes(STABLE_PRIVATE_PAGE_SIZE - 4, &mut bytes)
@@ -1692,6 +1756,34 @@ mod tests {
         second.write_bytes(0, &[9]).unwrap();
         second.read_bytes(0, &mut bytes).unwrap();
         assert_eq!(bytes[0], 9);
+    }
+
+    #[test]
+    fn diagnostic_slab_pin_list_is_birth_scoped_and_excludes_legacy() {
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        let parent = handles.process_birth_key(1).unwrap();
+        let _child_handle = handles.create_process(2);
+        let child = handles.process_birth_key(2).unwrap();
+        let mut memory = MemorySystem::default();
+        let slab_base = memory
+            .virtual_alloc_private_slab_for_test(parent, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
+        let legacy_base = memory
+            .virtual_alloc(
+                child,
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+        assert_ne!(slab_base, legacy_base);
+        assert_eq!(memory.private_page_pins_for(parent).len(), 1);
+        assert!(memory.private_page_pins_for(child).is_empty());
+        assert!(memory.private_page_pin(child, slab_base).is_none());
+        assert!(memory.private_page_pin(child, legacy_base).is_none());
     }
 
     #[test]
@@ -1740,6 +1832,7 @@ mod tests {
         assert!(memory.virtual_free(owner, base, 0, MEM_RELEASE));
         assert!(!memory.contains_private_page_pin(&pin));
         assert!(memory.private_page_pin(owner, base).is_none());
+        assert!(memory.private_page_pins_for(owner).is_empty());
         assert!(
             memory.has_stable_private_slabs(),
             "checkpoint gate is sticky"

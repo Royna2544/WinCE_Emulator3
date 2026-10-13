@@ -47,9 +47,56 @@ impl NativeMappingPins {
         self.0.borrow_mut().push(Rc::new(backing));
     }
 
-    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.0.borrow().len()
+    }
+}
+
+struct PinQuarantine(RefCell<Vec<NativeMappingPins>>);
+
+impl Drop for PinQuarantine {
+    fn drop(&mut self) {
+        // Thread exit is not proof that uc_close succeeded. Deliberately leak
+        // the remaining strong pins until host-process exit.
+        for pins in self.0.get_mut().drain(..) {
+            std::mem::forget(pins);
+        }
+    }
+}
+
+thread_local! {
+    // unicorn-engine 2.1.5 discards uc_close's result in Drop. A discarded
+    // native owner therefore cannot prove its raw pointer mappings are gone.
+    // Keep diagnostic backing alive until thread exit (or leak at thread-local
+    // teardown) rather than risk releasing a host page still mapped by C.
+    static NATIVE_PIN_QUARANTINE: PinQuarantine = const { PinQuarantine(RefCell::new(Vec::new())) };
+}
+
+fn quarantine_unchecked_close_pins(pins: NativeMappingPins) {
+    if pins.len() == 0 {
+        return;
+    }
+    let stored = NATIVE_PIN_QUARANTINE
+        .try_with(|quarantine| {
+            quarantine
+                .0
+                .try_borrow_mut()
+                .map(|mut quarantine| quarantine.push(pins.clone()))
+                .is_ok()
+        })
+        .unwrap_or(false);
+    if !stored {
+        std::mem::forget(pins);
+    }
+}
+
+impl<K, P> Drop for NativeSlot<K, P> {
+    fn drop(&mut self) {
+        if let Some(pins) = self.mapping_pins.take() {
+            quarantine_unchecked_close_pins(pins);
+        }
+        // The native owner drops after this method, while the quarantine
+        // retains any pointer backing even if uc_close silently fails.
     }
 }
 
@@ -146,7 +193,9 @@ impl<K, P> ProcessNativeEngine<K, P> {
                 slot.blank = None;
                 slot.saved = None;
                 slot.metadata = None;
-                slot.mapping_pins = None;
+                if let Some(pins) = slot.mapping_pins.take() {
+                    quarantine_unchecked_close_pins(pins);
+                }
                 return Err(err);
             }
         };
@@ -211,10 +260,12 @@ impl<K, P> ProcessNativeEngine<K, P> {
         let metadata = slot.metadata.take();
         let mapping_pins = slot.mapping_pins.take();
         drop(slot);
+        if let Some(pins) = mapping_pins {
+            quarantine_unchecked_close_pins(pins);
+        }
         drop(owner);
         drop(blank);
         drop(metadata);
-        drop(mapping_pins);
     }
 }
 
@@ -382,6 +433,8 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
 
     /// Explicit failure boundary for callers that must observe hook-removal
     /// errors. Unlike `finish`, this never publishes a reusable native owner.
+    /// The upstream wrapper cannot report uc_close status; pointer backing is
+    /// conservatively quarantined on this path, not claimed safely reusable.
     pub(crate) fn abort_close(mut self) -> Result<(), uc_error> {
         self.close(false)
     }
@@ -415,6 +468,7 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
             // remove_hook drops its Box before its FFI delete. On any failure
             // there must be no future native entry: close the native handle
             // before dropping the remaining borrowed callback Boxes.
+            quarantine_unchecked_close_pins(self.mapping_pins.clone());
             self.owner.take();
             self.uc.take();
             let mut slot = self.slot.borrow_mut();
@@ -522,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn native_mapping_pin_outlives_metadata_transfer_until_owner_close() {
+    fn native_mapping_pin_outlives_metadata_transfer_and_unchecked_close() {
         let slot = slot();
         let dropped = Rc::new(Cell::new(0));
         let mut first = slot.lease().unwrap();
@@ -538,7 +592,41 @@ mod tests {
         assert_eq!(second.mapping_pins().len(), 1);
         second.abort_close().unwrap();
         assert!(slot.identity().is_none());
-        assert_eq!(dropped.get(), 1, "discard owner before releasing pin");
+        assert_eq!(
+            dropped.get(),
+            0,
+            "unchecked upstream uc_close leaves diagnostic backing quarantined"
+        );
+    }
+
+    #[test]
+    fn quarantined_native_pin_survives_host_thread_exit() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct ThreadDrop(Arc<AtomicUsize>);
+        impl Drop for ThreadDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let observer = Arc::clone(&drops);
+        std::thread::spawn(move || {
+            let pins = NativeMappingPins::default();
+            pins.pin(ThreadDrop(observer));
+            quarantine_unchecked_close_pins(pins);
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            0,
+            "thread exit cannot retire unchecked native pointer backing"
+        );
     }
 
     struct Dropped(Rc<Cell<u32>>);

@@ -58265,14 +58265,19 @@ mod unicorn_tests {
 
         // Another bounded native slice must not replay a consumed return stub.
         run_to(&mut cpu, &mut kernel, &mut framebuffer, None)?;
-        assert!(cpu.pending_wndproc_returns.is_empty());
+        let child_after = phase1_actor_cpu(&cpu, &kernel, launch.process_id);
+        assert!(child_after.pending_wndproc_returns.is_empty());
         assert_ne!(
-            cpu.saved_context_pc(),
+            child_after.saved_context_pc(),
             Some(super::WNDPROC_RETURN_STUB_ADDR)
         );
-        assert_eq!(cpu.saved_context.as_ref().unwrap().regs.regs[17], 0x1234);
         assert_eq!(
-            cpu.last_debug_snapshot()
+            child_after.saved_context.as_ref().unwrap().regs.regs[17],
+            0x1234
+        );
+        assert_eq!(
+            child_after
+                .last_debug_snapshot()
                 .unwrap()
                 .last_wndproc_returns
                 .iter()
