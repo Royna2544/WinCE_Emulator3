@@ -904,6 +904,21 @@ and SHA-256 and no reported additions/removals. E-25's test-only slab did
 not become public `VirtualAlloc`, fresh-default ownership, Stage 2 or
 splash/map acceptance because this app run survived its limit.
 
+A later E-27 **test-only** real-MIPS discriminator added two controls beside
+the unchanged child park/resume fixture; the three focused release tests and a
+no-feature compile check passed. Its healthy bounded loop reuses one synthetic
+`MSG` for three callback entries and continuations; it does not model three
+queue dequeues. After a child park/resume, the test removed exactly one
+pending return and observed two fresh orphan-warning events on separate native
+attempts, each with PC/RA at the same return stub, lowered call SP, no pending
+record and frozen guest dispatch/entry/continuation counts `(1,1,0)`.
+This is a controlled stale-stub replay signature, not an identity match to
+the 2,518 live warnings, a scheduler root cause or splash progress. No new
+app run followed. Commands, source/test-binary/log SHA-256 values and the
+interrupted pre-witness compile are in the
+[discriminator receipt](../../evidence/e27-orphan-discriminator-20261014/receipt.md)
+(SHA-256 `D66F8E33B9FF27B388A287EF5B48E9D83185E95BF436A754E74781F4BB537D12`).
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
