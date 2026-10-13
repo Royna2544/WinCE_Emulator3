@@ -58,6 +58,36 @@ use unicorn_engine::RegisterMIPS;
 
 const MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS: u32 = 100;
 
+#[cfg(feature = "unicorn")]
+#[derive(Clone, Copy, Default)]
+struct NativeStopEvidence {
+    native_error: bool,
+    capture_error: bool,
+    hook_control_error: bool,
+    requested_pc_stop: bool,
+    native_deadline_expired: bool,
+    hook_stop_reason: Option<NativeHookStopReason>,
+}
+
+#[cfg(feature = "unicorn")]
+impl NativeStopEvidence {
+    fn outcome(self) -> NativeSliceOutcome {
+        if self.native_error {
+            NativeSliceOutcome::NativeError
+        } else if self.capture_error || self.hook_control_error {
+            NativeSliceOutcome::BackendError
+        } else if self.requested_pc_stop {
+            NativeSliceOutcome::RequestedPcStop
+        } else if self.native_deadline_expired {
+            NativeSliceOutcome::NativeDeadline
+        } else if let Some(reason) = self.hook_stop_reason {
+            NativeSliceOutcome::HookStop(reason)
+        } else {
+            NativeSliceOutcome::UnknownNormalStop
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
@@ -6251,6 +6281,10 @@ impl UnicornMips {
         let code_trace_counter_hook = Rc::clone(&code_trace_counter);
         let host_wall_clock_stop = Rc::new(RefCell::new(None));
         let host_wall_clock_stop_hook = Rc::clone(&host_wall_clock_stop);
+        // A per-attempt provenance latch, independent of the debug wall-stop
+        // snapshot. Only a checked safe-PC write and emu_stop may set it.
+        let native_hook_stop_reason = Rc::new(Cell::new(None::<NativeHookStopReason>));
+        let native_hook_control_error = Rc::new(RefCell::new(None::<String>));
         let host_wall_clock_limit = (limits.wall_clock_limit_ms != 0)
             .then(|| Duration::from_millis(limits.wall_clock_limit_ms));
         let host_wall_clock_started = Instant::now();
@@ -7418,6 +7452,8 @@ impl UnicornMips {
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
         let trampoline_jump_index_timeslice_hook = trampoline_jump_index.clone();
         let host_wall_clock_stop_timeslice_hook = Rc::clone(&host_wall_clock_stop);
+        let native_hook_stop_reason_timeslice_hook = Rc::clone(&native_hook_stop_reason);
+        let native_hook_control_error_timeslice_hook = Rc::clone(&native_hook_control_error);
         let framebuffer_tick_error_timeslice_hook = Rc::clone(&framebuffer_tick_error);
         uc.add_block_hook(1, 0, move |uc, address, size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
@@ -7570,16 +7606,24 @@ impl UnicornMips {
                     |addr| read_unicorn_u32(uc, addr),
                 )
             {
-                *host_wall_clock_stop_timeslice_hook.borrow_mut() =
-                    Some(UnicornHostWallClockStop {
-                        pc: stop_pc,
-                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                        instruction: read_unicorn_u32(uc, stop_pc),
-                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
-                    });
-                let _ = uc.reg_write(RegisterMIPS::PC, u64::from(stop_pc));
-                let _ = uc.emu_stop();
+                let safe_pc_write = uc.reg_write(RegisterMIPS::PC, u64::from(stop_pc));
+                let stop_request = uc.emu_stop();
+                if safe_pc_write.is_ok() && stop_request.is_ok() {
+                    *host_wall_clock_stop_timeslice_hook.borrow_mut() =
+                        Some(UnicornHostWallClockStop {
+                            pc: stop_pc,
+                            ra: read_mips_reg(uc, RegisterMIPS::RA),
+                            sp: read_mips_reg(uc, RegisterMIPS::SP),
+                            instruction: read_unicorn_u32(uc, stop_pc),
+                            elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                        });
+                    native_hook_stop_reason_timeslice_hook
+                        .set(Some(NativeHookStopReason::HostWallBudget));
+                } else {
+                    *native_hook_control_error_timeslice_hook.borrow_mut() = Some(format!(
+                        "host-budget safe stop failed: PC write={safe_pc_write:?}, emu_stop={stop_request:?}"
+                    ));
+                }
                 return;
             }
             if let Some(context_pc) = context_pc {
@@ -9977,22 +10021,21 @@ impl UnicornMips {
                     .is_some_and(|stop| stop.pc == *target)
                 && read_mips_reg(&uc, RegisterMIPS::PC) == *target
         });
-        self.last_native_slice_outcome = if result.is_err() || native_timeout_query.is_err() {
-            NativeSliceOutcome::NativeError
-        } else if native_capture_result.is_err() {
-            NativeSliceOutcome::BackendError
-        } else if native_requested_pc_stop.is_some() {
-            NativeSliceOutcome::RequestedPcStop
-        } else if native_deadline_expired {
-            NativeSliceOutcome::NativeDeadline
-        } else {
-            NativeSliceOutcome::ServiceBoundary
-        };
+        self.last_native_slice_outcome = NativeStopEvidence {
+            native_error: result.is_err() || native_timeout_query.is_err(),
+            capture_error: native_capture_result.is_err(),
+            hook_control_error: native_hook_control_error.borrow().is_some(),
+            requested_pc_stop: native_requested_pc_stop.is_some(),
+            native_deadline_expired,
+            hook_stop_reason: native_hook_stop_reason.get(),
+        }
+        .outcome();
         let mut deferred_launch_error = None;
         let mut deferred_view_sync_error = None;
         if result.is_ok()
             && native_timeout_query.is_ok()
             && native_capture_result.is_ok()
+            && native_hook_control_error.borrow().is_none()
             && deferred_process_launch.get()
         {
             deferred_launch_error = run_pending_process_launches(
@@ -10360,6 +10403,12 @@ impl UnicornMips {
                 "capture repaired scalar task context after Unicorn run failed: {err:?}"
             )));
         }
+        if let Some(err) = native_hook_control_error.borrow_mut().take() {
+            self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            self.persist_run_state(&run_state, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            return Err(Error::Backend(err));
+        }
         if let Some(err) = deferred_launch_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
@@ -10418,8 +10467,10 @@ impl UnicornMips {
             // context also satisfies the exact-PC check above.
             self.last_native_slice_outcome = if native_deadline_expired {
                 NativeSliceOutcome::NativeDeadline
+            } else if let Some(reason) = native_hook_stop_reason.get() {
+                NativeSliceOutcome::HookStop(reason)
             } else {
-                NativeSliceOutcome::ServiceBoundary
+                NativeSliceOutcome::UnknownNormalStop
             };
         }
         self.persist_run_state(&run_state, kernel);
@@ -35748,7 +35799,7 @@ mod guest_thread_stack_tests {
             }),
             ..Default::default()
         });
-        scheduler.last_native_slice_outcome = NativeSliceOutcome::ServiceBoundary;
+        scheduler.last_native_slice_outcome = NativeSliceOutcome::UnknownNormalStop;
 
         scheduler.rotate_after_run_slice_handoff(&mut kernel, true);
 
@@ -48913,7 +48964,7 @@ mod unicorn_tests {
             }),
             ..Default::default()
         });
-        parent.last_native_slice_outcome = super::NativeSliceOutcome::ServiceBoundary;
+        parent.last_native_slice_outcome = super::NativeSliceOutcome::UnknownNormalStop;
         parent.rotate_after_run_slice_handoff(&mut kernel, true);
         assert_eq!(kernel.current_process_id(), 67);
         assert!(parent.slice_end_rotation_pending());
@@ -49284,6 +49335,11 @@ mod unicorn_tests {
             live_pump: false,
         };
         cpu.run_until_import_trap_with_framebuffer_limits(&mut kernel, &mut framebuffer, limits)?;
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        assert!(!cpu.last_native_slice_outcome().is_service_boundary());
         let first = cpu.saved_context.clone().unwrap();
         cpu.run_until_import_trap_with_framebuffer_limits(&mut kernel, &mut framebuffer, limits)?;
         assert_eq!(cpu.saved_context.as_ref().unwrap(), &first);
@@ -54335,7 +54391,7 @@ mod unicorn_tests {
             pc: child.entry.unwrap(),
             regs: child_regs,
         });
-        child.last_native_slice_outcome = super::NativeSliceOutcome::ServiceBoundary;
+        child.last_native_slice_outcome = super::NativeSliceOutcome::UnknownNormalStop;
         active
             .parked_child_processes
             .push_back(super::ParkedProcess {
@@ -54443,6 +54499,36 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn failed_host_budget_control_is_backend_error_unless_native_failed_first() {
+        let stopped = super::NativeStopEvidence {
+            hook_control_error: true,
+            requested_pc_stop: true,
+            native_deadline_expired: true,
+            hook_stop_reason: Some(super::NativeHookStopReason::HostWallBudget),
+            ..Default::default()
+        };
+        assert_eq!(stopped.outcome(), super::NativeSliceOutcome::BackendError);
+        assert_eq!(
+            super::NativeStopEvidence {
+                native_error: true,
+                ..stopped
+            }
+            .outcome(),
+            super::NativeSliceOutcome::NativeError,
+            "a primary native result or timeout-query failure wins"
+        );
+        assert_eq!(
+            super::NativeStopEvidence {
+                capture_error: true,
+                ..stopped
+            }
+            .outcome(),
+            super::NativeSliceOutcome::BackendError,
+            "native capture remains a hard failure"
+        );
+    }
+
+    #[test]
     fn native_count_boundary_is_service_without_fabricated_deadline() -> crate::Result<()> {
         let mut kernel = phase1_kernel("phase1-count-classification.exe")?;
         let mut cpu = phase1_counter_cpu(0x1000, "phase1-count-classification.exe")?;
@@ -54476,7 +54562,7 @@ mod unicorn_tests {
 
         assert_eq!(
             cpu.last_native_slice_outcome(),
-            super::NativeSliceOutcome::ServiceBoundary
+            super::NativeSliceOutcome::UnknownNormalStop
         );
         assert!(cpu.last_native_slice_outcome().is_service_boundary());
         assert!(
@@ -54485,6 +54571,44 @@ mod unicorn_tests {
                 .host_wall_clock_stop
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn elapsed_host_budget_block_hook_has_typed_stop_reason() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("phase1-host-budget-stop.exe")?;
+        let mut cpu = phase1_counter_cpu(0x1000, "phase1-host-budget-stop.exe")?;
+        assert!(
+            cpu.trampoline_origins_all_direct(),
+            "the fixture must use the hookless code path and its scheduler block hook"
+        );
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        cpu.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 1,
+                stop_pc: None,
+                live_pump: true,
+            },
+        )?;
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::HookStop(super::NativeHookStopReason::HostWallBudget),
+            "only the checked safe-PC budget hook may publish this label"
+        );
+        assert!(cpu.last_native_slice_outcome().is_service_boundary());
+        assert!(cpu.saved_context_pc().is_some());
+        let native = cpu.native_engine.lease().unwrap();
+        assert_eq!(
+            native
+                .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
+                .unwrap(),
+            0,
+            "the native one-second deadline did not cause this stop"
+        );
+        native.finish().unwrap();
         Ok(())
     }
 

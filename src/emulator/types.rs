@@ -29,11 +29,20 @@ pub struct UnicornRunLimits {
 /// Result of the most recent native CPU attempt for this process. A service
 /// boundary permits scheduler maintenance; it does not prove that an
 /// instruction-count limit or a CE task quantum expired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeHookStopReason {
+    /// A hook observed the elapsed host budget and stopped at a safe PC.
+    HostWallBudget,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeSliceOutcome {
     #[default]
     NoAttempt,
-    ServiceBoundary,
+    /// Successful normal return without a proven stop cause. A positive
+    /// instruction count alone is not a native count-limit witness.
+    UnknownNormalStop,
+    HookStop(NativeHookStopReason),
     NativeDeadline,
     RequestedPcStop,
     GuestProcessExit,
@@ -43,17 +52,24 @@ pub enum NativeSliceOutcome {
 
 impl NativeSliceOutcome {
     pub fn is_service_boundary(self) -> bool {
-        matches!(self, Self::ServiceBoundary | Self::NativeDeadline)
+        matches!(
+            self,
+            Self::UnknownNormalStop | Self::HookStop(_) | Self::NativeDeadline
+        )
     }
 }
 
 #[cfg(test)]
 mod native_slice_outcome_tests {
-    use super::NativeSliceOutcome;
+    use super::{NativeHookStopReason, NativeSliceOutcome};
 
     #[test]
     fn only_successful_service_outcomes_allow_scheduler_handoff() {
-        assert!(NativeSliceOutcome::ServiceBoundary.is_service_boundary());
+        assert!(NativeSliceOutcome::UnknownNormalStop.is_service_boundary());
+        assert!(
+            NativeSliceOutcome::HookStop(NativeHookStopReason::HostWallBudget)
+                .is_service_boundary()
+        );
         assert!(NativeSliceOutcome::NativeDeadline.is_service_boundary());
         for stop in [
             NativeSliceOutcome::NoAttempt,
