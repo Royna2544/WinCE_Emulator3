@@ -126,8 +126,11 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   rejects the E-20 child same-VA allocation. E-18 fresh-owner bytes remain
   stale. Supplemental Ex arms reject remote targets and are not published
   by the default export table; this is not public remote Ex support (local
-  `evidence/stage2-e23-owner-va-20261013/focused-owner-va.md`). Broader
-  regression validation has not been claimed at this checkpoint.
+  `evidence/stage2-e23-owner-va-20261013/focused-owner-va.md`). Full release
+  1,649/0/5 ignored and no-feature 1,250/0/2 ignored passed on the same
+  source. Explicit ignored E-18/E-20 reruns still failed at the intended
+  stale-byte and child-allocation assertions; raw logs are in that evidence
+  folder. These suite passes do not close the two gates.
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,
   inferred creation PID, lost boot/primary identity or alias incoherence in a
@@ -271,6 +274,11 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
 - Scheduler/message semantics are not complete for every reentrant wait,
   cancellation, nested send, abort-if-hung, modal-loop, and cross-thread
   result-delivery combination.
+- E-23's green suites missed a foreign legacy-view mutation path: a child
+  can release parent `FileViewLegacy` metadata or commit/remove a parent
+  view through base-only unmap. The E-23 test totals remain historical;
+  owner-checked free/flush/unmap and cross-process controls are required
+  before this metadata slice is considered safe (ledger E-23).
 - In E-22, `happyway_win` process 67/thread 3 revisited a completed WNDPROC
   return stub 2,527 times with no pending callout. Its recorded last return
   lacks caller context, so fabricating a recovery would be unsafe. Parent

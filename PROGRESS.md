@@ -214,8 +214,11 @@ references for historical reconstruction.
   VA-only map still requires a global overlap fence, so E-20 same-VA public
   allocation remains expected red; E-18 fresh-owner bytes are unchanged.
   Supplemental Ex arms reject foreign targets but are not default-exported.
-  Broader regression and O-P4/Stage 2/app acceptance are not claimed
-  (ledger E-23).
+  The same source passed **1,649 release tests, 0 failed, 5 ignored** and
+  **1,250 no-feature tests, 0 failed, 2 ignored**. Explicit ignored E-18/E-20
+  reruns failed at the expected stale-byte/child-allocation assertions;
+  their raw logs are in `evidence/stage2-e23-owner-va-20261013/`. O-P4,
+  Stage 2 and app acceptance are not claimed (ledger E-23).
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

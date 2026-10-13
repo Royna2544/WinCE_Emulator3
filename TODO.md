@@ -63,8 +63,11 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
       did not migrate bytes. E-23 now keys private-VA metadata and lookups by
       process birth; two focused controls pass, but the native VA-only map
       retains a global overlap fence and blocks E-20 same-VA allocation.
-      Broader regressions on E-23 remain pending. Selected-process snapshots,
-      worker sweep, wait pins and clone lineage remain open. Next connect
+      Full release 1,649/0/5 ignored and no-feature 1,250/0/2 ignored pass
+      on the same source, while explicit ignored E-18/E-20 reruns still fail
+      at their intended stale-byte/child-allocation gates (ledger E-23).
+      Selected-process snapshots, worker sweep, wait pins and clone lineage
+      remain open. Next connect
       owner-scoped native reservations/mapping, cross-family overlap checks,
       reserve/commit behavior and remote queries to that directory; Stage 3
       extends the same authority. Then migrate
