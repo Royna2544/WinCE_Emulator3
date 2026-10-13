@@ -6259,7 +6259,12 @@ impl UnicornMips {
             .take_metadata()
             .unwrap_or_else(|| KernelMemoryMappings::new(&self.mapped_blobs));
         let setup_result = (|| -> Result<u64> {
-            reclaim_stale_virtual_memory_pages(&mut uc, kernel, &mut persisted_kernel_mappings)?;
+            reclaim_stale_virtual_memory_pages(
+                &mut uc,
+                kernel,
+                &mut persisted_kernel_mappings,
+                diagnostic_private.then_some(native_owner_birth),
+            )?;
             reclaim_stale_private_slab_pages(
                 &mut uc,
                 kernel,
@@ -10877,6 +10882,9 @@ impl UnicornMips {
             }
             self.saved_context = staged_saved_context;
             self.persist_run_state(&run_state, kernel);
+            // Clear the outgoing CPU's fail-closed sentinel before scheduler
+            // rotation can swap this struct with a different process CPU.
+            self.private_slab_attempt_poisoned = false;
             let _ = self.complete_orphaned_active_send_wait(kernel);
             let _ = self.complete_orphaned_parked_send_wait(kernel);
             self.clear_orphaned_blocked_get_message_state(kernel);
@@ -10889,7 +10897,6 @@ impl UnicornMips {
             let _ = self.clear_orphaned_send_depths(kernel);
             self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
             self.prune_exited_and_active_processes_from_parked(kernel);
-            self.private_slab_attempt_poisoned = false;
             return Ok(());
         }
         self.persist_run_state(&run_state, kernel);
@@ -13348,7 +13355,7 @@ fn map_kernel_memory_allocations_for_owner<D>(
     }
 
     if mapped.virtual_generation != kernel.memory.virtual_generation() {
-        reclaim_stale_virtual_memory_pages(uc, kernel, mapped)?;
+        reclaim_stale_virtual_memory_pages(uc, kernel, mapped, owner)?;
         if let Some(owner) = owner {
             reclaim_stale_private_slab_pages(uc, kernel, mapped, owner)?;
         }
@@ -13454,8 +13461,9 @@ fn reclaim_stale_virtual_memory_pages<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &CeKernel,
     mapped: &mut KernelMemoryMappings,
+    owner: Option<crate::ce::object::ProcessBirthKey>,
 ) -> Result<()> {
-    let live_pages = live_virtual_memory_pages(kernel)?;
+    let live_pages = live_virtual_memory_pages(kernel, owner)?;
     let stale_pages = mapped
         .virtual_pages
         .iter()
@@ -13494,13 +13502,18 @@ fn remove_mapped_guest_page(mapped: &mut KernelMemoryMappings, page: u32) {
 }
 
 #[cfg(feature = "unicorn")]
-fn live_virtual_memory_pages(kernel: &CeKernel) -> Result<HashSet<u32>> {
+fn live_virtual_memory_pages(
+    kernel: &CeKernel,
+    owner: Option<crate::ce::object::ProcessBirthKey>,
+) -> Result<HashSet<u32>> {
     let mut pages = HashSet::new();
-    for allocation in kernel
-        .memory
-        .virtual_allocations()
-        .filter(|allocation| allocation.backing == VirtualAllocationBacking::LegacySeed)
-    {
+    let allocations: Vec<_> = match owner {
+        Some(owner) => kernel.memory.virtual_allocations_visible_to(owner).collect(),
+        None => kernel.memory.virtual_allocations().collect(),
+    };
+    for allocation in allocations.into_iter().filter(|allocation| {
+        allocation.backing == VirtualAllocationBacking::LegacySeed
+    }) {
         insert_guest_range_pages(
             &mut pages,
             allocation.base,
@@ -13643,11 +13656,46 @@ fn ensure_unique_file_views_for_owner(kernel: &CeKernel, owner_pid: u32) -> Resu
 }
 
 #[cfg(feature = "unicorn")]
+fn ensure_private_slab_file_views_disjoint(kernel: &CeKernel, owner_pid: u32) -> Result<()> {
+    if !kernel.memory.has_stable_private_slabs() {
+        return Ok(());
+    }
+    // A file-view sync uses guest VA, while the pointer map makes the slab
+    // authoritative for those bytes. Reject any partial interval overlap
+    // before either direction can overwrite the other store. This check is
+    // intentionally global: outgoing readback refreshes lazy seeds for every
+    // view by guest VA alone, so even a foreign-PID view at this VA could
+    // overwrite the slab after native execution. Stale allocations may cause
+    // a false rejection, never an unauthorized write.
+    for allocation in kernel.memory.virtual_allocations().filter(|allocation| {
+        allocation.backing == VirtualAllocationBacking::StablePrivateSlab
+    }) {
+        let slab_start = u64::from(allocation.base);
+        let slab_end = slab_start + u64::from(allocation.size);
+        for mapping in kernel.handles.file_mappings() {
+            for view in &mapping.views {
+                let view_start = u64::from(view.base);
+                let view_end = view_start + u64::from(view.size);
+                if slab_start < view_end && view_start < slab_end {
+                    return Err(Error::Backend(format!(
+                        "process {owner_pid} native file-view sync: view PID {} at 0x{:08x}+0x{:x} overlaps private slab reservation PID {} at 0x{:08x}+0x{:x}",
+                        view.process_id, view.base, view.size,
+                        allocation.owner.process_id(), allocation.base, allocation.size
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
 fn sync_file_mapping_views_from_unicorn<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
     owner_pid: u32,
 ) -> Result<()> {
+    ensure_private_slab_file_views_disjoint(kernel, owner_pid)?;
     // Only the owning process's view pages carry authoritative bytes: other
     // processes hold stale snapshot copies of the same guest addresses, and
     // reading those back would clobber data the owner wrote into the mapping.
@@ -13744,6 +13792,7 @@ fn sync_file_mapping_views_to_unicorn<D>(
     kernel: &CeKernel,
     owner_pid: u32,
 ) -> Result<()> {
+    ensure_private_slab_file_views_disjoint(kernel, owner_pid)?;
     ensure_unambiguous_file_view_lazy_seeds(kernel)?;
     ensure_unique_file_views_for_owner(kernel, owner_pid)?;
     let native_regions = uc.mem_regions().map_err(|err| {
@@ -55412,7 +55461,171 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: ledger E-18, Stage 2 O-M1/O-P4 private VirtualAlloc bytes across fresh owner"]
+    fn native_file_view_partial_private_slab_overlap_is_rejected_before_sync() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("slab-view-overlap.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let base = kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("diagnostic private reservation");
+        assert!(kernel.memory.set_virtual_initial_bytes(owner, base, vec![1, 2, 3, 4]));
+        let handle = kernel.handles.create_file_mapping(None, 4, 4, None);
+        let mapping = kernel.handles.file_mapping_mut(handle)?;
+        mapping.data[..4].copy_from_slice(&[5, 6, 7, 8]);
+        mapping.views.push(crate::ce::object::FileMappingView {
+            base: base + 2,
+            size: 4,
+            offset: 0,
+            process_id: owner.process_id(),
+        });
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(u64::from(base), 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(base), &[9, 10, 11, 12]).unwrap();
+
+        let to_err = super::sync_file_mapping_views_to_unicorn(
+            &mut uc,
+            &kernel,
+            owner.process_id(),
+        )
+        .unwrap_err();
+        assert!(format!("{to_err:?}").contains("overlaps private slab reservation"));
+        let from_err = super::sync_file_mapping_views_from_unicorn(
+            &mut uc,
+            &mut kernel,
+            owner.process_id(),
+        )
+        .unwrap_err();
+        assert!(format!("{from_err:?}").contains("overlaps private slab reservation"));
+
+        let mut native = [0; 4];
+        uc.mem_read(u64::from(base), &mut native).unwrap();
+        assert_eq!(native, [9, 10, 11, 12]);
+        assert_eq!(&kernel.handles.file_mapping(handle)?.data[..4], &[5, 6, 7, 8]);
+        let mut canonical = [0; 4];
+        kernel
+            .memory
+            .private_page_pin(owner, base)
+            .expect("stable page")
+            .read_bytes(0, &mut canonical)
+            .expect("canonical read");
+        assert_eq!(canonical, [1, 2, 3, 4]);
+
+        // Outgoing readback refreshes lazy seeds for *every* process by VA.
+        // A foreign-PID view must therefore be rejected even though the
+        // native readback itself is restricted to the active owner.
+        let foreign_view = &mut kernel.handles.file_mapping_mut(handle)?.views[0];
+        foreign_view.process_id = owner.process_id().wrapping_add(1);
+        foreign_view.base = base;
+        let to_err = super::sync_file_mapping_views_to_unicorn(
+            &mut uc,
+            &kernel,
+            owner.process_id(),
+        )
+        .unwrap_err();
+        assert!(format!("{to_err:?}").contains("overlaps private slab reservation"));
+        let from_err = super::sync_file_mapping_views_from_unicorn(
+            &mut uc,
+            &mut kernel,
+            owner.process_id(),
+        )
+        .unwrap_err();
+        assert!(format!("{from_err:?}").contains("overlaps private slab reservation"));
+        assert_eq!(&kernel.handles.file_mapping(handle)?.data[..4], &[5, 6, 7, 8]);
+        kernel
+            .memory
+            .private_page_pin(owner, base)
+            .expect("stable page")
+            .read_bytes(0, &mut canonical)
+            .expect("canonical read");
+        assert_eq!(canonical, [1, 2, 3, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn native_private_slab_mapper_rejects_unowned_ram_before_pin_or_ffi() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("slab-collision.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let base = kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("diagnostic private reservation");
+        let pin = kernel.memory.private_page_pin(owner, base).expect("stable page");
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let same_perms = super::unicorn_perms(super::virtual_allocation_perms(0x04));
+        uc.mem_map(u64::from(base), 0x1000, same_perms).unwrap();
+        uc.mem_write(u64::from(base), &[0xa1, 0xb2, 0xc3, 0xd4]).unwrap();
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        let native_pins = super::NativeMappingPins::default();
+
+        let err = super::map_private_slab_page(
+            &mut uc,
+            &kernel,
+            &mut mapped,
+            owner,
+            pin,
+            &native_pins,
+            None,
+        )
+        .unwrap_err();
+        assert!(format!("{err:?}").contains("collides with an unowned native mapping"));
+        assert_eq!(native_pins.len(), 0, "collision rejected before raw pointer pin");
+        assert!(mapped.private_pages.is_empty());
+        assert_eq!(super::native_page_perms(&uc, base)?, Some(same_perms.0 as u32));
+        let mut native = [0; 4];
+        uc.mem_read(u64::from(base), &mut native).unwrap();
+        assert_eq!(native, [0xa1, 0xb2, 0xc3, 0xd4]);
+        Ok(())
+    }
+
+    #[test]
+    fn native_private_slab_mapper_rejects_cloned_and_released_pins_before_ffi() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("slab-stale-pin.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let base = kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("diagnostic private reservation");
+        let source_pin = kernel.memory.private_page_pin(owner, base).expect("source pin");
+        let cloned_pin = kernel
+            .memory
+            .clone()
+            .private_page_pin(owner, base)
+            .expect("deep-cloned pin");
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        let native_pins = super::NativeMappingPins::default();
+
+        for stale_pin in [cloned_pin, source_pin.clone()] {
+            if stale_pin.native_ptr() == source_pin.native_ptr() {
+                assert!(kernel.memory.virtual_free(owner, base, 0, MEM_RELEASE));
+            }
+            let err = super::map_private_slab_page(
+                &mut uc,
+                &kernel,
+                &mut mapped,
+                owner,
+                stale_pin,
+                &native_pins,
+                None,
+            )
+            .unwrap_err();
+            assert!(format!("{err:?}").contains("stale or unaligned private slab page"));
+            assert_eq!(native_pins.len(), 0, "stale pin rejected before FFI");
+            assert!(mapped.private_pages.is_empty());
+            assert_eq!(super::native_page_perms(&uc, base)?, None);
+        }
+        Ok(())
+    }
+
+    #[test]
+    // E25 diagnostic opt-in for the historical E18 shape. Public VirtualAlloc
+    // still selects LegacySeed, so this is not a general O-M1/O-P4 closure.
     fn native_private_virtual_write_survives_closed_owner_next_slice() -> crate::Result<()> {
         use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
 
