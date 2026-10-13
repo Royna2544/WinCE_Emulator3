@@ -59135,6 +59135,268 @@ mod unicorn_tests {
         Ok(())
     }
 
+    fn run_child_dispatch_message_counter_fixture(lose_pending_return: bool) -> crate::Result<()> {
+        const MSG_PTR: u32 = 0x0040_1080;
+        const DISPATCH_TRAP: u32 = crate::emulator::imports::IMPORT_TRAP_BASE + 0x240;
+
+        let mut parent_bytes = tiny_mips_spinner_pe();
+        write_vec_u32(&mut parent_bytes, 0x200, 0x2408_0055); // addiu t0,zero,0x55
+        write_vec_u32(&mut parent_bytes, 0x204, 0x1000_ffff); // beq zero,zero,-1
+        write_vec_u32(&mut parent_bytes, 0x208, 0);
+        let parent_image =
+            crate::pe::PeImage::parse_bytes("dispatch-count-parent.exe", &parent_bytes)?;
+
+        let mut child_bytes = tiny_mips_spinner_pe();
+        // S0 counts real guest DispatchMessageW jalr attempts, S2 counts
+        // WNDPROC entries, and S3 counts guest continuations after the stub.
+        // A genuine second delivery changes S2; replaying one stale stub does not.
+        for (offset, word) in [
+            (0x200, 0x2610_0001),                            // addiu s0,s0,1
+            (0x204, 0x3c04_0000 | (MSG_PTR >> 16)),          // lui a0,MSG_PTR high
+            (0x208, 0x3484_0000 | (MSG_PTR & 0xffff)),       // ori a0,a0,low
+            (0x20c, 0x3c19_0000 | (DISPATCH_TRAP >> 16)),    // lui t9,trap high
+            (0x210, 0x3739_0000 | (DISPATCH_TRAP & 0xffff)), // ori t9,t9,low
+            (0x214, 0x0320_f809),                            // jalr t9: guest creates RA
+            (0x218, 0),
+            (0x21c, 0x2673_0001), // continuation: addiu s3,s3,1
+            (0x220, 0x2e68_0003), // sltiu t0,s3,3
+            (0x224, 0x1500_fff6), // bne t0,zero,entry
+            (0x228, 0),
+            (0x22c, 0x1000_ffff), // terminal self-loop
+            (0x230, 0),
+            (0x240, 0x2652_0001), // WNDPROC: addiu s2,s2,1
+            (0x244, 0x2402_0042), // addiu v0,zero,0x42
+            (0x248, 0x03e0_0008), // jr ra (real callback return stub)
+            (0x24c, 0),
+        ] {
+            write_vec_u32(&mut child_bytes, offset, word);
+        }
+        let child_image =
+            crate::pe::PeImage::parse_bytes("dispatch-count-child.exe", &child_bytes)?;
+        let entry = child_image.entry_point_va();
+        let wndproc = entry + 0x40;
+        let continuation = entry + 0x1c;
+        assert_eq!(MSG_PTR, entry + 0x80);
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        kernel.set_process_module_base(parent_image.image_base());
+        kernel.set_process_module_path("\\Test\\dispatch-count-parent.exe");
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&parent_image)?;
+        let mut parent_regs = super::MipsGuestContext::zero();
+        parent_regs.regs[29] = cpu.stack_top.expect("parent stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext {
+            pc: parent_image.entry_point_va(),
+            regs: parent_regs,
+        });
+        cpu.running_guest_thread = Some((1, u32::MAX));
+
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\dispatch-count-child.exe".to_owned()), None);
+        assert!(kernel.take_pending_process_launches().iter().any(|queued| {
+            queued.process_id == launch.process_id && queued.thread_id == launch.thread_id
+        }));
+        let mut child = super::UnicornMips::new()?;
+        child.load_pe_image(&child_image)?;
+        child.set_initial_thread_id(launch.thread_id);
+        child.current_thread_id = launch.thread_id;
+        child.running_guest_thread = Some((launch.thread_id, launch.thread_handle));
+        child
+            .import_traps
+            .insert(crate::emulator::imports::ImportTrap {
+                address: DISPATCH_TRAP,
+                module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(crate::ce::coredll_ordinals::ORD_DISPATCH_MESSAGE_W),
+                name: Some("DispatchMessageW".to_owned()),
+                iat_va: 0,
+            });
+        super::refresh_import_trap_page_blob(&mut child.mapped_blobs, &child.import_traps);
+        let mut child_regs = super::MipsGuestContext::zero();
+        child_regs.regs[29] = child.stack_top.expect("child stack") - 0x100;
+        child.saved_context = Some(super::SavedCpuContext {
+            pc: entry,
+            regs: child_regs,
+        });
+        cpu.parked_child_processes.push_back(super::ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: launch.process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: launch.thread_id,
+            cpu: Box::new(child),
+            blocked_send_id: None,
+            module_base: child_image.image_base(),
+            module_path: "\\Test\\dispatch-count-child.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from("dispatch-count-child.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+        assert!(cpu.rotate_to_parked_process_id(&mut kernel, launch.process_id));
+
+        let hwnd = kernel.create_window_ex_w(launch.thread_id, "dispatch_count", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        assert_eq!(kernel.gwe.window(hwnd).unwrap().wndproc, wndproc);
+        for (offset, value) in [(0, hwnd), (4, crate::ce::gwe::WM_ACTIVATE), (8, 0), (12, 0)] {
+            write_guest_fixture_bytes(&mut cpu, MSG_PTR + offset, &value.to_le_bytes());
+        }
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let run_to = |cpu: &mut super::UnicornMips,
+                      kernel: &mut CeKernel,
+                      framebuffer: &mut crate::ce::framebuffer::VirtualFramebuffer,
+                      stop_pc: Option<u32>| {
+            cpu.run_until_import_trap_with_framebuffer_limits(
+                kernel,
+                framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 64,
+                    wall_clock_limit_ms: 500,
+                    stop_pc,
+                    live_pump: false,
+                },
+            )
+        };
+        let counters = |actor: &super::UnicornMips| {
+            let regs = &actor
+                .saved_context
+                .as_ref()
+                .expect("saved child context")
+                .regs
+                .regs;
+            (regs[16], regs[18], regs[19])
+        };
+
+        run_to(&mut cpu, &mut kernel, &mut framebuffer, Some(wndproc + 8))?;
+        assert_eq!(cpu.saved_context_pc(), Some(wndproc + 8));
+        assert_eq!(counters(&cpu), (1, 1, 0));
+        assert_eq!(cpu.pending_wndproc_returns.len(), 1);
+        let pending = &cpu.pending_wndproc_returns[0];
+        assert_eq!(pending.source, "DispatchMessageW");
+        assert_eq!(pending.msg, crate::ce::gwe::WM_ACTIVATE);
+        assert_eq!(pending.return_pc, continuation);
+        let return_sp = pending.return_sp;
+        let call_sp = return_sp - super::WNDPROC_CALL_FRAME_BYTES;
+        assert_eq!(cpu.saved_context.as_ref().unwrap().regs.regs[29], call_sp);
+        assert_eq!(
+            cpu.saved_context.as_ref().unwrap().regs.regs[31],
+            super::WNDPROC_RETURN_STUB_ADDR
+        );
+
+        // Park the child while its real callback is mid-flight, execute one
+        // parent MIPS instruction, then resume this same child process.
+        assert!(cpu.rotate_to_parked_process_id(&mut kernel, 1));
+        run_to(
+            &mut cpu,
+            &mut kernel,
+            &mut framebuffer,
+            Some(parent_image.entry_point_va() + 4),
+        )?;
+        assert_eq!(cpu.saved_context.as_ref().unwrap().regs.regs[8], 0x55);
+        assert!(cpu.rotate_to_parked_process_id(&mut kernel, launch.process_id));
+        assert_eq!(cpu.saved_context_pc(), Some(wndproc + 8));
+        assert_eq!(counters(&cpu), (1, 1, 0));
+        assert_eq!(cpu.pending_wndproc_returns.len(), 1);
+        assert_eq!(cpu.pending_wndproc_returns[0].return_sp, return_sp);
+        assert_eq!(cpu.saved_context.as_ref().unwrap().regs.regs[29], call_sp);
+
+        if lose_pending_return {
+            // Test-only fault injection: delete exactly this pending record
+            // after park/resume, without weakening production return handling.
+            // No completed or archived caller context exists to recover it.
+            assert!(cpu.orphaned_wndproc_returns.is_empty());
+            let lost = cpu.pending_wndproc_returns.pop().unwrap();
+            assert_eq!(lost.source, "DispatchMessageW");
+            assert_eq!(lost.return_pc, continuation);
+            assert_eq!(lost.return_sp, return_sp);
+            assert!(cpu.pending_wndproc_returns.is_empty());
+
+            for _ in 0..2 {
+                assert_eq!(kernel.current_process_id(), launch.process_id);
+                run_to(&mut cpu, &mut kernel, &mut framebuffer, None)?;
+                let child_after = phase1_actor_cpu(&cpu, &kernel, launch.process_id);
+                let saved = child_after
+                    .saved_context
+                    .as_ref()
+                    .expect("orphaned child context");
+                assert_eq!(saved.pc, super::WNDPROC_RETURN_STUB_ADDR);
+                assert_eq!(saved.regs.regs[31], super::WNDPROC_RETURN_STUB_ADDR);
+                assert_eq!(saved.regs.regs[29], call_sp);
+                assert_eq!(counters(child_after), (1, 1, 0));
+                assert!(child_after.pending_wndproc_returns.is_empty());
+                assert!(
+                    child_after
+                        .last_debug_snapshot()
+                        .unwrap()
+                        .last_wndproc_returns
+                        .iter()
+                        .all(|record| record.source != "DispatchMessageW")
+                );
+                if kernel.current_process_id() != launch.process_id {
+                    assert!(cpu.rotate_to_parked_process_id(&mut kernel, launch.process_id));
+                }
+            }
+            return Ok(());
+        }
+
+        // The intact control delivers the same guest message three times.
+        // Alternate exact stop PCs so resuming a stopped instruction advances.
+        for delivery in 1..=3 {
+            if delivery != 1 {
+                run_to(&mut cpu, &mut kernel, &mut framebuffer, Some(wndproc + 8))?;
+            }
+            assert_eq!(cpu.saved_context_pc(), Some(wndproc + 8));
+            assert_eq!(counters(&cpu), (delivery, delivery, delivery - 1));
+            assert_eq!(cpu.pending_wndproc_returns.len(), 1);
+            assert_eq!(cpu.pending_wndproc_returns[0].return_pc, continuation);
+            assert_eq!(cpu.pending_wndproc_returns[0].return_sp, return_sp);
+            assert_eq!(cpu.saved_context.as_ref().unwrap().regs.regs[29], call_sp);
+            run_to(
+                &mut cpu,
+                &mut kernel,
+                &mut framebuffer,
+                Some(continuation + 4),
+            )?;
+            assert_eq!(cpu.saved_context_pc(), Some(continuation + 4));
+            assert_eq!(counters(&cpu), (delivery, delivery, delivery));
+            assert_eq!(cpu.saved_context.as_ref().unwrap().regs.regs[29], return_sp);
+            assert_eq!(
+                cpu.saved_context.as_ref().unwrap().regs.regs[31],
+                continuation
+            );
+            assert_eq!(cpu.saved_context.as_ref().unwrap().regs.regs[2], 0x42);
+            assert!(cpu.pending_wndproc_returns.is_empty());
+            assert_eq!(
+                cpu.last_debug_snapshot()
+                    .unwrap()
+                    .last_wndproc_returns
+                    .iter()
+                    .filter(|record| record.source == "DispatchMessageW"
+                        && record.msg == crate::ce::gwe::WM_ACTIVATE)
+                    .count(),
+                delivery as usize
+            );
+        }
+        run_to(&mut cpu, &mut kernel, &mut framebuffer, Some(entry + 0x2c))?;
+        assert_eq!(cpu.saved_context_pc(), Some(entry + 0x2c));
+        assert_eq!(counters(&cpu), (3, 3, 3));
+        assert!(cpu.pending_wndproc_returns.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn child_dispatch_message_counter_healthy_repeated_callbacks() -> crate::Result<()> {
+        run_child_dispatch_message_counter_fixture(false)
+    }
+
+    #[test]
+    fn child_dispatch_message_counter_pending_loss_replays_same_stub() -> crate::Result<()> {
+        run_child_dispatch_message_counter_fixture(true)
+    }
+
     #[test]
     fn dispatch_message_callout_enters_timerproc_callback() {
         let config = RuntimeConfig::load_default().unwrap();
