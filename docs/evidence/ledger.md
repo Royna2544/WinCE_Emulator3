@@ -770,7 +770,7 @@ predates this source.
 
 ## E-25 internal private-slab fresh-owner diagnostic (2026-10-14, focused green)
 
-The final-source focused receipt is local
+The source-bound focused receipt for the earlier source is local
 [`evidence/e25-private-slab-20261014/README.md`](../../evidence/e25-private-slab-20261014/README.md)
 (SHA-256 `978F1BAD8E1D9E8EF14479AE06E767A7BCFFC3B23FD287B2E7F2DF2AB6B58E46`).
 It used the D: source, release profile, `unicorn` feature and
