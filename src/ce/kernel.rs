@@ -1275,6 +1275,7 @@ impl CeKernel {
             window_backing_stores: BTreeMap::new(),
             api_sets: BTreeMap::new(),
         };
+        kernel.handles.register_boot_process(1);
         kernel.publish_configured_mount_device_interfaces(true);
         kernel
     }
@@ -3029,7 +3030,10 @@ impl CeKernel {
         show_cmd: Option<u32>,
     ) -> PendingProcessLaunch {
         let process_id = self.next_process_id;
-        self.next_process_id = self.next_process_id.saturating_add(1);
+        self.next_process_id = self
+            .next_process_id
+            .checked_add(1)
+            .expect("process PID exhausted before launch publication");
         let thread_id = self.threads.allocate_guest_thread_id();
         let process_handle = self.handles.create_process(process_id);
         let thread_handle = self.handles.create_thread(thread_id, 0, 0, false);
@@ -3082,11 +3086,13 @@ impl CeKernel {
         } else {
             self.discard_window_backing_stores(&backing_store_targets);
         }
-        if self
+        if let Some(aliases) = self
             .handles
-            .mark_process_exited(launch.process_handle, exit_code)
+            .finish_process_execution_by_id(launch.process_id, exit_code)
         {
-            self.queue_object_wake_candidates(launch.process_handle);
+            for alias in aliases {
+                self.queue_object_wake_candidates(alias);
+            }
         }
         if self
             .handles
@@ -4618,10 +4624,7 @@ impl CeKernel {
                 mapping.views.len(),
                 mapping.closed
             ),
-            KernelObject::Process(process) => format!(
-                "process(id={},signaled={},exit=0x{:08x})",
-                process.process_id, process.signaled, process.exit_code
-            ),
+            KernelObject::Process(_) => self.handles.describe_handle(handle),
             _ => self.handles.describe_handle(handle),
         }
     }
@@ -6650,7 +6653,11 @@ impl CeKernel {
         }
         let success = self.handles.mark_process_exited(handle, exit_code);
         if success {
-            self.queue_object_wake_candidates(handle);
+            if let Some(process_id) = self.handles.process_id(handle) {
+                for alias in self.handles.process_alias_handles(process_id) {
+                    self.queue_object_wake_candidates(alias);
+                }
+            }
         }
         success
     }
@@ -7128,10 +7135,13 @@ impl CeKernel {
                 path: None,
                 process_handle: Some(handle),
                 thread_handle: None,
-                process_id: Some(process.process_id),
+                process_id: Some(process.process_id()),
                 thread_id: None,
                 result: Some(result),
-                error: Some(format!("exit=0x{:08x}", process.exit_code)),
+                error: self
+                    .handles
+                    .process_exit_code(handle)
+                    .map(|code| format!("exit=0x{code:08x}")),
                 detail: None,
             }),
             Some(KernelObject::Thread(thread)) => Some(ProcessTraceRecord {
@@ -10862,7 +10872,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: ledger E-20, Stage 2"]
     fn pending_child_birth_survives_last_public_process_handle_close() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
@@ -10891,6 +10900,56 @@ mod tests {
             "a pending child remains addressable by PID after its last process handle closes",
         );
         assert_eq!(kernel.process_id(reopened), Some(launch.process_id));
+        Ok(())
+    }
+
+    #[test]
+    fn child_exit_after_original_process_handle_close_updates_alias_wait_and_retirement()
+    -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
+        let first_alias = kernel
+            .open_process_handle(launch.process_id)
+            .expect("child birth");
+        let second_alias = kernel
+            .open_process_handle(launch.process_id)
+            .expect("child birth");
+        assert!(kernel.close_handle(launch.process_handle)?);
+        assert_eq!(kernel.process_id(launch.process_handle), None);
+        assert_eq!(kernel.is_wait_ready(first_alias, 1), Some(false));
+
+        let wait_id = kernel.register_blocked_waiter(
+            77,
+            launch.thread_handle,
+            vec![second_alias],
+            SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let wakes_before = kernel.scheduler_stats().object_wake_candidate_count;
+        kernel.mark_process_launch_exited(&launch, 7);
+        assert_eq!(kernel.process_exit_code(first_alias), Some(7));
+        assert_eq!(kernel.process_exit_code(second_alias), Some(7));
+        assert_eq!(kernel.is_wait_ready(first_alias, 1), Some(true));
+        assert_eq!(
+            kernel.wait_for_single_object(second_alias, 0, 1),
+            WAIT_OBJECT_0
+        );
+        assert!(kernel.scheduler_stats().object_wake_candidate_count > wakes_before);
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(0, kernel.timers.tick_count(), |wait, kernel| {
+                wait.wait_handles
+                    .iter()
+                    .any(|handle| kernel.is_wait_ready(*handle, 77) == Some(true))
+            }),
+            Some(wait_id)
+        );
+
+        assert!(kernel.close_handle(first_alias)?);
+        assert!(kernel.handles.process_id_exists(launch.process_id));
+        assert!(kernel.close_handle(second_alias)?);
+        assert!(!kernel.handles.process_id_exists(launch.process_id));
+        assert_eq!(kernel.open_process_handle(launch.process_id), None);
         Ok(())
     }
 

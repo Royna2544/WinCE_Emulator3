@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     ce::devices::DeviceSession,
@@ -41,7 +41,7 @@ pub enum KernelObject {
     ApiSet(ApiSetObject),
     ApiHandle(ApiHandleObject),
     Thread(ThreadObject),
-    Process(ProcessObject),
+    Process(ProcessHandleObject),
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +229,22 @@ pub struct ProcessObject {
     pub exit_code: u32,
     pub signaled: bool,
     pub debugger_thread_id: Option<u32>,
+    incarnation: u64,
+    execution_live: bool,
+    aliases: BTreeSet<u32>,
+}
+
+/// A public handle names a birth; mutable process state lives only in HandleTable.
+#[derive(Debug, Clone)]
+pub struct ProcessHandleObject {
+    process_id: u32,
+    incarnation: u64,
+}
+
+impl ProcessHandleObject {
+    pub fn process_id(&self) -> u32 {
+        self.process_id
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,6 +278,8 @@ pub enum ThreadResumeResult {
 pub struct HandleTable {
     next: u32,
     objects: BTreeMap<u32, KernelObject>,
+    processes: BTreeMap<u32, ProcessObject>,
+    next_process_incarnation: u64,
 }
 
 impl Default for HandleTable {
@@ -269,15 +287,39 @@ impl Default for HandleTable {
         Self {
             next: 0x100,
             objects: BTreeMap::new(),
+            processes: BTreeMap::new(),
+            next_process_incarnation: 1,
         }
     }
 }
 
 impl HandleTable {
     pub fn insert(&mut self, object: KernelObject) -> u32 {
+        let process_alias = match &object {
+            KernelObject::Process(alias) => {
+                assert!(
+                    self.processes
+                        .get(&alias.process_id)
+                        .is_some_and(|process| process.incarnation == alias.incarnation),
+                    "a process handle must refer to its registered birth"
+                );
+                Some(alias.process_id)
+            }
+            _ => None,
+        };
         let handle = self.next;
-        self.next += 4;
+        self.next = self
+            .next
+            .checked_add(4)
+            .expect("public handle ID exhausted");
         self.objects.insert(handle, object);
+        if let Some(process_id) = process_alias {
+            self.processes
+                .get_mut(&process_id)
+                .expect("validated process birth")
+                .aliases
+                .insert(handle);
+        }
         handle
     }
 
@@ -294,9 +336,19 @@ impl HandleTable {
     }
 
     pub fn close(&mut self, handle: u32) -> Result<KernelObject> {
-        self.objects
+        let object = self
+            .objects
             .remove(&handle)
-            .ok_or(Error::InvalidHandle(handle))
+            .ok_or(Error::InvalidHandle(handle))?;
+        if let KernelObject::Process(alias) = &object {
+            if let Some(process) = self.processes.get_mut(&alias.process_id)
+                && process.incarnation == alias.incarnation
+            {
+                process.aliases.remove(&handle);
+                self.retire_process_if_unreferenced(alias.process_id);
+            }
+        }
+        Ok(object)
     }
 
     pub fn len(&self) -> usize {
@@ -445,10 +497,15 @@ impl HandleTable {
                 "thread(id={},signaled={},suspend={},exit=0x{:08x})",
                 thread.thread_id, thread.signaled, thread.suspend_count, thread.exit_code
             ),
-            Ok(KernelObject::Process(process)) => format!(
-                "process(id={},signaled={},exit=0x{:08x})",
-                process.process_id, process.signaled, process.exit_code
-            ),
+            Ok(KernelObject::Process(alias)) => self
+                .process_for_alias(alias)
+                .map(|process| {
+                    format!(
+                        "process(id={},signaled={},exit=0x{:08x})",
+                        process.process_id, process.signaled, process.exit_code
+                    )
+                })
+                .unwrap_or_else(|| "invalid process birth".to_owned()),
             Err(_) => "invalid".to_owned(),
         }
     }
@@ -608,39 +665,109 @@ impl HandleTable {
         }))
     }
 
-    pub fn create_process(&mut self, process_id: u32) -> u32 {
-        self.insert(KernelObject::Process(ProcessObject {
+    fn register_process_birth(&mut self, process_id: u32) -> u64 {
+        assert!(
+            !self.processes.contains_key(&process_id),
+            "process PID must not alias an existing birth"
+        );
+        let incarnation = self.next_process_incarnation;
+        self.next_process_incarnation = self
+            .next_process_incarnation
+            .checked_add(1)
+            .expect("process incarnation exhausted");
+        self.processes.insert(
             process_id,
-            exit_code: 259,
-            signaled: false,
-            debugger_thread_id: None,
+            ProcessObject {
+                process_id,
+                exit_code: 259,
+                signaled: false,
+                debugger_thread_id: None,
+                incarnation,
+                execution_live: true,
+                aliases: BTreeSet::new(),
+            },
+        );
+        incarnation
+    }
+
+    pub fn register_boot_process(&mut self, process_id: u32) {
+        self.register_process_birth(process_id);
+    }
+
+    pub fn create_process(&mut self, process_id: u32) -> u32 {
+        let incarnation = self.register_process_birth(process_id);
+        self.insert(KernelObject::Process(ProcessHandleObject {
+            process_id,
+            incarnation,
         }))
     }
 
     pub fn open_process(&mut self, process_id: u32) -> Option<u32> {
-        let process = self.objects.values().find_map(|object| match object {
-            KernelObject::Process(process) if process.process_id == process_id => {
-                Some(process.clone())
-            }
-            _ => None,
-        })?;
-        Some(self.insert(KernelObject::Process(process)))
+        let incarnation = self.processes.get(&process_id)?.incarnation;
+        Some(self.insert(KernelObject::Process(ProcessHandleObject {
+            process_id,
+            incarnation,
+        })))
     }
 
     pub fn process_snapshots(&self) -> Vec<ProcessObject> {
-        let mut process_ids = Vec::new();
-        let mut processes = Vec::new();
-        for object in self.objects.values() {
-            let KernelObject::Process(process) = object else {
-                continue;
-            };
-            if process_ids.contains(&process.process_id) {
-                continue;
-            }
-            process_ids.push(process.process_id);
-            processes.push(process.clone());
+        self.processes.values().cloned().collect()
+    }
+
+    fn process_for_alias(&self, alias: &ProcessHandleObject) -> Option<&ProcessObject> {
+        self.processes
+            .get(&alias.process_id)
+            .filter(|process| process.incarnation == alias.incarnation)
+    }
+
+    fn process_for_handle(&self, handle: u32) -> Option<&ProcessObject> {
+        let KernelObject::Process(alias) = self.get(handle).ok()? else {
+            return None;
+        };
+        self.process_for_alias(alias)
+    }
+
+    fn retire_process_if_unreferenced(&mut self, process_id: u32) {
+        if self
+            .processes
+            .get(&process_id)
+            .is_some_and(|process| !process.execution_live && process.aliases.is_empty())
+        {
+            self.processes.remove(&process_id);
         }
-        processes
+    }
+
+    pub fn process_alias_handles(&self, process_id: u32) -> Vec<u32> {
+        self.processes
+            .get(&process_id)
+            .map(|process| process.aliases.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn finish_process_execution_by_id(
+        &mut self,
+        process_id: u32,
+        exit_code: u32,
+    ) -> Option<Vec<u32>> {
+        let process = self.processes.get_mut(&process_id)?;
+        process.exit_code = exit_code;
+        process.signaled = true;
+        process.execution_live = false;
+        let aliases = process.aliases.iter().copied().collect();
+        self.retire_process_if_unreferenced(process_id);
+        Some(aliases)
+    }
+
+    pub fn process_signaled_by_id(&self, process_id: u32) -> Option<bool> {
+        self.processes
+            .get(&process_id)
+            .map(|process| process.signaled)
+    }
+
+    pub fn process_exit_code_by_id(&self, process_id: u32) -> Option<u32> {
+        self.processes
+            .get(&process_id)
+            .map(|process| process.exit_code)
     }
 
     pub fn thread_snapshots(&self) -> Vec<ThreadObject> {
@@ -886,51 +1013,36 @@ impl HandleTable {
     }
 
     pub fn mark_process_exited(&mut self, handle: u32, exit_code: u32) -> bool {
-        let Ok(KernelObject::Process(process)) = self.get(handle) else {
+        let Some(process_id) = self.process_id(handle) else {
             return false;
         };
-        let process_id = process.process_id;
-        for object in self.objects.values_mut() {
-            if let KernelObject::Process(process) = object {
-                if process.process_id == process_id {
-                    process.exit_code = exit_code;
-                    process.signaled = true;
-                }
-            }
-        }
+        let process = self
+            .processes
+            .get_mut(&process_id)
+            .expect("validated process birth");
+        process.exit_code = exit_code;
+        process.signaled = true;
         true
     }
 
     pub fn process_exit_code(&self, handle: u32) -> Option<u32> {
-        let Ok(KernelObject::Process(process)) = self.get(handle) else {
-            return None;
-        };
-        Some(process.exit_code)
+        self.process_for_handle(handle)
+            .map(|process| process.exit_code)
     }
 
     pub fn process_id(&self, handle: u32) -> Option<u32> {
-        let Ok(KernelObject::Process(process)) = self.get(handle) else {
-            return None;
-        };
-        Some(process.process_id)
+        self.process_for_handle(handle)
+            .map(|process| process.process_id)
     }
 
     pub fn process_id_exists(&self, process_id: u32) -> bool {
-        self.objects.values().any(|object| {
-            matches!(
-                object,
-                KernelObject::Process(process) if process.process_id == process_id
-            )
-        })
+        self.processes.contains_key(&process_id)
     }
 
     pub fn process_debugger_thread_id(&self, process_id: u32) -> Option<u32> {
-        self.objects.values().find_map(|object| match object {
-            KernelObject::Process(process) if process.process_id == process_id => {
-                process.debugger_thread_id
-            }
-            _ => None,
-        })
+        self.processes
+            .get(&process_id)
+            .and_then(|process| process.debugger_thread_id)
     }
 
     pub fn set_process_debugger_thread_id(
@@ -938,17 +1050,11 @@ impl HandleTable {
         process_id: u32,
         debugger_thread_id: Option<u32>,
     ) -> bool {
-        let mut found = false;
-        for object in self.objects.values_mut() {
-            let KernelObject::Process(process) = object else {
-                continue;
-            };
-            if process.process_id == process_id {
-                process.debugger_thread_id = debugger_thread_id;
-                found = true;
-            }
-        }
-        found
+        let Some(process) = self.processes.get_mut(&process_id) else {
+            return false;
+        };
+        process.debugger_thread_id = debugger_thread_id;
+        true
     }
 
     pub fn set_event(&mut self, handle: u32) -> bool {
@@ -1015,6 +1121,13 @@ impl HandleTable {
         timeout_ms: u32,
         thread_id: u32,
     ) -> WaitResult {
+        if let Ok(KernelObject::Process(alias)) = self.get(handle) {
+            return match self.process_for_alias(alias) {
+                Some(process) if process.signaled => WaitResult::Object0,
+                Some(_) => WaitResult::Timeout,
+                None => WaitResult::Failed,
+            };
+        }
         let Ok(object) = self.get_mut(handle) else {
             return WaitResult::Failed;
         };
@@ -1068,7 +1181,7 @@ impl HandleTable {
             | KernelObject::ApiSet(_)
             | KernelObject::ApiHandle(_) => WaitResult::Failed,
             KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
-            KernelObject::Process(process) if process.signaled => WaitResult::Object0,
+            KernelObject::Process(_) => WaitResult::Failed,
             _ if timeout_ms == 0 => WaitResult::Timeout,
             _ => WaitResult::Timeout,
         }
@@ -1107,7 +1220,7 @@ impl HandleTable {
             KernelObject::Semaphore(semaphore) => semaphore.count > 0,
             KernelObject::FileChangeNotification(notification) => notification.signaled,
             KernelObject::Thread(thread) => thread.signaled,
-            KernelObject::Process(process) => process.signaled,
+            KernelObject::Process(alias) => self.process_for_alias(alias)?.signaled,
             KernelObject::File(_)
             | KernelObject::FindFile(_)
             | KernelObject::DeviceSearch(_)
