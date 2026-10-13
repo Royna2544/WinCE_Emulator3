@@ -230,6 +230,23 @@ references for historical reconstruction.
   VA metadata may Flush but cannot Unmap yet. Receipts are local
   `evidence/stage2-e24-owner-fileview-20261013/` (ledger E-24). No E-24 app
   run or Stage 2 acceptance follows.
+- E-25 added an internal `cfg(test)` private-slab opt-in while public
+  `VirtualAlloc` remains `LegacySeed`. A source-bound focused release control
+  now proves a real MIPS store reached canonical slab bytes before old-owner
+  closure and a fresh owner's MIPS load read `0x11223345`; two mapper
+  rejections, view-overlap, native-memory and pin-lifetime controls also
+  passed (immutable focused receipt under `evidence/e25-private-slab-20261014/`).
+  The first full release run caught an unconditional birth-key regression in
+  a synthetic PID 67 fixture (**726/1/3 ignored**). After limiting the birth
+  requirement to diagnostic slabs, both focused birth/E-18 controls passed;
+  the corrected-source locked full release suite passed **1,664/0/4 ignored**.
+  Both attempts, source/log hashes and commands are separate in the E-25
+  broad-validation receipt. The corrected-source locked no-feature suite
+  passed **1,258/0/2 ignored**, and the no-trace Unicorn+desktop release
+  check and final format check exited 0. The immutable focused receipt and
+  separate broad-validation receipt are under `evidence/e25-private-slab-20261014/`.
+  This is an internal diagnostic, not public O-M1/O-P4, Stage 2, measured
+  memory benefit or live-app acceptance (ledger E-25).
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

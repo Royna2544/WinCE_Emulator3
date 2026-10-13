@@ -49,8 +49,9 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
       allocation/lazy ownership, public same-VA `MapViewOfFile`, private
       guest-written `VirtualAlloc` persistence across fresh owner closure,
       alias/flush/unmap and remote query controls. The narrow E-16 green does
-      not close any of those gates. The ignored E-18 control is now expected
-      red: guest MIPS wrote `0x11223345` to an internal private allocation,
+      not close any of those gates. On the historical legacy-backing E-18
+      source, the ignored E-18 control was expected red: guest MIPS wrote
+      `0x11223345` to an internal private allocation,
       but after a test-only idle-owner closure the fresh engine loaded stale
       seed `0x11223344` at the correct PC without a fault. D-008 now selects
       AddressSpace-owned committed-page host slabs as the private-page target,
@@ -69,19 +70,26 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
       E-24 closed E-23's foreign legacy file-view Free/Flush/Unmap mutation
       escape with a public child-rejection/parent-success regression and
       passed 1,650/0/5 ignored release plus 1,251/0/2 ignored no-feature;
-      E-18/E-20 stayed red (ledger E-24). Complete the same-PID DIB Unmap
-      path without weakening the owner guard; Flush still works there.
+      E-18/E-20 stayed red on E-24 source (ledger E-24). E-25's changed
+      internal `cfg(test)` slab-opt-in made the real-MIPS fresh-owner byte
+      control green; public `VirtualAlloc` remains `LegacySeed` and E-20 is
+      still open. Its first full release run exposed a synthetic-PID birth
+      regression (726/1/3 ignored); after the narrow compatibility fix, the
+      corrected source passed full release 1,664/0/4 ignored, no-feature
+      1,258/0/2 ignored, and a no-trace Unicorn+desktop release check (ledger
+      E-25; separate focused and broad receipts). Complete the same-PID DIB
+      Unmap path without weakening the owner guard; Flush still works there.
       Selected-process snapshots, worker sweep, wait pins and clone lineage
       remain open. Next connect
       owner-scoped native reservations/mapping, cross-family overlap checks,
       reserve/commit behavior and remote queries to that directory; Stage 3
-      extends the same authority. Then migrate
-      private pages with exact pinned native maps, checked failure/publication
-      and no whole-`initial_bytes` reseed for that family. A failed unmap must
-      retain its pin and fail the attempt, not recycle a stale VA. Turn E-18
-      green without retaining the old engine or suppressing native errors;
-      also prove public COREDLL `VirtualAlloc`, two-PID same-VA isolation,
-      free/reallocation, protect/decommit and independent clones. Unmigrated
+      extends the same authority. Extend E-25's test-only slab backing to
+      public private pages with exact pinned native maps, checked
+      failure/publication and no whole-`initial_bytes` reseed for that family.
+      A failed unmap must retain its pin and fail the attempt, not recycle a
+      stale VA. The changed E-25 control is green; separately prove public
+      COREDLL `VirtualAlloc`, two-PID same-VA isolation, free/reallocation,
+      protect/decommit and independent clones. Unmigrated
       view/blob families retain an explicit checked copy boundary until their
       connected migration. Add end-to-end immediate CreateProcess sync-error
       fault injection; its error latch is source-reviewed only. Measure host
@@ -113,7 +121,8 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      success/failure controls (ledger E-13). Keep the native snapshot for
      exact raw continuations; writing a synthesized PC into it can retain
      stale branch `hflags`. Closed-owner exact-key Context transfer, guest
-     `VirtualAlloc` coherence (now expected red under E-18) and the broader
+     public `VirtualAlloc` coherence (historically red under E-18 and still
+     unaccepted after E-25's test-only slab opt-in) and the broader
      Stage 2 gates remain open. E-18's PC/normal-stop/no-fault checks passed;
      its stale byte is a RAM backing gap, not evidence of Context failure.
   3. The later E-17 visible-peer source passed the full release suite
