@@ -806,7 +806,14 @@ independent checkpoint clone/relineage, O-P4 fresh-default ownership,
 host-memory improvement or bounded iNavi/map readiness. Hook-time map-error
 injection, a bounded discarded-owner pin-retention policy, and negative
 checkpoint save/restore/direct-Clone controls remain open; a focused pass
-cannot close those gates or Stage 2.
+cannot close those gates or Stage 2. The reused-owner existing-page fast path
+still relies on the ledger/pin-bag invariant without an exact pin lookup;
+failure-injection hardening remains open. Legacy outgoing blob sync can
+partially update earlier blob snapshots before a later read error: the
+diagnostic poisons that attempt, but transactional outgoing legacy VM state is
+not proven. The isolated pointer-map diagnostic
+`native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner` remains
+ignored/unrun on this E-25 receipt, not a promoted production control.
 
 ## Chat-project validation notes (not in this repository)
 

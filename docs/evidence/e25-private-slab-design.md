@@ -1,20 +1,24 @@
 # E25 design record: private committed pages on process-owned native maps
 
-Status: **plan for independent review; no implementation or acceptance is claimed.**
+Status: **design baseline; the internal E-25 focused diagnostic is implemented,
+but public/Stage 2 acceptance remains open.** Its source-bound focused result
+is in the immutable [E-25 receipt](../../evidence/e25-private-slab-20261014/README.md).
 Date: 2026-10-14. Scope: Stage 2 O-M1, not scheduler policy or Stage 8 native-engine retention.
 The normative contract is [Architecture A2/A4/A6](../ARCHITECTURE.md), sequenced by
 [PLAN Stage 2](../PLAN.md) and [D-008](../DECISIONS.md). This record refines those
-contracts without changing them. A code review must settle the specific API and
-failure transitions below before source changes begin.
+contracts without changing them. The remaining public API, clone, native-close
+and failure transitions below are still proposed gates, not accepted behavior.
 
 ## Question and boundary
 
-E-18 is an executed expected red: the first real MIPS slice writes
-`0x11223345` to a private `VirtualAlloc` page, but a new native owner reloads
+On the historical E-18 source, an executed expected red showed a real MIPS
+slice writing `0x11223345` to a private `VirtualAlloc` page, but a new native
+owner reloaded
 the stale seed `0x11223344` ([ledger E-18](ledger.md),
-[`native_private_virtual_write_survives_closed_owner_next_slice`](../../src/emulator/unicorn.rs)). The current owner
-retains native RAM; `MemorySystem` retains only `initial_bytes`. E-23/E-24 made
-metadata and mutating APIs birth-aware without changing that byte authority
+[`native_private_virtual_write_survives_closed_owner_next_slice`](../../src/emulator/unicorn.rs)).
+On that source, the owner retained native RAM while `MemorySystem` retained
+only `initial_bytes`. E-23/E-24 made metadata and mutating APIs birth-aware
+without changing that byte authority
 ([ledger E-23/E-24](ledger.md)). E-20's public child same-VA allocation remains
 an independent expected red ([`coredll.rs:70004+`](../../src/ce/coredll.rs)).
 
@@ -24,8 +28,8 @@ slabs mapped into the running native owner. That allocation must replace its
 private copy-seed/native-RAM behavior rather than add copy-back beside it.
 Public `VirtualAlloc` remains on its explicit legacy seed backing until the
 public prepare/map/commit and change transactions below are implemented. The
-diagnostic may be accepted while the global VA fence and production
-persistent-owner policy remain.
+focused diagnostic can pass while the global VA fence and production
+persistent-owner policy remain, as the E-25 receipt demonstrates.
 Public two-process same-VA, shared views, checkpoint clone and fresh-default
 O-P4 are separate gates; a green E-18 alone must not close Stage 2 or imply
 app/map readiness.

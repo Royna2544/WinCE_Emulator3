@@ -70,7 +70,23 @@ ignored on source `59f7923b9e3b508705838b8da8f28a5f7aa3b14e`
 ([ledger E-24](../evidence/ledger.md)). E-18/E-20 explicitly remain red.
 Legacy nonprivate read/query visibility remains, and a same-PID DIB view
 without VA metadata may Flush but is conservatively refused by Unmap. Native
-VA-only backing and the fresh-owner byte gap are unchanged.
+VA-only backing and the fresh-owner byte gap are unchanged on E-24 source.
+
+### E-25 internal private-slab diagnostic (2026-10-14, focused only)
+
+The internal `cfg(test)` slab opt-in now has a source-bound focused release
+receipt: an unignored real-MIPS control stored `0x11223345` in canonical
+private backing before native-owner closure, and a fresh owner's next MIPS
+load read the same value. Two mapper rejection controls, one private-slab/file-
+view overlap control, four existing native-memory controls and one retained-
+pin control also passed ([E-25 focused receipt](../../evidence/e25-private-slab-20261014/README.md),
+[ledger E-25](../evidence/ledger.md)). This is not the historical unchanged
+E-18 fixture: its earlier red used legacy internal `virtual_alloc`, whereas
+E-25 opts into a test-only slab. Public `VirtualAlloc` still selects
+`LegacySeed`; full release/no-feature/alternate checks on E-25 source are
+pending, as are public same-VA, shared-view, clone/relineage, checked-close,
+hook-failure and bounded pin-retention gates. No O-M1/O-P4 or Stage 2
+acceptance follows from this focused diagnostic.
 
 ## Target authority and permitted interfaces
 
@@ -145,19 +161,21 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
 - A read-only source audit found `sync_mapped_blobs_from_unicorn` at the slice
   end, but no corresponding readback of ordinary guest-written `VirtualAlloc`
   pages; their `initial_bytes` are only seeded into native memory on mapping.
-  The ignored E-18 two-slice MIPS control now demonstrates that loss for an
-  internal `MemorySystem::virtual_alloc` page: the first owner's native RAM
+  The ignored two-slice MIPS control demonstrated that loss on the historical
+  E-18 source for an internal `MemorySystem::virtual_alloc` page: the first
+  owner's native RAM
   held guest-written `0x11223345`, but after `cfg(test)` idle-owner closure the
   fresh owner's load returned the unchanged `initial_bytes` seed
   `0x11223344`. Both slice PCs, normal stops and no-fault checks passed.
   This is an expected-red private-byte boundary, not a Context failure or a
   production fresh-default change ([ledger E-18](../evidence/ledger.md),
   local `evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`).
-  E-18 stays red until ordinary private pages have owner-qualified canonical
-  backing across fresh owners. The selected host-backing design below removes
+  E-18 remained red on that legacy source; E-25's test-only opt-in makes the
+  diagnostic shape green, not public ordinary private pages. The selected
+  host-backing design below removes
   private copy-in/readback rather than adding another copy-back path; public
   COREDLL `VirtualAlloc` and cross-process isolation require separate controls.
-- Read-only E-18 production audit: `MemorySystem` allocations/lazy seeds are
+- Historical read-only E-18 source audit: `MemorySystem` allocations/lazy seeds were
   global and base-keyed, mixing private `VirtualAlloc` and file-view backing;
   the native page ledger is VA-only. A copy-back interim would need captured
   owner, backing kind and allocation incarnation, exact mapped-page reads
@@ -243,13 +261,15 @@ cross-file byte changes, including lazy fault repair and outgoing readback.
 Separate controls must prove same-mapping alias visibility, flush and unmap
 while a mapping handle is closed but its view remains live, owner-specific
 `VirtualQueryEx`, and a foreign view not overwriting private RAM at the same VA.
-A fresh-owner two-slice guest-written private `VirtualAlloc` round-trip is now
-an executed expected-red gate under E-18. It must turn green with authoritative
-byte backing; the E-16 view controls alone cannot establish it.
+A fresh-owner two-slice guest-written private `VirtualAlloc` round-trip was an
+executed expected-red gate on the historical E-18/E-19 sources. E-25 passes
+the changed internal slab-opt-in shape; the public call still needs authoritative
+byte backing, which the E-16 view controls alone cannot establish.
 
 ## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
-**Design selected; implementation and acceptance open.** Per anchor A4, each
+**Design selected; an internal E-25 diagnostic is focused green, while public
+implementation and Stage 2 acceptance remain open.** Per anchor A4, each
 migrated page has one writable byte authority: stable host backing mapped into
 the selected native engine with `mem_map_ptr`. An `AddressSpace` owns private
 slabs and its view records; a canonical VM/file-mapping object owns shared
@@ -267,7 +287,9 @@ on the E-18 source ([local receipt](../../evidence/om1-host-slab-20261013/focuse
 The vendored Unicorn pointer-map contract requires a writable, stable host
 range for the mapping lifetime. The diagnostic did not exercise production
 Kernel allocation, concurrent host access, clone, failed native calls or app
-memory. E-18 is still red on the later E-19 source ([ledger E-18/E-19](../evidence/ledger.md)).
+memory. E-18 was still red on the historical E-19 source
+([ledger E-18/E-19](../evidence/ledger.md)); the changed E-25 internal opt-in
+has only the focused result above.
 
 The local CE6 kernel source at
 `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\vm.c` directly confirms the
