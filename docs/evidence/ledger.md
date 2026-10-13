@@ -1031,8 +1031,9 @@ was still present on the resulting `NativeError`; the old marker-driven
 cleanup wrongly consumed the Kernel wait. Cleanup now requires a finalized
 successful `HookStop(_)` or `NativeDeadline` after outgoing view sync and
 checked `uc.finish`, with no requested-PC stop. The debug marker is retained
-as evidence, not cleanup authority. The host idle guard also verifies that a
-saved GetMessage wait ID is still live in Kernel.
+as evidence, not cleanup authority. The host idle source guard also checks
+that a saved GetMessage wait ID is still live in Kernel; its binary-target
+focused test has not run on this source boundary.
 
 A separate [private error red](../../evidence/e28-run-outcome-20261014/private-wait-error-salvage-expected-red.receipt.md)
 then showed Kernel retaining the wait while the CPU lost its transferred
@@ -1053,8 +1054,16 @@ source passed [the non-ready wait control](../../evidence/e28-run-outcome-202610
 **1/0**, but a [ready-worker expected red](../../evidence/e28-run-outcome-20261014/private-preentry-ready-wait-expected-red.receipt.md)
 showed the stronger failure: a selectable worker wait was consumed and the
 worker was selected before a later fence error returned `NoAttempt`, leaving
-no saved PC. Hook/fence ordering and a separately moved orphaned-WNDPROC
-queue need their own repair/validation. These controls do not close all preflight/tail errors,
+no saved PC. A separate [orphaned-WNDPROC expected red](../../evidence/e28-run-outcome-20261014/private-preentry-orphaned-wndproc-expected-red.receipt.md)
+showed that the same rejected setup also lost the separately moved return
+queue. The combined source restores that queue on pre-entry errors and moves
+ready resume after fallible hook/fence setup. Its
+[focused release validation](../../evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md)
+passed the two fence controls **2/0** and the executed-wait filter **5/0**,
+with format and diff checks. Ready GetMessage against a guarded private page,
+other preflight/tail errors, and state consistency after ready-resume followed
+by a native-entry failure remain untested; no rollback semantics are claimed.
+These controls do not close
 Task/Frame authority, O-P1, Stage 2, S3-A, or live-app map readiness. E-29
 used an earlier executable and cannot validate them.
 
