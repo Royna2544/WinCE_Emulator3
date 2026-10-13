@@ -66,6 +66,11 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
       Full release 1,649/0/5 ignored and no-feature 1,250/0/2 ignored pass
       on the same source, while explicit ignored E-18/E-20 reruns still fail
       at their intended stale-byte/child-allocation gates (ledger E-23).
+      E-24 closed E-23's foreign legacy file-view Free/Flush/Unmap mutation
+      escape with a public child-rejection/parent-success regression and
+      passed 1,650/0/5 ignored release plus 1,251/0/2 ignored no-feature;
+      E-18/E-20 stayed red (ledger E-24). Complete the same-PID DIB Unmap
+      path without weakening the owner guard; Flush still works there.
       Selected-process snapshots, worker sweep, wait pins and clone lineage
       remain open. Next connect
       owner-scoped native reservations/mapping, cross-family overlap checks,

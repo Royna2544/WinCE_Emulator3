@@ -219,6 +219,17 @@ references for historical reconstruction.
   reruns failed at the expected stale-byte/child-allocation assertions;
   their raw logs are in `evidence/stage2-e23-owner-va-20261013/`. O-P4,
   Stage 2 and app acceptance are not claimed (ledger E-23).
+- E-24 corrected E-23's foreign legacy file-view mutation escape:
+  `VirtualFree`/decommit, `UnmapViewOfFile` and the shared Flush/Unmap commit
+  path now enforce the owning birth/process identity before mutation. A new
+  public regression rejects child Free/Flush/Unmap without changing parent
+  state and preserves parent Flush/Unmap success. Three focused controls
+  passed on `59f7923b9e3b508705838b8da8f28a5f7aa3b14e`; full release
+  passed **1,650/0/5 ignored**, no-feature **1,251/0/2 ignored**. Explicit
+  ignored E-18/E-20 reruns remain expected red. Same-PID DIB views without
+  VA metadata may Flush but cannot Unmap yet. Receipts are local
+  `evidence/stage2-e24-owner-fileview-20261013/` (ledger E-24). No E-24 app
+  run or Stage 2 acceptance follows.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

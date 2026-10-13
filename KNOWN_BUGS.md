@@ -130,7 +130,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   1,649/0/5 ignored and no-feature 1,250/0/2 ignored passed on the same
   source. Explicit ignored E-18/E-20 reruns still failed at the intended
   stale-byte and child-allocation assertions; raw logs are in that evidence
-  folder. These suite passes do not close the two gates.
+  folder. E-23 also had a foreign `FileViewLegacy` Free/Flush/Unmap mutation
+  escape despite those passes. E-24 corrected that escape with an owned-view
+  guard and public child-rejection/parent-success regression; full release
+  passed 1,650/0/5 ignored and no-feature 1,251/0/2 ignored (local
+  `evidence/stage2-e24-owner-fileview-20261013/post-e24-validation.receipt.md`).
+  A same-PID DIB view without VA metadata still cannot Unmap, though it can
+  Flush. Explicit E-18/E-20 gates remain red; neither suite closes them.
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,
   inferred creation PID, lost boot/primary identity or alias incoherence in a
