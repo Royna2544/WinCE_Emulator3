@@ -10,6 +10,7 @@
 //! engine's mapping ledger; cloning never copies a live engine or that ledger.
 
 use std::{
+    any::Any,
     cell::RefCell,
     fmt,
     ops::{Deref, DerefMut},
@@ -30,7 +31,26 @@ struct NativeSlot<K, P> {
     blank: Option<Rc<Context>>,
     saved: Option<Rc<NativeSnapshot<K>>>,
     metadata: Option<P>,
+    mapping_pins: Option<NativeMappingPins>,
     leased: bool,
+}
+
+/// Strong backing references tied to one native owner, independently of the
+/// mapping metadata transferred to hook-local state during a run. A pending
+/// pointer map is pinned before entering Unicorn; even an early error keeps
+/// its storage alive until the owner has been discarded.
+#[derive(Clone, Default)]
+pub(crate) struct NativeMappingPins(Rc<RefCell<Vec<Rc<dyn Any>>>>);
+
+impl NativeMappingPins {
+    pub(crate) fn pin<T: 'static>(&self, backing: T) {
+        self.0.borrow_mut().push(Rc::new(backing));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
 }
 
 pub(crate) struct ProcessNativeEngine<K, P = ()> {
@@ -72,6 +92,7 @@ impl<K, P> Clone for ProcessNativeEngine<K, P> {
                 blank: None,
                 saved,
                 metadata: None,
+                mapping_pins: None,
                 leased: false,
             })),
         }
@@ -88,6 +109,7 @@ impl<K, P> ProcessNativeEngine<K, P> {
                 blank: None,
                 saved: None,
                 metadata: None,
+                mapping_pins: None,
                 leased: false,
             })),
         }
@@ -124,11 +146,13 @@ impl<K, P> ProcessNativeEngine<K, P> {
                 slot.blank = None;
                 slot.saved = None;
                 slot.metadata = None;
+                slot.mapping_pins = None;
                 return Err(err);
             }
         };
         slot.leased = true;
         let metadata = slot.metadata.take();
+        let mapping_pins = slot.mapping_pins.take().unwrap_or_default();
         let saved = slot.saved.clone();
         Ok(NativeEngineLease {
             uc: Some(uc),
@@ -136,6 +160,7 @@ impl<K, P> ProcessNativeEngine<K, P> {
             blank,
             saved,
             metadata,
+            mapping_pins,
             slot: Rc::clone(&self.slot),
             hooks: Vec::new(),
             reused,
@@ -184,10 +209,12 @@ impl<K, P> ProcessNativeEngine<K, P> {
         let owner = slot.engine.take();
         let blank = slot.blank.take();
         let metadata = slot.metadata.take();
+        let mapping_pins = slot.mapping_pins.take();
         drop(slot);
         drop(owner);
         drop(blank);
         drop(metadata);
+        drop(mapping_pins);
     }
 }
 
@@ -197,6 +224,7 @@ pub(crate) struct NativeEngineLease<'a, K, P> {
     blank: Rc<Context>,
     saved: Option<Rc<NativeSnapshot<K>>>,
     metadata: Option<P>,
+    mapping_pins: NativeMappingPins,
     slot: Rc<RefCell<NativeSlot<K, P>>>,
     hooks: Vec<UcHookId>,
     reused: bool,
@@ -229,6 +257,12 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
 
     pub(crate) fn take_metadata(&mut self) -> Option<P> {
         self.metadata.take()
+    }
+
+    /// A handle to the lease-resident backing pins. Hook-local clones may
+    /// append pending pins, but cannot make the lease release them early.
+    pub(crate) fn mapping_pins(&self) -> NativeMappingPins {
+        self.mapping_pins.clone()
     }
 
     pub(crate) fn set_metadata(&mut self, metadata: P) {
@@ -346,6 +380,12 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
         self.close(true)
     }
 
+    /// Explicit failure boundary for callers that must observe hook-removal
+    /// errors. Unlike `finish`, this never publishes a reusable native owner.
+    pub(crate) fn abort_close(mut self) -> Result<(), uc_error> {
+        self.close(false)
+    }
+
     fn close(&mut self, commit: bool) -> Result<(), uc_error> {
         if self.closed {
             return Ok(());
@@ -369,6 +409,7 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
             slot.blank = Some(Rc::clone(&self.blank));
             slot.saved = self.saved.take();
             slot.metadata = self.metadata.take();
+            slot.mapping_pins = Some(self.mapping_pins.clone());
             slot.leased = false;
         } else {
             // remove_hook drops its Box before its FFI delete. On any failure
@@ -381,6 +422,7 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
             slot.blank = None;
             slot.saved = None;
             slot.metadata = None;
+            slot.mapping_pins = None;
             slot.leased = false;
         }
         self.closed = true;
@@ -477,6 +519,26 @@ mod tests {
         assert!(lease.take_metadata().is_none());
         assert_eq!(lease.finish(), Err(uc_error::ARG));
         assert!(slot.identity().is_none());
+    }
+
+    #[test]
+    fn native_mapping_pin_outlives_metadata_transfer_until_owner_close() {
+        let slot = slot();
+        let dropped = Rc::new(Cell::new(0));
+        let mut first = slot.lease().unwrap();
+        mapped(&mut first);
+        first.mapping_pins().pin(Dropped(Rc::clone(&dropped)));
+        assert_eq!(first.mapping_pins().len(), 1);
+        first.finish().unwrap();
+        assert_eq!(dropped.get(), 0, "reused owner still holds its pin");
+
+        let mut second = slot.lease().unwrap();
+        assert!(second.reused());
+        let _metadata = second.take_metadata().unwrap();
+        assert_eq!(second.mapping_pins().len(), 1);
+        second.abort_close().unwrap();
+        assert!(slot.identity().is_none());
+        assert_eq!(dropped.get(), 1, "discard owner before releasing pin");
     }
 
     struct Dropped(Rc<Cell<u32>>);

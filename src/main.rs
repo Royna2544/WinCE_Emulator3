@@ -2266,12 +2266,19 @@ fn run_monitor(
                     .next()
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| format!("#{}", checkpoints.len()));
-                checkpoints.push(MonitorCheckpoint {
-                    name: name.clone(),
-                    cpu: cpu.clone(),
-                    kernel: kernel.clone(),
-                    framebuffer: desktop.framebuffer().clone(),
-                });
+                let checkpoint = match try_monitor_checkpoint_save(
+                    name.clone(),
+                    cpu,
+                    kernel,
+                    desktop.framebuffer(),
+                ) {
+                    Ok(checkpoint) => checkpoint,
+                    Err(err) => {
+                        println!("  checkpoint not saved: {err}");
+                        continue;
+                    }
+                };
+                checkpoints.push(checkpoint);
                 println!("  checkpoint {} saved as {name}", checkpoints.len() - 1);
             }
             "checkpoints" | "saves" => {
@@ -2289,9 +2296,17 @@ fn run_monitor(
                     println!("  no checkpoint matching `{selector}`");
                     continue;
                 };
-                *cpu = checkpoint.cpu.clone();
-                *kernel = checkpoint.kernel.clone();
-                *desktop.framebuffer_mut() = checkpoint.framebuffer.clone();
+                let (restored_cpu, restored_kernel, restored_framebuffer) =
+                    match try_monitor_checkpoint_restore(checkpoint, kernel) {
+                        Ok(restored) => restored,
+                        Err(err) => {
+                            println!("  checkpoint not restored: {err}");
+                            continue;
+                        }
+                    };
+                *cpu = restored_cpu;
+                *kernel = restored_kernel;
+                *desktop.framebuffer_mut() = restored_framebuffer;
                 desktop.present()?;
                 println!("  restored checkpoint {}", checkpoint.name);
             }
@@ -2302,6 +2317,43 @@ fn run_monitor(
         }
     }
     Ok(())
+}
+
+fn ensure_monitor_checkpointable(kernel: &CeKernel) -> Result<()> {
+    if kernel.memory.has_stable_private_slabs() {
+        return Err(wince_emulation_v3::Error::Unsupported(
+            "slab-backed private VM needs machine-level checkpoint relineage".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn try_monitor_checkpoint_save(
+    name: String,
+    cpu: &UnicornMips,
+    kernel: &CeKernel,
+    framebuffer: &VirtualFramebuffer,
+) -> Result<MonitorCheckpoint> {
+    ensure_monitor_checkpointable(kernel)?;
+    Ok(MonitorCheckpoint {
+        name,
+        cpu: cpu.clone(),
+        kernel: kernel.clone(),
+        framebuffer: framebuffer.clone(),
+    })
+}
+
+fn try_monitor_checkpoint_restore(
+    checkpoint: &MonitorCheckpoint,
+    destination_kernel: &CeKernel,
+) -> Result<(UnicornMips, CeKernel, VirtualFramebuffer)> {
+    ensure_monitor_checkpointable(destination_kernel)?;
+    ensure_monitor_checkpointable(&checkpoint.kernel)?;
+    Ok((
+        checkpoint.cpu.clone(),
+        checkpoint.kernel.clone(),
+        checkpoint.framebuffer.clone(),
+    ))
 }
 
 fn select_checkpoint<'a>(

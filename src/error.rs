@@ -38,6 +38,8 @@ pub enum Error {
     InvalidHandle(u32),
     #[error("not same device: {0}")]
     NotSameDevice(String),
+    #[error("unsupported operation: {0}")]
+    Unsupported(String),
     #[error("CE registry key not found: {0}")]
     MissingRegistryKey(String),
     #[error("CE registry value not found: {key}\\{value}")]

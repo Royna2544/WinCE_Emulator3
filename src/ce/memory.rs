@@ -1,4 +1,10 @@
-use std::collections::BTreeMap;
+use std::{
+    cell::{Cell, UnsafeCell},
+    collections::BTreeMap,
+    ffi::c_void,
+    fmt,
+    rc::Rc,
+};
 
 use crate::ce::object::ProcessBirthKey;
 
@@ -26,7 +32,7 @@ const VIRTUAL_PTR_BASE: u32 = 0x5000_0000;
 const HEAP_ALIGN: u32 = 16;
 const VIRTUAL_ALIGN: u32 = 0x0001_0000;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MemorySystem {
     process_heap: u32,
     next_heap: u32,
@@ -41,6 +47,10 @@ pub struct MemorySystem {
     heaps: BTreeMap<u32, Heap>,
     allocations: BTreeMap<u32, MemoryAllocation>,
     virtual_allocations: BTreeMap<(ProcessBirthKey, u32), VirtualAllocation>,
+    stable_private_pages: BTreeMap<PrivatePageIdentity, Rc<StablePrivatePage>>,
+    // A native pin can outlive a released VM record. Keep the checkpoint
+    // unsupported flag set for this MemorySystem lineage even after release.
+    stable_private_slabs_seen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +152,199 @@ pub enum VirtualAllocationSource {
     SharedCompatibility,
 }
 
+/// Backing is explicit: a Private source does not opt public VirtualAlloc into
+/// pointer-mapped slabs. LegacySeed remains the production behavior for now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VirtualAllocationBacking {
+    LegacySeed,
+    StablePrivateSlab,
+}
+
+pub const STABLE_PRIVATE_PAGE_SIZE: usize = 0x1000;
+
+/// Exact page identity within a MemorySystem lineage. A native owner must
+/// additionally validate the backing pin itself, not just this copied key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PrivatePageIdentity {
+    owner: ProcessBirthKey,
+    allocation_base: u32,
+    allocation_incarnation: u64,
+    page_base: u32,
+}
+
+impl PrivatePageIdentity {
+    pub fn owner(self) -> ProcessBirthKey {
+        self.owner
+    }
+
+    pub fn allocation_base(self) -> u32 {
+        self.allocation_base
+    }
+
+    pub fn allocation_incarnation(self) -> u64 {
+        self.allocation_incarnation
+    }
+
+    pub fn page_base(self) -> u32 {
+        self.page_base
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivatePageAccessError {
+    OutOfRange,
+    NativeExecutionActive,
+}
+
+/// The only owner of private page bytes. UnsafeCell permits the synchronous
+/// native engine to mutate the stable address; host access is copied through
+/// bounded methods and forbidden while a native execution guard is held.
+struct StablePrivatePage {
+    bytes: UnsafeCell<[u8; STABLE_PRIVATE_PAGE_SIZE]>,
+    native_execution_active: Cell<bool>,
+}
+
+impl fmt::Debug for StablePrivatePage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StablePrivatePage")
+            .field(
+                "native_execution_active",
+                &self.native_execution_active.get(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl StablePrivatePage {
+    fn zeroed() -> Self {
+        Self {
+            bytes: UnsafeCell::new([0; STABLE_PRIVATE_PAGE_SIZE]),
+            native_execution_active: Cell::new(false),
+        }
+    }
+
+    fn deep_copy(&self) -> Self {
+        // MemorySystem::Clone cannot return Result. Refuse to copy while the
+        // native engine might be writing; a supported checkpoint operation
+        // remains separately gated until machine-wide relineage exists.
+        assert!(
+            !self.native_execution_active.get(),
+            "cannot clone stable private bytes during native execution"
+        );
+        let mut bytes = [0; STABLE_PRIVATE_PAGE_SIZE];
+        // SAFETY: the guard above excludes native execution, all host byte
+        // methods finish before returning, and Rc keeps the page alive.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                (*self.bytes.get()).as_ptr(),
+                bytes.as_mut_ptr(),
+                STABLE_PRIVATE_PAGE_SIZE,
+            );
+        }
+        Self {
+            bytes: UnsafeCell::new(bytes),
+            native_execution_active: Cell::new(false),
+        }
+    }
+}
+
+/// Opaque strong pin. It is !Send/!Sync through Rc and keeps the exact host
+/// page alive until native unmap or owner close, even after VM metadata release.
+#[derive(Debug, Clone)]
+pub struct StablePrivatePagePin {
+    identity: PrivatePageIdentity,
+    page: Rc<StablePrivatePage>,
+}
+
+impl StablePrivatePagePin {
+    pub fn identity(&self) -> PrivatePageIdentity {
+        self.identity
+    }
+
+    /// Obtaining a raw pointer is safe; passing it to native code is not.
+    /// The caller must retain this pin through checked unmap/owner close and
+    /// fence host access while native execution may write through the pointer.
+    pub fn native_ptr(&self) -> *mut c_void {
+        self.page.bytes.get().cast::<c_void>()
+    }
+
+    pub fn read_bytes(
+        &self,
+        offset: usize,
+        out: &mut [u8],
+    ) -> std::result::Result<(), PrivatePageAccessError> {
+        self.check_access(offset, out.len())?;
+        // SAFETY: no native execution guard is held, the page is pinned, and
+        // this bounded copy creates no reference that can outlive the call.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                (*self.page.bytes.get()).as_ptr().add(offset),
+                out.as_mut_ptr(),
+                out.len(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn write_bytes(
+        &self,
+        offset: usize,
+        bytes: &[u8],
+    ) -> std::result::Result<(), PrivatePageAccessError> {
+        self.check_access(offset, bytes.len())?;
+        // SAFETY: same single-threaded access fence as read_bytes. The only
+        // mutable access is this bounded copy or the native pointer lease.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                (*self.page.bytes.get()).as_mut_ptr().add(offset),
+                bytes.len(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn begin_native_execution(
+        &self,
+    ) -> std::result::Result<StablePrivatePageExecutionGuard, PrivatePageAccessError> {
+        if self.page.native_execution_active.replace(true) {
+            return Err(PrivatePageAccessError::NativeExecutionActive);
+        }
+        Ok(StablePrivatePageExecutionGuard {
+            page: Rc::clone(&self.page),
+        })
+    }
+
+    fn check_access(
+        &self,
+        offset: usize,
+        len: usize,
+    ) -> std::result::Result<(), PrivatePageAccessError> {
+        if self.page.native_execution_active.get() {
+            return Err(PrivatePageAccessError::NativeExecutionActive);
+        }
+        if offset
+            .checked_add(len)
+            .is_none_or(|end| end > STABLE_PRIVATE_PAGE_SIZE)
+        {
+            return Err(PrivatePageAccessError::OutOfRange);
+        }
+        Ok(())
+    }
+}
+
+/// Hold one guard for every mapped private page for the whole emu_start call.
+/// Fault-time pointer mappings must add their guard before resuming the guest.
+pub struct StablePrivatePageExecutionGuard {
+    page: Rc<StablePrivatePage>,
+}
+
+impl Drop for StablePrivatePageExecutionGuard {
+    fn drop(&mut self) {
+        self.page.native_execution_active.set(false);
+    }
+}
+
 impl VirtualAllocationSource {
     fn is_private(self) -> bool {
         matches!(self, Self::Private | Self::PrivateExCompatibility)
@@ -158,6 +361,31 @@ pub struct VirtualAllocation {
     pub owner: ProcessBirthKey,
     pub incarnation: u64,
     pub source: VirtualAllocationSource,
+    pub backing: VirtualAllocationBacking,
+}
+
+impl Clone for MemorySystem {
+    fn clone(&self) -> Self {
+        Self {
+            process_heap: self.process_heap,
+            next_heap: self.next_heap,
+            next_heap_ptr: self.next_heap_ptr,
+            next_virtual_ptr: self.next_virtual_ptr,
+            next_virtual_ptr_by_owner: self.next_virtual_ptr_by_owner.clone(),
+            heap_generation: self.heap_generation,
+            virtual_generation: self.virtual_generation,
+            next_virtual_incarnation: self.next_virtual_incarnation,
+            heaps: self.heaps.clone(),
+            allocations: self.allocations.clone(),
+            virtual_allocations: self.virtual_allocations.clone(),
+            stable_private_pages: self
+                .stable_private_pages
+                .iter()
+                .map(|(identity, page)| (*identity, Rc::new(page.deep_copy())))
+                .collect(),
+            stable_private_slabs_seen: self.stable_private_slabs_seen,
+        }
+    }
 }
 
 impl Default for MemorySystem {
@@ -185,6 +413,8 @@ impl Default for MemorySystem {
             heaps,
             allocations: BTreeMap::new(),
             virtual_allocations: BTreeMap::new(),
+            stable_private_pages: BTreeMap::new(),
+            stable_private_slabs_seen: false,
         }
     }
 }
@@ -492,7 +722,61 @@ impl MemorySystem {
         allocation_type: u32,
         protect: u32,
     ) -> Option<u32> {
+        self.virtual_alloc_with_backing(
+            owner,
+            source,
+            address,
+            size,
+            allocation_type,
+            protect,
+            VirtualAllocationBacking::LegacySeed,
+        )
+    }
+
+    /// E-18's internal-only backing opt-in. The public VirtualAlloc path above
+    /// remains LegacySeed until prepare/map/commit and owner-scoped native
+    /// release are connected. This diagnostic accepts one <=64-KiB reservation
+    /// beginning at an allocator-chosen base and commits only requested pages.
+    #[cfg(test)]
+    pub(crate) fn virtual_alloc_private_slab_for_test(
+        &mut self,
+        owner: ProcessBirthKey,
+        address: u32,
+        size: u32,
+        allocation_type: u32,
+        protect: u32,
+    ) -> Option<u32> {
+        self.virtual_alloc_with_backing(
+            owner,
+            VirtualAllocationSource::Private,
+            address,
+            size,
+            allocation_type,
+            protect,
+            VirtualAllocationBacking::StablePrivateSlab,
+        )
+    }
+
+    fn virtual_alloc_with_backing(
+        &mut self,
+        owner: ProcessBirthKey,
+        source: VirtualAllocationSource,
+        address: u32,
+        size: u32,
+        allocation_type: u32,
+        protect: u32,
+        backing: VirtualAllocationBacking,
+    ) -> Option<u32> {
         if size == 0 || allocation_type & (MEM_COMMIT | MEM_RESERVE) == 0 {
+            return None;
+        }
+        let requested_size = size;
+        if backing == VirtualAllocationBacking::StablePrivateSlab
+            && (source != VirtualAllocationSource::Private
+                || address != 0
+                || size > VIRTUAL_ALIGN
+                || allocation_type != MEM_COMMIT | MEM_RESERVE)
+        {
             return None;
         }
         let incarnation = self.next_virtual_incarnation;
@@ -520,6 +804,27 @@ impl MemorySystem {
         if self.virtual_overlaps(base, size) {
             return None;
         }
+        // Reserve 64 KiB of guest VA, but allocate fixed host storage only
+        // for the requested committed 4-KiB pages. Build all page records
+        // before publishing the allocation or advancing a cursor.
+        let mut new_private_pages = Vec::new();
+        if backing == VirtualAllocationBacking::StablePrivateSlab {
+            let committed_size = align_up(requested_size, STABLE_PRIVATE_PAGE_SIZE as u32)?;
+            let end = base.checked_add(committed_size)?;
+            let mut page_base = base;
+            while page_base < end {
+                new_private_pages.push((
+                    PrivatePageIdentity {
+                        owner,
+                        allocation_base: base,
+                        allocation_incarnation: incarnation,
+                        page_base,
+                    },
+                    Rc::new(StablePrivatePage::zeroed()),
+                ));
+                page_base = page_base.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?;
+            }
+        }
         if let Some(next_cursor) = next_cursor {
             self.next_virtual_ptr_by_owner.insert(owner, next_cursor);
             self.next_virtual_ptr = next_cursor;
@@ -536,8 +841,13 @@ impl MemorySystem {
                 owner,
                 incarnation,
                 source,
+                backing,
             },
         );
+        if backing == VirtualAllocationBacking::StablePrivateSlab {
+            self.stable_private_pages.extend(new_private_pages);
+            self.stable_private_slabs_seen = true;
+        }
         self.bump_virtual_generation();
         Some(base)
     }
@@ -548,10 +858,69 @@ impl MemorySystem {
         base: u32,
         bytes: Vec<u8>,
     ) -> bool {
-        let Some(allocation) = self.virtual_allocations.get_mut(&(owner, base)) else {
+        let Some(allocation) = self.virtual_allocations.get(&(owner, base)) else {
             return false;
         };
-        allocation.initial_bytes = bytes;
+        if allocation.backing == VirtualAllocationBacking::LegacySeed {
+            self.virtual_allocations
+                .get_mut(&(owner, base))
+                .expect("allocation was just found")
+                .initial_bytes = bytes;
+            self.bump_virtual_generation();
+            return true;
+        }
+        let incarnation = allocation.incarnation;
+        let Some(end) = u32::try_from(bytes.len())
+            .ok()
+            .and_then(|len| base.checked_add(len))
+        else {
+            return false;
+        };
+        if end > base.saturating_add(allocation.size) {
+            return false;
+        }
+        let mut writes = Vec::new();
+        let mut position = 0usize;
+        while position < bytes.len() {
+            let Some(address) = base.checked_add(position as u32) else {
+                return false;
+            };
+            let page_base = address & !(STABLE_PRIVATE_PAGE_SIZE as u32 - 1);
+            let offset = (address - page_base) as usize;
+            let length = (STABLE_PRIVATE_PAGE_SIZE - offset).min(bytes.len() - position);
+            let identity = PrivatePageIdentity {
+                owner,
+                allocation_base: base,
+                allocation_incarnation: incarnation,
+                page_base,
+            };
+            let Some(page) = self.stable_private_pages.get(&identity) else {
+                return false;
+            };
+            // Initial seed is not an ongoing copy authority. Reject reseeding
+            // a page with an outstanding native or diagnostic pin.
+            if Rc::strong_count(page) != 1 || page.native_execution_active.get() {
+                return false;
+            }
+            writes.push((
+                StablePrivatePagePin {
+                    identity,
+                    page: Rc::clone(page),
+                },
+                offset,
+                position,
+                length,
+            ));
+            position += length;
+        }
+        for (page, offset, position, length) in writes {
+            if page
+                .write_bytes(offset, &bytes[position..position + length])
+                .is_err()
+            {
+                return false;
+            }
+        }
         self.bump_virtual_generation();
         true
     }
@@ -568,8 +937,17 @@ impl MemorySystem {
         let key = (owner, address);
         match free_type {
             MEM_RELEASE => {
-                if size != 0 || self.virtual_allocations.remove(&key).is_none() {
+                if size != 0 {
                     return false;
+                }
+                let Some(allocation) = self.virtual_allocations.remove(&key) else {
+                    return false;
+                };
+                if allocation.backing == VirtualAllocationBacking::StablePrivateSlab {
+                    self.stable_private_pages.retain(|identity, _| {
+                        identity.owner != owner
+                            || identity.allocation_incarnation != allocation.incarnation
+                    });
                 }
                 self.bump_virtual_generation();
                 true
@@ -577,7 +955,10 @@ impl MemorySystem {
             MEM_DECOMMIT => self
                 .virtual_allocations
                 .get(&key)
-                .is_some_and(|allocation| size <= allocation.size),
+                .is_some_and(|allocation| {
+                    allocation.backing == VirtualAllocationBacking::LegacySeed
+                        && size <= allocation.size
+                }),
             _ => false,
         }
     }
@@ -633,6 +1014,55 @@ impl MemorySystem {
         self.virtual_allocations
             .values()
             .filter(move |allocation| allocation.owner == owner || !allocation.source.is_private())
+    }
+
+    /// Conservatively reject independent machine checkpointing after any
+    /// diagnostic slab existed, including after release while native pins may
+    /// still exist outside this VM directory.
+    pub fn has_stable_private_slabs(&self) -> bool {
+        self.stable_private_slabs_seen
+    }
+
+    pub fn private_page_pin(
+        &self,
+        owner: ProcessBirthKey,
+        page_base: u32,
+    ) -> Option<StablePrivatePagePin> {
+        if page_base & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0 {
+            return None;
+        }
+        let allocation = self.virtual_allocations_for(owner).find(|allocation| {
+            allocation.backing == VirtualAllocationBacking::StablePrivateSlab
+                && page_base >= allocation.base
+                && allocation
+                    .base
+                    .checked_add(allocation.size)
+                    .is_some_and(|end| page_base < end)
+        })?;
+        let identity = PrivatePageIdentity {
+            owner,
+            allocation_base: allocation.base,
+            allocation_incarnation: allocation.incarnation,
+            page_base,
+        };
+        let page = Rc::clone(self.stable_private_pages.get(&identity)?);
+        Some(StablePrivatePagePin { identity, page })
+    }
+
+    /// Revalidate the exact VM record and strong backing identity before a
+    /// native owner treats a retained pin as current. Clone deep-copies pages,
+    /// so a pin from the source MemorySystem is stale in its clone.
+    pub fn contains_private_page_pin(&self, pin: &StablePrivatePagePin) -> bool {
+        let identity = pin.identity;
+        self.virtual_allocation(identity.owner, identity.allocation_base)
+            .is_some_and(|allocation| {
+                allocation.backing == VirtualAllocationBacking::StablePrivateSlab
+                    && allocation.incarnation == identity.allocation_incarnation
+            })
+            && self
+                .stable_private_pages
+                .get(&identity)
+                .is_some_and(|page| Rc::ptr_eq(page, &pin.page))
     }
 
     pub fn heap_high_water_mark(&self) -> u32 {
@@ -1143,6 +1573,215 @@ mod tests {
                 .virtual_allocation(boot_owner(), 0x5200_0000)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn public_private_virtual_alloc_keeps_legacy_seed_backing() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let base = memory
+            .virtual_alloc(
+                owner,
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+        assert_eq!(
+            memory.virtual_allocation(owner, base).unwrap().backing,
+            VirtualAllocationBacking::LegacySeed
+        );
+        assert!(!memory.has_stable_private_slabs());
+        assert!(memory.private_page_pin(owner, base).is_none());
+        assert!(memory.set_virtual_initial_bytes(owner, base, vec![1, 2, 3, 4]));
+        assert_eq!(
+            memory
+                .virtual_allocation(owner, base)
+                .unwrap()
+                .initial_bytes,
+            [1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn diagnostic_slab_commits_one_page_not_whole_reservation() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let base = memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
+        let incarnation = {
+            let allocation = memory.virtual_allocation(owner, base).unwrap();
+            assert_eq!(allocation.size, VIRTUAL_ALIGN);
+            assert_eq!(
+                allocation.backing,
+                VirtualAllocationBacking::StablePrivateSlab
+            );
+            assert!(allocation.initial_bytes.is_empty());
+            allocation.incarnation
+        };
+        assert!(memory.has_stable_private_slabs());
+        assert!(memory.private_page_pin(owner, base + 0x1000).is_none());
+        assert!(memory.set_virtual_initial_bytes(
+            owner,
+            base,
+            0x1122_3344u32.to_le_bytes().to_vec()
+        ));
+        let pin = memory.private_page_pin(owner, base).unwrap();
+        assert_eq!(pin.identity().owner(), owner);
+        assert_eq!(pin.identity().allocation_base(), base);
+        assert_eq!(pin.identity().allocation_incarnation(), incarnation);
+        assert_eq!(pin.identity().page_base(), base);
+        assert!(!pin.native_ptr().is_null());
+        assert_eq!(pin.native_ptr(), pin.clone().native_ptr());
+        assert!(memory.contains_private_page_pin(&pin));
+        assert!(pin.read_bytes(STABLE_PRIVATE_PAGE_SIZE, &mut [0]).is_err());
+        assert_eq!(
+            pin.write_bytes(STABLE_PRIVATE_PAGE_SIZE, &[0]),
+            Err(PrivatePageAccessError::OutOfRange)
+        );
+        let mut bytes = [0; 4];
+        pin.read_bytes(0, &mut bytes).unwrap();
+        assert_eq!(bytes, 0x1122_3344u32.to_le_bytes());
+        // No second copy may become an ongoing seed authority once pinned.
+        assert!(!memory.set_virtual_initial_bytes(owner, base, vec![9]));
+        assert!(
+            memory
+                .virtual_allocation(owner, base)
+                .unwrap()
+                .initial_bytes
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn diagnostic_slab_seed_spans_two_pages_and_execution_fences_host_access() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let base = memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x2000, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
+        let mut seed = vec![0x5a; STABLE_PRIVATE_PAGE_SIZE + 4];
+        seed[STABLE_PRIVATE_PAGE_SIZE..].copy_from_slice(&[1, 2, 3, 4]);
+        assert!(memory.set_virtual_initial_bytes(owner, base, seed));
+        let first = memory.private_page_pin(owner, base).unwrap();
+        let second = memory.private_page_pin(owner, base + 0x1000).unwrap();
+        let mut bytes = [0; 4];
+        first
+            .read_bytes(STABLE_PRIVATE_PAGE_SIZE - 4, &mut bytes)
+            .unwrap();
+        assert_eq!(bytes, [0x5a; 4]);
+        second.read_bytes(0, &mut bytes).unwrap();
+        assert_eq!(bytes, [1, 2, 3, 4]);
+        let guard = second.begin_native_execution().unwrap();
+        assert_eq!(
+            second.read_bytes(0, &mut bytes),
+            Err(PrivatePageAccessError::NativeExecutionActive)
+        );
+        assert_eq!(
+            second.write_bytes(0, &[9]),
+            Err(PrivatePageAccessError::NativeExecutionActive)
+        );
+        assert_eq!(
+            second.begin_native_execution().err(),
+            Some(PrivatePageAccessError::NativeExecutionActive)
+        );
+        drop(guard);
+        second.write_bytes(0, &[9]).unwrap();
+        second.read_bytes(0, &mut bytes).unwrap();
+        assert_eq!(bytes[0], 9);
+    }
+
+    #[test]
+    fn diagnostic_slab_clone_deep_copies_bytes_and_rejects_source_pin() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let base = memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
+        assert!(memory.set_virtual_initial_bytes(owner, base, vec![1, 2, 3, 4]));
+        let source_pin = memory.private_page_pin(owner, base).unwrap();
+        let copy = memory.clone();
+        let copy_pin = copy.private_page_pin(owner, base).unwrap();
+        assert!(copy.has_stable_private_slabs());
+        assert!(memory.contains_private_page_pin(&source_pin));
+        assert!(!copy.contains_private_page_pin(&source_pin));
+        assert!(!memory.contains_private_page_pin(&copy_pin));
+        assert_ne!(source_pin.native_ptr(), copy_pin.native_ptr());
+        source_pin.write_bytes(0, &[0xa5]).unwrap();
+        let mut source = [0; 4];
+        let mut copied = [0; 4];
+        source_pin.read_bytes(0, &mut source).unwrap();
+        copy_pin.read_bytes(0, &mut copied).unwrap();
+        assert_eq!(source, [0xa5, 2, 3, 4]);
+        assert_eq!(copied, [1, 2, 3, 4]);
+        let guard = source_pin.begin_native_execution().unwrap();
+        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| memory.clone()));
+        assert!(
+            rejected.is_err(),
+            "derived clone must fail closed during native writes"
+        );
+        drop(guard);
+    }
+
+    #[test]
+    fn diagnostic_slab_release_invalidates_identity_but_pin_retains_bytes() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let base = memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
+        assert!(memory.set_virtual_initial_bytes(owner, base, vec![0x45]));
+        let pin = memory.private_page_pin(owner, base).unwrap();
+        assert!(!memory.virtual_free(owner, base, 0x1000, MEM_DECOMMIT));
+        assert!(memory.contains_private_page_pin(&pin));
+        assert!(memory.virtual_free(owner, base, 0, MEM_RELEASE));
+        assert!(!memory.contains_private_page_pin(&pin));
+        assert!(memory.private_page_pin(owner, base).is_none());
+        assert!(
+            memory.has_stable_private_slabs(),
+            "checkpoint gate is sticky"
+        );
+        let mut byte = [0];
+        pin.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x45]);
+        let replacement = memory
+            .virtual_alloc(
+                owner,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+        assert_eq!(replacement, base);
+        assert_eq!(
+            memory.virtual_allocation(owner, base).unwrap().backing,
+            VirtualAllocationBacking::LegacySeed
+        );
+        assert!(!memory.contains_private_page_pin(&pin));
+    }
+
+    #[test]
+    fn diagnostic_slab_rejects_unsupported_request_without_publication() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        for (address, size, flags) in [
+            (0, 0x1000, MEM_RESERVE),
+            (0, VIRTUAL_ALIGN + 1, MEM_COMMIT | MEM_RESERVE),
+            (0x5200_0000, 0x1000, MEM_COMMIT | MEM_RESERVE),
+        ] {
+            assert!(
+                memory
+                    .virtual_alloc_private_slab_for_test(owner, address, size, flags, 4)
+                    .is_none()
+            );
+        }
+        assert_eq!(memory.virtual_allocations().count(), 0);
+        assert!(!memory.has_stable_private_slabs());
     }
 
     #[test]
