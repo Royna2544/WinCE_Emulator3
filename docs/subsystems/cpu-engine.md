@@ -21,8 +21,15 @@ default tests; actual nested execution remains unvalidated
 The [checked finish-order fix](../../evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)
 passed three focused real-MIPS/unit controls after an intended red: the
 outgoing parent retains a finish error, reconciles its view bytes and does
-not hand off to the parked child. A new full suite for this later source is
-pending. `NativeSliceOutcome` is still not an immutable owner/frame-qualified
+not hand off to the parked child. That later source passed the locked full
+release suite **1,674/0/16 ignored**
+([release log](../../evidence/e28-run-outcome-20261014/broad-validation/release-unicorn-trace-desktop.raw.log));
+locked no-feature passed **1,259/0/14 ignored**
+([no-feature log](../../evidence/e28-run-outcome-20261014/broad-validation/no-feature.raw.log)).
+The Unicorn+desktop/no-trace release check, format and diff checks also
+exited 0; exact source/log hashes are in the
+[post-order validation receipt](../../evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
+`NativeSliceOutcome` is still not an immutable owner/frame-qualified
 task-facing `RunOutcome`; O-P1, Stage 2 and S3-A remain open, and
 service-boundary rotation policy is unchanged.
 

@@ -961,7 +961,13 @@ one-shot finish failure stays with parent PID 1 and discards its native
 owner, outgoing view bytes reconcile, the child remains parked, and the
 successful sibling still rotates
 ([regression receipt](../../evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
-No full release/no-feature suite has yet been recorded for that later source.
+That later source passed the locked full release suite **1,674/0/16 ignored**
+([release log](../../evidence/e28-run-outcome-20261014/broad-validation/release-unicorn-trace-desktop.raw.log));
+locked no-feature passed **1,259/0/14 ignored**
+([no-feature log](../../evidence/e28-run-outcome-20261014/broad-validation/no-feature.raw.log)).
+The Unicorn+desktop/no-trace release check, format and diff checks also
+exited 0; exact source/log hashes are in the
+[post-order validation receipt](../../evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
 O-P1 still needs one immutable owner/frame-qualified final attempt report,
 forced query-error and competing-hook controls, and
 preserved native-query provenance in the diagnostic-private error path.

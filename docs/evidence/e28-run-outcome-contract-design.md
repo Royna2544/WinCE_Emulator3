@@ -15,8 +15,15 @@ was removed. The
 identifies plausible callback reentrancy and shared C-state hazards, not an
 established crash cause; actual nested execution remains unvalidated. The narrow
 [finish-before-handoff fix](../../evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)
-passed three focused controls after an intended real-MIPS red; a full suite
-for the later source is pending. The pre-adapter/pre-ordering source
+passed three focused controls after an intended real-MIPS red. The later
+source passed the locked full release suite **1,674/0/16 ignored**
+([release log](../../evidence/e28-run-outcome-20261014/broad-validation/release-unicorn-trace-desktop.raw.log));
+locked no-feature passed **1,259/0/14 ignored**
+([no-feature log](../../evidence/e28-run-outcome-20261014/broad-validation/no-feature.raw.log)).
+The Unicorn+desktop/no-trace release check, format and diff checks also
+exited 0; exact source/log hashes are in the
+[post-order validation receipt](../../evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
+The pre-adapter/pre-ordering source
 description below is retained as the design baseline. An immutable
 owner/frame-qualified final report, forced query-error and
 competing-hook controls, and diagnostic-private query-error provenance remain
