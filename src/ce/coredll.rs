@@ -29620,7 +29620,7 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
     // Determine region state based on whether addr falls within a known virtual allocation.
     let (state, protect, region_size) = kernel
         .memory
-        .virtual_allocations_for(owner)
+        .virtual_allocations_visible_to(owner)
         .find(|a| addr >= a.base && addr < a.base.saturating_add(a.size))
         .map(|a| (MEM_COMMIT_FLAG, a.protect, a.size))
         .unwrap_or((MEM_FREE_FLAG, PAGE_NOACCESS, 0x1000));
@@ -30010,16 +30010,6 @@ fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
-    if !kernel
-        .memory
-        .virtual_allocation(owner, base)
-        .is_some_and(|allocation| allocation.source == VirtualAllocationSource::FileViewLegacy)
-    {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
     let Some((file_id, view, bytes)) =
         commit_file_mapping_view_from_guest(kernel, memory, thread_id, base, None)
     else {
@@ -69680,7 +69670,7 @@ mod tests {
     }
 
     #[test]
-    fn public_virtual_metadata_rejects_foreign_owner_and_ex_target() -> Result<()> {
+    fn public_virtual_metadata_and_ex_arm_reject_foreign_owner() -> Result<()> {
         let table = CoredllExportTable::default();
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
         let mut memory = UnitGuestMemory::default();
@@ -69762,12 +69752,40 @@ mod tests {
             }
         ));
 
-        let remote_alloc = table.dispatch_raw_ordinal_with_memory(
+        // The default export table does not publish these supplemental Ex
+        // ordinals. Exercise their existing raw arms directly without adding
+        // a guessed export to the dumped COREDLL surface.
+        for ordinal in [
+            ORD_VIRTUAL_ALLOC_EX,
+            ORD_VIRTUAL_FREE_EX,
+            ORD_VIRTUAL_PROTECT_EX,
+            ORD_VIRTUAL_QUERY_EX,
+        ] {
+            assert!(table.resolve_ordinal(ordinal).is_none());
+        }
+        let ex_arm =
+            |kernel: &mut CeKernel, memory: &mut UnitGuestMemory, ordinal: u32, args: &[u32]| {
+                dispatch_real_raw_ordinal(
+                    kernel,
+                    memory,
+                    None,
+                    &CoredllRawContext {
+                        thread_id: child_thread,
+                        ..Default::default()
+                    },
+                    child_thread,
+                    &CoredllExport {
+                        name: "test-only Ex arm".to_owned(),
+                        ordinal,
+                    },
+                    args,
+                )
+            };
+        let remote_alloc = ex_arm(
             &mut kernel,
             &mut memory,
-            child_thread,
             ORD_VIRTUAL_ALLOC_EX,
-            [
+            &[
                 parent_handle,
                 0x5300_0000,
                 0x1000,
@@ -69775,13 +69793,7 @@ mod tests {
                 PAGE_READWRITE,
             ],
         );
-        assert!(matches!(
-            remote_alloc,
-            CoredllDispatch::Returned {
-                value: CoredllValue::Handle(0),
-                ..
-            }
-        ));
+        assert!(matches!(remote_alloc, Some(CoredllValue::Handle(0))));
         assert_eq!(
             kernel.threads.get_last_error(child_thread),
             ERROR_NOT_SUPPORTED
@@ -69792,60 +69804,38 @@ mod tests {
                 .virtual_allocation(parent, 0x5300_0000)
                 .is_none()
         );
-        let remote_free = table.dispatch_raw_ordinal_with_memory(
+        let remote_free = ex_arm(
             &mut kernel,
             &mut memory,
-            child_thread,
             ORD_VIRTUAL_FREE_EX,
-            [parent_handle, base, 0, MEM_RELEASE],
+            &[parent_handle, base, 0, MEM_RELEASE],
         );
-        assert!(matches!(
-            remote_free,
-            CoredllDispatch::Returned {
-                value: CoredllValue::Bool(false),
-                ..
-            }
-        ));
+        assert!(matches!(remote_free, Some(CoredllValue::Bool(false))));
         assert!(kernel.memory.virtual_allocation(parent, base).is_some());
-        let remote_protect = table.dispatch_raw_ordinal_with_memory(
+        let remote_protect = ex_arm(
             &mut kernel,
             &mut memory,
-            child_thread,
             ORD_VIRTUAL_PROTECT_EX,
-            [parent_handle, base, 0x1000, PAGE_READWRITE, query_buf],
+            &[parent_handle, base, 0x1000, PAGE_READWRITE, query_buf],
         );
-        assert!(matches!(
-            remote_protect,
-            CoredllDispatch::Returned {
-                value: CoredllValue::Bool(false),
-                ..
-            }
-        ));
-        let remote_query = table.dispatch_raw_ordinal_with_memory(
+        assert!(matches!(remote_protect, Some(CoredllValue::Bool(false))));
+        let remote_query = ex_arm(
             &mut kernel,
             &mut memory,
-            child_thread,
             ORD_VIRTUAL_QUERY_EX,
-            [parent_handle, base, query_buf, 28],
+            &[parent_handle, base, query_buf, 28],
         );
-        assert!(matches!(
-            remote_query,
-            CoredllDispatch::Returned {
-                value: CoredllValue::U32(0),
-                ..
-            }
-        ));
+        assert!(matches!(remote_query, Some(CoredllValue::U32(0))));
         assert_eq!(
             kernel.threads.get_last_error(child_thread),
             ERROR_NOT_SUPPORTED
         );
 
-        let self_alloc = table.dispatch_raw_ordinal_with_memory(
+        let self_alloc = ex_arm(
             &mut kernel,
             &mut memory,
-            child_thread,
             ORD_VIRTUAL_ALLOC_EX,
-            [
+            &[
                 crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
                 0x5400_0000,
                 0x1000,
@@ -69855,10 +69845,7 @@ mod tests {
         );
         assert!(matches!(
             self_alloc,
-            CoredllDispatch::Returned {
-                value: CoredllValue::Handle(0x5400_0000),
-                ..
-            }
+            Some(CoredllValue::Handle(0x5400_0000))
         ));
         assert_eq!(
             kernel

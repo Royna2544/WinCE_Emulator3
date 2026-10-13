@@ -142,6 +142,12 @@ pub enum VirtualAllocationSource {
     SharedCompatibility,
 }
 
+impl VirtualAllocationSource {
+    fn is_private(self) -> bool {
+        matches!(self, Self::Private | Self::PrivateExCompatibility)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualAllocation {
     pub base: u32,
@@ -557,17 +563,35 @@ impl MemorySystem {
         size: u32,
         free_type: u32,
     ) -> bool {
+        // Private regions require the exact birth key. The other producers
+        // still use the old global compatibility path until file views and
+        // shared memory receive their own backing/ownership migration.
+        let key = self
+            .virtual_allocations
+            .get_key_value(&(owner, address))
+            .map(|(key, _)| *key)
+            .or_else(|| {
+                self.virtual_allocations
+                    .iter()
+                    .find(|(_, allocation)| {
+                        allocation.base == address && !allocation.source.is_private()
+                    })
+                    .map(|(key, _)| *key)
+            });
         match free_type {
             MEM_RELEASE => {
-                if size != 0 || self.virtual_allocations.remove(&(owner, address)).is_none() {
+                if size != 0
+                    || key
+                        .and_then(|key| self.virtual_allocations.remove(&key))
+                        .is_none()
+                {
                     return false;
                 }
                 self.bump_virtual_generation();
                 true
             }
-            MEM_DECOMMIT => self
-                .virtual_allocations
-                .get(&(owner, address))
+            MEM_DECOMMIT => key
+                .and_then(|key| self.virtual_allocations.get(&key))
                 .is_some_and(|allocation| size <= allocation.size),
             _ => false,
         }
@@ -615,6 +639,17 @@ impl MemorySystem {
             .map(|(_, allocation)| allocation)
     }
 
+    /// Private pages are scoped to `owner`; unmigrated nonprivate producers
+    /// retain their previous global visibility for compatibility.
+    pub fn virtual_allocations_visible_to(
+        &self,
+        owner: ProcessBirthKey,
+    ) -> impl Iterator<Item = &VirtualAllocation> {
+        self.virtual_allocations
+            .values()
+            .filter(move |allocation| allocation.owner == owner || !allocation.source.is_private())
+    }
+
     pub fn heap_high_water_mark(&self) -> u32 {
         self.next_heap_ptr
     }
@@ -639,12 +674,14 @@ impl MemorySystem {
                 return false;
             };
             ptr >= allocation.ptr && end <= allocation_end
-        }) || self.virtual_allocations_for(owner).any(|allocation| {
-            let Some(allocation_end) = allocation.base.checked_add(allocation.size) else {
-                return false;
-            };
-            ptr >= allocation.base && end <= allocation_end
-        })
+        }) || self
+            .virtual_allocations_visible_to(owner)
+            .any(|allocation| {
+                let Some(allocation_end) = allocation.base.checked_add(allocation.size) else {
+                    return false;
+                };
+                ptr >= allocation.base && end <= allocation_end
+            })
     }
 
     pub fn intersects_foreign_virtual_allocation(
@@ -658,11 +695,7 @@ impl MemorySystem {
         };
         self.virtual_allocations.values().any(|allocation| {
             allocation.owner != owner
-                && matches!(
-                    allocation.source,
-                    VirtualAllocationSource::Private
-                        | VirtualAllocationSource::PrivateExCompatibility
-                )
+                && allocation.source.is_private()
                 && allocation
                     .base
                     .checked_add(allocation.size)
@@ -1085,6 +1118,20 @@ mod tests {
             .unwrap();
         assert_ne!(child_base, base);
         assert!(memory.virtual_allocation(child, child_base).is_some());
+
+        let legacy_base = memory
+            .virtual_alloc(
+                parent,
+                VirtualAllocationSource::FileViewLegacy,
+                0x5600_0000,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+        assert!(memory.contains_allocated_range(child, legacy_base, 4));
+        assert!(memory.virtual_free(child, legacy_base, 0, MEM_RELEASE));
+        assert!(memory.virtual_allocation(parent, legacy_base).is_none());
     }
 
     #[test]
