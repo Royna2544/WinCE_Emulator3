@@ -1022,6 +1022,37 @@ ordinary failed-retry control, not all fallible tails, O-P1, Stage 2 or
 canonical Task/Frame authority. E-29 used the **pre-fix** executable and
 does not validate this correction.
 
+### E-28 typed-stop and run-state wait boundaries (2026-10-14, focused)
+
+A [real-MIPS expected red](../../evidence/e28-run-outcome-20261014/typed-stop-wait-cleanup-expected-red.receipt.md)
+registered a same-thread `Sleep` wait, then used a test-only Rust `RESOURCE`
+substitution after the actual C `COUNT_STOP=0` query. A host-wall debug marker
+was still present on the resulting `NativeError`; the old marker-driven
+cleanup wrongly consumed the Kernel wait. Cleanup now requires a finalized
+successful `HookStop(_)` or `NativeDeadline` after outgoing view sync and
+checked `uc.finish`, with no requested-PC stop. The debug marker is retained
+as evidence, not cleanup authority. The host idle guard also verifies that a
+saved GetMessage wait ID is still live in Kernel.
+
+A separate [private error red](../../evidence/e28-run-outcome-20261014/private-wait-error-salvage-expected-red.receipt.md)
+then showed Kernel retaining the wait while the CPU lost its transferred
+`blocked_wait_threads` record. Private entered-attempt error exits now drain
+the transient run-state handles back to the poisoned CPU without publishing
+context or rotation. On the [focused green source](../../evidence/e28-run-outcome-20261014/typed-stop-and-private-wait-green.receipt.md),
+four real-MIPS controls passed: ordinary/private error paths preserved both
+wait records and ordinary/private successful host-budget stops pruned them.
+This is **4/0**, not a full-suite result for that later source. The Rust
+adapter substitution is not a failing C `uc_query`.
+
+An additional [pre-entry fence expected red](../../evidence/e28-run-outcome-20261014/private-preentry-wait-salvage-expected-red.receipt.md)
+showed `NoAttempt` with Kernel wait intact but CPU wait lost before `emu_start`
+when a private-page execution fence rejected setup. Its
+[two-phase repair design](../evidence/e28-preentry-handle-salvage-design.md)
+covers state moved before/after hook construction; validation belongs to a
+later source boundary. These controls do not close all preflight/tail errors,
+Task/Frame authority, O-P1, Stage 2, S3-A, or live-app map readiness. E-29
+used an earlier executable and cannot validate them.
+
 ## E-29 third bounded iNavi run after detached-report validation (2026-10-14 analysis)
 
 The third user-authorized original-mount read/write run is retained under
