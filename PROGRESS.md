@@ -297,8 +297,7 @@ references for historical reconstruction.
   16 ignored** and **1,259 no-feature tests, 0 failed, 14 ignored**; no-trace
   release check and format check also exited 0
   ([broad receipt](evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md)).
-  Those broad counts are historical for the count-adapter source, not yet a
-  full-suite result for the later focused changes. A direct ARM Thumb
+  Those broad counts are historical for the count-adapter source. A direct ARM Thumb
   control then passed count-stop reversal and next-start reset (3/0/0
   integration tests). An exploratory same-handle nested-start hook probe
   exited `0xC0000005` before any ambiguity-query assertion; it was removed
@@ -312,7 +311,14 @@ references for historical reconstruction.
   bytes are reconciled, the child remains parked, and the failed native
   owner is discarded; the successful sibling still rotates normally
   ([finish-order receipt](evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
-  Full release/no-feature validation for this later source is pending.
+  On this later source, the locked full release suite passed **1,674 tests,
+  0 failed, 16 ignored**
+  ([raw log](evidence/e28-run-outcome-20261014/broad-validation/release-unicorn-trace-desktop.raw.log));
+  the locked no-feature suite passed **1,259/0/14 ignored**
+  ([raw log](evidence/e28-run-outcome-20261014/broad-validation/no-feature.raw.log)).
+  The Unicorn+desktop/no-trace release check, format and diff checks also
+  exited 0; exact commands, source/log hashes and caveats are in the
+  [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
   Immutable owner/frame-qualified final reports, forced query-error and
   competing-hook controls, and diagnostic-private
   query-error provenance remain open. This is not O-P1, Stage 2, S3-A, or

@@ -219,8 +219,15 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   misattribution; the narrow finish-before-handoff fix and three focused
   controls now pass
   ([finish-order receipt](evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
-  No full release/no-feature suite has yet been recorded for this later
-  source. An immutable owner/frame-qualified final report, forced query-
+  The later source passed the locked full release suite **1,674/0/16 ignored**
+  ([raw log](evidence/e28-run-outcome-20261014/broad-validation/release-unicorn-trace-desktop.raw.log));
+  locked no-feature passed **1,259/0/14 ignored**
+  ([raw log](evidence/e28-run-outcome-20261014/broad-validation/no-feature.raw.log)).
+  The Unicorn+desktop/no-trace release check, format and diff checks also
+  exited 0; exact source/log hashes are in the
+  [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
+  An immutable
+  owner/frame-qualified final report, forced query-
   error/competing-hook controls, diagnostic-private query-error provenance,
   other sparse/hookless reasons and typed restart-PC repair remain open.
   Complete O-P1 classification, fresh-owner Stage 2 and live acceptance

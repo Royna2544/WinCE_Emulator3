@@ -115,7 +115,14 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      and three focused green controls; parent error/view bytes stay with the
      outgoing owner, child stays parked, and the failed native owner is
      discarded ([finish-order receipt](evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
-     A new full release/no-feature suite on this later source is pending.
+     On this later source, the locked full release suite passed **1,674/0/16
+     ignored**
+     ([raw log](evidence/e28-run-outcome-20261014/broad-validation/release-unicorn-trace-desktop.raw.log));
+     locked no-feature passed **1,259/0/14 ignored**
+     ([raw log](evidence/e28-run-outcome-20261014/broad-validation/no-feature.raw.log)).
+     The Unicorn+desktop/no-trace release check, format and diff checks also
+     exited 0; exact source/log hashes are in the
+     [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
      Next seal one immutable owner/frame-qualified attempt report through
      all fallible outgoing byte/view sync, checked finish and partial-effect
      paths ([report design](evidence/e28-run-outcome-20261014/sealed-report-next-gate.receipt.md)).

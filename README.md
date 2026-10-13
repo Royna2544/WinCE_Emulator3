@@ -25,8 +25,15 @@ remote-control HTTP/WebSocket surface.
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
   and formatting checks. Those counts are **historical** for that exact source.
   Later ARM stop-reversal/reset controls and a checked finish-before-handoff
-  repair pass focused tests; the current follow-up source awaits a new full
-  suite. An exploratory same-handle nested-start hook probe exited
+  repair pass focused tests. That follow-up source also passed **1,674
+  release tests, 0 failed, 16 ignored** and **1,259 no-feature tests,
+  0 failed, 14 ignored**
+  ([release log](evidence/e28-run-outcome-20261014/broad-validation/release-unicorn-trace-desktop.raw.log),
+  [no-feature log](evidence/e28-run-outcome-20261014/broad-validation/no-feature.raw.log)).
+  The Unicorn+desktop/no-trace release check, format and diff checks also
+  passed; exact source/log hashes are in the
+  [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
+  An exploratory same-handle nested-start hook probe exited
   `0xC0000005` before a query assertion, was removed, and remains unresolved
   ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),
   [nested risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
