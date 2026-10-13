@@ -48,6 +48,13 @@ remote-control HTTP/WebSocket surface.
   [green](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
   The older 1,674/1,259 and 1,682/1,262 counts above remain historical.
   E-29 below used a pre-fix executable and does not validate this correction.
+  Later typed-stop and private entered-attempt wait controls passed focused
+  release **4/0**. A pre-entry fence then exposed separate ready-worker and
+  orphaned-WNDPROC losses; their combined repair passes focused fence **2/0**
+  and executed-wait **5/0** on a later source
+  ([receipt](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md)).
+  No current full-suite or live iNavi validation is claimed for that source;
+  guarded GetMessage/private-slab resume remains untested.
   An exploratory same-handle nested-start hook probe exited
   `0xC0000005` before a query assertion, was removed, and remains unresolved
   ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),

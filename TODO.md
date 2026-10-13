@@ -157,9 +157,14 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      the Kernel wait intact but CPU wait lost
      ([red receipt](evidence/e28-run-outcome-20261014/private-preentry-wait-salvage-expected-red.receipt.md),
      [repair design](docs/evidence/e28-preentry-handle-salvage-design.md)).
-     Validate its two-phase handle-restoration source before treating that
-     specific setup loss as repaired. The report remains observational and
-     the app still discards it.
+     The first handles-only fix passed its non-ready wait control, then
+     [ready-worker](evidence/e28-run-outcome-20261014/private-preentry-ready-wait-expected-red.receipt.md)
+     and [orphaned-WNDPROC](evidence/e28-run-outcome-20261014/private-preentry-orphaned-wndproc-expected-red.receipt.md)
+     reds exposed two more pre-entry losses. The combined repair passes the
+     [focused fence **2/0** and wait **5/0** filters](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md).
+     Add a guarded GetMessage/private-slab integration control and current
+     broad validation; do not infer rollback for all ready-resume failures.
+     The report remains observational and the app still discards it.
      Finish the other fallible context/PC/byte-view/lease-tail and
      partial-effect paths, then
      migrate live/monitor consumers with explicit owner/frame validation

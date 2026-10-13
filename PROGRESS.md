@@ -370,8 +370,14 @@ references for historical reconstruction.
   This does not establish a failing C `uc_query` or a full-suite result on
   that source. A further [pre-entry expected red](evidence/e28-run-outcome-20261014/private-preentry-wait-salvage-expected-red.receipt.md)
   showed a private-page fence error returning `NoAttempt` after dropping the
-  CPU wait but retaining Kernel's. Its source repair and broader validation
-  are a separate gate; O-P1, Stage 2, S3-A and map readiness stay open.
+  CPU wait but retaining Kernel's. The first handles-only repair passed the
+  [non-ready wait control](evidence/e28-run-outcome-20261014/private-preentry-nonready-wait-focused-green.receipt.md)
+  **1/0**, but separate [ready-worker](evidence/e28-run-outcome-20261014/private-preentry-ready-wait-expected-red.receipt.md)
+  and [orphaned-WNDPROC](evidence/e28-run-outcome-20261014/private-preentry-orphaned-wndproc-expected-red.receipt.md)
+  reds exposed further pre-entry losses. The combined source now passes the
+  [fence filter **2/0** and executed-wait filter **5/0**](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md).
+  Guarded GetMessage resume, other setup/tail paths, and a current full-suite
+  result remain separate gates; O-P1, Stage 2, S3-A and map readiness stay open.
 - E-29 ran the then-current, pre-retry-fix D: release executable
   (`8A8B9C7E…57AFB3E094A`)
   against the three original ZIP-backed read/write mounts. It exited 0 at
@@ -1156,8 +1162,9 @@ only slow when their body is.
   eligibility. Debug handle output identifies `0x1054` as an event handle.
 - On a successfully finalized `HookStop(_)`/`NativeDeadline` without a
   requested-PC stop, slice maintenance purges stale blocked-wait and parked
-  `GetMessage` records for the executed thread. Failed attempts retain waits
-  for diagnosis; a saved GetMessage wait must still be live in Kernel before
+  `GetMessage` records for the executed thread. The tested ordinary/private
+  entered-attempt errors retain their waits for diagnosis; a saved GetMessage
+  wait must still be live in Kernel before
   the host idle-poll gate can use it. These narrow controls do not prove every
   wait/callback interleaving or full O-P1 closure.
 - Host live-pump idle polling no longer forces short 100 ms CPU slices while an

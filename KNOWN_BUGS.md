@@ -240,6 +240,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   **1,683/0/16 ignored** release plus **1,262/0/14 ignored** no-feature pass
   ([red](evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md),
   [green](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
+  Later pre-entry private-page fence reds separately lost a transferred CPU
+  wait, consumed a ready worker's wait before `NoAttempt`, and dropped an
+  orphaned WNDPROC return. The combined source now passes the reproduced
+  [fence **2/0** and executed-wait **5/0** controls](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md),
+  but guarded GetMessage/private-slab resume and state consistency when a
+  ready helper consumes state before a native-entry failure are unvalidated;
+  no rollback semantics are claimed.
   Other fallible-tail effect salvage, real C query-error/competing-hook
   controls, sparse/hookless reasons and typed restart-PC repair remain open.
   A test-only Rust post-query failure control does not establish a genuine C
@@ -453,8 +460,9 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   the focused ordinary/private controls now pass, but other fallible tails
   remain open (ledger E-28).
 - A saved parked `GetMessage` waiter must still exist in Kernel before it can
-  trigger host idle polling. This guards the tested stale-ID case; it does not
-  prove every live-pump pacing or callback interleaving.
+  trigger host idle polling. This source guard covers the stale-ID shape; its
+  focused binary-target test remains to run. It does not prove every live-pump
+  pacing or callback interleaving.
 - Remote touch/key input reaches the real iNavi window stack after the
   scheduler handoff fix. Current COM7 consumption is proven by successful
   ReadFile payload/transferred-byte records, not host queue emptiness alone.
