@@ -56776,6 +56776,95 @@ mod unicorn_tests {
     }
 
     #[test]
+    #[ignore = "expected red: a debug host-wall marker consumes a registered wait after a native query error"]
+    fn real_mips_host_budget_query_error_must_preserve_executed_thread_wait() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("phase1-budget-error-wait.exe")?;
+        let mut cpu = phase1_counter_cpu(0x1000, "phase1-budget-error-wait.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot process birth");
+        let thread_id = cpu.current_thread_id();
+        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let wait_started_ms = kernel.timers.tick_count();
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep,
+            wait_started_ms,
+            crate::ce::timer::INFINITE,
+        );
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[29] = cpu.stack_top.expect("loaded guest stack") - 0x100;
+        cpu.blocked_wait_threads.push(super::BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles: Vec::new(),
+            kind: super::BlockedWaitKind::Sleep,
+            wait_started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs,
+            return_pc: cpu.entry.expect("loaded guest entry"),
+        });
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert!(cpu.blocked_wait_threads.iter().any(|wait| wait.wait_id == wait_id));
+
+        // The real MIPS host-budget hook writes its debug stop and typed hook
+        // provenance. Only the post-real-query Rust adapter substitutes
+        // RESOURCE for the native COUNT_STOP=0 result; no nested start occurs.
+        cpu.native_engine
+            .arm_count_stop_query_error_once_for_test(0);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 1,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        let report = execution.report;
+        let err = execution.result.expect_err("query error must fail this native attempt");
+        assert!(format!("{err:#}").contains("query native count stop"));
+        assert!(phase1_counter(&cpu) > 0x1000, "real MIPS stores must occur");
+        assert!(report.attempt_id().is_some());
+        assert_eq!(report.start_process_birth(), Some(owner));
+        assert_eq!(report.end_process_birth(), Some(owner));
+        assert_eq!(report.start_thread_id(), Some(thread_id));
+        assert_eq!(report.end_thread_id(), Some(thread_id));
+        assert_eq!(report.native_result(), &super::AttemptObservation::Value(()));
+        assert!(matches!(
+            report.count_stop_query(),
+            super::AttemptObservation::Error(message) if message.contains("RESOURCE")
+        ));
+        assert_eq!(report.timeout_query(), &super::AttemptObservation::Value(false));
+        assert_eq!(
+            report.hook_stop_reason(),
+            Some(super::NativeHookStopReason::HostWallBudget)
+        );
+        assert_eq!(report.final_outcome(), super::NativeSliceOutcome::NativeError);
+        assert_eq!(report.failure_operation(), Some("query native count stop"));
+        assert!(report.partial_effects_possible());
+        assert!(
+            cpu.last_debug_snapshot()
+                .and_then(|snapshot| snapshot.host_wall_clock_stop.as_ref())
+                .is_some(),
+            "the debug marker must be present to exercise the legacy cleanup gate"
+        );
+        assert_eq!(kernel.current_process_id(), report.start_process_id().unwrap());
+        assert!(
+            kernel.blocked_waiter(wait_id).is_some(),
+            "a failed native attempt must not consume the registered wait"
+        );
+        assert!(
+            cpu.blocked_wait_threads.iter().any(|wait| wait.wait_id == wait_id),
+            "the CPU-side matching wait must survive the same failed attempt"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn private_real_mips_count_query_adapter_error_preserves_provenance() -> crate::Result<()> {
         use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
 
