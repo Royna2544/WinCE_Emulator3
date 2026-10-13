@@ -355,6 +355,38 @@ only the injected same-VA native-view collision: public same-VA MapView,
 private `VirtualAlloc` readback, fresh owner closure, same-mapping aliases,
 file flush/unmap, and application readiness remain open.
 
+## E-15 Narrow O-P1 native stop taxonomy (2026-10-13, focused green)
+
+On the sole D: source, `NativeSliceOutcome::UnknownNormalStop` replaced the
+unproven successful `ServiceBoundary` residual. A positive configured count
+and native `Ok` are not an independent count-exhaustion witness. The scheduler
+block hook now records `HookStop(HostWallBudget)` only after an elapsed host
+budget, a safe restart PC, successful checked PC write and successful
+`emu_stop` request. Its failed control operations instead return
+`BackendError` after primary native result/query/context precedence; the
+failure precedence is unit-tested, but real PC-write/stop-failure injection
+has not run. Six other host-wall debug-record writers remain untyped and
+normally classify as `UnknownNormalStop`; restart-PC repair still reads the
+legacy debug marker. Successful Unknown, HookStop and NativeDeadline outcomes
+remain eligible for the existing service handoff, so the one-million-
+instruction tick and rotation policy were not changed.
+
+Seven final-source focused release controls passed individually (one pass in
+each run): actual MIPS host-budget hook stop with `Query::TIMEOUT = 0`,
+hook-control error precedence, counted unknown boundary, unmapped native
+error, explicit PC stop, actual native deadline with `Query::TIMEOUT = 1`,
+and service-boundary handoff policy. Format and diff checks passed. Source
+SHA-256 was `5CCAD8FF…92E5` for `types.rs` and `F1103483…46C73` for
+`unicorn.rs`; focused executable SHA-256 was `482BB864…F3A55E`.
+Commands, full hashes and raw logs are in local
+`evidence/op1-stop-taxonomy-20261013/focused-controls.receipt.md`.
+
+This is focused O-P1 progress, not a complete classification or Stage 2
+acceptance. Native count-stop witness, remaining hook reasons, typed
+restart-PC repair, full release/feature suites on this source and a bounded
+live workload remain separate gates. The earlier E-13 suite counts are
+historical and must not be attributed to this O-P1 source.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
