@@ -10088,6 +10088,7 @@ impl UnicornMips {
                     sync_file_mapping_views_to_unicorn(&mut uc, kernel, native_owner_pid).err();
             }
         }
+        let mut post_run_pc_repair_error = None::<String>;
         if result.is_ok()
             && native_requested_pc_stop.is_none()
             && native_deadline_expired
@@ -10097,8 +10098,14 @@ impl UnicornMips {
             if let Some(target) =
                 import_trap_target_for_mips_jr_thunk(&uc, &import_traps_live.borrow(), pc)
             {
-                let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
-                pc = target;
+                match uc.reg_write(RegisterMIPS::PC, u64::from(target)) {
+                    Ok(()) => pc = target,
+                    Err(err) => {
+                        post_run_pc_repair_error = Some(format!(
+                            "native-deadline JR import thunk PC repair to 0x{target:08x} failed: {err:?}"
+                        ));
+                    }
+                }
             }
             *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
                 pc,
@@ -10110,27 +10117,43 @@ impl UnicornMips {
         }
         // ── Post-run: sync state, capture debug snapshot ──────────────────────────
         self.import_traps = import_traps_live.borrow().clone();
+        let has_typed_repair_stop = matches!(
+            self.last_native_slice_outcome,
+            NativeSliceOutcome::HookStop(_) | NativeSliceOutcome::NativeDeadline
+        );
         let mut snapshot_pc = read_mips_reg(&uc, RegisterMIPS::PC);
         if native_requested_pc_stop.is_none()
+            && post_run_pc_repair_error.is_none()
             && let Some(target) = import_trap_page_target_for_mips_jr_thunk(&uc, snapshot_pc)
         {
-            snapshot_pc = target;
-            let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
-            if host_wall_clock_stop.borrow().is_some() {
-                let elapsed_ms = host_wall_clock_stop.borrow().as_ref().map_or_else(
-                    || host_wall_clock_started.elapsed().as_millis() as u64,
-                    |stop| stop.elapsed_ms,
-                );
-                *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
-                    pc: target,
-                    ra: read_mips_reg(&uc, RegisterMIPS::RA),
-                    sp: read_mips_reg(&uc, RegisterMIPS::SP),
-                    instruction: read_unicorn_u32(&uc, target),
-                    elapsed_ms,
-                });
+            match uc.reg_write(RegisterMIPS::PC, u64::from(target)) {
+                Ok(()) => {
+                    snapshot_pc = target;
+                    if has_typed_repair_stop && host_wall_clock_stop.borrow().is_some() {
+                        let elapsed_ms = host_wall_clock_stop.borrow().as_ref().map_or_else(
+                            || host_wall_clock_started.elapsed().as_millis() as u64,
+                            |stop| stop.elapsed_ms,
+                        );
+                        *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
+                            pc: target,
+                            ra: read_mips_reg(&uc, RegisterMIPS::RA),
+                            sp: read_mips_reg(&uc, RegisterMIPS::SP),
+                            instruction: read_unicorn_u32(&uc, target),
+                            elapsed_ms,
+                        });
+                    }
+                }
+                Err(err) => {
+                    post_run_pc_repair_error = Some(format!(
+                        "post-run JR import thunk PC repair to 0x{target:08x} failed: {err:?}"
+                    ));
+                }
             }
         }
-        if native_requested_pc_stop.is_none() && host_wall_clock_stop.borrow().is_some() {
+        if has_typed_repair_stop
+            && native_requested_pc_stop.is_none()
+            && post_run_pc_repair_error.is_none()
+        {
             let post_run_mapped_code = MappedCodeIndex::new(&self.mapped_blobs);
             let restart_pc = {
                 let trampoline_state = live_trampoline_state.borrow();
@@ -10141,20 +10164,39 @@ impl UnicornMips {
                 )
             };
             if let Some(restart_pc) = restart_pc {
-                snapshot_pc = restart_pc;
-                let _ = uc.reg_write(RegisterMIPS::PC, u64::from(restart_pc));
-                let elapsed_ms = host_wall_clock_stop.borrow().as_ref().map_or_else(
-                    || host_wall_clock_started.elapsed().as_millis() as u64,
-                    |stop| stop.elapsed_ms,
-                );
-                *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
-                    pc: restart_pc,
-                    ra: read_mips_reg(&uc, RegisterMIPS::RA),
-                    sp: read_mips_reg(&uc, RegisterMIPS::SP),
-                    instruction: read_unicorn_code_u32(&uc, &post_run_mapped_code, restart_pc),
-                    elapsed_ms,
-                });
+                match uc.reg_write(RegisterMIPS::PC, u64::from(restart_pc)) {
+                    Ok(()) => {
+                        snapshot_pc = restart_pc;
+                        if host_wall_clock_stop.borrow().is_some() {
+                            let elapsed_ms = host_wall_clock_stop.borrow().as_ref().map_or_else(
+                                || host_wall_clock_started.elapsed().as_millis() as u64,
+                                |stop| stop.elapsed_ms,
+                            );
+                            *host_wall_clock_stop.borrow_mut() = Some(UnicornHostWallClockStop {
+                                pc: restart_pc,
+                                ra: read_mips_reg(&uc, RegisterMIPS::RA),
+                                sp: read_mips_reg(&uc, RegisterMIPS::SP),
+                                instruction: read_unicorn_code_u32(
+                                    &uc,
+                                    &post_run_mapped_code,
+                                    restart_pc,
+                                ),
+                                elapsed_ms,
+                            });
+                        }
+                    }
+                    Err(err) => {
+                        post_run_pc_repair_error = Some(format!(
+                            "post-run trampoline PC repair to 0x{restart_pc:08x} failed: {err:?}"
+                        ));
+                    }
+                }
             }
+        }
+        if post_run_pc_repair_error.is_some()
+            && self.last_native_slice_outcome != NativeSliceOutcome::NativeError
+        {
+            self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
         }
         let snapshot_ra = read_mips_reg(&uc, RegisterMIPS::RA);
         if native_requested_pc_stop.is_none()
@@ -10341,6 +10383,7 @@ impl UnicornMips {
             && native_capture_result.is_ok()
             && snapshot_context_result.is_ok()
             && native_hook_control_error.borrow().is_none()
+            && post_run_pc_repair_error.is_none()
             && immediate_process_sync_failure.is_none()
             && deferred_launch_error.is_none()
             && deferred_view_sync_error.is_none()
@@ -10453,6 +10496,12 @@ impl UnicornMips {
             )));
         }
         if let Some(err) = native_hook_control_error.borrow_mut().take() {
+            self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            self.persist_run_state(&run_state, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            return Err(Error::Backend(err));
+        }
+        if let Some(err) = post_run_pc_repair_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
@@ -54124,6 +54173,76 @@ mod unicorn_tests {
         Ok(cpu)
     }
 
+    fn phase1_sparse_hook_cpu(name: &str) -> crate::Result<super::UnicornMips> {
+        // Each page has an unreachable jr site so the native sparse hook
+        // covers the running NOP stream. Fixture-only non-direct trampoline
+        // metadata makes the selector choose Sparse when scoped hooks are set;
+        // this does not claim that a guest trampoline executes in this test.
+        const CODE_WORDS: usize = 16384;
+        const CODE_BYTES: usize = CODE_WORDS * 4;
+        let mut bytes = tiny_mips_spinner_pe();
+        bytes.resize(0x200 + CODE_BYTES, 0);
+        write_vec_u32(&mut bytes, 0x98 + 4, CODE_BYTES as u32);
+        write_vec_u32(&mut bytes, 0x98 + 56, 0x1000 + CODE_BYTES as u32);
+        write_vec_u32(&mut bytes, 0x178 + 8, CODE_BYTES as u32);
+        write_vec_u32(&mut bytes, 0x178 + 16, CODE_BYTES as u32);
+        bytes[0x200..0x200 + CODE_BYTES].fill(0);
+        for page in 0..16 {
+            let page_offset = page * 0x1000;
+            let jump_target = 0x0040_1000 + page_offset as u32 + 0x804;
+            write_vec_u32(
+                &mut bytes,
+                0x200 + page_offset,
+                0x0800_0000 | ((jump_target >> 2) & 0x03ff_ffff),
+            );
+            write_vec_u32(&mut bytes, 0x200 + page_offset + 0x800, 0x03e0_0008); // jr ra
+        }
+        write_vec_u32(&mut bytes, 0x200 + CODE_BYTES - 8, 0x1000_ffff);
+        let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("sparse fixture entry");
+        cpu.trampoline_jumps.push(super::MipsTrampolineJump {
+            origin: entry + 0x800,
+            stub: entry + 0x804,
+            byte_len: 0x10,
+        });
+        assert!(!cpu.trampoline_origins_all_direct());
+        assert_eq!(
+            super::select_unicorn_code_hook_mode(false, false, true, false),
+            super::UnicornCodeHookMode::Sparse
+        );
+        Ok(cpu)
+    }
+
+    fn run_sparse_test_in_isolated_process(test_name: &str) -> bool {
+        if std::env::var_os("WINCE_EMU_SPARSE_TEST_CHILD").is_some() {
+            assert!(std::env::var_os("WINCE_EMU_SCOPED_HOOKS").is_some());
+            return true;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg(test_name)
+            .arg("--nocapture")
+            .env("WINCE_EMU_SCOPED_HOOKS", "1")
+            .env("WINCE_EMU_SPARSE_TEST_CHILD", "1")
+            .env_remove("WINCE_EMU_GLOBAL_CODE_HOOK")
+            .env_remove("WINCE_EMU_FULL_TRACE")
+            .env_remove("WINCE_EMU_CRASH_CODE_TRACE")
+            .env_remove("WINCE_EMU_INAVI_GLOBAL_TRACE")
+            .env_remove("WINCE_EMU_RESOURCE_TRACE")
+            .env_remove("WINCE_EMU_SLOT_TRACE")
+            .env_remove("WINCE_EMU_PROGRESS_FILE")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "sparse child failed or did not run exactly one test: {stdout}\n{stderr}"
+        );
+        false
+    }
+
     fn phase1_kernel(name: &str) -> crate::Result<crate::ce::kernel::CeKernel> {
         let mut kernel =
             crate::ce::kernel::CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
@@ -54674,9 +54793,17 @@ mod unicorn_tests {
     #[test]
     fn native_file_view_rejects_ambiguous_global_lazy_seed() -> crate::Result<()> {
         let mut kernel = phase1_kernel("ambiguous-lazy-view.exe")?;
+        let boot_owner = kernel.current_process_birth_key().expect("boot birth");
         let base = kernel
             .memory
-            .virtual_alloc(0, 4, 0x3000, 0x04)
+            .virtual_alloc(
+                boot_owner,
+                crate::ce::memory::VirtualAllocationSource::FileViewLegacy,
+                0,
+                4,
+                0x3000,
+                0x04,
+            )
             .expect("test lazy allocation");
         assert!(kernel.memory.set_virtual_initial_bytes(base, vec![0; 4]));
         for process_id in [1, 2] {
@@ -54709,9 +54836,17 @@ mod unicorn_tests {
         const PAGE_READWRITE: u32 = 0x04;
 
         let mut kernel = phase1_kernel("private-virtual-fresh.exe")?;
+        let boot_owner = kernel.current_process_birth_key().expect("boot birth");
         let private_base = kernel
             .memory
-            .virtual_alloc(0, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
+            .virtual_alloc(
+                boot_owner,
+                crate::ce::memory::VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            )
             .expect("reserve ordinary private VirtualAlloc backing");
         assert_eq!(private_base, PRIVATE_BASE);
         assert!(
@@ -55189,13 +55324,161 @@ mod unicorn_tests {
         Ok(())
     }
 
+    fn assert_sparse_hook_stop(cpu: &super::UnicornMips, reason: super::NativeHookStopReason) {
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::HookStop(reason)
+        );
+        let entry = cpu.entry.unwrap();
+        let saved_pc = cpu.saved_context_pc().expect("saved sparse safe PC");
+        let expected_offsets = match reason {
+            super::NativeHookStopReason::HostWallBudget => 0x6000..0x9000,
+            super::NativeHookStopReason::RemoteControlService
+            | super::NativeHookStopReason::VisibleParkedPeerYield => 0..0x1000,
+        };
+        let offset = saved_pc
+            .checked_sub(entry)
+            .expect("sparse stop below entry");
+        assert!(
+            expected_offsets.contains(&offset),
+            "sparse stop must occur at its code-hook service point, not a later block-hook stop"
+        );
+        let snapshot = cpu.last_debug_snapshot().unwrap();
+        assert_eq!(snapshot.pc, saved_pc);
+        assert_eq!(
+            snapshot.host_wall_clock_stop.as_ref().map(|stop| stop.pc),
+            Some(saved_pc)
+        );
+        let native = cpu.native_engine.lease().unwrap();
+        assert_eq!(
+            native.reg_read(RegisterMIPS::PC).unwrap(),
+            u64::from(saved_pc)
+        );
+        assert_eq!(
+            native
+                .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
+                .unwrap(),
+            0,
+            "the native deadline did not cause the sparse stop"
+        );
+        native.finish().unwrap();
+    }
+
+    #[test]
+    fn sparse_code_hook_remote_control_has_typed_stop_reason() -> crate::Result<()> {
+        if !run_sparse_test_in_isolated_process(
+            "sparse_code_hook_remote_control_has_typed_stop_reason",
+        ) {
+            return Ok(());
+        }
+        let mut kernel = phase1_kernel("phase1-sparse-remote.exe")?;
+        let mut cpu = phase1_sparse_hook_cpu("phase1-sparse-remote.exe")?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let server =
+            crate::remote_server::RemoteServer::start(crate::remote_server::RemoteServerConfig {
+                addr: "127.0.0.1:0".parse().unwrap(),
+                ..crate::remote_server::RemoteServerConfig::default()
+            })?;
+        kernel.set_remote_server(server.clone());
+        kernel.remote.set_framebuffer_size(800, 480);
+        let thread_id = cpu.current_thread_id();
+        let hwnd = kernel.create_window_ex_w(
+            thread_id,
+            "SPARSE_REMOTE",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        for _ in 0..16 {
+            if kernel.gwe.get_message(thread_id).is_none() {
+                break;
+            }
+        }
+        server.enqueue_control_message_for_test(serde_json::json!({
+            "type": "touch",
+            "phase": "tap",
+            "x": 12,
+            "y": 34,
+        }));
+        assert_eq!(server.pending_control_count(), 1);
+        cpu.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 0,
+                stop_pc: None,
+                live_pump: true,
+            },
+        )?;
+        assert_sparse_hook_stop(&cpu, super::NativeHookStopReason::RemoteControlService);
+        assert_eq!(server.pending_control_count(), 0);
+        let mut delivered = false;
+        for _ in 0..64 {
+            let Some(message) = kernel.gwe.get_message(thread_id) else {
+                break;
+            };
+            delivered |= message.hwnd == hwnd && message.msg == crate::ce::gwe::WM_LBUTTONDOWN;
+        }
+        assert!(delivered, "the queued touch reached the guest window");
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_code_hook_host_budget_has_typed_stop_reason() -> crate::Result<()> {
+        if !run_sparse_test_in_isolated_process(
+            "sparse_code_hook_host_budget_has_typed_stop_reason",
+        ) {
+            return Ok(());
+        }
+        let mut kernel = phase1_kernel("phase1-sparse-budget.exe")?;
+        let mut cpu = phase1_sparse_hook_cpu("phase1-sparse-budget.exe")?;
+        let mut framebuffer = PausingFramebuffer {
+            inner: VirtualFramebuffer::default_primary()?,
+            ticks: 0,
+        };
+        cpu.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 200,
+                stop_pc: None,
+                live_pump: true,
+            },
+        )?;
+        assert!(framebuffer.ticks >= 1);
+        assert_sparse_hook_stop(&cpu, super::NativeHookStopReason::HostWallBudget);
+        Ok(())
+    }
+
     #[test]
     fn visible_parked_peer_block_hook_has_typed_stop_reason() -> crate::Result<()> {
+        assert_visible_peer_hook_stop(false)
+    }
+
+    #[test]
+    fn sparse_code_hook_visible_peer_has_typed_stop_reason() -> crate::Result<()> {
+        if !run_sparse_test_in_isolated_process(
+            "sparse_code_hook_visible_peer_has_typed_stop_reason",
+        ) {
+            return Ok(());
+        }
+        assert_visible_peer_hook_stop(true)
+    }
+
+    fn assert_visible_peer_hook_stop(sparse: bool) -> crate::Result<()> {
         let mut kernel = phase1_kernel("phase1-visible-peer-parent.exe")?;
         let parent_state = kernel.current_process_state();
-        let mut active = phase1_counter_cpu(0x1000, "phase1-visible-peer-parent.exe")?;
+        let mut active = if sparse {
+            phase1_sparse_hook_cpu("phase1-visible-peer-parent.exe")?
+        } else {
+            phase1_counter_cpu(0x1000, "phase1-visible-peer-parent.exe")?
+        };
         let parent_entry = active.entry.unwrap();
-        assert!(active.trampoline_origins_all_direct());
+        assert_eq!(active.trampoline_origins_all_direct(), !sparse);
         let launch = kernel.queue_process_launch(Some("\\Test\\visible-peer.exe".to_owned()), None);
         assert!(
             kernel
@@ -55287,10 +55570,17 @@ mod unicorn_tests {
             .cpu
             .saved_context_pc()
             .expect("saved safe restart PC");
-        assert!(saved_pc >= parent_entry && saved_pc < parent_entry + 124 * 4);
+        let max_offset = if sparse { 0x10000 } else { 124 * 4 };
+        assert!(saved_pc >= parent_entry && saved_pc < parent_entry + max_offset);
+        if sparse {
+            assert!(saved_pc < parent_entry + 0x1000);
+        }
         let snapshot = outgoing.cpu.last_debug_snapshot().unwrap();
         assert_eq!(snapshot.pc, saved_pc);
-        assert!(snapshot.host_wall_clock_stop.is_none());
+        assert_eq!(
+            snapshot.host_wall_clock_stop.as_ref().map(|stop| stop.pc),
+            sparse.then_some(saved_pc)
+        );
         let native = outgoing.cpu.native_engine.lease().unwrap();
         assert_eq!(
             native.reg_read(RegisterMIPS::PC).unwrap(),

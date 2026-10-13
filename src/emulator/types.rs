@@ -33,9 +33,9 @@ pub struct UnicornRunLimits {
 pub enum NativeHookStopReason {
     /// A hook observed the elapsed host budget and stopped at a safe PC.
     HostWallBudget,
-    /// The global code hook drained remote control and stopped at a safe PC.
+    /// A code hook drained remote control and stopped at a safe PC.
     RemoteControlService,
-    /// The hookless scheduler yielded at a safe PC to a larger visible parked process.
+    /// A hook yielded at a safe PC to a visible parked process.
     VisibleParkedPeerYield,
 }
 
