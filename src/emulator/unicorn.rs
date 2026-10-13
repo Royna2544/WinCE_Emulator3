@@ -6194,37 +6194,30 @@ impl UnicornMips {
             report.final_outcome = outcome_before_handoff.unwrap_or(self.last_native_slice_outcome);
             if result.is_err() {
                 // A provisional service stop cannot survive a failed tail.
-                // Keep independent native/query evidence in the report even
-                // when a private cleanup path revises the compatibility enum.
-                report.final_outcome = if matches!(
-                    report.count_stop_query,
-                    AttemptObservation::Error(_)
-                ) || matches!(report.timeout_query, AttemptObservation::Error(_))
-                {
-                    NativeSliceOutcome::NativeError
-                } else if matches!(report.native_result, AttemptObservation::Error(_))
-                    && self.last_native_slice_outcome == NativeSliceOutcome::NativeError
-                {
-                    NativeSliceOutcome::NativeError
-                } else {
-                    NativeSliceOutcome::BackendError
-                };
+                // The returned error branch, not any competing raw query
+                // observation, decides failure precedence. Failure paths do
+                // not rotate; the selected CPU still is the outgoing owner.
+                report.final_outcome =
+                    if self.last_native_slice_outcome == NativeSliceOutcome::NativeError {
+                        NativeSliceOutcome::NativeError
+                    } else {
+                        NativeSliceOutcome::BackendError
+                    };
                 report.partial_effects_possible = true;
                 if report.failure_operation.is_none() {
-                    report.failure_operation = Some(if matches!(
-                        report.count_stop_query,
-                        AttemptObservation::Error(_)
-                    ) {
-                        "query native count stop"
-                    } else if matches!(report.timeout_query, AttemptObservation::Error(_)) {
-                        "query native timeout"
-                    } else if matches!(report.context_capture, AttemptObservation::Error(_)) {
-                        "capture native context"
-                    } else if report.final_outcome == NativeSliceOutcome::NativeError {
-                        "execute native slice"
-                    } else {
-                        "post-run tail"
-                    });
+                    report.failure_operation = Some(
+                        if report.final_outcome == NativeSliceOutcome::BackendError {
+                            "post-run tail"
+                        } else if matches!(report.native_result, AttemptObservation::Error(_)) {
+                            "execute native slice"
+                        } else if matches!(report.timeout_query, AttemptObservation::Error(_)) {
+                            "query native timeout"
+                        } else if matches!(report.count_stop_query, AttemptObservation::Error(_)) {
+                            "query native count stop"
+                        } else {
+                            "native stop observation"
+                        },
+                    );
                 }
             }
         }
@@ -10306,7 +10299,15 @@ impl UnicornMips {
         report.end_process_id = Some(native_owner_pid);
         report.end_process_birth = report.start_process_birth;
         report.end_thread_id = Some(*current_thread_id.borrow());
-        report.end_pc = Some(read_mips_reg(&uc, RegisterMIPS::PC));
+        report.raw_stop_pc = match uc.reg_read(RegisterMIPS::PC) {
+            Ok(value) => match u32::try_from(value) {
+                Ok(pc) => AttemptObservation::Value(pc),
+                Err(_) => AttemptObservation::Error(format!(
+                    "native stop PC 0x{value:x} does not fit MIPS32"
+                )),
+            },
+            Err(err) => AttemptObservation::Error(format!("{err:?}")),
+        };
         // Bind the actual native stop evidence to this primary attempt before
         // deferred launches can run another engine. ctl_get_timeout() reports
         // the configured deadline, not whether it fired.
@@ -10353,7 +10354,8 @@ impl UnicornMips {
         self.last_native_slice_outcome = NativeStopEvidence {
             native_error: result.is_err()
                 || native_count_stop_query.is_err()
-                || native_timeout_query.is_err(),
+                || native_timeout_query.is_err()
+                || matches!(report.raw_stop_pc, AttemptObservation::Error(_)),
             capture_error: native_capture_result.is_err(),
             hook_control_error: native_hook_control_error.borrow().is_some()
                 || immediate_process_sync_failure.is_some(),
@@ -10685,6 +10687,7 @@ impl UnicornMips {
         let framebuffer_error = framebuffer_tick_error.borrow_mut().take();
         let post_native_state_ready = native_count_stop_query.is_ok()
             && native_timeout_query.is_ok()
+            && matches!(report.raw_stop_pc, AttemptObservation::Value(_))
             && native_capture_result.is_ok()
             && snapshot_context_result.is_ok()
             && native_hook_control_error.borrow().is_none()
@@ -10695,17 +10698,25 @@ impl UnicornMips {
             && mapped_blob_sync_error.is_none()
             && framebuffer_error.is_none();
         macro_rules! reject_private_attempt {
-            ($cause:expr) => {{
+            ($cause:expr, $outcome:expr, $operation:expr) => {{
                 let cause: Error = $cause;
                 self.private_slab_attempt_poisoned = true;
                 self.saved_context = None;
-                self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                self.last_native_slice_outcome = $outcome;
+                report.failure_operation = Some($operation);
                 return Err(match uc.abort_close() {
                     Ok(()) => cause,
                     Err(cleanup) => Error::Backend(format!(
                         "{cause}; abort private slab native attempt: {cleanup:?}"
                     )),
                 });
+            }};
+            ($cause:expr) => {{
+                reject_private_attempt!(
+                    $cause,
+                    NativeSliceOutcome::BackendError,
+                    "private native post-run tail"
+                )
             }};
         }
         let decoded_kernel_exit = self
@@ -10716,9 +10727,14 @@ impl UnicornMips {
         // also reports a generic memory fault. Reject it before decoded exits
         // or any diagnostic private continuation can be published.
         if let Some(err) = immediate_process_sync_failure {
+            report.failure_operation = Some("synchronize native process mapping");
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             if diagnostic_private {
-                reject_private_attempt!(err);
+                reject_private_attempt!(
+                    err,
+                    NativeSliceOutcome::BackendError,
+                    "synchronize native process mapping"
+                );
             } else {
                 self.persist_run_state(&run_state, kernel);
                 let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
@@ -10739,11 +10755,17 @@ impl UnicornMips {
                     if let Err(err) =
                         sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
                     {
-                        reject_private_attempt!(err);
+                        reject_private_attempt!(
+                            err,
+                            NativeSliceOutcome::BackendError,
+                            "sync decoded-exit file mapping views"
+                        );
                     }
                     if let Err(err) = uc.finish() {
                         self.private_slab_attempt_poisoned = true;
                         self.saved_context = None;
+                        self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                        report.failure_operation = Some("finish decoded process exit");
                         return Err(Error::Backend(format!(
                             "finish private slab process exit: {err:?}"
                         )));
@@ -10751,6 +10773,8 @@ impl UnicornMips {
                     if !Self::terminate_decoded_kernel_process(kernel, &exit) {
                         self.private_slab_attempt_poisoned = true;
                         self.saved_context = None;
+                        self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                        report.failure_operation = Some("terminate decoded process exit");
                         return Err(Error::Backend(format!(
                             "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
                             exit.process, exit.exit_code
@@ -10768,6 +10792,7 @@ impl UnicornMips {
                 if let Err(err) =
                     sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
                 {
+                    report.failure_operation = Some("sync decoded-exit file mapping views");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
                     return Err(match uc.abort_close() {
@@ -10778,6 +10803,7 @@ impl UnicornMips {
                     });
                 }
                 if let Err(err) = uc.finish() {
+                    report.failure_operation = Some("finish decoded process exit");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
                     return Err(Error::Backend(format!(
@@ -10785,6 +10811,7 @@ impl UnicornMips {
                     )));
                 }
                 if !Self::terminate_decoded_kernel_process(kernel, &exit) {
+                    report.failure_operation = Some("terminate decoded process exit");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
                     return Err(Error::Backend(format!(
@@ -10805,9 +10832,11 @@ impl UnicornMips {
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
             if diagnostic_private {
-                reject_private_attempt!(Error::Backend(format!(
-                    "Unicorn run failed: {err:?}; {snapshot}"
-                )));
+                reject_private_attempt!(
+                    Error::Backend(format!("Unicorn run failed: {err:?}; {snapshot}")),
+                    NativeSliceOutcome::NativeError,
+                    "execute native slice"
+                );
             }
             self.persist_run_state(&run_state, kernel);
             return Err(Error::Backend(format!(
@@ -10817,9 +10846,13 @@ impl UnicornMips {
         if let Err(err) = native_timeout_query {
             self.last_native_slice_outcome = NativeSliceOutcome::NativeError;
             if diagnostic_private {
-                reject_private_attempt!(Error::Backend(format!(
-                    "query native timeout after Unicorn run failed: {err:?}"
-                )));
+                reject_private_attempt!(
+                    Error::Backend(format!(
+                        "query native timeout after Unicorn run failed: {err:?}"
+                    )),
+                    NativeSliceOutcome::NativeError,
+                    "query native timeout"
+                );
             }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
@@ -10830,14 +10863,34 @@ impl UnicornMips {
         if let Err(err) = native_count_stop_query {
             self.last_native_slice_outcome = NativeSliceOutcome::NativeError;
             if diagnostic_private {
-                reject_private_attempt!(Error::Backend(format!(
-                    "query native count stop after Unicorn run failed: {err:?}"
-                )));
+                reject_private_attempt!(
+                    Error::Backend(format!(
+                        "query native count stop after Unicorn run failed: {err:?}"
+                    )),
+                    NativeSliceOutcome::NativeError,
+                    "query native count stop"
+                );
             }
             self.persist_run_state(&run_state, kernel);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
             return Err(Error::Backend(format!(
                 "query native count stop after Unicorn run failed: {err:?}"
+            )));
+        }
+        if let AttemptObservation::Error(err) = report.raw_stop_pc.clone() {
+            self.last_native_slice_outcome = NativeSliceOutcome::NativeError;
+            report.failure_operation = Some("query native stop PC");
+            if diagnostic_private {
+                reject_private_attempt!(
+                    Error::Backend(format!("query native stop PC failed: {err}")),
+                    NativeSliceOutcome::NativeError,
+                    "query native stop PC"
+                );
+            }
+            self.persist_run_state(&run_state, kernel);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            return Err(Error::Backend(format!(
+                "query native stop PC failed: {err}"
             )));
         }
         if self
@@ -10850,11 +10903,17 @@ impl UnicornMips {
                     if let Err(err) =
                         sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
                     {
-                        reject_private_attempt!(err);
+                        reject_private_attempt!(
+                            err,
+                            NativeSliceOutcome::BackendError,
+                            "sync decoded-exit file mapping views"
+                        );
                     }
                     if let Err(err) = uc.finish() {
                         self.private_slab_attempt_poisoned = true;
                         self.saved_context = None;
+                        self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                        report.failure_operation = Some("finish decoded process exit");
                         return Err(Error::Backend(format!(
                             "finish private slab process exit: {err:?}"
                         )));
@@ -10862,6 +10921,8 @@ impl UnicornMips {
                     if !Self::terminate_decoded_kernel_process(kernel, &exit) {
                         self.private_slab_attempt_poisoned = true;
                         self.saved_context = None;
+                        self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                        report.failure_operation = Some("terminate decoded process exit");
                         return Err(Error::Backend(format!(
                             "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
                             exit.process, exit.exit_code
@@ -10879,6 +10940,7 @@ impl UnicornMips {
                 if let Err(err) =
                     sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
                 {
+                    report.failure_operation = Some("sync decoded-exit file mapping views");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
                     return Err(match uc.abort_close() {
@@ -10889,6 +10951,7 @@ impl UnicornMips {
                     });
                 }
                 if let Err(err) = uc.finish() {
+                    report.failure_operation = Some("finish decoded process exit");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
                     return Err(Error::Backend(format!(
@@ -10896,6 +10959,7 @@ impl UnicornMips {
                     )));
                 }
                 if !Self::terminate_decoded_kernel_process(kernel, &exit) {
+                    report.failure_operation = Some("terminate decoded process exit");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
                     return Err(Error::Backend(format!(
@@ -55476,7 +55540,10 @@ mod unicorn_tests {
             .expect("the parent ran a real native attempt");
         assert_eq!(parent_report.start_process_id(), Some(1));
         assert_eq!(parent_report.end_process_id(), Some(1));
-        assert_eq!(parent_report.final_outcome(), super::NativeSliceOutcome::CountLimit);
+        assert_eq!(
+            parent_report.final_outcome(),
+            super::NativeSliceOutcome::CountLimit
+        );
         assert!(matches!(
             parent_report.native_result(),
             super::AttemptObservation::Value(())
@@ -55515,12 +55582,18 @@ mod unicorn_tests {
             },
         );
         child_execution.result?;
-        assert_eq!(child_execution.report.start_process_id(), Some(launch.process_id));
+        assert_eq!(
+            child_execution.report.start_process_id(),
+            Some(launch.process_id)
+        );
         assert_ne!(child_execution.report.attempt_id(), Some(parent_attempt_id));
         assert_eq!(parent_report.attempt_id(), Some(parent_attempt_id));
         assert_eq!(parent_report.start_process_id(), Some(1));
         assert_eq!(parent_report.end_process_id(), Some(1));
-        assert_eq!(parent_report.final_outcome(), super::NativeSliceOutcome::CountLimit);
+        assert_eq!(
+            parent_report.final_outcome(),
+            super::NativeSliceOutcome::CountLimit
+        );
         Ok(())
     }
 
@@ -55580,17 +55653,16 @@ mod unicorn_tests {
             });
 
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
-        let execution = active
-            .run_until_import_trap_with_framebuffer_limits_report(
-                &mut kernel,
-                &mut framebuffer,
-                super::UnicornRunLimits {
-                    instruction_limit: 20,
-                    wall_clock_limit_ms: 500,
-                    stop_pc: None,
-                    live_pump: true,
-                },
-            );
+        let execution = active.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 20,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
         let report = execution.report;
         let error = execution
             .result
@@ -55598,7 +55670,10 @@ mod unicorn_tests {
         assert!(report.attempt_id().is_some());
         assert_eq!(report.start_process_id(), Some(1));
         assert_eq!(report.end_process_id(), Some(1));
-        assert_eq!(report.final_outcome(), super::NativeSliceOutcome::BackendError);
+        assert_eq!(
+            report.final_outcome(),
+            super::NativeSliceOutcome::BackendError
+        );
         assert!(matches!(
             report.native_result(),
             super::AttemptObservation::Value(())
@@ -56286,6 +56361,65 @@ mod unicorn_tests {
             "the preflight handoff made no native attempt on the incoming CPU"
         );
         assert!(active.native_engine_identity_for_test().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn private_native_error_report_keeps_primary_failure_class() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("private-native-error.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("enable diagnostic private native path");
+        let mut cpu = phase1_counter_cpu(0x1000, "private-native-error.exe")?;
+        cpu.entry = Some(0x7000_0000); // deliberately unmapped guest fetch
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 20,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        let report = execution.report;
+        let error = execution
+            .result
+            .expect_err("unmapped native fetch must fail");
+        assert!(
+            format!("{error:#}").contains("Unicorn run failed"),
+            "{error:#}"
+        );
+        assert!(report.attempt_id().is_some());
+        assert!(matches!(
+            report.native_result(),
+            super::AttemptObservation::Error(_)
+        ));
+        assert_eq!(
+            report.final_outcome(),
+            super::NativeSliceOutcome::NativeError
+        );
+        assert_eq!(report.failure_operation(), Some("execute native slice"));
+        assert_eq!(report.start_process_birth(), Some(owner));
+        assert_eq!(report.end_process_birth(), Some(owner));
+        assert!(cpu.private_slab_attempt_poisoned);
+        let rejected = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        assert!(rejected.result.is_err());
+        assert_eq!(rejected.report.attempt_id(), None);
+        assert_eq!(
+            rejected.report.final_outcome(),
+            super::NativeSliceOutcome::NoAttempt
+        );
         Ok(())
     }
 
@@ -57409,7 +57543,8 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn decoded_native_process_exit_finish_failure_does_not_terminate_process() -> crate::Result<()> {
+    fn decoded_native_process_exit_finish_failure_does_not_terminate_process() -> crate::Result<()>
+    {
         let mut bytes = tiny_mips_spinner_pe();
         for (index, word) in [
             0x2405_0003_u32, // addiu a1,zero,3: guest exit code
@@ -57445,15 +57580,19 @@ mod unicorn_tests {
             format!("{error:#}").contains("finish decoded CE process exit"),
             "{error:#}"
         );
-        assert_eq!(kernel.current_process_state().exit_code, crate::ce::kernel::STILL_ACTIVE);
+        assert_eq!(
+            kernel.current_process_state().exit_code,
+            crate::ce::kernel::STILL_ACTIVE
+        );
         assert!(!kernel.current_process_state().signaled);
         assert_eq!(
             cpu.last_native_slice_outcome(),
             super::NativeSliceOutcome::BackendError
         );
-        assert!(cpu
-            .last_debug_snapshot()
-            .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_none()));
+        assert!(
+            cpu.last_debug_snapshot()
+                .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_none())
+        );
         Ok(())
     }
 

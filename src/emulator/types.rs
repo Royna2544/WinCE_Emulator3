@@ -106,7 +106,9 @@ pub struct NativeAttemptReport {
     pub(crate) end_process_id: Option<u32>,
     pub(crate) end_process_birth: Option<ProcessBirthKey>,
     pub(crate) end_thread_id: Option<u32>,
-    pub(crate) end_pc: Option<u32>,
+    /// Raw native PC sampled at primary return, before any continuation PC
+    /// repair. It is not a checked final Task/Frame resume address.
+    pub(crate) raw_stop_pc: AttemptObservation<u32>,
     pub(crate) final_outcome: NativeSliceOutcome,
     pub(crate) failure_operation: Option<&'static str>,
     /// True when guest/native effects may have occurred before a failure.
@@ -133,7 +135,7 @@ impl NativeAttemptReport {
             end_process_id: None,
             end_process_birth: None,
             end_thread_id: None,
-            end_pc: None,
+            raw_stop_pc: AttemptObservation::Uncollected,
             final_outcome: NativeSliceOutcome::NoAttempt,
             failure_operation: None,
             partial_effects_possible: false,
@@ -212,8 +214,8 @@ impl NativeAttemptReport {
         self.end_thread_id
     }
 
-    pub fn end_pc(&self) -> Option<u32> {
-        self.end_pc
+    pub fn raw_stop_pc(&self) -> &AttemptObservation<u32> {
+        &self.raw_stop_pc
     }
 
     pub fn final_outcome(&self) -> NativeSliceOutcome {
