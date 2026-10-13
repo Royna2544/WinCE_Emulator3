@@ -57,8 +57,12 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      Add end-to-end fault injection for failed PC-write/stop plus encoded exit.
      `Ok` with a positive count alone is not proof. Keep the 1M-instruction
      scheduling policy unchanged. The final-source full release suite passed
-     1,628 tests (0 failed, 4 ignored); repeat the alternate feature profiles
-     and bounded live gate. The earlier 1,626-pass suite predates O-P1.
+     1,628 tests (0 failed, 4 ignored); both no-trace release checks exited 0
+     and the no-feature suite passed 1,239 tests (0 failed, 1 ignored). The
+     source/hash/command receipt is local
+     `evidence/op1-stop-taxonomy-20261013/post-op1-validation.receipt.md`.
+     The bounded live gate remains, and later O-M1 source changes need their
+     own validation. The earlier 1,626-pass suite predates O-P1.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR
@@ -67,10 +71,12 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      stale branch `hflags`. Closed-owner exact-key Context transfer, guest
      `VirtualAlloc` coherence and the broader Stage 2 gates remain open.
   3. The O-P1 final-source full release suite passed (1,628/0/4 ignored).
-     Repeat applicable feature profiles after this source change, then one
+     Both applicable no-trace release checks and the no-feature suite passed.
+     After remaining source fixes, repeat the applicable profiles, then one
      bounded 330 s live run against BED2.
-     Record any newly exposed native errors in KNOWN_BUGS; neither the current
-     1,626-pass dirty-source suite nor the decorative splash closes Stage 2.
+     Record any newly exposed native errors in KNOWN_BUGS; neither the latest
+     1,628-pass O-P1 dirty-source suite nor the decorative splash closes
+     Stage 2.
 - Parallel Stage 8 native lane (diagnostic only, never gates Stages 2-6):
   the evidence is in ledger E-3 to E-6. Before any production budget change,
   the remaining open items are concurrent in-flight VEH teardown, VEH

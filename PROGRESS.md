@@ -72,9 +72,14 @@ references for historical reconstruction.
   fourth ignored test is the expected-red E-14 same-VA fixture. Exact raw log
   SHA-256 `8946D073…1E041` is in local
   `evidence/op1-stop-taxonomy-20261013/full-release-suite-final.log`.
-  Typed restart-PC repair, alternate feature profiles on this source, O-P1
-  completion, Stage 2 and live acceptance remain open. The 1,626-pass suite
-  above predates this slice.
+  Unicorn-only and Unicorn+desktop/no-trace release checks also exited 0;
+  the no-feature suite passed **1,239 passed, 0 failed, 1 ignored**. Their
+  exact source/log hashes and paths are in local
+  `evidence/op1-stop-taxonomy-20261013/post-op1-validation.receipt.md`
+  (ledger E-15). This is the O-P1 source identity before later O-M1 edits;
+  those edits require separate validation. Typed restart-PC repair,
+  complete O-P1 classification, fresh-owner/VM Stage 2 and live acceptance
+  remain open. The 1,626-pass suite above predates this slice.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

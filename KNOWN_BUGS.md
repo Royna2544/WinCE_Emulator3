@@ -130,7 +130,9 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   two host-budget controls. Real hook-control-failure/encoded-exit injection
   was not run. The final follow-up source passed the full release suite
   (1,628 passed, 0 failed, 4 ignored); the four ignored tests, including E-14,
-  did not become passes. The 1,626-pass suite above is historical.
+  did not become passes. Both no-trace release checks exited 0, and the
+  no-feature suite passed 1,239/0/1 ignored. The 1,626-pass suite above is
+  historical.
   Complete O-P1 classification and fresh-owner Stage 2 acceptance remain
   open, and the 1M-instruction tick remains intact.
 - HeapFree does not reuse addresses or release per-process spillover pages.
