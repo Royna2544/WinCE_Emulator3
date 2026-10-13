@@ -7602,7 +7602,7 @@ impl UnicornMips {
                     let safe_pc_write = uc.reg_write(RegisterMIPS::PC, u64::from(yield_pc));
                     let stop_request = uc.emu_stop();
                     if safe_pc_write.is_ok() && stop_request.is_ok() {
-                        if hookless_trampolines_enabled {
+                        if native_hook_stop_reason_timeslice_hook.get().is_none() {
                             native_hook_stop_reason_timeslice_hook
                                 .set(Some(NativeHookStopReason::VisibleParkedPeerYield));
                         }
@@ -7640,8 +7640,10 @@ impl UnicornMips {
                             instruction: read_unicorn_u32(uc, stop_pc),
                             elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
                         });
-                    native_hook_stop_reason_timeslice_hook
-                        .set(Some(NativeHookStopReason::HostWallBudget));
+                    if native_hook_stop_reason_timeslice_hook.get().is_none() {
+                        native_hook_stop_reason_timeslice_hook
+                            .set(Some(NativeHookStopReason::HostWallBudget));
+                    }
                 } else {
                     *native_hook_control_error_timeslice_hook.borrow_mut() = Some(format!(
                         "host-budget safe stop failed: PC write={safe_pc_write:?}, emu_stop={stop_request:?}"
@@ -55465,7 +55467,12 @@ mod unicorn_tests {
 
     #[test]
     fn visible_parked_peer_block_hook_has_typed_stop_reason() -> crate::Result<()> {
-        assert_visible_peer_hook_stop(false)
+        assert_visible_peer_hook_stop(false, false)
+    }
+
+    #[test]
+    fn global_code_hook_visible_peer_block_hook_has_typed_stop_reason() -> crate::Result<()> {
+        assert_visible_peer_hook_stop(false, true)
     }
 
     #[test]
@@ -55475,10 +55482,10 @@ mod unicorn_tests {
         ) {
             return Ok(());
         }
-        assert_visible_peer_hook_stop(true)
+        assert_visible_peer_hook_stop(true, false)
     }
 
-    fn assert_visible_peer_hook_stop(sparse: bool) -> crate::Result<()> {
+    fn assert_visible_peer_hook_stop(sparse: bool, global: bool) -> crate::Result<()> {
         let mut kernel = phase1_kernel("phase1-visible-peer-parent.exe")?;
         let parent_state = kernel.current_process_state();
         let mut active = if sparse {
@@ -55553,7 +55560,7 @@ mod unicorn_tests {
             super::UnicornRunLimits {
                 instruction_limit: 1_000_000,
                 wall_clock_limit_ms: 0,
-                stop_pc: None,
+                stop_pc: global.then_some(0xdead_beef),
                 live_pump: true,
             },
         )?;
