@@ -162,8 +162,10 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      and [orphaned-WNDPROC](evidence/e28-run-outcome-20261014/private-preentry-orphaned-wndproc-expected-red.receipt.md)
      reds exposed two more pre-entry losses. The combined repair passes the
      [focused fence **2/0** and wait **5/0** filters](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md).
-     Add a guarded GetMessage/private-slab integration control and current
-     broad validation; do not infer rollback for all ready-resume failures.
+     A [ready GetMessage/private-slab integration control](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)
+     now passes **1/0** with fence **2/0** and wait **5/0** rerun on its
+     rebuilt binary. Run current broad validation and cover other resume
+     families; do not infer rollback for all ready-resume failures.
      The report remains observational and the app still discards it.
      Finish the other fallible context/PC/byte-view/lease-tail and
      partial-effect paths, then

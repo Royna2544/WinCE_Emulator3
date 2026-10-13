@@ -376,8 +376,11 @@ references for historical reconstruction.
   and [orphaned-WNDPROC](evidence/e28-run-outcome-20261014/private-preentry-orphaned-wndproc-expected-red.receipt.md)
   reds exposed further pre-entry losses. The combined source now passes the
   [fence filter **2/0** and executed-wait filter **5/0**](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md).
-  Guarded GetMessage resume, other setup/tail paths, and a current full-suite
-  result remain separate gates; O-P1, Stage 2, S3-A and map readiness stay open.
+  A later [ready GetMessage/private-slab integration control](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)
+  passes **1/0**; the fence **2/0** and wait **5/0** filters also pass on
+  its rebuilt binary. Other ready-resume families, setup/tail paths, and a
+  current full-suite result remain separate gates; O-P1, Stage 2, S3-A and
+  map readiness stay open.
 - E-29 ran the then-current, pre-retry-fix D: release executable
   (`8A8B9C7E…57AFB3E094A`)
   against the three original ZIP-backed read/write mounts. It exited 0 at

@@ -53,8 +53,11 @@ remote-control HTTP/WebSocket surface.
   orphaned-WNDPROC losses; their combined repair passes focused fence **2/0**
   and executed-wait **5/0** on a later source
   ([receipt](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md)).
-  No current full-suite or live iNavi validation is claimed for that source;
-  guarded GetMessage/private-slab resume remains untested.
+  A subsequent ready GetMessage/private-slab integration control passes
+  focused **1/0**, with the fence and wait filters rerun **2/0** and **5/0**
+  on its rebuilt binary
+  ([receipt](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)).
+  No current full-suite or live iNavi validation is claimed for that source.
   An exploratory same-handle nested-start hook probe exited
   `0xC0000005` before a query assertion, was removed, and remains unresolved
   ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),

@@ -244,9 +244,10 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   wait, consumed a ready worker's wait before `NoAttempt`, and dropped an
   orphaned WNDPROC return. The combined source now passes the reproduced
   [fence **2/0** and executed-wait **5/0** controls](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md),
-  but guarded GetMessage/private-slab resume and state consistency when a
-  ready helper consumes state before a native-entry failure are unvalidated;
-  no rollback semantics are claimed.
+  A later [ready GetMessage/private-slab control](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)
+  passes **1/0** on a rebuilt source. Other ready-resume families and state
+  consistency when a ready helper consumes state before a native-entry
+  failure are unvalidated; no rollback semantics are claimed.
   Other fallible-tail effect salvage, real C query-error/competing-hook
   controls, sparse/hookless reasons and typed restart-PC repair remain open.
   A test-only Rust post-query failure control does not establish a genuine C
