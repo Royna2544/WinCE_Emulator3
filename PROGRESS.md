@@ -155,7 +155,7 @@ references for historical reconstruction.
   mapping-owned shared slabs, pinned through exact native owner leases. Local
   CE6 `NK/KERNEL/vm.c` confirms reserve/commit, decommit/release, protection
   and shared-heap operations are distinct; dumped-app use remains to measure.
-  Independent source review found no canonical birth record today, per-handle
+  Independent source review at that design gate found no canonical birth record, per-handle
   copied process objects, global VA-only virtual allocations, startup native
   remapping that could bypass slabs, and CPU snapshot publication before some
   outgoing byte sync. The revised anchor/Stage 2 design requires one birth
@@ -163,6 +163,18 @@ references for historical reconstruction.
   controls, pin-before-map/close-before-unpin, clone isolation, and an all-
   family checked slice commit. This is design/source review only: no O-M1
   implementation, fresh-default acceptance, new live run or performance gain.
+- E-20 added two ignored ownership controls: last-public-handle child birth
+  and public parent/child same-VA private `VirtualAlloc`; both initially failed
+  at the intended boundary. E-21 introduced the canonical HandleTable birth
+  record and process alias lifetime. The first control is now unignored and
+  green with four added completion/termination/retirement controls (five
+  focused 1/0 results). Final source passed **1,639 release tests, 0 failed,
+  5 ignored**, **1,244 no-feature tests, 0 failed, 2 ignored**, and both
+  no-trace release checks (ledger E-21; local
+  `evidence/e21-process-birth-20261013.receipt.md`). This is a narrow public
+  process-handle milestone; selected-process snapshots, wait pins, clone
+  lineage, public same-VA VM, private bytes across fresh owner, Stage 2 and
+  app acceptance remain open. No app run was made on E-21 source.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

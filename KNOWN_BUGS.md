@@ -93,9 +93,14 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   no-feature suite (1,239 passed, 0 failed, 1 ignored); E-18 is the fourth
   ignored test, not a green private-byte result. Exact source/log hashes are
   in local `evidence/stage2-o-m1-private-fresh-20261013/post-e18-validation.receipt.md`.
-  Public same-VA `MapViewOfFile`, public COREDLL `VirtualAlloc`, per-owner lazy
-  fault repair and live-app behavior remain untested; immediate CreateProcess
-  error handling lacks fault injection.
+  E-20 later added a public COREDLL `VirtualAlloc`/`CreateProcessW` two-PID
+  same-VA control; it remains ignored and expected red because the child
+  allocation returns null at the parent's VA. Its later free/query assertions
+  were not reached. Public same-VA `MapViewOfFile`, per-owner lazy fault repair
+  and live-app behavior remain untested; immediate CreateProcess error handling
+  lacks fault injection. The static COREDLL table also lacks ROM-exported
+  `VirtualAllocEx`/`VirtualQueryEx` ordinals, but the target EXE does not
+  directly import those Ex functions (dynamic lookup remains possible).
   This is not O-M1/O-P4 or Stage 2 acceptance.
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,

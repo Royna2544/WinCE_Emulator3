@@ -50,10 +50,13 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
       but after a test-only idle-owner closure the fresh engine loaded stale
       seed `0x11223344` at the correct PC without a fault. D-008 now selects
       AddressSpace-owned committed-page host slabs as the private-page target,
-      not outgoing private-page copy-back. First introduce one canonical
-      machine-owned process-birth directory independent of public handles,
-      then connect owner-scoped reservation/allocation incarnation and remote
-      queries to it. Stage 3 extends that same directory. Then migrate
+      not outgoing private-page copy-back. E-21 introduced one canonical
+      HandleTable process-birth directory independent of public aliases; its
+      five focused controls, full release/no-feature suites and alternate
+      checks pass, but selected-process snapshots, worker sweep, wait pins and
+      clone lineage remain open. Next connect owner-scoped reservation,
+      allocation incarnation and remote queries to that directory; Stage 3
+      extends the same authority. Then migrate
       private pages with exact pinned native maps, checked failure/publication
       and no whole-`initial_bytes` reseed for that family. A failed unmap must
       retain its pin and fail the attempt, not recycle a stale VA. Turn E-18
