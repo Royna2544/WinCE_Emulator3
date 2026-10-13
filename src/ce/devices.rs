@@ -1006,7 +1006,7 @@ mod tests {
         );
         let mag_read =
             mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0x40, 1, 0], 1);
-        assert_eq!(mag_read.output, vec![0x10]);
+        assert_eq!(mag_read.output, vec![0x1d]);
         assert!(
             mag.device_io_control(magnetometer::IOCTL_MFS_WRITE_REGISTERS, &[0, 0, 0, 0xa0], 0)
                 .success
@@ -1017,14 +1017,18 @@ mod tests {
             0,
             true,
         );
-        assert_eq!(mag_live_pattern.output, vec![0x10, 0x00, 0xf0, 0xff]);
+        assert_eq!(mag_live_pattern.output, vec![0; 4]);
+        assert!(
+            mag.device_io_control(magnetometer::IOCTL_MFS_WRITE_REGISTERS, &[1, 0, 0, 0xa0], 0)
+                .success
+        );
         let mag_bank_2f = mag.device_io_control_with_output_buffer(
             magnetometer::IOCTL_MFS_READ_REGISTERS,
             &[1, 0, 4, 0xa0],
             0,
             true,
         );
-        assert_eq!(mag_bank_2f.output, vec![0x20, 0x00, 0x08, 0x00]);
+        assert_eq!(mag_bank_2f.output, vec![0; 4]);
         assert!(
             !mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[2, 0, 1, 0], 1)
                 .success
@@ -1040,7 +1044,7 @@ mod tests {
         );
         assert!(mag_zero_capacity_with_output_buffer.success);
         assert_eq!(mag_zero_capacity_with_output_buffer.bytes_returned, 1);
-        assert_eq!(mag_zero_capacity_with_output_buffer.output, vec![0x10]);
+        assert_eq!(mag_zero_capacity_with_output_buffer.output, vec![0]);
 
         let mut i2c = namespace.open("I2C2:").unwrap();
         assert!(
@@ -1123,11 +1127,21 @@ mod tests {
                 "z": 42.0
             }
         }));
-        let field = mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0, 6, 0], 6);
-        assert!(field.success);
-        assert_eq!(&field.output[0..2], &30i16.to_le_bytes());
-        assert_eq!(&field.output[2..4], &(-5i16).to_le_bytes());
-        assert_eq!(&field.output[4..6], &42i16.to_le_bytes());
+        for bank in 0..2 {
+            assert!(
+                mag.device_io_control(magnetometer::IOCTL_MFS_WRITE_REGISTERS, &[bank, 0, 0, 0], 0)
+                    .success
+            );
+        }
+        let y = mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0, 4, 0], 4);
+        let x = mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[1, 0, 2, 0], 2);
+        assert!(x.success && y.success);
+        // Target YAS526 decoder: unsigned nibble-packed ADC values, not
+        // direct little-endian signed field coordinates.
+        let decode = |bytes: &[u8]| (u16::from(bytes[0] & 0x7f) << 4) | u16::from(bytes[1] >> 4);
+        assert_eq!(decode(&x.output), 542);
+        assert_eq!(decode(&y.output[..2]), 489);
+        assert_eq!(decode(&y.output[2..]), 494);
     }
 
     #[test]
