@@ -995,7 +995,7 @@ implementation landed together. The app loop still discards this report via
 its compatibility `Result<()>` wrapper, and the scheduler still reads the
 mutable selected-CPU outcome. An earlier broad run on this source was
 interrupted for error-precedence repair. The subsequent completed
-[current-source validation](../../evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)
+[then-current report-source validation](../../evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)
 passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature,
 with three check profiles, format and diff checks exiting 0. Three focused
 real-MIPS [query-adapter error controls](../../evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)
@@ -1005,12 +1005,29 @@ competing hooks, full fallible-tail/partial-effect validation, Task/Frame
 authority and Stage 2 remain open. A subsequent bounded app run is E-29;
 it is not runtime acceptance.
 
+### E-28 ordinary checked-finish failed retry (2026-10-14, red to green)
+
+An executed [real-MIPS expected-red control](../../evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md)
+showed an ordinary checked-finish `BackendError` after guest counter `0x3006`
+but then a successful second native entry with a new diagnostic attempt ID
+and counter `0x3010`. The correction poisons the outgoing CPU after an
+entered-attempt error and clears provisional saved context. Its retry now
+fails preflight as `NoAttempt`, without a second ID or guest counter change;
+the formerly ignored focused release test passed **1/0**. The
+[post-fix validation](../../evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)
+passed **1,683/0/16 ignored** release and **1,262/0/14 ignored** no-feature,
+with feature/release-no-trace checks, format and diff checks exiting 0.
+First-attempt guest effects remain, without rollback. This closes only the
+ordinary failed-retry control, not all fallible tails, O-P1, Stage 2 or
+canonical Task/Frame authority. E-29 used the **pre-fix** executable and
+does not validate this correction.
+
 ## E-29 third bounded iNavi run after detached-report validation (2026-10-14 analysis)
 
 The third user-authorized original-mount read/write run is retained under
 `evidence/e22-live-20261013T211230Z/` with a
 [binary-identified analysis receipt](../../evidence/e22-live-20261013T211230Z/analysis.receipt.md).
-Its release executable SHA-256 was `8A8B9C7E07C5DF4B40281A4B882CBCA0FA212DD7A04B9183EE93457AFB3E094A`;
+Its pre-retry-fix release executable SHA-256 was `8A8B9C7E07C5DF4B40281A4B882CBCA0FA212DD7A04B9183EE93457AFB3E094A`;
 the manifest lacks a complete source-tree digest. It exited 0 at the 330 s
 host cap after 330.3949337 s, with no 2,048 MiB RSS-monitor trip or stderr
 text. This is bounded host survival, not guest completion.

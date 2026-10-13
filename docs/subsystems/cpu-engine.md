@@ -34,12 +34,20 @@ evidence through native execution and a possible child handoff, including
 `NoAttempt` on preflight. Its frame is `LegacyUnbound`, not a canonical
 Task/Frame-qualified `RunOutcome`; the app loop still discards it and
 service-boundary rotation still reads selected-CPU compatibility state.
-The completed [current-source validation](../../evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)
+The completed [earlier report-source validation](../../evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)
 passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature;
 three check profiles, format and diff checks exited 0. Three focused
 [post-real-query Rust adapter-error controls](../../evidence/e28-run-outcome-20261014/query-adapter-error-controls.receipt.md)
-passed, without proving a failing C query. O-P1, Stage 2 and S3-A remain
-open, with the same rotation policy; the bounded app run is pending.
+passed, without proving a failing C query. A later genuine
+[ordinary finish-retry red](../../evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md)
+showed a second native attempt after a failed checked finish. The corrected
+source rejects that retry before native entry; its focused control passed
+1/0, full release **1,683/0/16 ignored**, no-feature **1,262/0/14 ignored**
+and applicable check/format/diff gates exited 0
+([green receipt](../../evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
+This is fail-closed continuation handling, not full tail sealing. O-P1,
+Stage 2 and S3-A remain open with the same rotation policy; E-29 was a
+pre-fix, splash-only bounded app run.
 
 ## Current implementation
 
@@ -175,14 +183,17 @@ remaining connected O-P1 work is:
    E-28 supplies a count-stop *request* witness, not an exclusive cause or
    retired-instruction total. The ordinary tail now checks fallible
    `uc.finish()` before handoff, with a focused real-MIPS error/owner control;
-   earlier saved-context and drained run-state publication still need a
-   failure transaction or explicit salvage before a final report can seal.
+   the ordinary checked-finish failed-retry path now poisons the outgoing
+   continuation. Other saved-context and drained run-state publication still
+   need a failure transaction or explicit salvage before a final report can
+   seal.
    Stop reversal/next-start reset passed direct ARM controls. Do not rerun
    the recursive Rust hook probe; actual nested execution remains
    unvalidated. A non-recursive private ambiguity-query check could test
-   conservative policy without proving nested safety. Add forced query-error
-   and competing-hook controls; preserve
-   native-query error provenance in diagnostic-private rejection.
+   conservative policy without proving nested safety. The three post-real-
+   query Rust adapter-error controls preserve diagnostic-private provenance,
+   but do not inject a C failure. Add genuine C query-error and competing-hook
+   controls.
 2. Record each remaining hook reason at its actual request, then make
    post-run restart-PC repair consume typed provenance while preserving safe
    continuations after remote/ready-peer yields and actual budget stops.
