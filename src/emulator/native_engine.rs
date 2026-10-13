@@ -18,7 +18,7 @@ use std::{
 };
 use unicorn_engine::{
     Context, UcHookId, Unicorn,
-    unicorn_const::{Arch, ContextMode, HookType, MemType, Mode, uc_error},
+    unicorn_const::{Arch, ContextMode, HookType, MemType, Mode, Query, uc_error},
 };
 
 struct NativeSnapshot<K> {
@@ -35,6 +35,8 @@ struct NativeSlot<K, P> {
     leased: bool,
     #[cfg(test)]
     fail_next_finish_after_hook_cleanup: bool,
+    #[cfg(test)]
+    fail_next_count_stop_query_after_native_value: Option<usize>,
 }
 
 /// Strong backing references tied to one native owner, independently of the
@@ -145,6 +147,8 @@ impl<K, P> Clone for ProcessNativeEngine<K, P> {
                 leased: false,
                 #[cfg(test)]
                 fail_next_finish_after_hook_cleanup: false,
+                #[cfg(test)]
+                fail_next_count_stop_query_after_native_value: None,
             })),
         }
     }
@@ -164,6 +168,8 @@ impl<K, P> ProcessNativeEngine<K, P> {
                 leased: false,
                 #[cfg(test)]
                 fail_next_finish_after_hook_cleanup: false,
+                #[cfg(test)]
+                fail_next_count_stop_query_after_native_value: None,
             })),
         }
     }
@@ -241,6 +247,20 @@ impl<K, P> ProcessNativeEngine<K, P> {
         slot.fail_next_finish_after_hook_cleanup = true;
     }
 
+    /// Test only: force the Rust adapter to observe a COUNT_STOP query error
+    /// after a real native query returns the expected value. This does not
+    /// claim that the vendored C `uc_query` itself failed.
+    #[cfg(test)]
+    pub(crate) fn arm_count_stop_query_error_once_for_test(&self, expected_native_value: usize) {
+        let mut slot = self.slot.borrow_mut();
+        assert!(!slot.leased, "arm only before the native attempt");
+        assert!(
+            slot.fail_next_count_stop_query_after_native_value.is_none(),
+            "query fault is already armed"
+        );
+        slot.fail_next_count_stop_query_after_native_value = Some(expected_native_value);
+    }
+
     /// Observe a completed owner's RAM without creating a diagnostic lease.
     /// Fresh-by-default engines have already closed and return None.
     #[cfg(test)]
@@ -314,6 +334,31 @@ impl<K, P> DerefMut for NativeEngineLease<'_, K, P> {
 impl<'a, K, P> NativeEngineLease<'a, K, P> {
     pub(crate) fn reused(&self) -> bool {
         self.reused
+    }
+
+    /// Read the count-stop witness on the current native lease. The test-only
+    /// fault seam verifies the real C query before substituting one error at
+    /// this Rust adapter boundary; ordinary builds return the native result.
+    pub(crate) fn query_count_stop(&self) -> Result<usize, uc_error> {
+        let native = self
+            .uc
+            .as_ref()
+            .expect("native lease is open")
+            .query(Query::COUNT_STOP);
+        #[cfg(test)]
+        if let Some(expected) = self
+            .slot
+            .borrow_mut()
+            .fail_next_count_stop_query_after_native_value
+            .take()
+        {
+            assert!(
+                matches!(&native, Ok(actual) if *actual == expected),
+                "test query fault expected native COUNT_STOP={expected}, got {native:?}"
+            );
+            return Err(uc_error::RESOURCE);
+        }
+        native
     }
 
     #[cfg(test)]
@@ -504,6 +549,7 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
             #[cfg(test)]
             {
                 slot.fail_next_finish_after_hook_cleanup = false;
+                slot.fail_next_count_stop_query_after_native_value = None;
             }
         }
         self.closed = true;

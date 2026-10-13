@@ -10270,7 +10270,7 @@ impl UnicornMips {
         // Both queries belong to this primary native lease and must precede
         // capture or deferred child execution. A failed query is a hard
         // outcome, never evidence that the stop simply did not happen.
-        let native_count_stop_query = uc.query(unicorn_engine::unicorn_const::Query::COUNT_STOP);
+        let native_count_stop_query = uc.query_count_stop();
         let native_timeout_query = uc.query(unicorn_engine::unicorn_const::Query::TIMEOUT);
         report.native_result = match &result {
             Ok(()) => AttemptObservation::Value(()),
@@ -56606,6 +56606,153 @@ mod unicorn_tests {
             super::NativeSliceOutcome::BackendError,
             "native capture remains a hard failure"
         );
+    }
+
+    #[test]
+    fn real_mips_count_query_adapter_error_keeps_native_failure_report() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("phase1-count-query-error.exe")?;
+        let mut cpu = phase1_counter_cpu(0x1000, "phase1-count-query-error.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        // This seam observes a genuine native count witness of 1, then
+        // substitutes RESOURCE in the Rust lease adapter only.
+        cpu.native_engine
+            .arm_count_stop_query_error_once_for_test(1);
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 20,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        let report = execution.report;
+        let err = execution
+            .result
+            .expect_err("injected query error must fail the run");
+        assert!(format!("{err:#}").contains("query native count stop"));
+        assert_eq!(phase1_counter(&cpu), 0x1006, "real MIPS stores must occur");
+        assert!(report.attempt_id().is_some());
+        assert_eq!(report.start_process_birth(), Some(owner));
+        assert_eq!(report.end_process_birth(), Some(owner));
+        assert_eq!(
+            report.native_result(),
+            &super::AttemptObservation::Value(())
+        );
+        assert!(matches!(
+            report.count_stop_query(),
+            super::AttemptObservation::Error(message) if message.contains("RESOURCE")
+        ));
+        assert_eq!(
+            report.timeout_query(),
+            &super::AttemptObservation::Value(false)
+        );
+        assert_eq!(
+            report.final_outcome(),
+            super::NativeSliceOutcome::NativeError
+        );
+        assert_eq!(report.failure_operation(), Some("query native count stop"));
+        assert!(report.partial_effects_possible());
+        assert!(!report.final_outcome().is_service_boundary());
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::NativeError
+        );
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn real_mips_host_budget_hook_does_not_hide_count_query_adapter_error() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("phase1-budget-query-error.exe")?;
+        let mut cpu = phase1_counter_cpu(0x1000, "phase1-budget-query-error.exe")?;
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        // The actual safe-PC host-budget hook requests a stop before the
+        // million-instruction count. Native COUNT_STOP is verified as zero.
+        cpu.native_engine
+            .arm_count_stop_query_error_once_for_test(0);
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 1,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        let report = execution.report;
+        let err = execution.result.expect_err("injected query error must win");
+        assert!(format!("{err:#}").contains("query native count stop"));
+        assert_eq!(
+            report.hook_stop_reason(),
+            Some(super::NativeHookStopReason::HostWallBudget),
+            "the competing hook fact must come from the real MIPS run"
+        );
+        assert_eq!(
+            report.native_result(),
+            &super::AttemptObservation::Value(())
+        );
+        assert!(matches!(
+            report.count_stop_query(),
+            super::AttemptObservation::Error(message) if message.contains("RESOURCE")
+        ));
+        assert_eq!(
+            report.final_outcome(),
+            super::NativeSliceOutcome::NativeError
+        );
+        assert_eq!(report.failure_operation(), Some("query native count stop"));
+        assert!(!report.final_outcome().is_service_boundary());
+        Ok(())
+    }
+
+    #[test]
+    fn private_real_mips_count_query_adapter_error_preserves_provenance() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
+
+        let mut kernel = phase1_kernel("private-count-query-error.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        kernel
+            .memory
+            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
+            .expect("enable diagnostic private native path");
+        let mut cpu = phase1_counter_cpu(0x1000, "private-count-query-error.exe")?;
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        cpu.native_engine
+            .arm_count_stop_query_error_once_for_test(1);
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 20,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        let report = execution.report;
+        let err = execution.result.expect_err("private query error must fail");
+        assert!(format!("{err:#}").contains("query native count stop"));
+        assert_eq!(
+            report.native_result(),
+            &super::AttemptObservation::Value(())
+        );
+        assert!(matches!(
+            report.count_stop_query(),
+            super::AttemptObservation::Error(message) if message.contains("RESOURCE")
+        ));
+        assert_eq!(
+            report.final_outcome(),
+            super::NativeSliceOutcome::NativeError
+        );
+        assert_eq!(report.failure_operation(), Some("query native count stop"));
+        assert_eq!(report.start_process_birth(), Some(owner));
+        assert_eq!(report.end_process_birth(), Some(owner));
+        assert!(cpu.private_slab_attempt_poisoned);
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        Ok(())
     }
 
     #[test]
