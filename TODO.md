@@ -60,11 +60,14 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
       checks pass. E-22 attaches checked birth keys, non-reused within-lineage
       allocation incarnations and producer kinds to virtual metadata; four
       focused controls and combined release/no-feature suites pass. This
-      does not scope the global VA directory or migrate bytes. Selected-
-      process snapshots, worker sweep, wait pins and clone lineage remain
-      open. Next connect owner-scoped reservations, overlap checks, reserve/
-      commit behavior and remote queries to that directory; Stage 3 extends
-      the same authority. Then migrate
+      did not migrate bytes. E-23 now keys private-VA metadata and lookups by
+      process birth; two focused controls pass, but the native VA-only map
+      retains a global overlap fence and blocks E-20 same-VA allocation.
+      Broader regressions on E-23 remain pending. Selected-process snapshots,
+      worker sweep, wait pins and clone lineage remain open. Next connect
+      owner-scoped native reservations/mapping, cross-family overlap checks,
+      reserve/commit behavior and remote queries to that directory; Stage 3
+      extends the same authority. Then migrate
       private pages with exact pinned native maps, checked failure/publication
       and no whole-`initial_bytes` reseed for that family. A failed unmap must
       retain its pin and fail the attempt, not recycle a stale VA. Turn E-18

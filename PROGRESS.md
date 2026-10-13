@@ -207,6 +207,15 @@ references for historical reconstruction.
   bounded survival, not Stage 2, memory-footprint or map acceptance. The
   persistent-owner run's sampled working-set and private-byte peaks were
   1,543.9 MiB and 1,554.4 MiB; O-P4 must be measured against this baseline.
+- E-23 qualified private-VA metadata by process birth for lookup, release,
+  query visibility and pointer probes. The two focused release controls
+  passed on source `4a1a9bfb9898a9f2a251212d6120794970266692` (local
+  `evidence/stage2-e23-owner-va-20261013/focused-owner-va.md`). The native
+  VA-only map still requires a global overlap fence, so E-20 same-VA public
+  allocation remains expected red; E-18 fresh-owner bytes are unchanged.
+  Supplemental Ex arms reject foreign targets but are not default-exported.
+  Broader regression and O-P4/Stage 2/app acceptance are not claimed
+  (ledger E-23).
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

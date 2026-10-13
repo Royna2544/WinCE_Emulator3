@@ -121,6 +121,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   sampled working-set peak was 1,543.9 MiB and private-byte peak was
   1,554.4 MiB, so survival did not resolve its memory footprint. This is
   not O-M1/O-P4, Stage 2 or map-readiness acceptance.
+  E-23 now keys private-VA metadata/lookups by process birth and passes two
+  focused release controls, but the global native overlap fence still
+  rejects the E-20 child same-VA allocation. E-18 fresh-owner bytes remain
+  stale. Supplemental Ex arms reject remote targets and are not published
+  by the default export table; this is not public remote Ex support (local
+  `evidence/stage2-e23-owner-va-20261013/focused-owner-va.md`). Broader
+  regression validation has not been claimed at this checkpoint.
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,
   inferred creation PID, lost boot/primary identity or alias incoherence in a
