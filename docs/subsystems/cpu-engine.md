@@ -119,20 +119,20 @@ Search by symbol, not by line number; the file moves.
 - `Query::TIMEOUT`, the actual expiry, was collected only when
   `ce.slice_profile` debug was on. Current D: source collects it every attempt.
 
-The remaining connected O-P1 work after the preliminary D: correction is:
+The remaining connected O-P1 work after the narrow E-15 correction is:
 
-1. Split the successful `ServiceBoundary` residual into proven count
-   exhaustion, hook-recorded stop (the hook records its reason before
-   `emu_stop`) and unknown normal stop. `Ok` with `count > 0` and no recorded
-   hook reason is only a count-stop candidate: an early native exit or an
-   unrecorded hook can also return normally. A native count-stop witness is
-   needed before reporting `CountLimit`; otherwise retain `Unknown` rather
-   than mapping it to count or timeout.
-2. Make post-run restart-PC repair and both rotation consumers read typed stop
-   provenance, preserving safe continuations after remote/ready-peer yields as
-   well as actual budget stops. Do not revive `unicorn_native_timeout` or
-   change the current scheduling tick. Preserve verified encoded-kernel-exit
-   decoding before native-error failure.
+1. Obtain an independent native count-stop witness before reporting
+   `CountLimit`. `Ok` with `count > 0` and no recorded hook reason remains
+   `UnknownNormalStop`: an early native exit or unrecorded hook can also
+   return normally.
+2. Record each remaining hook reason at its actual request, then make
+   post-run restart-PC repair consume typed provenance while preserving safe
+   continuations after remote/ready-peer yields and actual budget stops.
+   Both rotation consumers already read `NativeSliceOutcome`; keep their
+   existing successful-boundary policy. Do not revive
+   `unicorn_native_timeout` or change the current scheduling tick. Preserve
+   verified encoded-kernel-exit decoding, but never let it mask a failed
+   hook-control operation or primary native failure.
 3. Repeat the focused controls after hardening, then execute the broader
    feature/full-backend and bounded live gates. Record newly exposed native
    errors in KNOWN_BUGS; do not suppress them again.
@@ -140,8 +140,8 @@ The remaining connected O-P1 work after the preliminary D: correction is:
 These steps would close the remaining O-P1 classification gap. They do not
 change the 1M-instruction tick, the quantum or the clock.
 
-Status (working D: tree; preliminary focused controls only, not a full-suite or
-live-run result):
+Status (working D: tree; E-15 focused controls and final-source full release
+suite, not alternate-profile or live-run acceptance):
 
 - Done in source: `unicorn_native_timeout` is gone. `Query::TIMEOUT` is
   always collected, and a post-run *synthetic* host-wall record is created
@@ -156,20 +156,26 @@ live-run result):
   Rotation still fires on every successful stop, as it did before, so no
   policy changed. In-repo controls cover the count boundary (no fabricated
   deadline) and the native-error case.
-- Still open for O-P1: `NativeSliceOutcome::ServiceBoundary` is a residual
-  that covers possible count exhaustion, hook-requested yields and unknown
-  normal stops alike. The doc comment says so honestly, but the anchor (A3)
-  wants them distinguished. Split it into `CountLimit` only with an actual
-  native count-stop witness, `HookStop(reason)` when a hook records why before
-  `emu_stop`, and `Unknown` when neither cause is proven. Keep
-  `is_service_boundary()` true for all three, so rotation policy does not
-  change in Stage 2. Add an actual-backend control per variant. The code and
-  block hooks that write `UnicornHostWallClockStop` include true host-budget
-  stops, remote-control servicing and ready-peer yields; that debug record
-  alone does not prove `HookStop(HostWallBudget)`. Post-run restart-PC repair
-  should use typed safe-stop provenance covering those hook yields and actual
-  native deadline, rather than the side-channel `Rc` alone.
-- O-P1 progress (supervisor source check, 20:55, working tree):
+- E-15 focused O-P1 progress: the successful `ServiceBoundary` residual is
+  now `UnknownNormalStop`; no `CountLimit` is reported without a witness.
+  One checked scheduler block-hook path latches
+  `HookStop(HostWallBudget)` only after elapsed budget, safe PC, successful
+  PC write and successful `emu_stop`. Seven focused release controls passed
+  on that initial source, including a real MIPS host-budget stop and actual
+  native deadline query. A follow-up guard made both decoded guest-exit
+  branches require no pending hook-control error; two host-budget focused
+  controls passed on the follow-up source. Real PC-write/stop failure plus
+  encoded-exit fault injection has not run. Receipts:
+  `evidence/op1-stop-taxonomy-20261013/focused-controls.receipt.md` and
+  `evidence/op1-stop-taxonomy-20261013/encoded-exit-mask.receipt.md` (ledger
+  E-15). The final follow-up source also passed the complete release suite
+  (1,628 passed, 0 failed, 4 ignored; raw log SHA-256
+  `8946D073…1E041`); this is later than the E-13 1,626-pass checkpoint and
+  does not turn the ignored E-14 VM control green. Keep
+  `is_service_boundary()` true for successful Unknown, HookStop and
+  NativeDeadline, preserving rotation policy. A debug
+  `UnicornHostWallClockStop` alone does not prove a host-budget hook reason.
+- Remaining hook-site inventory on the E-15 source:
   `NativeSliceOutcome` now has `UnknownNormalStop` and
   `HookStop(NativeHookStopReason)`, and `HostWallBudget` is the only reason
   so far. Only one of the seven hook sites that write

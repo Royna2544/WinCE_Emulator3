@@ -371,19 +371,40 @@ legacy debug marker. Successful Unknown, HookStop and NativeDeadline outcomes
 remain eligible for the existing service handoff, so the one-million-
 instruction tick and rotation policy were not changed.
 
-Seven final-source focused release controls passed individually (one pass in
+Seven focused release controls passed individually on the first O-P1 source
+(one pass in
 each run): actual MIPS host-budget hook stop with `Query::TIMEOUT = 0`,
 hook-control error precedence, counted unknown boundary, unmapped native
 error, explicit PC stop, actual native deadline with `Query::TIMEOUT = 1`,
-and service-boundary handoff policy. Format and diff checks passed. Source
+and service-boundary handoff policy. Format and diff checks passed. That source
 SHA-256 was `5CCAD8FF…92E5` for `types.rs` and `F1103483…46C73` for
 `unicorn.rs`; focused executable SHA-256 was `482BB864…F3A55E`.
 Commands, full hashes and raw logs are in local
 `evidence/op1-stop-taxonomy-20261013/focused-controls.receipt.md`.
 
+A subsequent source review found that a failed hook-control operation could
+still be masked by the decoded guest-exit branch. The decoded-exit readiness
+predicate now requires the hook-control-error slot to be empty in both
+branches. On this follow-up source, the two `host_budget` focused controls
+passed (2 passed, 0 failed); `unicorn.rs` SHA-256 was `CD693878…25F8` and
+the focused executable was `A64D52D4…7F79B`. The exact one-line change,
+command and hashes are in local
+`evidence/op1-stop-taxonomy-20261013/encoded-exit-mask.receipt.md`. No test
+injects a real native PC-write/stop failure together with an encoded exit;
+this remains an end-to-end gap.
+
+The final follow-up source then passed the complete
+`unicorn,trace,win32-desktop` release suite: **1,628 passed, 0 failed,
+4 ignored**. The fourth ignored control is the expected-red E-14 same-VA
+fixture; it did not turn green. Raw log SHA-256
+`8946D0736B3B0D8816C0017B7B8DCDC24B436EBBFE80A7CEBA559DE1FB51E041`
+is local `evidence/op1-stop-taxonomy-20261013/full-release-suite-final.log`.
+This supersedes the earlier E-13 full-suite count as the latest release
+result, but does not convert any ignored gate into a pass.
+
 This is focused O-P1 progress, not a complete classification or Stage 2
 acceptance. Native count-stop witness, remaining hook reasons, typed
-restart-PC repair, full release/feature suites on this source and a bounded
+restart-PC repair, alternate feature profiles on this source and a bounded
 live workload remain separate gates. The earlier E-13 suite counts are
 historical and must not be attributed to this O-P1 source.
 
