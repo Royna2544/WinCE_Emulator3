@@ -535,6 +535,40 @@ policy. O-M1 private-page readback/authoritative backing, O-P4 closed-owner
 default, Stage 2 and a bounded live app remain open. Retaining the old owner
 or suppressing failed native reads would not satisfy this control.
 
+## E-19 Global code-hook deferred stop reasons (2026-10-13, narrow green)
+
+The global per-instruction code hook now latches the first reason it observes:
+`RemoteControlService` when it drains queued remote control, or
+`HostWallBudget` after an elapsed host limit. The pending reason travels to
+one of three safe-PC completion paths (JR thunk, trampoline origin or ordinary
+safe instruction). The hook publishes `HookStop(reason)` only after checked
+native PC write and `emu_stop` both succeed; control-transfer failure records
+a backend error instead. A debug host-wall record can accompany either
+reason, so that marker alone is not evidence of actual host-budget expiry.
+
+Two real-backend focused controls passed together in three serial runs
+(2 passed, 0 failed each). Both checked typed reason, saved/native safe PC,
+and actual native `Query::TIMEOUT = 0`; the remote control used a test-queued
+message and the host-budget case used a paused framebuffer service point.
+This proves the exercised straight-line/deferred-stop shapes, not an actual
+network delivery, every branch/delay-slot shape, or a fault-injected PC-write/
+stop failure. Focused raw logs SHA-256 were `63166691…E918`,
+`CAE66AFD…8362` and `976F8269…6E94` in local
+`evidence/op1-global-code-hook-20261013/`.
+
+On frozen `types.rs` SHA-256 `00856084…80521` and `unicorn.rs` SHA-256
+`6560E1E3…A0F2`, the full release suite passed **1,634 passed, 0 failed,
+4 ignored** (raw log SHA-256 `B56F3E54…CE30`). The fourth ignored control is
+E-18's private-byte expected red, not a pass. Alternate feature/no-feature
+validation and a final run receipt are pending separately. E-16's injected
+same-VA green and E-18's private-byte red remain separate; this O-P1 slice
+does not change production fresh-owner policy or close Stage 2.
+
+The hookless/sparse remote and ready-peer paths, native count-exhaustion
+witness, typed restart-PC repair, O-P4/O-M1 and bounded live-app gates remain
+open. First observed remote or budget condition wins when both occur before
+the safe stop; the type is not a post-hoc inference from elapsed time.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
