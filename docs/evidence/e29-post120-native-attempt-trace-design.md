@@ -25,9 +25,12 @@ publishes a scheduler-visible outcome.
 The first question is whether +100 to +180 s contains primary native attempts,
 which outgoing PID/birth/TID and PCs they actually execute, and how much host
 time each takes. The second is whether actual overlay-window imports and
-WNDPROC continuations occur in those same attempts. A selected CPU's later
-`last_debug_snapshot` is **not** an attempt join key: the ordinary success tail
-may rotate to a child after the outgoing report is captured. The throttled
+WNDPROC returns occur in those same attempts. This post-120 s trace does **not**
+resolve wait id 833: its registration may predate the capture window, and the
+current blocked-wait record omits raw wait-any/all mode and object incarnation.
+A selected CPU's later `last_debug_snapshot` is **not** an attempt join key:
+the ordinary success tail may rotate to a child after the outgoing report is
+captured. The throttled
 remote debug pages also combine live kernel views and retained CPU snapshots;
 matching cached PIDs or close timestamps is only suggestive.
 
@@ -43,12 +46,20 @@ ID in a run header; `DiagnosticAttemptId` restarts in a new host process and
 is never globally unique by itself.
 
 - Entered-at-host `[100_000, 180_000)` ms is the detailed capture window.
-  Bracket the CPU call with host start/end offsets and whole-call elapsed time;
-  mark an attempt crossing either boundary. Emit a late summary for a call
-  entered before +100 s but returned inside/after the window, with
-  `events_uncollected`, rather than silently implying no work. A host-crashed
-  or never-returning call still needs the external watchdog and memory log;
-  the in-process writer cannot promise a terminal record.
+  For a call entered in that window, write a small `call_enter` record with a
+  host-local call ordinal (distinct from the native attempt ID), host offset
+  and **selected** PID/TID/PC, and flush it before invoking the desktop/CPU
+  wrapper. After the wrapper returns, emit `call_end` with the same call
+  ordinal, outgoing report, separate `result`, end offset and whole-call
+  elapsed time **before the caller's error return or next main-loop
+  maintenance**. The backend must capture outgoing identity and
+  raw facts before any in-call child handoff; the host writer cannot promise
+  that its post-return line precedes that handoff. Mark calls crossing either
+  window boundary. Emit a late summary for a call entered before +100 s but
+  returned inside/after the window, with `events_uncollected`, rather than
+  silently implying no work. An unmatched `call_enter` identifies an
+  in-flight/unreturned call, not its cause; a host crash still needs the
+  external watchdog and memory log, and cannot promise a terminal record.
 - The per-attempt line retains `result` separately from `report`: `NoAttempt`
   and its preflight operation have no fabricated native facts; a failed run
   still emits its report before the existing error path returns. Include
@@ -57,52 +68,69 @@ is never globally unique by itself.
   failure operation, partial-effects flag, native result, count-stop and
   timeout observations including `Uncollected` and `Error`, requested-PC
   match, hook reason, and configured limits. Label the frame
-  `LegacyUnbound`. Record whole-call and primary `emu_start` host durations
-  separately; neither is GuestInstant.
+  `LegacyUnbound`. Measure primary `emu_start` duration immediately around
+  that native call; record it separately from the host wrapper's whole-call
+  duration. Neither is GuestInstant.
 - If guest work volume is needed, carry the existing per-slice basic-block
   code-byte tally as a separately labelled `block_bytes/4` estimate and
   relate it to the same attempt ID. `COUNT_STOP = true` means the native count
   hook requested a stop, not that exactly the configured instruction count
   retired, not an exclusive stop cause, and not a CE quantum. Preserve raw
   competing stop/query facts even when `final_outcome` has one value.
-- Add a 1 Hz, cheap top-of-live-loop heartbeat during the same host window:
-  loop iterations since last heartbeat, native attempts since last heartbeat,
+- Add a cheap top-of-live-loop heartbeat, due at most once per second while
+  that loop is turning, during the same host window: loop iterations since the
+  last heartbeat, native attempts since the last heartbeat,
   selected PID/TID and saved PC labelled **selected, not executed**. Many
   current main-loop branches `continue` before the CPU call. An empty attempt
   stream without this heartbeat cannot distinguish scheduler-only churn from
-  a stalled writer or long native call. The heartbeat does not sample large
-  debug snapshots or alter the branch decisions.
+  a stalled writer or long native call. It cannot fire while one wrapper/native
+  call blocks; use the flushed `call_enter` and external observer for that
+  interval. The heartbeat does not sample large debug snapshots or alter the
+  branch decisions.
 
-For overlay correlation, use only existing import-trap and WNDPROC paths: a
-bounded optional per-attempt collector in the backend, armed by the host window
-before the call, receives the allocated attempt ID immediately before the
-primary `emu_start`. Record a monotonic **within-attempt** event ordinal and
-host offset, actual executing TID, event phase (import entry/return, WNDPROC
-entry/return where observable), HWND/message or import ordinal, arguments,
-result, and the observed window-owner PID/TID if looked up at event time.
-Scope import families to `ShowWindow`, `DestroyWindow`, `SetWindowPos`,
-`InvalidateRect`/`ValidateRect`, `BeginPaint`/`EndPaint`; scope callbacks to
-display lifecycle/paint/position/destroy messages. Capture all matching
-HWNDs within the bounded window, then identify E29's `0x00020008` overlay
-and `0x00020004` main window in analysis; those numerical handles are
-run-specific diagnostic targets, never behavior keys. Do not install a new
-global code hook. Host-side GWE or callback preparation outside a native
-attempt is unbound to that attempt: record it separately with a host timestamp
-or leave it explicitly unjoined. Repeated HWND/message tuples alone do not
-prove an entry/return pair; use an actual continuation identity before making
-that stronger claim.
+For overlay correlation, use only existing import-trap and WNDPROC-return
+paths: a bounded optional per-attempt collector in the backend, armed by the
+host window before the call, receives the allocated attempt ID immediately
+before the primary `emu_start`. Record a monotonic **within-attempt** event
+ordinal and host offset, actual executing TID, event phase (import entry,
+observed shim-dispatch result, observed WNDPROC return), HWND/message or import
+ordinal, arguments, result, and observed window-owner PID/TID and post-call
+visibility/parent/rectangle/z-order where available without new guest work.
+Include `ShowWindow`, `DestroyWindow`, `SetWindowPos`,
+`InvalidateRect`/`ValidateRect`, `BeginPaint`/`EndPaint`, **and**
+`SetWindowLongW(GWL_STYLE)`, `SetParent`, `MoveWindow`, `BringWindowToTop`, and
+`DeferWindowPos`: the latter APIs can change visibility, geometry or ordering
+without a `ShowWindow` call. A shim-dispatch result is not necessarily a
+completed guest-visible import return when a callback follows. Scope callback
+returns to display lifecycle/paint/position/destroy messages. Capture all
+matching HWNDs within
+the bounded window, then identify E29's `0x00020008` overlay and `0x00020004`
+main window in analysis; those numerical handles are run-specific diagnostic
+targets, never behavior keys. Do not install a new global code hook. The
+existing GWE `show_window` lifecycle ring records **changes**, not every
+guest request, so its silence cannot prove that a no-op hide/show call was
+absent. Host-side GWE or callback preparation outside a native attempt is
+unbound to that
+attempt: record it separately with a host timestamp or leave it explicitly
+unjoined. A prepared callout is not proof that its first guest instruction
+ran; the existing return-stub path proves a return only. Repeated
+HWND/message tuples alone do not prove an entry/return pair; use an actual
+continuation identity before making that stronger claim.
 
-The write path is bounded: at most 128 compact events per attempt, with a
-per-type dropped count; at most 32 MiB JSONL total, with a truncation marker
-and final counters; a small buffered writer flushed at least once per second
-and at normal exit. These are proposed caps to verify under the focused
-controls, not evidence of adequate capacity in a real app run. Overflow may
-not abort or change the guest. A write failure disables the diagnostic sink,
-reports one host-side error, and invalidates trace acceptance; it must not
-convert a successful CPU result into an emulator failure. No absence claim is
-valid across truncated, dropped, missing, or uncollected intervals. No guest
-or mounted file is modified by this diagnostic, so disabling the opt-in path
-is its execution rollback; retained evidence remains in `evidence/`.
+The write path is bounded: at most 128 compact events per attempt, with
+per-type saturating dropped counts; at most 1 KiB encoded per event (truncate
+diagnostic text explicitly); and at most 32 MiB JSONL **including** header,
+truncation marker and final counters, with 4 KiB of footer space reserved
+before the cap. Flush `call_enter` before the CPU call, then at least once per second
+while the loop is turning and at normal exit. These are proposed caps to
+verify under focused controls, not evidence of adequate capacity in a real
+app run. Overflow may not abort or change the guest. A write failure disables
+the diagnostic sink, reports one host-side error, and invalidates trace
+acceptance; it must not convert a successful CPU result into an emulator
+failure. No absence claim is valid across truncated, dropped, missing, or
+uncollected intervals. No guest or mounted file is modified by this
+diagnostic, so disabling the opt-in path is its execution rollback; retained
+evidence remains in `evidence/`.
 
 ## Source boundary and expected-red controls
 
@@ -111,11 +139,17 @@ The contemplated edit surface is `src/main.rs::run_cpu_loop`,
 live and monitor callers use the Result wrapper); `src/emulator/types.rs`
 for compact diagnostic event/metric transport if necessary; and
 `src/emulator/unicorn.rs::run_with_unicorn_attempt` around attempt ID/native
-return, the existing import trap/return and WNDPROC return paths. No
+return, the existing import trap/return (`~8813`, `~9796`) and WNDPROC return
+stub (`~8245`) paths. No
 `src/ce/scheduler.rs`, task policy, remote HTTP endpoint, guest API shim,
 vendored Unicorn C, or per-instruction hook change is proposed. The
 `src/ce/kernel.rs` message/window rings and `src/remote_server.rs` debug
-pages remain contextual evidence, not exact joins.
+pages remain contextual evidence, not exact joins. A causal test of E29's
+blocked wait is a **separate** boot-forward, bounded wait-lifecycle capture:
+raw wait-any/all at registration, object incarnation/generation, signal,
+eligibility/selection, acquire and removal in ordered records. The post-120 s
+attempt trace cannot reconstruct earlier registration from a later snapshot;
+until that separate control exists, the wait remains unresolved.
 
 Stage these controls as **expected-red before implementation**, then require
 them green on the implemented source; none is claimed executed by this note:
@@ -136,9 +170,11 @@ them green on the implemented source; none is claimed executed by this note:
    retained prior return must be unjoined. An interrupted callback must not
    be reported as a completed return.
 5. `post120_trace_caps_and_writer_failure_are_observational`: exercise
-   per-attempt and file caps, drop/truncation markers and write failure; no
-   memory growth without bound, scheduler change, or transformed CPU result.
-   A 1 Hz heartbeat still exposes a loop with zero native attempts.
+   128-event/1-KiB-event/32-MiB-file caps, per-type drop/truncation counters,
+   reserved footer, pre-call flush and write failure; no memory growth without
+   bound, scheduler change, or transformed CPU result. A heartbeat exposes a
+   turning loop with zero native attempts, while an unmatched `call_enter`
+   exposes an unreturned call without claiming its cause.
 
 ## Acceptance recipe and interpretation limits
 
@@ -161,7 +197,7 @@ trace drops, host overhead, hook mode and guest block-byte/MIPS accounting
 before claiming a performance change. A repeated PC, positive count query,
 event ACK, or splash frame alone is not a root cause or map readiness.
 E29's blocked wait 833/TID 10 also needs its actual wait-any/all mode,
-object incarnation/generation and signal/acquire ordering recorded in a
-separate targeted control before claiming a missed wake. This diagnostic
-does not implement that wait control or close O-P1, Stage 2, S3-A or map
-acceptance.
+object incarnation/generation and signal/acquire ordering recorded from its
+registration in a separate targeted control before claiming a missed wake.
+This diagnostic does not implement that wait control or close O-P1, Stage 2,
+S3-A or map acceptance.
