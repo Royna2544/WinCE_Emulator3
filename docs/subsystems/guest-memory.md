@@ -180,43 +180,55 @@ A fresh-owner two-slice guest-written private `VirtualAlloc` round-trip is now
 an executed expected-red gate under E-18. It must turn green with authoritative
 byte backing; the E-16 view controls alone cannot establish it.
 
-## O-M1 backing recommendation: host-owned slabs via `mem_map_ptr` (supervisor, 22:15)
+## O-M1 backing proposal: host-owned slabs via `mem_map_ptr` (reviewed 2026-10-13)
 
 Source facts (working tree, 2026-10-13):
 
-- **Two writable truths.** Guest bytes reach a native engine by copy-in
+- **Duplicate writable byte storage.** Guest bytes reach a native engine by copy-in
   (`uc.mem_map` plus writes from blobs or `initial_bytes`). They leave by
   copy-back (`sync_mapped_blobs_from_unicorn`,
-  `sync_file_mapping_views_from_unicorn`). For the length of a slice, host
-  blobs and native RAM are both writable copies of the same guest page,
-  which anchor A4 says to avoid.
+  `sync_file_mapping_views_from_unicorn`). Host blobs and native RAM are
+  separate writable copies; making a copy-based design meet anchor A4 would
+  require an explicit, checked authority hand-off at every boundary.
 - **E-18 is that gap.** Private `VirtualAlloc` pages have no copy-back, so a
   fresh owner reseeds from `initial_bytes`.
-- **Copy-back is expensive.** Pinned Unicorn 2.1.5 has no dirty-page API, so
-  copy-back has to rescan every mapped page per slice or add write hooks.
-  Write hooks are the per-instruction cost Phase 0 removed (ledger E-9).
-- **Slabs already work.** The ignored diagnostic
+- **Copy-back has a cost risk.** Pinned Unicorn 2.1.5 exposes no public
+  dirty-page API, so complete copy-back would require scanning mapped pages
+  or tracking writes. The actual cost of either approach has not been measured
+  for this migration; Phase 0's hook measurements are in ledger E-9.
+- **The native mechanism works in isolation.** The explicitly selected ignored
+  diagnostic
   `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner`
-  (`native_engine.rs`) shows that a fixed host slab mapped with `mem_map_ptr`
-  takes guest stores directly. It also survives a `mem_protect` split and is
-  visible to a fresh owner with no copy.
+  (`native_engine.rs`) passed 1/1 on the E-18 source: a fixed host slab mapped
+  with `mem_map_ptr` took guest stores, survived a `mem_protect` split, and was
+  visible to a fresh owner without byte copy. See the local
+  `evidence/om1-host-slab-20261013/focused-diagnostic.receipt.md`. This does
+  not exercise production allocation ownership, hooks or engine lifetime.
 
-Recommendation: decide O-M1 as **host-owned, page-aligned, address-stable
-backing mapped with `mem_map_ptr`**, with the AddressSpace as its only owner.
+Reviewed recommendation, **not an accepted O-M1 decision or implementation**:
+target host-owned, address-stable backing mapped with `mem_map_ptr`, with the
+AddressSpace as its byte authority. Before the first private-page migration,
+define owner, backing kind and allocation incarnation; scope native map, fault,
+reclaim and query paths to that identity; pin each slab in the native mapping
+lease until checked unmap or owner close; deep-copy private bytes on clone;
+and report map/protect/unmap or backing failures as checked backend errors.
 
-- One truth per page. Native code and host shims read and write the same
-  bytes. A fresh engine per slice maps the existing slabs, so nothing is
-  reseeded and nothing is read back. E-18 closes structurally.
-- Shared file views map the *same* slab into each process that has a view
-  of it. Private pages map per-process slabs. Same-VA isolation follows from
-  which slab is mapped, not from copy ordering (E-14 and E-16).
-- Per-slice cost becomes mapping calls instead of copying the mapped
-  footprint (hundreds of MiB for iNavi). That also makes the fresh lifetime
-  (O-P4) cheaper.
+- If integrated correctly, native code and host shims would use one
+  authoritative backing per page. A fresh engine could map existing private
+  slabs without reseeding or readback; E-18 must still turn green in the full
+  backend before that claim is accepted.
+- Shared file views would map the *same* backing where their view identity
+  permits it; private pages would have per-process backing. Same-VA isolation
+  and aliases require separate public-path controls beyond E-14 and E-16.
+- Reduced per-slice copying and a cheaper fresh lifetime (O-P4) are
+  hypotheses, not measured results. Migrating private pages alone leaves
+  image/heap blob and file-view copies in place; map topology and host memory
+  costs must be measured.
 - The `unsafe` stays in one module, with these invariants:
   - a slab never moves or resizes (`Box<[u8]>` or a page arena, never a
     growing `Vec`);
-  - every engine that maps a slab is dropped or unmapped before the slab;
+  - every active or idle engine retains a backing pin until its mapping is
+    checked-unmapped or the owner is closed, before the slab is dropped;
   - host access happens only while no `emu_start` is running, or from hooks
     through the existing bounded lease;
   - protection changes go through `mem_protect` on the mapping, never through
@@ -232,9 +244,10 @@ backing mapped with `mem_map_ptr`**, with the AddressSpace as its only owner.
   foundation. Add the same-VA and fresh-owner controls on real Kernel
   allocations.
 
-Prefer this to adding "checked outgoing private-byte readback before owner
-finish". Readback keeps two truths and adds per-slice copy cost and failure
-staging, all of which the slab design removes.
+This is the preferred target to evaluate against checked outgoing private-byte
+readback, not permission for an immediate pointer swap. Readback could be an
+explicit interim boundary, but it would retain copy and failure-staging costs
+and would not by itself complete O-M1 or Stage 2.
 
 ## Telemetry and executable migration gates
 
