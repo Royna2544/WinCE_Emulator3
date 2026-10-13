@@ -135,9 +135,18 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   (1,628 passed, 0 failed, 4 ignored); the four ignored tests, including E-14,
   did not become passes. Both no-trace release checks exited 0, and the
   no-feature suite passed 1,239/0/1 ignored. The 1,626-pass suite above is
-  historical.
-  Complete O-P1 classification and fresh-owner Stage 2 acceptance remain
-  open, and the 1M-instruction tick remains intact.
+  historical. A later E-17 source added
+  `HookStop(VisibleParkedPeerYield)` at one checked hookless block-hook site;
+  its real-backend control passed three serial runs without a native timeout
+  or host-wall marker. Frozen E-17 source passed 1,632 release tests (0 failed,
+  3 ignored), both no-trace checks and 1,239 no-feature tests (0 failed,
+  1 ignored); exact hashes are in local
+  `evidence/op1-visible-peer-20261013/post-visible-peer-validation.receipt.md`.
+  The peer was directly constructed, not created through public CreateProcess,
+  and failing Unicorn control APIs were not injected. Other global/sparse and
+  remote-control hook reasons, a native count-exhaustion witness and typed
+  restart-PC repair remain open. Complete O-P1 classification, fresh-owner
+  Stage 2 and live acceptance remain open; the 1M-instruction tick is intact.
 - HeapFree does not reuse addresses or release per-process spillover pages.
   Initial/reallocation mapping, ZERO and metadata ordering are now validated,
   but global allocation metadata lacks authoritative private-process ownership,

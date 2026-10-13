@@ -94,6 +94,21 @@ references for historical reconstruction.
   `VirtualAlloc` bytes across fresh owner closure, O-P4, Stage 2 or live
   readiness. Immediate CreateProcess sync-error handling is source-reviewed
   but lacks end-to-end fault injection. Later source edits need new validation.
+- A later narrow O-P1 slice added `HookStop(VisibleParkedPeerYield)` at one
+  hookless live-pump block-hook path after a safe PC and successful checked
+  PC write/stop request. The real-backend fixture passed three serial runs:
+  a directly constructed visible parked peer triggered a native parent slice,
+  typed yield, safe saved/native PC and handoff with `Query::TIMEOUT = 0` and
+  no host-wall marker. Seven nearby focused controls also passed. Frozen
+  `types.rs`/`unicorn.rs` SHA-256 `6EA882B5…D14DE` / `F1D45245…FD38` passed
+  the full release suite (**1,632 passed, 0 failed, 3 ignored**), both
+  no-trace release checks and the no-feature suite (**1,239 passed, 0 failed,
+  1 ignored**). Exact commands, source/log hashes and limits are in local
+  `evidence/op1-visible-peer-20261013/post-visible-peer-validation.receipt.md`
+  (ledger E-17). This source follows E-16; the O-M1 green remains bound to
+  its earlier frozen source. Other hook causes, actual count witness, typed
+  restart-PC repair, API-failure injection, O-P4/O-M1 completion, Stage 2 and
+  live acceptance remain open. A later source edit needs its own validation.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

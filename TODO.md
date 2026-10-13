@@ -46,24 +46,21 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
       alias/flush/unmap and remote query controls. The narrow E-16 green does
       not close any of those gates. Add end-to-end immediate CreateProcess
       sync-error fault injection; its error latch is source-reviewed only.
-  2. The narrow O-P1 slice now reports `UnknownNormalStop` for unproven
-     successful stops and `HookStop(HostWallBudget)` from one checked scheduler
-     block-hook path; seven focused release controls passed on its first
-     source, then two host-budget controls passed after a decoded-exit
-     error-precedence guard (ledger E-15; local
-     `evidence/op1-stop-taxonomy-20261013/encoded-exit-mask.receipt.md`).
-     Complete the other hook reasons and typed restart-PC repair, then add a
-     genuine native count-stop witness before reporting `CountLimit`.
-     Add end-to-end fault injection for failed PC-write/stop plus encoded exit.
-     `Ok` with a positive count alone is not proof. Keep the 1M-instruction
-     scheduling policy unchanged. The final-source full release suite passed
-     1,628 tests (0 failed, 4 ignored); both no-trace release checks exited 0
-     and the no-feature suite passed 1,239 tests (0 failed, 1 ignored). The
-     source/hash/command receipt is local
-     `evidence/op1-stop-taxonomy-20261013/post-op1-validation.receipt.md`.
-     The bounded live gate remains. Later O-M1 source was validated separately
-     under E-16; subsequent edits still need their own validation. The
-     earlier 1,626-pass suite predates O-P1.
+  2. O-P1 now reports `UnknownNormalStop` for unproven successful stops,
+     `HookStop(HostWallBudget)` from one checked elapsed-budget path (E-15),
+     and `HookStop(VisibleParkedPeerYield)` from one checked hookless live-pump
+     path (E-17). The peer gate passed three real-backend repetitions with
+     `Query::TIMEOUT = 0`, safe PC, peer handoff and no host-wall marker.
+     Finish the global/sparse and remote-control hook reasons, move restart-PC
+     repair to typed provenance, and obtain an independent native count-stop
+     witness before reporting `CountLimit`; `Ok` with positive count is not
+     proof. Add end-to-end failed PC-write/stop API injection. Keep the
+     1M-instruction scheduling policy unchanged. Frozen E-17 source passed
+     1,632 release tests (0 failed, 3 ignored), both no-trace release checks
+     and 1,239 no-feature tests (0 failed, 1 ignored); see local
+     `evidence/op1-visible-peer-20261013/post-visible-peer-validation.receipt.md`.
+     The O-M1 green remains tied to its separate frozen E-16 source. Later
+     edits and the bounded live gate require independent validation.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR
@@ -71,12 +68,13 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      exact raw continuations; writing a synthesized PC into it can retain
      stale branch `hflags`. Closed-owner exact-key Context transfer, guest
      `VirtualAlloc` coherence and the broader Stage 2 gates remain open.
-  3. The later O-M1 source passed the full release suite (1,631/0/3 ignored),
-     both applicable no-trace release checks and the no-feature suite (E-16).
+  3. The later E-17 visible-peer source passed the full release suite
+     (1,632/0/3 ignored), both applicable no-trace release checks and the
+     no-feature suite. E-16 O-M1 was separately validated on its own source.
      After remaining source fixes, repeat the applicable profiles, then one
      bounded 330 s live run against BED2.
      Record any newly exposed native errors in KNOWN_BUGS; neither the frozen
-     1,631-pass O-M1 source suite nor the decorative splash closes
+     1,632-pass E-17 source suite nor the decorative splash closes
      Stage 2.
 - Parallel Stage 8 native lane (diagnostic only, never gates Stages 2-6):
   the evidence is in ledger E-3 to E-6. Before any production budget change,
@@ -106,7 +104,7 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
 - Finish per-primary-native-attempt outcome/actual expiry/fault telemetry under
   existing profile logging; summary and terminal retained snapshots cannot
   establish whole-run native behavior. The typed D-source outcome has
-  focused E-15 coverage for one proven hook reason, but final stop taxonomy,
+  focused E-15/E-17 coverage for two proven hook reasons, but final stop taxonomy,
   full-backend
   ownership/rotation and live controls remain open. Four native counted replay
   tests over64 boundaries already pass.
