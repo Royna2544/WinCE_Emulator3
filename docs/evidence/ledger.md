@@ -936,15 +936,34 @@ count/timeout/private-owner/service-boundary controls and two public typed
 one-/two-instruction integration controls passed
 ([adapter receipt](../../evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md)).
 
-On that source, locked full release features passed **1,671/0/16 ignored**
+On that count-adapter source, locked full release features passed **1,671/0/16 ignored**
 and no-feature passed **1,259/0/14 ignored**; no-trace release and format
-checks exited 0. Complete logs and selected source SHA-256 values are in the
+checks exited 0. Those counts predate the focused follow-ups below; complete
+logs and selected source SHA-256 values are in the
 [broad validation receipt](../../evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md).
-The ordinary tail still rotates before fallible `uc.finish`; the
-[finish-order plan](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)
-is documentation, not a test or fix. O-P1 still needs one immutable
-owner/frame-qualified final attempt report, checked finish before handoff,
-native nested-start/reversal/query-error and competing-hook controls, and
+An ARM Thumb direct-native control subsequently passed stop reversal inside
+an IT block and reset on the next top-level run; all three integration tests
+passed. One exploratory same-handle nested-start hook probe exited with
+Windows `0xC0000005` before a query assertion and was removed from the
+default test. This is not evidence that nested-start ambiguity is handled;
+actual nested execution remains unvalidated. A
+[read-only risk audit](../../evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)
+identifies plausible Rust callback reentrancy and shared C per-start state,
+without identifying the crash cause; the
+[edge receipt](../../evidence/e28-count-witness-audit-20261014/edge-controls.receipt.md)
+preserves the observed result.
+
+The [finish-order plan](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)
+then led to a real-MIPS intended red: a parent hook-finish `RESOURCE` failure
+was reported after the active PID had rotated to a parked child. The narrow
+fix checks `uc.finish()` before handoff. Three focused controls pass: a
+one-shot finish failure stays with parent PID 1 and discards its native
+owner, outgoing view bytes reconcile, the child remains parked, and the
+successful sibling still rotates
+([regression receipt](../../evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
+No full release/no-feature suite has yet been recorded for that later source.
+O-P1 still needs one immutable owner/frame-qualified final attempt report,
+forced query-error and competing-hook controls, and
 preserved native-query provenance in the diagnostic-private error path.
 O-P1, fresh-owner Stage 2, E26 S3-A and live-app acceptance remain open.
 

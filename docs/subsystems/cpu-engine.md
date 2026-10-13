@@ -12,11 +12,19 @@ now witness an uncontested count stop as `CountLimit`; the local patch is
 inventoried in [vendor PATCHES.md](../../vendor/unicorn-engine-sys/PATCHES.md).
 The [broad validation](../../evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md)
 passed 1,671/0/16 ignored release and 1,259/0/14 ignored no-feature, with
-no-trace and format green. `NativeSliceOutcome` is still not an immutable
-owner/frame-qualified task-facing `RunOutcome`; the
-[fallible finish-order plan](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md)
-is unimplemented. O-P1, Stage 2 and S3-A remain open, and service-boundary
-rotation policy is unchanged.
+no-trace and format green, on the earlier count-adapter source. The later
+[ARM edge controls](../../evidence/e28-count-witness-audit-20261014/edge-controls.receipt.md)
+passed stop reversal and next-start reset; one exploratory nested-start hook
+probe exited `0xC0000005` before its query assertion and was removed from
+default tests; actual nested execution remains unvalidated
+([risk audit](../../evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
+The [checked finish-order fix](../../evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)
+passed three focused real-MIPS/unit controls after an intended red: the
+outgoing parent retains a finish error, reconciles its view bytes and does
+not hand off to the parked child. A new full suite for this later source is
+pending. `NativeSliceOutcome` is still not an immutable owner/frame-qualified
+task-facing `RunOutcome`; O-P1, Stage 2 and S3-A remain open, and
+service-boundary rotation policy is unchanged.
 
 ## Current implementation
 
@@ -146,12 +154,16 @@ remaining connected O-P1 work is:
 1. Seal one immutable outgoing-owner/frame-qualified native-attempt report
    after all fallible context, PC, byte/view sync and lease-finish work.
    E-28 supplies a count-stop *request* witness, not an exclusive cause or
-   retired-instruction total. Move fallible ordinary `uc.finish()` before
-   handoff and test its failure on real MIPS without losing drained run state
-   or publishing the earlier saved continuation as a successful boundary.
-   Add native nested-start, stop-reversal, forced query-error and competing-
-   hook controls; preserve native-query error provenance in diagnostic-private
-   rejection.
+   retired-instruction total. The ordinary tail now checks fallible
+   `uc.finish()` before handoff, with a focused real-MIPS error/owner control;
+   earlier saved-context and drained run-state publication still need a
+   failure transaction or explicit salvage before a final report can seal.
+   Stop reversal/next-start reset passed direct ARM controls. Do not rerun
+   the recursive Rust hook probe; actual nested execution remains
+   unvalidated. A non-recursive private ambiguity-query check could test
+   conservative policy without proving nested safety. Add forced query-error
+   and competing-hook controls; preserve
+   native-query error provenance in diagnostic-private rejection.
 2. Record each remaining hook reason at its actual request, then make
    post-run restart-PC repair consume typed provenance while preserving safe
    continuations after remote/ready-peer yields and actual budget stops.

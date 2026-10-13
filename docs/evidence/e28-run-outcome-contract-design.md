@@ -1,16 +1,26 @@
 # E28 Stage 2 run-outcome contract: one sealed native attempt
 
 Status: **partially connected design, not an acceptance claim** (2026-10-14).
-The additive native count-stop query and typed `CountLimit` adapter now have
+The additive native count-stop query and typed `CountLimit` adapter have
 [focused](../../evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md)
 and [broad validation](../../evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md);
 the [native C seam](../../evidence/e28-count-witness-audit-20261014/native-c-seam.receipt.md)
 is listed in [vendor PATCHES.md](../../vendor/unicorn-engine-sys/PATCHES.md).
-The pre-adapter source description below is retained as the design baseline.
-An immutable owner/frame-qualified final report, fallible
-[finish-before-handoff](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md),
-nested/reversal/query-error controls and diagnostic-private query-error
-provenance remain open; O-P1, Stage 2 and scheduler migration are not claimed.
+Those broad counts precede the later focused changes. Direct
+[ARM edge controls](../../evidence/e28-count-witness-audit-20261014/edge-controls.receipt.md)
+passed stop reversal and next-start reset; an exploratory same-handle
+nested-start hook probe exited `0xC0000005` before any query assertion and
+was removed. The
+[read-only risk audit](../../evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)
+identifies plausible callback reentrancy and shared C-state hazards, not an
+established crash cause; actual nested execution remains unvalidated. The narrow
+[finish-before-handoff fix](../../evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)
+passed three focused controls after an intended real-MIPS red; a full suite
+for the later source is pending. The pre-adapter/pre-ordering source
+description below is retained as the design baseline. An immutable
+owner/frame-qualified final report, forced query-error and
+competing-hook controls, and diagnostic-private query-error provenance remain
+open; O-P1, Stage 2 and scheduler migration are not claimed.
 This narrows [Architecture A3](../ARCHITECTURE.md#a3-execution-and-continuation-boundary),
 [PLAN Stages 2-3](../PLAN.md#migration-sequence-and-acceptance-gates) and
 [O-P1](../DECISIONS.md) into the outcome prerequisite for the
@@ -42,24 +52,26 @@ identity, final owner/frame or final-tail success boundary. Some global and
 sparse hook reasons are typed already; this note does not reset those gains.
 Other `emu_stop` paths and failed PC-write/stop combinations remain to audit.
 
-There is a concrete publication-order trap in the ordinary success tail:
+At the pre-ordering baseline, there was a concrete publication-order trap in the ordinary success tail:
 outgoing file views are checked, then `rotate_after_run_slice_handoff` may
-switch the active process, and only *after that* does fallible `uc.finish()`
+switch the active process, and only *after that* did fallible `uc.finish()`
 remove hooks ([unicorn.rs](../../src/emulator/unicorn.rs)). A sealed success
-cannot be attached to the now-selected `self` after that rotation. The first
-connected report slice must check `finish` before rotation, bind the report
-to the outgoing owner, and publish it before any handoff; this is an ordering
-repair, not a new scheduling policy. The explicit-PC and diagnostic-private
+could not be attached to the now-selected `self` after that rotation. The
+narrow E28 fix now checks `finish` before rotation; a future report slice
+must bind the final report to the outgoing owner and publish it before any
+handoff. This is an ordering repair, not a new scheduling policy. The
+explicit-PC and diagnostic-private
 tails already check outgoing sync and `finish` before returning success, but
 their error paths still need the same one-attempt report discipline.
 
-For the ordinary tail, the minimal order is: read back the captured outgoing
-owner's file views while `uc` is live; check `uc.finish()` and classify any
-error on that still-active owner; only then rotate and prune parked processes.
-Use a per-engine, one-shot test-only finish failure after a real counted MIPS
-run to verify the parent remains selected, receives the backend-error report,
-and leaves its runnable child parked. The successful parent/child view-readback
-test is the opposite control. This order is necessary but not sufficient for a
+For the ordinary tail, the implemented narrow order is: read back the
+captured outgoing owner's file views while `uc` is live; check `uc.finish()`
+and classify any error on that still-active owner; only then rotate and prune
+parked processes.
+The one-shot real-MIPS finish-failure and successful parent/child view-readback
+controls now pass after the ordering fix: the failed parent remains selected,
+receives `BackendError`, reconciles view bytes, and leaves its child parked.
+This order is necessary but not sufficient for a
 fully sealed outcome: `persist_run_state` already drains shared run handles
 before the ordinary finish, and `saved_context` is assigned before later
 fallible work. Moving persistence after finish without explicit failure
@@ -67,13 +79,15 @@ salvage could lose pending/parked state; leaving these pre-finish mutations
 requires a separate continuation/error-state review. See the
 [finish-order audit](../../evidence/e28-run-outcome-20261014/finish-order-test-plan.receipt.md).
 
-At this baseline, the vendored Unicorn core's count hook had an internal
+At this pre-adapter baseline, the vendored Unicorn core's count hook had an internal
 `emu_counter` and `emu_count` ([uc.c](../../vendor/unicorn-engine-sys/uc.c)),
 but public `uc_query` exposed timeout, not a count-stop flag
 ([unicorn.h](../../vendor/unicorn-engine-sys/include/unicorn/unicorn.h)).
 `Ok` plus configured `count > 0`, a matching PC, or a sampled instruction
 counter is therefore **not** an independent count-exhaustion witness. The
-current `UnknownNormalStop` classification is honest for that residual.
+then-current `UnknownNormalStop` classification was honest for that residual.
+The later local query now makes an uncontested successful count-stop request
+`CountLimit`, without proving an exclusive cause or retired instruction total.
 
 ## Proposed contract and publication boundary
 
@@ -154,8 +168,10 @@ The bit must reset on **every** `uc_emu_start` entry, before `UC_INIT`, nesting
 validation, hook registration or any other early return; an unsuccessful new
 attempt must not expose an older count stop. The current counter already resets
 at entry. Same-handle nested starts also reset that counter and can corrupt a
-single-bit attempt record, so the first adapter must forbid them or use a
-stacked native record. In this core, `hook_count_cb` increments at the code
+single-bit attempt record. The current query conservatively returns
+`UC_ERR_RESOURCE` after a nested start, but real recursive execution remains
+unvalidated; the public Rust hook probe must not be rerun without a safe
+reentrancy design. In this core, `hook_count_cb` increments at the code
 callback and requests stop only when `emu_counter > emu_count`: a limit of one
 is signalled at callback two, before that candidate instruction executes.
 The counter is not an independently verified retired-instruction count.
@@ -184,22 +200,19 @@ hook-control, mapping, capture, sync or teardown error competes; unexplained
 PC zero remains hard failure. Post-run PC repair consumes typed provenance
 and must not turn an unknown/error stop into a safe continuation.
 
-## Red controls, first connected implementation slice and rollback
+## Original red controls, connected adapter and remaining report slice
 
-Before production code, stage ignored expected-red controls on this source
-for the new count query and sealed-report boundary. Then implement only the
-count-witness adapter and immutable per-attempt report, keeping current
+The original sequence staged ignored expected-red controls before the count
+query. The count-witness adapter is now connected and green, while the
+immutable per-attempt report is the remaining gate. Keep the current
 `is_service_boundary()`/rotation policy unchanged. The report may temporarily
 record legacy/unbound frame identity; no S3-A production caller consumes it
 until the canonical frame shell and outcome review are ready. Do not add a
 second task registry or claim that this slice classifies every `emu_stop`.
-An ignored test still has to compile: before the header generates a new Rust
-`Query` variant, a control can run real MIPS through the existing API and
-temporarily compare the successful outcome's debug label with `CountLimit`
-(alongside `TIMEOUT == 0`, no requested PC, and no typed hook). Replace that
-string assertion with a typed one when the variant exists. Stage a direct
-typed native-query control only after the header/bindgen seam compiles; do
-not transmute a not-yet-valid Rust enum discriminant.
+The historical red control compiled before the header generated a new Rust
+`Query` variant by comparing a debug label; it was replaced with a typed
+assertion once the header/bindgen seam compiled. Do not transmute an invalid
+Rust enum discriminant when adding further native controls.
 
 Focused controls must include real MIPS execution, not just enum-unit tests:
 
