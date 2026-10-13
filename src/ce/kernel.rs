@@ -6650,7 +6650,7 @@ impl CeKernel {
             self.current_process_signaled = true;
             if let Some(aliases) = self
                 .handles
-                .mark_process_exited_by_id(self.current_process_id, exit_code)
+                .request_process_termination_by_id(self.current_process_id, exit_code)
             {
                 for alias in aliases {
                     self.queue_object_wake_candidates(alias);
@@ -6659,15 +6659,19 @@ impl CeKernel {
             self.queue_object_wake_candidates(handle);
             return true;
         }
-        let success = self.handles.mark_process_exited(handle, exit_code);
-        if success {
-            if let Some(process_id) = self.handles.process_id(handle) {
-                for alias in self.handles.process_alias_handles(process_id) {
-                    self.queue_object_wake_candidates(alias);
-                }
-            }
+        let Some(process_id) = self.handles.process_id(handle) else {
+            return false;
+        };
+        let Some(aliases) = self
+            .handles
+            .request_process_termination_by_id(process_id, exit_code)
+        else {
+            return false;
+        };
+        for alias in aliases {
+            self.queue_object_wake_candidates(alias);
         }
-        success
+        true
     }
 
     pub fn suspend_thread(&mut self, handle: u32) -> ThreadSuspendResult {
@@ -10882,6 +10886,8 @@ mod tests {
     #[test]
     fn pending_child_birth_survives_last_public_process_handle_close() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        assert!(kernel.handles.process_id_exists(1));
+        assert!(kernel.handles.process_alias_handles(1).is_empty());
         let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
 
         assert!(kernel.handles.process_id_exists(launch.process_id));
@@ -10994,6 +11000,31 @@ mod tests {
         assert!(kernel.close_handle(launch.process_handle)?);
         assert_eq!(kernel.open_process_handle(launch.process_id), None);
         kernel.mark_process_launch_exited(&launch, 11);
+        Ok(())
+    }
+
+    #[test]
+    fn completed_process_retires_after_final_alias_and_new_birth_is_distinct() -> Result<()> {
+        let mut handles = HandleTable::default();
+        let original = handles.create_process(77);
+        let alias = handles.open_process(77).expect("live process birth");
+        let duplicate = handles.insert(handles.get(original)?.clone());
+        assert_eq!(handles.process_alias_handles(77).len(), 3);
+        assert!(handles.set_process_debugger_thread_id(77, Some(123)));
+        assert_eq!(handles.process_debugger_thread_id(77), Some(123));
+        assert!(handles.mark_process_exited(original, 5));
+        assert_eq!(handles.process_exit_code(alias), Some(5));
+        assert_eq!(handles.is_wait_ready(alias, 1), Some(true));
+        handles.close(original)?;
+        assert!(handles.process_id_exists(77));
+        handles.close(alias)?;
+        assert!(handles.process_id_exists(77));
+        handles.close(duplicate)?;
+        assert!(!handles.process_id_exists(77));
+        let replacement = handles.create_process(77);
+        assert_ne!(replacement, original);
+        assert_eq!(handles.process_exit_code(replacement), Some(STILL_ACTIVE));
+        assert_eq!(handles.process_debugger_thread_id(77), None);
         Ok(())
     }
 

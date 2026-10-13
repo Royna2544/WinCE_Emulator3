@@ -1027,13 +1027,13 @@ impl HandleTable {
         let Some(process_id) = self.process_id(handle) else {
             return false;
         };
-        self.mark_process_exited_by_id(process_id, exit_code)
+        self.finish_process_execution_by_id(process_id, exit_code)
             .is_some()
     }
 
-    /// Mark the canonical birth signaled without claiming its CPU execution is
-    /// already retired. `finish_process_execution_by_id` releases that pin.
-    pub fn mark_process_exited_by_id(
+    /// TerminateProcess requests death and signals the object, but the machine
+    /// retains execution ownership until its actual child-completion boundary.
+    pub fn request_process_termination_by_id(
         &mut self,
         process_id: u32,
         exit_code: u32,
