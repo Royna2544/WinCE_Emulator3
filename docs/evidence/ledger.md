@@ -768,6 +768,46 @@ Unmap. Native VA backing remains global, and no fresh-default, memory
 improvement, Stage 2 or app/map acceptance is claimed; the E-22 live run
 predates this source.
 
+## E-25 internal private-slab fresh-owner diagnostic (2026-10-14, focused green)
+
+The final-source focused receipt is local
+[`evidence/e25-private-slab-20261014/README.md`](../../evidence/e25-private-slab-20261014/README.md)
+(SHA-256 `978F1BAD8E1D9E8EF14479AE06E767A7BCFFC3B23FD287B2E7F2DF2AB6B58E46`).
+It used the D: source, release profile, `unicorn` feature and
+`LIBCLANG_PATH=C:\Program Files\doxygen\bin`. Source SHA-256 values at that
+receipt were `unicorn.rs` `BFD6097EE12992980ED7CC9E3CC3E0FD68DE7A0C64F8A79D2D019F455B8866DE`,
+`memory.rs` `F3F2F226E7523D094EA21B85BEE826F917E5B40849EC78800B05A8FB53D1E077`,
+and `native_engine.rs` `346D2E3DAD0141E7A69BF1FEADC7B429861DEAFC318CA00E0097AE492B9AA18F`.
+Those hashes and all four raw-log hashes below were independently verified
+against the files named in the receipt.
+
+| Focused raw log (same evidence directory) | Observed result | SHA-256 |
+| --- | --- | --- |
+| `native-private.log` | 3/0: unignored E-18 shape plus unowned-native-RAM and cloned/released-pin mapper rejection | `85B93514D1A65290FFB0E47A1F52B4921BF4F1DEF43EE95F38C57B7A8C89A540` |
+| `view-overlap.log` | 1/0: same- and foreign-PID file-view/private-slab conflicts rejected before sync | `4E5CEA3DF68782D4A007916C4206AC59C6E671AF677BEC6752BE694979F0049C` |
+| `persistent-native-memory.log` | 4/0 existing native-memory controls | `17435602923C28155ACC8A36B53746AE479F3DD889FC4983B7C5ACCBCF3877EF` |
+| `native-mapping-pin.log` | 1/0: pin survives metadata transfer and unchecked owner close | `B1D6F9E7D0AC46F81D174DFC8D9E455648E17547CB5AC9BA8F0FCEDF0A01EA5C` |
+
+The unignored `native_private_virtual_write_survives_closed_owner_next_slice`
+fixture uses only the `cfg(test)` private-slab opt-in. Five real MIPS
+instructions store `0x11223345`; canonical backing contains that value
+before completed native-owner closure. A second real MIPS slice under a fresh
+owner loads `0x11223345` at the expected PC with no memory fault. The raw log
+prints `first_written=0x11223345 second_read=0x11223345
+initial=0x11223344`. The historical E-18 red used the legacy internal
+`virtual_alloc` path on an older frozen source; this is not a red-to-green
+comparison of an unchanged fixture and source.
+
+The **full release suite, no-feature suite and alternate-feature checks are
+pending on this source**. Public `VirtualAlloc` remains `LegacySeed`; this
+internal diagnostic does not establish public private-VA semantics, E-20
+two-process same-VA isolation, shared-view coherence, checked native close,
+independent checkpoint clone/relineage, O-P4 fresh-default ownership,
+host-memory improvement or bounded iNavi/map readiness. Hook-time map-error
+injection, a bounded discarded-owner pin-retention policy, and negative
+checkpoint save/restore/direct-Clone controls remain open; a focused pass
+cannot close those gates or Stage 2.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

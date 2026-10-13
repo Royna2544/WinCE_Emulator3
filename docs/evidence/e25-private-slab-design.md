@@ -12,7 +12,7 @@ failure transitions below before source changes begin.
 E-18 is an executed expected red: the first real MIPS slice writes
 `0x11223345` to a private `VirtualAlloc` page, but a new native owner reloads
 the stale seed `0x11223344` ([ledger E-18](ledger.md),
-[`unicorn.rs:54850-54965`](../../src/emulator/unicorn.rs)). The current owner
+[`native_private_virtual_write_survives_closed_owner_next_slice`](../../src/emulator/unicorn.rs)). The current owner
 retains native RAM; `MemorySystem` retains only `initial_bytes`. E-23/E-24 made
 metadata and mutating APIs birth-aware without changing that byte authority
 ([ledger E-23/E-24](ledger.md)). E-20's public child same-VA allocation remains

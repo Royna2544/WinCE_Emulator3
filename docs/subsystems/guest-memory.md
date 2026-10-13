@@ -369,6 +369,46 @@ that use and its failures before matching CE behavior in the emulator.
   `saved_context`; already-executed guest writes are not promised rollback or
   another full-RAM staging image.
 
+### O-P4 checked native close boundary (plan only; all tests unrun)
+
+This refines the checked-close target above; it does not claim that the current
+diagnostic `NativeEngineLease::abort_close()` proves native closure. In
+`unicorn-engine` 2.1.5, `Unicorn::new` owns a private `Rc` inner object whose
+`Drop` discards the `uc_close` result. `get_handle()` does not transfer that
+ownership: calling raw `uc_close` on it and then allowing ordinary `Drop` would
+double-close. `Unicorn::from_handle` is nonowning, but its wrapper is clonable;
+the current lease's `Deref` surface also permits a wrapper alias to escape.
+Therefore the public/O-P4 path needs either a patched consuming checked-close
+API in the wrapper, or one unique, non-`Clone` raw `uc_engine` owner (opened
+with `uc_open`) with only scoped, nonescaping `from_handle` views. Proving no
+wrapper clone or raw-handle alias survives the close is part of that boundary,
+not an assumption. The E-25 internal diagnostic keeps pins conservatively
+quarantined when a discarded wrapper owner cannot prove native closure
+([design](../evidence/e25-private-slab-design.md)); that is not O-P4 acceptance.
+
+For a fresh close-only slice, finish CPU capture and byte sync, stop native
+execution, then call `uc_close` exactly once while the nonowning wrapper, hook
+callback `Box`es, backing pins, and their referents are still alive. Do not
+delete hooks first: the upstream `remove_hook` drops a callback `Box` before
+checking `uc_hook_del`, so failed deletion could leave native user data
+dangling. On verified `UC_ERR_OK`, retire the wrapper and callbacks before
+releasing backing pins, then publish success. On an error or uncertain close
+side effect, disarm the raw owner against retry/double-close, poison the lease,
+retain or quarantine the wrapper, callbacks, referents and pins to host-process
+exit, and forbid native reentry or successful continuation. If those referent
+lifetimes cannot be guaranteed, the raw-owner route is blocked. A future
+persistent-owner/reusable-hook path separately needs checked hook deletion that
+keeps each callback alive until native deletion succeeds.
+
+Before enabling public backing or O-P4, executable controls must inject close
+failure both before and after a possible native side effect and prove one close
+attempt, no double-close, no alias escape, no premature callback/pin drop and
+no success publication. Cover setup abort, failed unmap, hook-deletion failure
+for any reusable owner, a guest-written slab read by a fresh owner, and
+repeated successful closes without retained pins. The current vendored
+`uc_close` normally returns `UC_ERR_OK`, so an explicit failure-injection seam
+is required; none of these gates has been run.
+
 ### Connected migration and executable gates
 
 An optional narrow first slab slice may make internal single-address-space
