@@ -33,6 +33,17 @@ identity, final owner/frame or final-tail success boundary. Some global and
 sparse hook reasons are typed already; this note does not reset those gains.
 Other `emu_stop` paths and failed PC-write/stop combinations remain to audit.
 
+There is a concrete publication-order trap in the ordinary success tail:
+outgoing file views are checked, then `rotate_after_run_slice_handoff` may
+switch the active process, and only *after that* does fallible `uc.finish()`
+remove hooks ([unicorn.rs](../../src/emulator/unicorn.rs)). A sealed success
+cannot be attached to the now-selected `self` after that rotation. The first
+connected report slice must check `finish` before rotation, bind the report
+to the outgoing owner, and publish it before any handoff; this is an ordering
+repair, not a new scheduling policy. The explicit-PC and diagnostic-private
+tails already check outgoing sync and `finish` before returning success, but
+their error paths still need the same one-attempt report discipline.
+
 The vendored Unicorn core's count hook has an internal `emu_counter` and
 `emu_count` ([uc.c](../../vendor/unicorn-engine-sys/uc.c)), but public
 `uc_query` exposes timeout, not a count-stop flag
@@ -52,7 +63,11 @@ through one checked API rather than a mutable `last_*` getter, carries:
   ending process/task/frame observations. Until Stage 3 supplies a canonical
   `FrameIdentity`, a legacy frame observation is explicitly **unbound** and
   cannot authorize a task-frame transition. Never derive creation owner from
-  the Kernel's later selected PID or a debug trace.
+  the Kernel's later selected PID or a debug trace. The current birth lookup
+  is mandatory only for diagnostic private slabs; capture it as an optional
+  fact for every native attempt without imposing a new legacy preflight
+  rejection. The lease's test-only handle address is not a non-reused identity:
+  use an epoch/attempt sequence rather than a recyclable pointer alone.
 - The raw native result, actual timeout query (including query failure),
   independent count-stop observation, requested-PC match, first typed hook
   request and any competing requests, bounded native fault evidence, and
