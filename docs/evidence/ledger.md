@@ -973,6 +973,31 @@ forced query-error and competing-hook controls, and
 preserved native-query provenance in the diagnostic-private error path.
 O-P1, fresh-owner Stage 2, E26 S3-A and live-app acceptance remain open.
 
+### E-28 detached diagnostic report transport (2026-10-14, focused)
+
+The next source slice adds `AttemptExecution { report, result }` to the CPU
+boundary. Its owned report captures a checked host-process-local diagnostic
+ordinal, starting PID/optional birth/TID/PC, raw primary native/count/timeout/
+context observations, typed hook request and raw stop PC before deferred child
+work, plus an outgoing native owner and final observed outcome. A preflight
+rotation or rejected private attempt reports `NoAttempt` with no invented
+native evidence. The frame remains `LegacyUnbound`; neither the ordinal nor
+the selected CPU's later state authorizes a Task transition.
+
+Real-MIPS parent-to-child, checked-finish, preflight, private native-error and
+decoded-exit finish-error controls passed. The decoder now checks outgoing
+view sync and hook teardown before terminating; one injected finish failure
+left the process alive. See the [report controls](../../evidence/e28-run-outcome-20261014/detached-report-expected-red-plan.receipt.md),
+[decoded-exit control](../../evidence/e28-run-outcome-20261014/decoded-exit-ordering.focused.receipt.md)
+and [consumer audit](../../evidence/e28-run-outcome-20261014/main-report-consumer-seam.receipt.md).
+No expected-red report run was captured; the test assertions and
+implementation landed together. The app loop still discards this report via
+its compatibility `Result<()>` wrapper, and the scheduler still reads the
+mutable selected-CPU outcome. The broad run on this newer source was
+interrupted for error-precedence repair and proves nothing. Forced query
+failure, competing hooks, full fallible-tail/partial-effect validation,
+Task/Frame authority, Stage 2 and a bounded app run remain open.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

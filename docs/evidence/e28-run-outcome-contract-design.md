@@ -1,6 +1,7 @@
 # E28 Stage 2 run-outcome contract: one sealed native attempt
 
-Status: **partially connected design, not an acceptance claim** (2026-10-14).
+Status: **observational report transport connected; final Task/Frame seal and
+consumer migration open** (2026-10-14).
 The additive native count-stop query and typed `CountLimit` adapter have
 [focused](../../evidence/e28-count-witness-audit-20261014/adapter-slice.receipt.md)
 and [broad validation](../../evidence/e28-count-witness-validation-20261014/broad-validation.receipt.md);
@@ -23,11 +24,16 @@ locked no-feature passed **1,259/0/14 ignored**
 The Unicorn+desktop/no-trace release check, format and diff checks also
 exited 0; exact source/log hashes are in the
 [post-order validation receipt](../../evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
-The pre-adapter/pre-ordering source
-description below is retained as the design baseline. An immutable
-owner/frame-qualified final report, forced query-error and
-competing-hook controls, and diagnostic-private query-error provenance remain
-open; O-P1, Stage 2 and scheduler migration are not claimed.
+The pre-adapter/pre-ordering source description below is retained as the
+design baseline. A later additive owned `AttemptExecution { report, result }`
+now carries the outgoing primary native attempt's diagnostic ID, owner and
+raw observations through error and child-handoff paths, with `NoAttempt` for
+preflight. It is not a canonical Task/Frame seal: its frame is
+`LegacyUnbound`, the app loop still discards the report, and selected-CPU
+compatibility state still drives scheduling. Complete fallible-tail sealing,
+real C query-error and competing-hook controls remain open; O-P1, Stage 2
+and scheduler migration are not claimed. The broad counts above belong to
+the prior source.
 This narrows [Architecture A3](../ARCHITECTURE.md#a3-execution-and-continuation-boundary),
 [PLAN Stages 2-3](../PLAN.md#migration-sequence-and-acceptance-gates) and
 [O-P1](../DECISIONS.md) into the outcome prerequisite for the

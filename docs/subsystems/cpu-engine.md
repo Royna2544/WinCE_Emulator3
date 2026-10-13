@@ -29,9 +29,12 @@ locked no-feature passed **1,259/0/14 ignored**
 The Unicorn+desktop/no-trace release check, format and diff checks also
 exited 0; exact source/log hashes are in the
 [post-order validation receipt](../../evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
-`NativeSliceOutcome` is still not an immutable owner/frame-qualified
-task-facing `RunOutcome`; O-P1, Stage 2 and S3-A remain open, and
-service-boundary rotation policy is unchanged.
+An additive owned `NativeAttemptReport` now carries per-call diagnostic
+evidence through native execution and a possible child handoff, including
+`NoAttempt` on preflight. Its frame is `LegacyUnbound`, not a canonical
+Task/Frame-qualified `RunOutcome`; the app loop still discards it and
+service-boundary rotation still reads selected-CPU compatibility state.
+O-P1, Stage 2 and S3-A remain open, with the same rotation policy.
 
 ## Current implementation
 
@@ -158,8 +161,12 @@ Search by symbol, not by line number; the file moves.
 After the narrow E-15/E-17/E-19 corrections and E-28 count adapter, the
 remaining connected O-P1 work is:
 
-1. Seal one immutable outgoing-owner/frame-qualified native-attempt report
-   after all fallible context, PC, byte/view sync and lease-finish work.
+1. Finish sealing and consuming the now-returned owned outgoing-attempt
+   report after all fallible context, PC, byte/view sync and lease-finish work.
+   The current report is an observational transport with a checked
+   host-process-local diagnostic ID and `LegacyUnbound` frame, not Task
+   transition authority. Live/monitor callers still discard it through a
+   `Result<()>` wrapper; selected-CPU outcome remains their policy input.
    E-28 supplies a count-stop *request* witness, not an exclusive cause or
    retired-instruction total. The ordinary tail now checks fallible
    `uc.finish()` before handoff, with a focused real-MIPS error/owner control;
