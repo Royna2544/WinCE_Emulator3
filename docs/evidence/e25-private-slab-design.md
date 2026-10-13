@@ -67,6 +67,16 @@ app/map readiness.
   It did **not** exercise `MemorySystem`, API publication, failure injection,
   clones, concurrent host access or iNavi. E-16 only proves an injected
   owner-qualified file-view sync path, not public same-VA memory.
+- The installed `unicorn-engine` 2.1.5 wrapper owns `Unicorn::new` handles
+  through a private `Rc<UnsafeCell<UnicornInner>>`. Its final `Drop` calls
+  `uc_close` but discards the result (`lib.rs:140-165,185-205`); there is no
+  public consuming checked-close or ownership-transfer method. The public
+  `get_handle()` and re-exported raw `uc_close` do not make a checked close
+  safe on that owner: an ordinary subsequent `Drop` would close the same
+  pointer again. `Unicorn::from_handle` creates a separate non-owning wrapper,
+  not a transfer of the original owner. A future patched consuming close or
+  separately raw-owned handle with proved callback/alias teardown is required
+  before E25 can release native pins after verified closure.
 
 ## Authority, identity and minimal data model
 
@@ -181,14 +191,24 @@ acceptable shortcut.
 | Fault repair fails | Preserve the typed error from the hook; request checked native stop and reject continuation. The current `.unwrap_or(false)` path is not sufficient. |
 | Decommit/release/protect fails | Keep canonical old allocation/protection if no guest bytes changed. If native state may have partially changed, poison/close its owner and retain pins until closure; no successful API return or same-VA reuse. |
 | Outgoing legacy sync / hook cleanup fails | No successful saved Context or VM continuation; close/poison owner. Stage, then commit CPU state only after synchronization. Existing live slab writes may remain and must be attributed to the failed attempt. |
-| Owner closes normally | Native pointer mappings and engine-specific blank Context/ledger die before their strong pins may be released. The AddressSpace retains private slabs while allocations live. A fresh owner maps those same slabs. |
+| Owner closes normally | Native pointer mappings and engine-specific blank Context/ledger must die before their strong pins may be released. With the current opaque owning wrapper, native close success is unobservable: quarantine pins before discarding that owner, including the nominal-success path. A future checked-close owner may release them only after it proves closure. The AddressSpace retains private slabs while allocations live; a fresh owner maps those same slabs. |
 
-Add an explicit checked abort/poison-close operation for every error return,
-including pre-run setup, in-hook mapping and post-run sync; it reports cleanup
-failure to the typed backend latch. `NativeEngineLease::Drop` currently calls
-`close(false)` and ignores its result, so it remains only a last-resort
-fail-safe, not success publication. If a native close cannot be established,
-quarantine backing rather than dropping the last pin. Do not infer map
+Add an explicit abort/poison operation for every error return, including
+pre-run setup, in-hook mapping and post-run sync. It must report checked hook
+cleanup errors to the typed backend latch, retain or quarantine pins before
+discarding any owner, and never advertise a native-close proof it does not
+have. `NativeEngineLease::Drop` currently calls `close(false)` and ignores its
+result; even a successful `abort_close()` hook-cleanup result does **not**
+verify the wrapper's native `uc_close`. For the internal E-18 diagnostic,
+quarantine the last strong pin for every discarded owner (normal, abort,
+setup-error and idle rotation) until emulator host-process exit or another
+proven-safe retirement boundary; measure retained bytes and cap diagnostic
+owner rotations. This avoids a
+use-after-free but deliberately permits a diagnostic-only leak; it cannot
+justify public slab backing or fresh-default O-P4. A checked close requires
+either a patched consuming wrapper method or a separate raw-handle ownership
+design that performs one checked `uc_close` after all borrowed wrappers,
+hooks and callbacks have been retired. Do not infer map
 identity solely from `uc.mem_regions()`: it reports extent/protection, not
 the backing pointer or allocation incarnation.
 
@@ -196,9 +216,12 @@ The current normal path rotates at `unicorn.rs:10604` before checked
 `finish()` at line 10606. Successful decoded-process-exit paths return `Ok`
 at lines 10429 and 10479 without `finish()`; the explicit debugger stop
 persists handles before sync/finish at lines 10560-10573. All three exits
-need the same staged publication and checked finish or checked abort-close
+need the same staged publication and checked finish or checked abort/poison
 boundary. No early `Ok`, process retirement, PID rotation or saved Context
-may outlive a failed native close merely because `Drop` eventually ran.
+may outlive a failed checked hook-cleanup boundary merely because `Drop`
+eventually ran. Native-close success cannot yet be asserted on the current
+owning wrapper, so diagnostic-only publication must keep discarded-owner pins
+quarantined; public/O-P4 publication remains blocked.
 
 ## Clone and lineage gate
 
@@ -296,8 +319,10 @@ from that one run.
    `mem_map`/seed only for the opt-in slab-backed private path with an exact
    `mem_map_ptr` ledger. Keep public and other legacy paths explicit.
 4. Implement checked import/fault error latches, map rollback/poison, explicit
-   abort-close and staged continuation/process-exit/stop/rotation. Keep public
-   calls on their legacy backing in this cut; later implement their
+   abort/poison with conservative discarded-owner pin quarantine, and staged
+   continuation/process-exit/stop/rotation. Do not treat hook cleanup as a
+   checked native close. Keep public calls on their legacy backing in this
+   cut; later implement a single-owner checked native-close path and their
    prepare/map/commit and free/protect/decommit transitions before publishing
    slab-backed success. Do not relax the global overlap fence until
    owner-qualified native mapping plus same-owner cross-family collision
