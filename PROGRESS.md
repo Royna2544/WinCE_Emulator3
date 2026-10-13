@@ -40,6 +40,17 @@ references for historical reconstruction.
   `evidence/e12-repaired-pc-green-20261013/post-e12-validation.receipt.md`
   (ledger E-13). This is not fresh-engine default ownership, O-P1/O-P4/O-M1,
   Stage 2, bounded live-app or map/input acceptance.
+- A separate ignored O-M1 control ran two real Unicorn MIPS slices with
+  distinct file-mapping views injected at the same guest VA under two PIDs.
+  It failed at the intended ownership assertion: all-view seeding gave the
+  parent the child's `0x55667788` word (saved `T1=0x55667789` instead of
+  `0x11223345`), and base-only readback applied the child's store to the
+  parent mapping while leaving the child mapping unchanged. The exact
+  observed/required tuple, source/binary/log hashes and raw output are in
+  local `evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md`
+  (ledger E-14). This is an injected-view native failure, not a public
+  same-VA `MapViewOfFile`, private `VirtualAlloc`, fresh-owner or app result;
+  it does not change the post-E-12 suite totals above.
 - D-007 now requires this D: checkout as the only active source and one Cargo
   target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
   matching file hashes) and selected via Cargo's path patch. The initial

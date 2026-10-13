@@ -35,6 +35,15 @@ Refreshed on 2026-10-13. This file is limited to active, plan-aligned work.
      closed-owner control remains expected red at the final owner-closure
      assertion. Resolve O-P4 closed-owner Context transfer and O-M1
      private/shared guest-byte coherence here.
+  1a. Use the executed, ignored E-14 native same-VA control as the O-M1
+      expected-red baseline: all-view seeding supplied the parent with the
+      child's word, then base-only readback wrote the child's store into the
+      parent mapping after two native slices. Qualify native synchronization
+      by captured owner and exact view/mapping identity, then pursue the
+      broader per-address-space allocator and public `MapViewOfFile` gate.
+      The injected-view fixture does not cover private `VirtualAlloc` or
+      fresh-owner persistence (ledger E-14; local
+      `evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md`).
   2. The current typed `NativeSliceOutcome` uses actual `Query::TIMEOUT` and
      routes native errors to failure except validated guest exits, but
      `ServiceBoundary` still combines possible count stops, hook yields and

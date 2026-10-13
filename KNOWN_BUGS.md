@@ -73,8 +73,14 @@ Refreshed on 2026-10-13. This file lists unresolved behavior only.
   final assertion because the default still retains the owner. Its preceding
   Context/guest-store checks passed in that isolated fixture, but a production
   fresh-owner transition is not proved. Outgoing file-view readback now runs
-  before PID rotation; same-VA private/shared ownership remains an open
-  source-audit risk pending genuine two-slice/owner controls, not an observed
+  before PID rotation. A separate ignored E-14 control completed two native
+  MIPS slices with distinct views injected at the same VA under two PIDs and
+  failed at its intended ownership assertion: all-view seeding gave the
+  parent the child's bytes, and base-only readback credited the child's
+  store to the parent mapping. Exact tuple and raw evidence are in local
+  `evidence/stage2-o-m1-same-va-20261013/expected-red.receipt.md` (ledger
+  E-14). Public same-VA `MapViewOfFile`, private `VirtualAlloc` readback and
+  fresh-owner closure remain untested by E-14; this is not an observed
   live-app regression (O-M1/O-P4 and the chat fresh-default design note).
 - Canonical Task/alias ownership is still absent. In eight actual-Kernel
   copy-mirror controls, seven failed on copied alias priority/suspend/exit,
