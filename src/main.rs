@@ -3250,6 +3250,17 @@ impl DesktopRuntime {
         kernel: &mut CeKernel,
         limits: UnicornRunLimits,
     ) -> Result<()> {
+        self.run_cpu_until_report(cpu, kernel, limits).result
+    }
+
+    /// Preserve the native attempt's detached evidence across desktop
+    /// wrappers. Presentation failure happens before any CPU attempt.
+    fn run_cpu_until_report(
+        &mut self,
+        cpu: &mut UnicornMips,
+        kernel: &mut CeKernel,
+        limits: UnicornRunLimits,
+    ) -> wince_emulation_v3::emulator::cpu::AttemptExecution {
         match self {
             Self::Virtual(desktop) => {
                 if limits.live_pump
@@ -3257,13 +3268,13 @@ impl DesktopRuntime {
                 {
                     let mut live_framebuffer =
                         RemoteLiveFramebuffer::new(desktop.framebuffer_mut(), server);
-                    cpu.run_until_import_trap_with_framebuffer_limits(
+                    cpu.run_until_import_trap_with_framebuffer_limits_report(
                         kernel,
                         &mut live_framebuffer,
                         limits,
                     )
                 } else {
-                    cpu.run_until_import_trap_with_framebuffer_limits(
+                    cpu.run_until_import_trap_with_framebuffer_limits_report(
                         kernel,
                         desktop.framebuffer_mut(),
                         limits,
@@ -3272,11 +3283,18 @@ impl DesktopRuntime {
             }
             #[cfg(all(windows, feature = "win32-desktop"))]
             Self::Host(desktop) => {
+                use wince_emulation_v3::emulator::cpu::{AttemptExecution, NativeAttemptReport};
+
                 let (framebuffer, presenter) = desktop.framebuffer_and_presenter_mut();
-                presenter.blit(framebuffer)?;
+                if let Err(err) = presenter.blit(framebuffer) {
+                    return AttemptExecution {
+                        report: NativeAttemptReport::no_attempt_failure(limits, "presenter_blit"),
+                        result: Err(err),
+                    };
+                }
                 let mut live_framebuffer =
                     HostLiveFramebuffer::new(framebuffer, presenter, kernel.remote_server.clone());
-                cpu.run_until_import_trap_with_framebuffer_limits(
+                cpu.run_until_import_trap_with_framebuffer_limits_report(
                     kernel,
                     &mut live_framebuffer,
                     limits,
@@ -3284,14 +3302,21 @@ impl DesktopRuntime {
             }
             #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
             Self::Host(desktop) => {
+                use wince_emulation_v3::emulator::cpu::{AttemptExecution, NativeAttemptReport};
+
                 let (framebuffer, presenter) = desktop.framebuffer_and_presenter_mut();
-                presenter.blit(framebuffer)?;
+                if let Err(err) = presenter.blit(framebuffer) {
+                    return AttemptExecution {
+                        report: NativeAttemptReport::no_attempt_failure(limits, "presenter_blit"),
+                        result: Err(err),
+                    };
+                }
                 let mut live_framebuffer = LinuxHostLiveFramebuffer::new(
                     framebuffer,
                     presenter,
                     kernel.remote_server.clone(),
                 );
-                cpu.run_until_import_trap_with_framebuffer_limits(
+                cpu.run_until_import_trap_with_framebuffer_limits_report(
                     kernel,
                     &mut live_framebuffer,
                     limits,

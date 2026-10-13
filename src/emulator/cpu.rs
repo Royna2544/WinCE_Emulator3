@@ -53,6 +53,15 @@ pub trait CpuBackend: Clone + std::fmt::Debug {
         framebuffer: &mut dyn Framebuffer,
         limits: UnicornRunLimits,
     ) -> Result<()>;
+
+    /// Return the checked result and its immutable per-call evidence together.
+    /// A `NoAttempt` report never implies native execution occurred.
+    fn run_until_import_trap_with_framebuffer_limits_report(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+        limits: UnicornRunLimits,
+    ) -> AttemptExecution;
 }
 
 #[cfg(feature = "unicorn")]

@@ -410,4 +410,21 @@ impl CpuBackend for UnicornMips {
                 .to_owned(),
         ))
     }
+
+    fn run_until_import_trap_with_framebuffer_limits_report(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: &mut dyn Framebuffer,
+        limits: UnicornRunLimits,
+    ) -> AttemptExecution {
+        let mut report = NativeAttemptReport::no_attempt(limits);
+        report.failure_operation = Some("unsupported_cpu_backend");
+        AttemptExecution {
+            report,
+            result: Err(Error::Backend(
+                "built without the `unicorn` feature; core state is ready but CPU execution is disabled"
+                    .to_owned(),
+            )),
+        }
+    }
 }

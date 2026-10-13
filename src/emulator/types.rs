@@ -1,4 +1,13 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    num::NonZeroU64,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use crate::{
+    ce::object::ProcessBirthKey,
+    error::{Error, Result},
+};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LoadedPeModuleInfo {
@@ -24,6 +33,208 @@ pub struct UnicornRunLimits {
     pub wall_clock_limit_ms: u64,
     pub stop_pc: Option<u32>,
     pub live_pump: bool,
+}
+
+/// A diagnostic correlation ordinal for one entered native run in this host
+/// process. It is not a Process, Task, Frame, checkpoint, or scheduler identity.
+/// A new host process may issue the same numeric value after restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DiagnosticAttemptId(NonZeroU64);
+
+static NEXT_DIAGNOSTIC_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
+
+impl DiagnosticAttemptId {
+    /// Allocate immediately before the primary native `emu_start`. Failure
+    /// must prevent native entry; wrapping or saturating would reuse an ID.
+    pub(crate) fn next() -> Result<Self> {
+        Self::next_from(&NEXT_DIAGNOSTIC_ATTEMPT_ID)
+    }
+
+    fn next_from(counter: &AtomicU64) -> Result<Self> {
+        let value = counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current != 0).then(|| current.checked_add(1)).flatten()
+            })
+            .map_err(|_| Error::Backend("diagnostic native-attempt ID exhausted".to_owned()))?;
+        NonZeroU64::new(value)
+            .map(Self)
+            .ok_or_else(|| Error::Backend("diagnostic native-attempt ID is zero".to_owned()))
+    }
+
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Raw attempt evidence distinguishes a fact not collected from a collected
+/// false/zero value and from an error while collecting it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum AttemptObservation<T> {
+    #[default]
+    Uncollected,
+    Value(T),
+    Error(String),
+}
+
+/// Stage 3 has not yet supplied a canonical Task/Frame key to the backend.
+/// This marker cannot authorize a task-frame transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AttemptFrameBinding {
+    #[default]
+    LegacyUnbound,
+}
+
+/// Immutable evidence for one run call, including a native attempt only when
+/// `attempt_id` is present. The process birth is an observation from the
+/// canonical directory, not a newly minted identity. Current clone/checkpoint
+/// lineage remains unbound, so this report cannot authorize Task transitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeAttemptReport {
+    pub(crate) attempt_id: Option<DiagnosticAttemptId>,
+    pub(crate) limits: UnicornRunLimits,
+    pub(crate) start_process_id: Option<u32>,
+    pub(crate) start_process_birth: Option<ProcessBirthKey>,
+    pub(crate) start_thread_id: Option<u32>,
+    pub(crate) start_pc: Option<u32>,
+    pub(crate) frame_binding: AttemptFrameBinding,
+    pub(crate) native_result: AttemptObservation<()>,
+    pub(crate) count_stop_query: AttemptObservation<bool>,
+    pub(crate) timeout_query: AttemptObservation<bool>,
+    pub(crate) context_capture: AttemptObservation<()>,
+    pub(crate) hook_stop_reason: Option<NativeHookStopReason>,
+    pub(crate) requested_pc_stop: Option<u32>,
+    pub(crate) end_process_id: Option<u32>,
+    pub(crate) end_process_birth: Option<ProcessBirthKey>,
+    pub(crate) end_thread_id: Option<u32>,
+    pub(crate) end_pc: Option<u32>,
+    pub(crate) final_outcome: NativeSliceOutcome,
+    pub(crate) failure_operation: Option<&'static str>,
+    /// True when guest/native effects may have occurred before a failure.
+    /// False is meaningful only when the caller proved no such effects.
+    pub(crate) partial_effects_possible: bool,
+}
+
+impl NativeAttemptReport {
+    pub fn no_attempt(limits: UnicornRunLimits) -> Self {
+        Self {
+            attempt_id: None,
+            limits,
+            start_process_id: None,
+            start_process_birth: None,
+            start_thread_id: None,
+            start_pc: None,
+            frame_binding: AttemptFrameBinding::LegacyUnbound,
+            native_result: AttemptObservation::Uncollected,
+            count_stop_query: AttemptObservation::Uncollected,
+            timeout_query: AttemptObservation::Uncollected,
+            context_capture: AttemptObservation::Uncollected,
+            hook_stop_reason: None,
+            requested_pc_stop: None,
+            end_process_id: None,
+            end_process_birth: None,
+            end_thread_id: None,
+            end_pc: None,
+            final_outcome: NativeSliceOutcome::NoAttempt,
+            failure_operation: None,
+            partial_effects_possible: false,
+        }
+    }
+
+    /// A host-side preflight failed before native entry. The operation label
+    /// is diagnostic only; no native result or Task/Frame authority is implied.
+    pub fn no_attempt_failure(limits: UnicornRunLimits, operation: &'static str) -> Self {
+        let mut report = Self::no_attempt(limits);
+        report.failure_operation = Some(operation);
+        report
+    }
+
+    pub fn attempt_id(&self) -> Option<DiagnosticAttemptId> {
+        self.attempt_id
+    }
+
+    pub fn limits(&self) -> UnicornRunLimits {
+        self.limits
+    }
+
+    pub fn start_process_id(&self) -> Option<u32> {
+        self.start_process_id
+    }
+
+    pub fn start_process_birth(&self) -> Option<ProcessBirthKey> {
+        self.start_process_birth
+    }
+
+    pub fn start_thread_id(&self) -> Option<u32> {
+        self.start_thread_id
+    }
+
+    pub fn start_pc(&self) -> Option<u32> {
+        self.start_pc
+    }
+
+    pub fn frame_binding(&self) -> AttemptFrameBinding {
+        self.frame_binding
+    }
+
+    pub fn native_result(&self) -> &AttemptObservation<()> {
+        &self.native_result
+    }
+
+    pub fn count_stop_query(&self) -> &AttemptObservation<bool> {
+        &self.count_stop_query
+    }
+
+    pub fn timeout_query(&self) -> &AttemptObservation<bool> {
+        &self.timeout_query
+    }
+
+    pub fn context_capture(&self) -> &AttemptObservation<()> {
+        &self.context_capture
+    }
+
+    pub fn hook_stop_reason(&self) -> Option<NativeHookStopReason> {
+        self.hook_stop_reason
+    }
+
+    pub fn requested_pc_stop(&self) -> Option<u32> {
+        self.requested_pc_stop
+    }
+
+    pub fn end_process_id(&self) -> Option<u32> {
+        self.end_process_id
+    }
+
+    pub fn end_process_birth(&self) -> Option<ProcessBirthKey> {
+        self.end_process_birth
+    }
+
+    pub fn end_thread_id(&self) -> Option<u32> {
+        self.end_thread_id
+    }
+
+    pub fn end_pc(&self) -> Option<u32> {
+        self.end_pc
+    }
+
+    pub fn final_outcome(&self) -> NativeSliceOutcome {
+        self.final_outcome
+    }
+
+    pub fn failure_operation(&self) -> Option<&'static str> {
+        self.failure_operation
+    }
+
+    pub fn partial_effects_possible(&self) -> bool {
+        self.partial_effects_possible
+    }
+}
+
+/// The report remains available when execution fails. Callers must examine
+/// `result`; a report does not turn a failed native run into success.
+#[derive(Debug)]
+pub struct AttemptExecution {
+    pub report: NativeAttemptReport,
+    pub result: Result<()>,
 }
 
 /// Result of the most recent native CPU attempt for this process. A service
@@ -65,6 +276,74 @@ impl NativeSliceOutcome {
             self,
             Self::UnknownNormalStop | Self::CountLimit | Self::HookStop(_) | Self::NativeDeadline
         )
+    }
+}
+
+#[cfg(test)]
+mod native_attempt_report_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{
+        AttemptFrameBinding, AttemptObservation, DiagnosticAttemptId, NativeAttemptReport,
+        NativeSliceOutcome, UnicornRunLimits,
+    };
+
+    #[test]
+    fn diagnostic_attempt_id_exhaustion_is_checked_without_wrapping() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        let last = DiagnosticAttemptId::next_from(&counter).expect("last available ordinal");
+        assert_eq!(last.get(), u64::MAX - 1);
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+        assert!(DiagnosticAttemptId::next_from(&counter).is_err());
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+
+        let exhausted = AtomicU64::new(u64::MAX);
+        assert!(DiagnosticAttemptId::next_from(&exhausted).is_err());
+        assert_eq!(exhausted.load(Ordering::Relaxed), u64::MAX);
+
+        let invalid_zero = AtomicU64::new(0);
+        assert!(DiagnosticAttemptId::next_from(&invalid_zero).is_err());
+        assert_eq!(invalid_zero.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn diagnostic_attempt_id_source_does_not_reuse_values() {
+        let counter = AtomicU64::new(1);
+        let first = DiagnosticAttemptId::next_from(&counter).unwrap();
+        let second = DiagnosticAttemptId::next_from(&counter).unwrap();
+        assert_eq!(first.get(), 1);
+        assert_eq!(second.get(), 2);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn no_attempt_has_no_native_facts_or_bound_frame() {
+        let limits = UnicornRunLimits {
+            instruction_limit: 17,
+            wall_clock_limit_ms: 25,
+            stop_pc: Some(0x1000),
+            live_pump: true,
+        };
+        let report = NativeAttemptReport::no_attempt(limits);
+        assert_eq!(report.limits(), limits);
+        assert_eq!(report.attempt_id(), None);
+        assert_eq!(report.final_outcome(), NativeSliceOutcome::NoAttempt);
+        assert_eq!(report.frame_binding(), AttemptFrameBinding::LegacyUnbound);
+        assert_eq!(report.native_result(), &AttemptObservation::Uncollected);
+        assert_eq!(report.count_stop_query(), &AttemptObservation::Uncollected);
+        assert_eq!(report.timeout_query(), &AttemptObservation::Uncollected);
+        assert_eq!(report.context_capture(), &AttemptObservation::Uncollected);
+        assert_ne!(
+            AttemptObservation::Uncollected,
+            AttemptObservation::Value(false)
+        );
+        assert!(!report.partial_effects_possible());
+
+        let failed = NativeAttemptReport::no_attempt_failure(limits, "presenter_blit");
+        assert_eq!(failed.attempt_id(), None);
+        assert_eq!(failed.final_outcome(), NativeSliceOutcome::NoAttempt);
+        assert_eq!(failed.failure_operation(), Some("presenter_blit"));
+        assert_eq!(failed.native_result(), &AttemptObservation::Uncollected);
     }
 }
 
