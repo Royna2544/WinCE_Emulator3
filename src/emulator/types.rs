@@ -33,6 +33,8 @@ pub struct UnicornRunLimits {
 pub enum NativeHookStopReason {
     /// A hook observed the elapsed host budget and stopped at a safe PC.
     HostWallBudget,
+    /// The global code hook drained remote control and stopped at a safe PC.
+    RemoteControlService,
     /// The hookless scheduler yielded at a safe PC to a larger visible parked process.
     VisibleParkedPeerYield,
 }
@@ -70,6 +72,10 @@ mod native_slice_outcome_tests {
         assert!(NativeSliceOutcome::UnknownNormalStop.is_service_boundary());
         assert!(
             NativeSliceOutcome::HookStop(NativeHookStopReason::HostWallBudget)
+                .is_service_boundary()
+        );
+        assert!(
+            NativeSliceOutcome::HookStop(NativeHookStopReason::RemoteControlService)
                 .is_service_boundary()
         );
         assert!(

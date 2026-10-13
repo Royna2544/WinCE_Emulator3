@@ -6413,11 +6413,11 @@ impl UnicornMips {
         let blocked_get_message_live_hook = Rc::clone(&blocked_get_message);
         let cross_process_send_yield = Rc::new(RefCell::new(None::<UnicornCrossProcessSendYield>));
         let cross_process_send_yield_hook = Rc::clone(&cross_process_send_yield);
-        // Wall-clock/live-pump stops must not land on a branch delay slot or
+        // Global code-hook stops must not land on a branch delay slot or
         // inside a trampoline sequence: resuming at such a pc executes the
         // delay slot standalone (the branch is lost) and the guest jumps wild.
-        // The stop request is deferred until the next safe instruction.
-        let host_wall_clock_stop_pending = Rc::new(Cell::new(false));
+        // Retain the cause while deferring the request to a safe instruction.
+        let host_wall_clock_stop_pending = Rc::new(Cell::new(None::<NativeHookStopReason>));
         let host_wall_clock_stop_pending_hook = Rc::clone(&host_wall_clock_stop_pending);
         let code_hook_previous_pc = Rc::new(Cell::new(None::<u32>));
         let code_hook_previous_pc_hook = Rc::clone(&code_hook_previous_pc);
@@ -6458,6 +6458,8 @@ impl UnicornMips {
                 "hookless trampoline mode: no per-instruction code hooks installed"
             );
         } else if code_hook_mode == UnicornCodeHookMode::Global {
+            let native_hook_stop_reason_code_hook = Rc::clone(&native_hook_stop_reason);
+            let native_hook_control_error_code_hook = Rc::clone(&native_hook_control_error);
             uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
             if pc != 0 && stop_pc == Some(pc) {
@@ -6479,18 +6481,29 @@ impl UnicornMips {
                     unsafe { &*kernel_ptr },
                 );
             }
-            if host_wall_clock_stop_pending_hook.get() && pc < IMPORT_TRAP_BASE {
+            if let Some(pending_reason) = host_wall_clock_stop_pending_hook.get()
+                && pc < IMPORT_TRAP_BASE
+            {
                 if let Some(target) = import_trap_page_target_for_mips_jr_thunk(uc, pc) {
-                    host_wall_clock_stop_pending_hook.set(false);
-                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
-                    *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
-                        pc: target,
-                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                        instruction: read_unicorn_u32(uc, target),
-                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
-                    });
-                    let _ = uc.emu_stop();
+                    host_wall_clock_stop_pending_hook.set(None);
+                    let safe_pc_write = uc.reg_write(RegisterMIPS::PC, u64::from(target));
+                    let stop_request = uc.emu_stop();
+                    if safe_pc_write.is_ok() && stop_request.is_ok() {
+                        if native_hook_stop_reason_code_hook.get().is_none() {
+                            *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
+                                pc: target,
+                                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                instruction: read_unicorn_u32(uc, target),
+                                elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                            });
+                            native_hook_stop_reason_code_hook.set(Some(pending_reason));
+                        }
+                    } else {
+                        *native_hook_control_error_code_hook.borrow_mut() = Some(format!(
+                            "global deferred stop at JR thunk failed: PC write={safe_pc_write:?}, emu_stop={stop_request:?}"
+                        ));
+                    }
                     return;
                 }
                 let restart_pc = {
@@ -6502,30 +6515,49 @@ impl UnicornMips {
                     )
                 };
                 if let Some(restart_pc) = restart_pc {
-                    host_wall_clock_stop_pending_hook.set(false);
-                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(restart_pc));
-                    *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
-                        pc: restart_pc,
-                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                        instruction: read_unicorn_code_u32(uc, &mapped_code, restart_pc),
-                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
-                    });
-                    let _ = uc.emu_stop();
+                    host_wall_clock_stop_pending_hook.set(None);
+                    let safe_pc_write = uc.reg_write(RegisterMIPS::PC, u64::from(restart_pc));
+                    let stop_request = uc.emu_stop();
+                    if safe_pc_write.is_ok() && stop_request.is_ok() {
+                        if native_hook_stop_reason_code_hook.get().is_none() {
+                            *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
+                                pc: restart_pc,
+                                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                instruction: read_unicorn_code_u32(uc, &mapped_code, restart_pc),
+                                elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                            });
+                            native_hook_stop_reason_code_hook.set(Some(pending_reason));
+                        }
+                    } else {
+                        *native_hook_control_error_code_hook.borrow_mut() = Some(format!(
+                            "global deferred stop at trampoline origin failed: PC write={safe_pc_write:?}, emu_stop={stop_request:?}"
+                        ));
+                    }
                     return;
                 }
                 if !is_control_transfer_target(previous_pc, pc)
                     && !is_mips_delay_slot_pc(|addr| read_unicorn_u32(uc, addr), previous_pc, pc)
                 {
-                    host_wall_clock_stop_pending_hook.set(false);
-                    *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
-                        pc,
-                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                        instruction: read_unicorn_code_u32(uc, &mapped_code, pc),
-                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
-                    });
-                    let _ = uc.emu_stop();
+                    host_wall_clock_stop_pending_hook.set(None);
+                    let safe_pc_write = uc.reg_write(RegisterMIPS::PC, u64::from(pc));
+                    let stop_request = uc.emu_stop();
+                    if safe_pc_write.is_ok() && stop_request.is_ok() {
+                        if native_hook_stop_reason_code_hook.get().is_none() {
+                            *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
+                                pc,
+                                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                instruction: read_unicorn_code_u32(uc, &mapped_code, pc),
+                                elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                            });
+                            native_hook_stop_reason_code_hook.set(Some(pending_reason));
+                        }
+                    } else {
+                        *native_hook_control_error_code_hook.borrow_mut() = Some(format!(
+                            "global deferred stop at safe instruction failed: PC write={safe_pc_write:?}, emu_stop={stop_request:?}"
+                        ));
+                    }
                     return;
                 }
             }
@@ -6547,7 +6579,10 @@ impl UnicornMips {
                     live_blocked,
                 );
                 if live_pump && remote_drained != 0 {
-                    host_wall_clock_stop_pending_hook.set(true);
+                    if host_wall_clock_stop_pending_hook.get().is_none() {
+                        host_wall_clock_stop_pending_hook
+                            .set(Some(NativeHookStopReason::RemoteControlService));
+                    }
                 }
                 if let Err(err) = drain_win32_host_input_to_active_window(unsafe {
                     &mut *kernel_ptr
@@ -6565,7 +6600,10 @@ impl UnicornMips {
                 *counter = counter.wrapping_add(1);
                 if *counter & 0x0fff == 0 {
                     if host_wall_clock_started.elapsed() >= limit {
-                        host_wall_clock_stop_pending_hook.set(true);
+                        if host_wall_clock_stop_pending_hook.get().is_none() {
+                            host_wall_clock_stop_pending_hook
+                                .set(Some(NativeHookStopReason::HostWallBudget));
+                        }
                     }
                 }
             }
@@ -48837,7 +48875,14 @@ mod unicorn_tests {
         MemoryPerms, read_unicorn_u32, reconcile_persistent_native_memory,
         sync_persisted_blobs_to_native,
     };
-    use crate::{ce::gwe::GWL_WNDPROC, ce::kernel::CeKernel, config::RuntimeConfig};
+    use crate::{
+        ce::{
+            framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, VirtualFramebuffer},
+            gwe::GWL_WNDPROC,
+            kernel::CeKernel,
+        },
+        config::RuntimeConfig,
+    };
     use std::{
         cell::RefCell,
         collections::{BTreeMap, HashMap, HashSet, VecDeque},
@@ -48847,6 +48892,45 @@ mod unicorn_tests {
         RegisterMIPS, Unicorn,
         unicorn_const::{Arch, Mode, Prot},
     };
+
+    struct PausingFramebuffer {
+        inner: VirtualFramebuffer,
+        ticks: u32,
+    }
+
+    impl Framebuffer for PausingFramebuffer {
+        fn info(&self) -> FramebufferInfo {
+            self.inner.info()
+        }
+
+        fn pixels(&self) -> &[u8] {
+            self.inner.pixels()
+        }
+
+        fn pixels_mut(&mut self) -> &mut [u8] {
+            self.inner.pixels_mut()
+        }
+
+        fn mark_dirty(&mut self, rect: FramebufferRect) {
+            self.inner.mark_dirty(rect);
+        }
+
+        fn dirty_rects(&self) -> &[FramebufferRect] {
+            self.inner.dirty_rects()
+        }
+
+        fn take_dirty_rects(&mut self) -> Vec<FramebufferRect> {
+            self.inner.take_dirty_rects()
+        }
+
+        fn emulator_tick(&mut self) -> crate::Result<()> {
+            self.ticks += 1;
+            if self.ticks == 1 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            self.inner.emulator_tick()
+        }
+    }
 
     #[test]
     fn create_structw_bytes_match_ce_sdk_layout() {
@@ -54014,6 +54098,25 @@ mod unicorn_tests {
         Ok(cpu)
     }
 
+    fn phase1_global_hook_straight_line_cpu(name: &str) -> crate::Result<super::UnicornMips> {
+        // One long basic block lets the per-instruction global hook reach its
+        // 4096-instruction service point before the amortized block scheduler.
+        const CODE_WORDS: usize = 16384;
+        const CODE_BYTES: usize = CODE_WORDS * 4;
+        let mut bytes = tiny_mips_spinner_pe();
+        bytes.resize(0x200 + CODE_BYTES, 0);
+        write_vec_u32(&mut bytes, 0x98 + 4, CODE_BYTES as u32); // SizeOfCode
+        write_vec_u32(&mut bytes, 0x98 + 56, 0x1000 + CODE_BYTES as u32); // SizeOfImage
+        write_vec_u32(&mut bytes, 0x178 + 8, CODE_BYTES as u32); // virtual size
+        write_vec_u32(&mut bytes, 0x178 + 16, CODE_BYTES as u32); // raw size
+        bytes[0x200..0x200 + CODE_BYTES].fill(0); // MIPS NOPs
+        write_vec_u32(&mut bytes, 0x200 + CODE_BYTES - 8, 0x1000_ffff);
+        let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        Ok(cpu)
+    }
+
     fn phase1_kernel(name: &str) -> crate::Result<crate::ce::kernel::CeKernel> {
         let mut kernel =
             crate::ce::kernel::CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
@@ -54956,6 +55059,126 @@ mod unicorn_tests {
             "the native one-second deadline did not cause this stop"
         );
         native.finish().unwrap();
+        Ok(())
+    }
+
+    fn assert_global_deferred_hook_stop(
+        cpu: &super::UnicornMips,
+        reason: super::NativeHookStopReason,
+    ) {
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::HookStop(reason)
+        );
+        let entry = cpu.entry.unwrap();
+        let saved_pc = cpu.saved_context_pc().expect("saved safe global-hook PC");
+        assert!(saved_pc >= entry + 0x4000 && saved_pc < entry + 0x10000);
+        assert_eq!(
+            (saved_pc - entry) % 0x4000,
+            0,
+            "the global code hook stops after a 4096-instruction service point"
+        );
+        let snapshot = cpu.last_debug_snapshot().unwrap();
+        assert_eq!(snapshot.pc, saved_pc);
+        assert_eq!(
+            snapshot.host_wall_clock_stop.as_ref().map(|stop| stop.pc),
+            Some(saved_pc)
+        );
+        let native = cpu.native_engine.lease().unwrap();
+        assert_eq!(
+            native.reg_read(RegisterMIPS::PC).unwrap(),
+            u64::from(saved_pc)
+        );
+        assert_eq!(
+            native
+                .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
+                .unwrap(),
+            0,
+            "the native one-second deadline did not cause the deferred stop"
+        );
+        native.finish().unwrap();
+    }
+
+    #[test]
+    fn global_code_hook_deferred_host_budget_has_typed_stop_reason() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("phase1-global-budget.exe")?;
+        let mut cpu = phase1_global_hook_straight_line_cpu("phase1-global-budget.exe")?;
+        let mut framebuffer = PausingFramebuffer {
+            inner: VirtualFramebuffer::default_primary()?,
+            ticks: 0,
+        };
+        cpu.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 200,
+                stop_pc: Some(0xdead_beef), // unreachable; selects the global hook
+                live_pump: true,
+            },
+        )?;
+        assert_eq!(framebuffer.ticks, 1, "the global hook serviced the pause");
+        assert_global_deferred_hook_stop(&cpu, super::NativeHookStopReason::HostWallBudget);
+        Ok(())
+    }
+
+    #[test]
+    fn global_code_hook_deferred_remote_control_has_typed_stop_reason() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("phase1-global-remote.exe")?;
+        let mut cpu = phase1_global_hook_straight_line_cpu("phase1-global-remote.exe")?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let server =
+            crate::remote_server::RemoteServer::start(crate::remote_server::RemoteServerConfig {
+                addr: "127.0.0.1:0".parse().unwrap(),
+                ..crate::remote_server::RemoteServerConfig::default()
+            })?;
+        kernel.set_remote_server(server.clone());
+        kernel.remote.set_framebuffer_size(800, 480);
+        let thread_id = cpu.current_thread_id();
+        let hwnd = kernel.create_window_ex_w(
+            thread_id,
+            "GLOBAL_REMOTE",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        for _ in 0..16 {
+            if kernel.gwe.get_message(thread_id).is_none() {
+                break;
+            }
+        }
+        server.enqueue_control_message_for_test(serde_json::json!({
+            "type": "touch",
+            "phase": "tap",
+            "x": 12,
+            "y": 34,
+        }));
+        assert_eq!(server.pending_control_count(), 1);
+        cpu.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 0,
+                stop_pc: Some(0xdead_beef), // unreachable; selects the global hook
+                live_pump: true,
+            },
+        )?;
+        assert_global_deferred_hook_stop(&cpu, super::NativeHookStopReason::RemoteControlService);
+        assert_eq!(server.pending_control_count(), 0);
+        let mut delivered = false;
+        for _ in 0..64 {
+            let Some(message) = kernel.gwe.get_message(thread_id) else {
+                break;
+            };
+            delivered |= message.hwnd == hwnd && message.msg == crate::ce::gwe::WM_LBUTTONDOWN;
+        }
+        assert!(
+            delivered,
+            "the queued remote touch reached the guest window"
+        );
         Ok(())
     }
 
