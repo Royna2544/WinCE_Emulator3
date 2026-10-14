@@ -32972,20 +32972,24 @@ fn try_enter_create_thread_callout<D>(
         let _ = uc.reg_write(RegisterMIPS::V0, 0);
         return true;
     }
-    let (thread_handle, worker_thread_id) =
-        match kernel.try_create_guest_thread(start_address, parameter, suspended) {
-            Ok(created) => created,
-            Err(error) => {
-                let code = if matches!(error, Error::OutOfStructures(_)) {
-                    crate::ce::thread::ERROR_OUT_OF_STRUCTURES
-                } else {
-                    crate::ce::thread::ERROR_INVALID_PARAMETER
-                };
-                kernel.threads.set_last_error(creator_thread_id, code);
-                let _ = uc.reg_write(RegisterMIPS::V0, 0);
-                return true;
-            }
-        };
+    let (thread_handle, worker_thread_id) = match kernel.try_create_guest_thread_for_creator(
+        creator_thread_id,
+        start_address,
+        parameter,
+        suspended,
+    ) {
+        Ok(created) => created,
+        Err(error) => {
+            let code = if matches!(error, Error::OutOfStructures(_)) {
+                crate::ce::thread::ERROR_OUT_OF_STRUCTURES
+            } else {
+                crate::ce::thread::ERROR_INVALID_PARAMETER
+            };
+            kernel.threads.set_last_error(creator_thread_id, code);
+            let _ = uc.reg_write(RegisterMIPS::V0, 0);
+            return true;
+        }
+    };
     if thread_id_ptr != 0
         && checked_host_write(
             uc,
