@@ -1,6 +1,6 @@
 # Known Bugs And Risks
 
-Refreshed on 2026-10-14. This file lists unresolved behavior only.
+Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entries are removed (history: docs/evidence/ledger.md and git).
 
 ## Open Issues
 
@@ -16,287 +16,47 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   ([E-32 receipt](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
   E-33 repaired that isolated handler arithmetic defect and passed native and
   broad tests, but no post-repair app run has tested this failure.
-- The first persistent-engine 650 live trial host-crashed at 129.1081087 s with
-  `0xC0000005`, no watchdog/empty stderr; peak RSS/private were
-  1,662.59 / 1,663.40 MiB. GUID-matched 650 symbols/disassembly place fault
-  RVA `0x85e757` at native `tb_gen_code_mipsel` / TranslationBlock jump-reset
-  initialization. Earlier `subpage_init` labeling used an adjacent BED2 PDB
-  and was wrong.
-  A matching ~1-MiB minidump was later recovered from the exact Windows
-  CrashDumps folder and hash-preserved beside the 650 EXE/PDB under
-  `evidence/legacy-target-release-20261013`; no final native Result/profile
-  or causal diagnosis follows from that recovery alone.
-  Terminal PPM/full traces are absent. Failed650/PDB and evidence are preserved;
-  BED2 is a hash-preserved measured fallback, not the current `target/release`
-  EXE. Current source still builds experimental ownership; do not treat it as
-  stable merely because historical suites passed 1,623/0/3 ignored before
-  E-12, 1,626/0/3 after it, or frozen E-19 passed 1,634/0/4 ignored.
-  Pinned native translation arenas retain touched Windows pages through hook
-  invalidation/flush. Six isolated Stage 0 cases queried a 1 GiB initial arena;
-  three hook-churn cases retained about 243 MiB sampled RSS until owner close,
-  whereas stable/lease/map controls stayed near 7 MiB. Native residency and
-  the 650 failure mechanism remain unattributed; bounded fixture success is
-  not full-backend or application stability.
-- Historically, pre-init native arena requests of1MiB and2MiB both faulted0xC0000005
-  while the initializing size query ran; no actual native size was returned.
-  Both WER faults point to GUID-matched tcg_out8 at RVA0xA2D31. The pinned
-  pristine Windows translation-arena handler requested4MiB at a time and its
-  end branch did not clamp to the reserved end. This source mechanism is consistent
-  with these tiny-reservation failures, but the pristine failure's exact fault
-  address/handler result and any connection to the650 app fault remain
-  unproven. An8MiB tiny smoke
-  passed; that did not validate later tail behavior or a production cap. A
-  E-6 copied-source bounds clamp passed fresh1/2/8MiB/default tiny controls;
-  its8MiB distinct-PC probe observes second-half page commitment before any
-  TB flush and a later successful translation. The matching pristine-handler
-  copy still AVs on1/2MiB and before tail observation. This differential
-  supports an isolated repair, not a production cap, full backend safety or
-  650 causality. A later isolated 2x2 matrix passed24/24 fresh-owned runs
-  and directly recorded a second fault at arena offset4,194,328 with the
-  clipped request4,194,280B and a successful commit. The earlier in-VEH
-  telemetry build stack-overflowed before its first1MiB query; smaller
-  counters did not reproduce it, so its cause remains open. The existing
-  x64 call-based trampoline also lacks unwind metadata; a compliant shadow
-  stack frame alone does not establish exception/unwind safety. A separate
-  leaf-tail-jump candidate passed seven isolated fresh-process controls,
-  including the direct clipped tail, but not concurrent callback teardown,
-  full-backend or app validation. Two synthetic final-partial-page runs at
-  logical4MiB+1 also passed a one-byte clipped commit without observing
-  commitment beyond the host-page-rounded reservation; TCG's guard means
-  this is not a normal translation-block tail or production-budget proof.
-  Sequential VEH owner close/recreate passed twice with handler removal,
-  arena/closure release and a surviving owner's successful tail. The
-  concurrent in-flight callback versus teardown race remains untested. E-33
-  applied the narrow clamp to the vendored production source and passed a new
-  pristine-red/modified-green 1MiB native control, isolated 2MiB control, and
-  combined 1/2/8MiB/default controls plus broad suites. This resolves the
-  isolated small-arena arithmetic defect, not default-cache footprint,
-  concurrent teardown, full-backend app stability, or E-2/E-32 causality
-  ([repair receipt](evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)).
-- Phase1 experimental migration is underway, not complete. Native per-process engines now
-  persist through checked hook-free reuse; exact primary TID/scalar keys can
-  restore full native CPU snapshots. Legacy in-slice per-API thread/callback
-  continuations still restore scalar contexts; task identity/lifecycle and
-  coherent virtual time are not authoritative yet. Global hook removal
-  invalidates translated regions, so cache retention is unproven. Retaining
-  multiple engines beside host blobs raised whole-host RSS in the failed trial;
-  allocation attribution and stable/cache-preserving design remain unproven.
-- The pre-repair persistent-owner E-12 map/unmap attempt failed on its first
-  mapped phase; 64 cycles were not completed, so no churn acceptance follows.
-  Its repaired-PC scalar-fallback FPU loss now has an expected-red/focused-green
-  fresh-owner control (ledger E-13), but that result neither attributes the
-  650 crash nor closes the fresh-engine Stage 2 VM/context gate. Legacy
-  in-hook register helpers still turn some read/write errors into zero or
-  ignored results, and callback/o32 floating-return behavior is unverified.
-- Fresh-per-slice is not yet safe to select from the current dirty source:
-  ordinary guest-written private `VirtualAlloc` bytes lack authoritative
-  readback into host backing, and the separately run closed-owner fixture fails at the
-  final assertion because the default still retains the owner. Its preceding
-  Context/guest-store checks passed in that isolated fixture, but a production
-  fresh-owner transition is not proved. Outgoing file-view readback now runs
-  before PID rotation. Historical E-14 injected two distinct views at one VA
-  under two PIDs and failed after both native MIPS slices: all-view seeding
-  gave the parent the child's bytes, and base-only readback credited the
-  child's store to the parent mapping. On the E-16 O-M1 source, captured-owner
-  seeding and exact-view readback turned this into an unignored passing default
-  regression; closed-live exact readback and ambiguous lazy fail-closed
-  controls also passed. Exact red/green logs and frozen source hash are in
-  local `evidence/stage2-o-m1-same-va-20261013/owner-qualified-native-view.receipt.md`.
-  The later ignored E-18 internal `MemorySystem::virtual_alloc` fixture now
-  demonstrates the private-byte loss: native RAM held `0x11223345` after a
-  guest MIPS store, but a one-instruction load on a fresh owner read stale
-  `0x11223344` from unchanged seed bytes. Expected PC, normal stop and no-
-  fault checks passed. Test-only helpers simulated idle-owner closure;
-  production owner policy is unchanged. Receipt:
-  `evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`.
-  The later test-only source passed its default full release suite
-  (1,632 passed, 0 failed, 4 ignored), both no-trace release checks and the
-  no-feature suite (1,239 passed, 0 failed, 1 ignored); E-18 is the fourth
-  ignored test, not a green private-byte result. Exact source/log hashes are
-  in local `evidence/stage2-o-m1-private-fresh-20261013/post-e18-validation.receipt.md`.
-  E-20 later added a public COREDLL `VirtualAlloc`/`CreateProcessW` two-PID
-  same-VA control; it remains ignored and expected red because the child
-  allocation returns null at the parent's VA. Its later free/query assertions
-  were not reached. Public same-VA `MapViewOfFile`, per-owner lazy fault repair
-  and live-app behavior remain untested; immediate CreateProcess error handling
-  lacks fault injection. The static COREDLL table also lacks ROM-exported
-  `VirtualAllocEx`/`VirtualQueryEx` ordinals, but the target EXE does not
-  directly import those Ex functions (dynamic lookup remains possible).
-  E-22 now records canonical process-birth keys, per-lineage allocation
-  incarnations and explicit private/file-view/locale/Toolhelp/shared-compat
-  source kinds. It does not change the global base-keyed allocation directory,
-  native copy-seeded bytes, Ex target handling or clone lineage. The combined
-  release suite passed 1,647/0/5 ignored and the no-feature suite passed
-  1,248/0/2 ignored. Explicit E-18/E-20 reruns on that source still failed
-  at the intended stale-byte and child-same-VA-allocation assertions
-  (ledger E-22).
-  Its later bounded live run reached the configured 330 s limit and the
-  emulator exited 0 without a monitor trip, yet last observed and terminal
-  frames stayed on splash. Sixteen remote NMEA ACKs alone would not establish
-  guest consumption; retained positive `COM7:` reads do prove injected NMEA
-  bytes reached guest code, while parsing/fix/map use remains unproven. Tap
-  down/up reached the guest window procedure without a map transition. The
-  feed was not input-matched to BED2 (local
-  `evidence/e22-live-20261013T154435Z/observer-captures/files-full-0065.txt`
-  and `observer-captures/messages-0165.txt`). The persistent-owner run's
-  sampled working-set peak was 1,543.9 MiB and private-byte peak was
-  1,554.4 MiB, so survival did not resolve its memory footprint. This is
-  not O-M1/O-P4, Stage 2 or map-readiness acceptance.
-  E-23 now keys private-VA metadata/lookups by process birth and passes two
-  focused release controls, but the global native overlap fence still
-  rejects the E-20 child same-VA allocation. E-18 fresh-owner bytes remain
-  stale. Supplemental Ex arms reject remote targets and are not published
-  by the default export table; this is not public remote Ex support (local
-  `evidence/stage2-e23-owner-va-20261013/focused-owner-va.md`). Full release
-  1,649/0/5 ignored and no-feature 1,250/0/2 ignored passed on the same
-  source. Explicit ignored E-18/E-20 reruns still failed at the intended
-  stale-byte and child-allocation assertions; raw logs are in that evidence
-  folder. E-23 also had a foreign `FileViewLegacy` Free/Flush/Unmap mutation
-  escape despite those passes. E-24 corrected that escape with an owned-view
-  guard and public child-rejection/parent-success regression; full release
-  passed 1,650/0/5 ignored and no-feature 1,251/0/2 ignored (local
-  `evidence/stage2-e24-owner-fileview-20261013/post-e24-validation.receipt.md`).
-  A same-PID DIB view without VA metadata still cannot Unmap, though it can
-  Flush. Explicit E-18/E-20 gates remain red; neither suite closes them.
-- Canonical Task/alias ownership is still absent. In eight actual-Kernel
-  copy-mirror controls, seven failed on copied alias priority/suspend/exit,
-  inferred creation PID, lost boot/primary identity or alias incoherence in a
-  cloned Kernel; only DuplicateHandle(CLOSE_SOURCE) state preservation passed.
-  Exit through one alias did not expose the code through another, so the
-  later alias wake-index assertion was not reached. These are reproducible
-  ownership defects, not a proof that a production Task migration has landed.
-  Three further private-copy controls failed for final-public-handle live
-  task retention, sibling-alias wake indexing and registered-wait target
-  retention after alias closure. Across the thirteen controls, one passes
-  and twelve are expected red (ledger E-8/E-11); genuine native exit and
-  wait acquisition remain unproved. See chat
-  `validation/20261013-task-pin-expected-red-receipt.md`.
+- Persistent-owner 650 trial: host AV at 129.1 s with 1.66 GiB RSS in TCG
+  TranslationBlock initialization; cause unattributed. EXE/PDB/minidump are
+  preserved under `evidence/legacy-target-release-20261013` (ledger E-2 to E-4).
+- TCG code-arena commit tail: the small-arena arithmetic defect is fixed in the
+  vendored source (E-33). Still open: concurrent in-flight VEH-handler versus
+  owner-teardown race, x64 trampoline unwind metadata, and the default 1 GiB
+  per-engine footprint (Stage 8 lane, paused; ledger E-5, E-6, E-33).
+- The persistent-owner E-12 map/unmap churn control failed at its first mapped
+  phase (Stage 8 diagnostic, ledger E-12). Legacy in-hook register helpers
+  still zero failed reads and drop write errors; o32 float-return restore sites
+  are unaudited (CPU page, E-12 follow-ups).
+- Fresh-per-slice is not yet safe: public `VirtualAlloc` private pages are still
+  `LegacySeed`, and E-18 is green only through the `cfg(test)` slab opt-in
+  (E-25). The public two-PID same-VA allocation control (E-20) is red because
+  of the global native overlap fence. A same-PID DIB view without VA metadata
+  can Flush but not Unmap. The immediate CreateProcess view-sync failure path
+  has no fault injection. `VirtualAllocEx`/`VirtualQueryEx` are not exported.
+  History: ledger E-14, E-16, E-18, E-20, E-22 to E-25.
+- Canonical Task/alias ownership is absent: 12 expected-red Task controls live
+  in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are
+  fixed (E-21); thread/task aliases, wait pins and clone lineage are not.
 
-- The newly integrated 354AA0FB build passes1,571 tests but its normal GPS/tap
-  run fails at260.174s with PC0, RA0xe6de4/SP0x7feff1c8 on pool worker10.
-  Event trace records a legitimate signaled0xff4 ready wait (id4029/result0)
-  before the failure; worker5 is suspended at0x321c98. The wait continuation,
-  native branch/jump target and in-slice context switch need provenance checks.
-  Profile startPC26a264/endTID10 alone is not ownership corruption: those fields
-  refer to different points in the slice. Cause/regression attribution remains
-  open; PC0 stays a hard failure. Artifacts: `target/bringup_1013_boundaries_drive_*`.
-  Separate genuine native fixtures now prove unsafe helper-interior handoff
-  can produce PC0 with a valid IAT, and original-PC replay after a completed
-  guest delay duplicates its effect even when the recipient runs cleanly.
-  The entry-only scheduling guard passes1,585 tests and a subsequent normal
-  330.268s GPS/tap run (12DF), exit0/no reported CPU error/watchdog. Exact actual-app
-  attribution remains unproven; this bounded success is not full map readiness.
-  The later BED2 safe-yield build also passes1,593 tests and a clean330.234s
-  run. Wall-clock restart and asynchronous native timeout persistence remain
-  separate unproven scope; neither bounded success proves full map readiness.
-- The historical E-7 actual-backend baseline used `ctl_get_timeout()` as if it
-  reported actual expiry. A counted stop with `Query::TIMEOUT = 0` fabricated a
-  host-wall record, and a nonzero `READ_UNMAPPED` fault returned Ok under a
-  configured positive timeout. The current D: source queries actual expiry,
-  records a typed native outcome and passed the post-E-12 full release suite
-  (1,626 passed, 0 failed, 3 ignored) on the dirty persistent-owner checkout.
-  Unicorn-only and Unicorn+desktop/no-trace release checks and the no-feature
-  suite (1,239 passed, 0 failed, 1 ignored) also passed; a bounded app run
-  remains pending. A later focused O-P1 slice changed the successful residual
-  to `UnknownNormalStop` and proved `HookStop(HostWallBudget)` at one checked
-  block-hook site (ledger E-15); six other debug host-wall writers were
-  untyped on that E-15 source, and no independent native count-stop witness
-  existed on that source. Seven
-  focused controls passed on the first O-P1 source; a follow-up guard kept
-  hook-control failures from being masked by decoded guest exit and passed
-  two host-budget controls. Real hook-control-failure/encoded-exit injection
-  was not run. The final follow-up source passed the full release suite
-  (1,628 passed, 0 failed, 4 ignored); the four ignored tests, including E-14,
-  did not become passes. Both no-trace release checks exited 0, and the
-  no-feature suite passed 1,239/0/1 ignored. The 1,626-pass suite above is
-  historical. A later E-17 source added
-  `HookStop(VisibleParkedPeerYield)` at one checked hookless block-hook site;
-  its real-backend control passed three serial runs without a native timeout
-  or host-wall marker. Frozen E-17 source passed 1,632 release tests (0 failed,
-  3 ignored), both no-trace checks and 1,239 no-feature tests (0 failed,
-  1 ignored); exact hashes are in local
-  `evidence/op1-visible-peer-20261013/post-visible-peer-validation.receipt.md`.
-  The peer was directly constructed, not created through public CreateProcess,
-  and failing Unicorn control APIs were not injected. A later E-19 global
-  code-hook slice types the first observed `RemoteControlService` or
-  `HostWallBudget` deferred stop after checked safe-PC transfer. Its two
-  real-backend focused controls passed in three serial runs (2/0 each);
-  frozen-source full release passed 1,634/0/4 ignored, both no-trace checks
-  exited 0, and no-feature passed 1,239/0/1 ignored. Exact hashes are in
-  local `evidence/op1-global-code-hook-20261013/post-global-stop-validation.receipt.md`.
-  The queued remote input is test-
-  inserted, not a public network-delivery proof. The later E-28 source added
-  a native count-stop *request* query and typed uncontested `CountLimit`, not
-  an exclusive stop cause or retired-instruction count. Direct ARM controls
-  passed stop reversal and next-start reset; one exploratory same-handle
-  nested-start hook probe exited `0xC0000005` before its ambiguity-query
-  assertion and was removed from default tests. The cause is unestablished;
-  actual nested execution remains unvalidated. A read-only audit identifies
-  plausible overlapping Rust `FnMut` access and shared C per-start fields,
-  but not the crash cause; it advises against rerunning that recursive hook
-  probe ([edge receipt](evidence/e28-count-witness-audit-20261014/edge-controls.receipt.md),
-  [risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
-  A separate one-shot checked-finish failure exposed parent-to-child error
-  misattribution; the narrow finish-before-handoff fix and three focused
-  controls now pass
-  ([finish-order receipt](evidence/e28-run-outcome-20261014/finish-order-regression.receipt.md)).
-  The later source passed the locked full release suite **1,674/0/16 ignored**
-  ([raw log](evidence/e28-run-outcome-20261014/broad-validation/release-unicorn-trace-desktop.raw.log));
-  locked no-feature passed **1,259/0/14 ignored**
-  ([raw log](evidence/e28-run-outcome-20261014/broad-validation/no-feature.raw.log)).
-  The Unicorn+desktop/no-trace release check, format and diff checks also
-  exited 0; exact source/log hashes are in the
-  [post-order validation receipt](evidence/e28-run-outcome-20261014/broad-validation/validation.receipt.md).
-  An owned outgoing-attempt report now exists for observation, but it is not
-  a canonical owner/Task/Frame-qualified scheduler result: its frame is
-  `LegacyUnbound`, its ID is host-process-local, the app loop discards it,
-  and rotation still reads the mutable selected-CPU outcome. The earlier
-  detached-report source
-  passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature
-  plus check/format/diff gates
-  ([earlier report-source receipt](evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)).
-  A later executed real-MIPS red showed a failed ordinary checked finish
-  allowing a second native attempt and guest counter progress. The
-  corrected path rejects the retry before `emu_start`; focused 1/0 and full
-  **1,683/0/16 ignored** release plus **1,262/0/14 ignored** no-feature pass
-  ([red](evidence/e28-run-outcome-20261014/ordinary-finish-retry-expected-red.receipt.md),
-  [green](evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
-  Later pre-entry private-page fence reds separately lost a transferred CPU
-  wait, consumed a ready worker's wait before `NoAttempt`, and dropped an
-  orphaned WNDPROC return. The combined source now passes the reproduced
-  [fence **2/0** and executed-wait **5/0** controls](evidence/e28-run-outcome-20261014/private-preentry-ready-and-orphaned-focused-green.receipt.md).
-  A later [ready GetMessage/private-slab control](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)
-  passes **1/0** on a rebuilt source. Other ready-resume families and state
-  consistency when a ready helper consumes state before a native-entry
-  failure are unvalidated; no rollback semantics are claimed.
-  The [latest broad source](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)
-  passes release **1,691/0/16 ignored** and no-feature **1,263/0/14 ignored**,
-  but has not been exercised in a new live iNavi run.
-  Other fallible-tail effect salvage, real C query-error/competing-hook
-  controls, sparse/hookless reasons and typed restart-PC repair remain open.
-  A test-only Rust post-query failure control does not establish a genuine C
-  query failure.
-  Complete O-P1 classification, fresh-owner Stage 2 and live acceptance
-  remain open; the 1M-instruction tick is intact.
+- Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
+  (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been
+  reproduced and its cause is unattributed. PC 0 remains a hard failure.
+- O-P1 hardening (outside the classification contract): fallible-tail effect
+  salvage, genuine C query-error and competing-hook controls, and state
+  consistency for other ready-resume families on a native-entry failure. An
+  exploratory same-handle nested-start hook probe crashed with an AV of
+  unknown cause and was removed from default tests. Receipts: ledger E-28 to
+  E-31.
 - HeapFree does not reuse addresses or release per-process spillover pages.
   Initial/reallocation mapping, ZERO and metadata ordering are now validated,
   but global allocation metadata lacks authoritative private-process ownership,
   immutable reservation footprint and incarnation identity needed for safe reuse.
   No free list, cross-process page reuse or speculative unmapping has landed.
-- Host footprint is too large for the intended lean CE environment: a
-  300 s profile reached sampled RSS 1,187.1 MiB/private 1,195.9 MiB while
-  the app stayed on splash. Eager read-only whole-file retention, writable
-  buffer copies, persistent guest blobs and repeated engine/snapshot copies
-  are distinct costs to measure; virtual reservation is not resident RAM.
-  Bounded read-only windows are implemented and all 1,527 tests pass. The
-  new 330 s run peaks at RSS 562.3 MiB/private 573.2 MiB, materially lower
-  but not yet a fully lean/interactive CE bring-up. Do not assume ordinary process
-  snapshots duplicate full kernel/file buffers: production park/rotation moves
-  CPU/blob owners; full kernel clones belong to optional monitor checkpoints.
-  The reallocation-prerequisite 330 s repeat peaks at 566.0/568.0 MiB, with
-  splash still present; early lower memory samples do not establish a new gain.
-  The integrated callback-context run peaks at 492.6/503.2 MiB; it remains too
-  large and non-interactive, and has a different helper workload distribution.
+- Host footprint is too large. With the persistent owner as default, bounded
+  330 s runs peak at about 1.49-1.55 GiB working set (E-22, E-27, E-29), and
+  E-32 crashed at 1.65 GiB. The BED2 fresh-engine baseline peaked at 562-582
+  MiB (E-1). Translation arenas, guest blobs, file buffers and engine copies
+  are separate costs; virtual reservation is not resident RAM.
 - Gesture FIFO is fixed, but a real tap still took about 1.29 s from successful
   HTTP response to first guest wndproc delivery in the prior 330 s input test,
   and 1.62 s in the bounded-cache repeat.
@@ -350,11 +110,6 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
 - Scheduler/message semantics are not complete for every reentrant wait,
   cancellation, nested send, abort-if-hung, modal-loop, and cross-thread
   result-delivery combination.
-- E-23's green suites missed a foreign legacy-view mutation path: a child
-  can release parent `FileViewLegacy` metadata or commit/remove a parent
-  view through base-only unmap. The E-23 test totals remain historical;
-  owner-checked free/flush/unmap and cross-process controls are required
-  before this metadata slice is considered safe (ledger E-23).
 - In E-22, `happyway_win` process 67/thread 3 revisited a completed WNDPROC
   return stub 2,527 times with no pending callout. Its recorded last return
   lacks caller context, so fabricating a recovery would be unsafe. Parent
@@ -409,16 +164,6 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   process ahead of a runnable visible parked UI process outside the live-pump
   branch. The remaining delay is not explained by unreadable MessageBox UI,
   remote input routing, or pre-COM7 sensor queuing.
-- The stale `happyway_win` escaped visible-message callout no longer remains
-  in `pending-wndproc`; keep watching for fresh send-stack or wait-state leaks
-  before treating the splash transition as purely app readiness.
-- Receiver-terminated sends no longer leave active send-stack depth behind in
-  live startup; the current completed `happyway_win` send result is retained for
-  sender observation without blocking receiver state.
-- Remote-server control input no longer remains stuck in `pendingControlMessages`
-  while live-pump CPU execution stays inside import-heavy guest work,
-  block-hook-visible guest work, or inline wait timeout completions; the current
-  live run drains the queue and posts touch messages to the real splash window.
 
 ## Build And Validation Risks
 
@@ -430,75 +175,3 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   strings from future REGEDIT4 exports may need code-page-aware decoding.
 - `git diff --check` may report CRLF warnings on existing files. Treat new
   non-CRLF whitespace findings as actionable.
-
-## Recently Closed
-
-- Unsafe voluntary raw-yield helper interior: genuine native fresh replay
-  originally lost a not-taken branch path without PC0. Removal of the unsafe
-  fallback preserves the existing safe-yield policy; both outcomes/deferred
-  destinations/fresh scalar replay pass. BED2 passes1,593 tests and the actual
-  330.234s GPS/tap run; it remains splash, so no startup-causality claim follows.
-- Checked initial allocation and remaining scoped native typed-message routes
-  pass all 1,571 tests, feature/build/fmt checks in the installed 354AA0FB build.
-  Full destination RW/RAM preflight, zero-size physical byte, failed-create
-  teardown/scratch lifetime, sent identity/expiry and complete MSG output
-  protection are covered. Its actual app run subsequently failed as above; this is not
-  a map-frontier, memory-reduction or universal scheduler-rollback claim.
-- Authenticated archived WNDPROC recovery now restores SP/GPR/HI/LO (including
-  K0/K1) with validated ownership and native readback, instead of PC-only
-  history. Native caller-epilogue/refusal tests pass; the normal 330 s app run
-  proves original 0x7ffdf578 restoration. This does not close splash-to-map.
-- Two visible typed-payload preparation paths and NotifyIcon's actual CE6
-  152-byte writer are fixed, with sparse persistent-page coverage and adjacent
-  allocation guards. The integrated frozen executable passes 1,552 tests and
-  the actual 330 s GPS/tap run; remaining native delivery routes stay open above.
-- Nested GPS callback ancestry is preserved without changing the 6144-byte
-  grace. MIPS return-chain regressions pass; actual injected NMEA is read in
-  the latest clean 300.773 s run, with no PC-zero/guest CPU exception.
-- Historical CreateProcess traces no longer reverse pre-run choices, and
-  CLI wall limits apply at the loop head. Corrected 600 s run exits cleanly
-  at 600.45 s, without the former external-watchdog livelock termination.
-- YAS526B rough/normal packed-sample semantics are corrected. Nine focused
-  tests pass; no custom -15 modal appeared in the corrected 600 s run.
-- Worker identity is not changed merely because another thread has a visible
-  window. Real thread 6 continues executing and consumes injected GPS bytes.
-- Callback FIFO selection checks receiver eligibility before message removal;
-  DOWN/UP and filtered non-head regressions pass. A 330 s actual-input run
-  delivers DOWN before UP with clean guest returns; this is not map bring-up
-  and does not close the measured delivery lag.
-- Live-pump CreateProcess timeout replay is fixed: parent API return state is
-  committed before child execution. The former RA `0x00059ba0` replay site ran
-  once in the fixed 120 s count=0 / 100 ms run instead of 16 times; PIDs stop at
-  68. The actual-runtime parent/child regression passes.
-- Scheduler TB starts now use a block-specific predecessor delay-slot guard;
-  ordinary targets/fallthrough are eligible, and page-crossing delay slots are
-  covered by a real Unicorn count=0 regression.
-- Global-hook and diagnostic requests now take precedence over sparse flags;
-  both no-trace Unicorn feature profiles compile.
-- The handle-like `pc=0x00001054` no-hook crash is no longer reproduced in the
-  current startup path after blocked scheduler contexts were excluded from
-  direct receiver-work eligibility.
-- Stale blocked-wait records for the thread that just executed are cleaned up
-  only after a successfully finalized `HookStop(_)`/`NativeDeadline` without
-  a requested-PC stop. An E-28 red proved that using the host-wall debug
-  marker before checked teardown could wrongly delete a wait on native error;
-  the focused ordinary/private controls now pass, but other fallible tails
-  remain open (ledger E-28).
-- A saved parked `GetMessage` waiter must still exist in Kernel before it can
-  trigger host idle polling. This source guard covers the stale-ID shape, and
-  its binary-target test passed within the current broad release main suite
-  ([receipt](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)).
-  It does not prove every live-pump pacing or callback interleaving.
-- Remote touch/key input reaches the real iNavi window stack after the
-  scheduler handoff fix. Current COM7 consumption is proven by successful
-  ReadFile payload/transferred-byte records, not host queue emptiness alone.
-- Stale escaped visible-message WndProc callouts no longer block later visible
-  input dispatch after the CPU is already parked at their resume PC.
-- Receiver/window teardown clears active send stacks for terminated synchronous
-  sends.
-- Missing coredll exports for `GetDeviceInformationByDeviceHandle` and
-  `GetDeviceInformationByFileHandle` are closed; they now return CE-style
-  device information for live device handles and covered failure cases.
-- Missing coredll exports for `FindFirstDevice` and `FindNextDevice` are closed;
-  they now enumerate activated device handles with CE-style search state and
-  no-match/stale-handle behavior.
