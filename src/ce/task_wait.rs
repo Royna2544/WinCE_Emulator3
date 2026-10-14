@@ -1,11 +1,13 @@
 //! Transitional authoritative wait storage for the existing Scheduler.
 //!
 //! This migrates wait-record ownership, not the CPU runnable state machine.
-//! The current globally allocated thread ID is the compatibility task key.
-//! Process/incarnation, continuation frames, ready queues and virtual time must
-//! be wired through real thread/engine lifecycle before replacing that key.
+//! Known owners use their canonical thread birth. A numeric TID is retained
+//! only for explicitly legacy records whose birth was never known. Continuation
+//! frames, ready queues and virtual time remain separate migration gates.
 
 use std::collections::BTreeMap;
+
+use crate::ce::object::ThreadBirthKey;
 
 /// Compatibility deadline in the existing wrapping GetTickCount domain.
 /// This deliberately preserves current behavior; it is not a virtual clock
@@ -44,15 +46,40 @@ impl TickDeadline {
 pub(crate) trait TaskWaitRecord {
     fn wait_id(&self) -> u64;
     fn owner_thread_id(&self) -> u32;
+    fn owner_birth(&self) -> Option<ThreadBirthKey>;
 }
 
-/// Each record is owned exactly once by a compatibility task. The wait-ID map
-/// is a derived locator, not a second record store. Multiple records for one
-/// TID are preserved until legacy reentrant continuation frames are migrated.
+/// The only owner index for one wait. An unknown TID must never be inferred to
+/// name a later canonical birth with the same numeric TID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum WaitOwnerKey {
+    Birth(ThreadBirthKey),
+    LegacyUnknownTid(u32),
+}
+
+impl WaitOwnerKey {
+    fn for_record<W: TaskWaitRecord>(record: &W) -> Self {
+        match record.owner_birth() {
+            Some(birth) => {
+                assert_eq!(
+                    record.owner_thread_id(),
+                    birth.thread_id(),
+                    "wait record TID does not match owner birth"
+                );
+                Self::Birth(birth)
+            }
+            None => Self::LegacyUnknownTid(record.owner_thread_id()),
+        }
+    }
+}
+
+/// Each record is owned exactly once by its birth or explicit legacy bucket.
+/// The wait-ID map is a derived locator, not a second record store. Multiple
+/// records for one owner preserve legacy reentrant continuation frames.
 #[derive(Debug, Clone)]
 pub(crate) struct TaskWaitStore<W> {
-    tasks: BTreeMap<u32, BTreeMap<u64, W>>,
-    owners: BTreeMap<u64, u32>,
+    tasks: BTreeMap<WaitOwnerKey, BTreeMap<u64, W>>,
+    owners: BTreeMap<u64, WaitOwnerKey>,
 }
 
 impl<W> Default for TaskWaitStore<W> {
@@ -69,8 +96,8 @@ impl<W: TaskWaitRecord> TaskWaitStore<W> {
     /// coherent. This does not authorize wait-ID reuse or add ABA protection.
     pub(crate) fn insert(&mut self, wait_id: u64, record: W) -> Option<W> {
         assert_eq!(wait_id, record.wait_id(), "wait record identity mismatch");
+        let owner = WaitOwnerKey::for_record(&record);
         let previous = self.remove(&wait_id);
-        let owner = record.owner_thread_id();
         self.tasks.entry(owner).or_default().insert(wait_id, record);
         self.owners.insert(wait_id, owner);
         previous
@@ -111,9 +138,19 @@ impl<W: TaskWaitRecord> TaskWaitStore<W> {
         })
     }
 
-    pub(crate) fn wait_ids_for_thread(&self, thread_id: u32) -> Vec<u64> {
+    /// Direct exact-birth bucket lookup, not a numeric-TID scan.
+    pub(crate) fn wait_ids_for_birth(&self, birth: ThreadBirthKey) -> Vec<u64> {
         self.tasks
-            .get(&thread_id)
+            .get(&WaitOwnerKey::Birth(birth))
+            .map(|records| records.keys().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Explicit compatibility cleanup for records that never had a birth.
+    /// Canonical task exit must not call this with a reused numeric TID.
+    pub(crate) fn legacy_wait_ids_for_thread(&self, thread_id: u32) -> Vec<u64> {
+        self.tasks
+            .get(&WaitOwnerKey::LegacyUnknownTid(thread_id))
             .map(|records| records.keys().copied().collect())
             .unwrap_or_default()
     }
@@ -122,11 +159,13 @@ impl<W: TaskWaitRecord> TaskWaitStore<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ce::object::HandleTable;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct Wait {
         id: u64,
         thread: u32,
+        birth: Option<ThreadBirthKey>,
         payload: u32,
     }
     impl TaskWaitRecord for Wait {
@@ -136,13 +175,39 @@ mod tests {
         fn owner_thread_id(&self) -> u32 {
             self.thread
         }
+
+        fn owner_birth(&self) -> Option<ThreadBirthKey> {
+            self.birth
+        }
     }
     fn wait(id: u64, thread: u32) -> Wait {
         Wait {
             id,
             thread,
+            birth: None,
             payload: id as u32,
         }
+    }
+
+    fn wait_for_birth(id: u64, birth: ThreadBirthKey) -> Wait {
+        Wait {
+            id,
+            thread: birth.thread_id(),
+            birth: Some(birth),
+            payload: id as u32,
+        }
+    }
+
+    fn reused_thread_births(thread_id: u32) -> (ThreadBirthKey, ThreadBirthKey) {
+        let mut handles = HandleTable::default();
+        let old_handle = handles.try_create_thread(thread_id, 0, 0, false).unwrap();
+        let old = handles.thread_birth_key_for_handle(old_handle).unwrap();
+        assert!(handles.mark_thread_exited_by_birth(old, 0));
+        handles.close(old_handle).unwrap();
+        let new_handle = handles.try_create_thread(thread_id, 0, 0, false).unwrap();
+        let new = handles.thread_birth_key_for_handle(new_handle).unwrap();
+        assert_ne!(old, new);
+        (old, new)
     }
 
     #[test]
@@ -155,9 +220,9 @@ mod tests {
             store.values().map(|wait| wait.id).collect::<Vec<_>>(),
             [1, 2, 3]
         );
-        assert_eq!(store.wait_ids_for_thread(20), [1, 2]);
-        assert_eq!(store.wait_ids_for_thread(1), [3]);
-        assert!(store.wait_ids_for_thread(99).is_empty());
+        assert_eq!(store.legacy_wait_ids_for_thread(20), [1, 2]);
+        assert_eq!(store.legacy_wait_ids_for_thread(1), [3]);
+        assert!(store.legacy_wait_ids_for_thread(99).is_empty());
         assert_eq!(store.len(), 3);
         assert!(store.contains_key(&2));
         assert_eq!(store.get(&2), Some(&wait(2, 20)));
@@ -170,10 +235,10 @@ mod tests {
         store.insert(2, wait(2, 7));
         store.insert(3, wait(3, 8));
         assert_eq!(store.remove(&1), Some(wait(1, 7)));
-        assert_eq!(store.wait_ids_for_thread(7), [2]);
+        assert_eq!(store.legacy_wait_ids_for_thread(7), [2]);
         assert_eq!(store.remove(&2), Some(wait(2, 7)));
-        assert!(!store.tasks.contains_key(&7));
-        assert_eq!(store.wait_ids_for_thread(8), [3]);
+        assert!(!store.tasks.contains_key(&WaitOwnerKey::LegacyUnknownTid(7)));
+        assert_eq!(store.legacy_wait_ids_for_thread(8), [3]);
         assert_eq!(store.remove(&2), None);
         assert_eq!(store.len(), 1);
     }
@@ -184,10 +249,10 @@ mod tests {
         store.insert(1, wait(1, 7));
         let mut cloned = store.clone();
         assert_eq!(cloned.insert(1, wait(1, 8)), Some(wait(1, 7)));
-        assert!(cloned.wait_ids_for_thread(7).is_empty());
-        assert_eq!(cloned.wait_ids_for_thread(8), [1]);
-        assert_eq!(store.wait_ids_for_thread(7), [1]);
-        assert!(store.wait_ids_for_thread(8).is_empty());
+        assert!(cloned.legacy_wait_ids_for_thread(7).is_empty());
+        assert_eq!(cloned.legacy_wait_ids_for_thread(8), [1]);
+        assert_eq!(store.legacy_wait_ids_for_thread(7), [1]);
+        assert!(store.legacy_wait_ids_for_thread(8).is_empty());
         assert_eq!(cloned.remove(&1), Some(wait(1, 8)));
         assert!(cloned.tasks.is_empty());
         assert!(cloned.owners.is_empty());
@@ -197,6 +262,47 @@ mod tests {
     #[should_panic(expected = "wait record identity mismatch")]
     fn task_wait_store_rejects_record_key_mismatch() {
         TaskWaitStore::default().insert(2, wait(1, 7));
+    }
+
+    #[test]
+    #[should_panic(expected = "wait record TID does not match owner birth")]
+    fn task_wait_store_rejects_birth_tid_mismatch_before_replacing_a_wait() {
+        let (birth, _) = reused_thread_births(7);
+        let mut record = wait_for_birth(1, birth);
+        record.thread = 8;
+        TaskWaitStore::default().insert(1, record);
+    }
+
+    #[test]
+    fn task_wait_store_keeps_exact_births_and_legacy_tids_separate() {
+        let (old, new) = reused_thread_births(7);
+        let mut store = TaskWaitStore::default();
+        store.insert(4, wait_for_birth(4, old));
+        store.insert(1, wait(1, 7));
+        store.insert(3, wait_for_birth(3, old));
+        store.insert(2, wait_for_birth(2, new));
+
+        assert_eq!(store.wait_ids_for_birth(old), [3, 4]);
+        assert_eq!(store.wait_ids_for_birth(new), [2]);
+        assert_eq!(store.legacy_wait_ids_for_thread(7), [1]);
+        assert_eq!(
+            store.values().map(|record| record.id).collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+
+        let mut clone = store.clone();
+        for id in clone.wait_ids_for_birth(old) {
+            clone.remove(&id).unwrap();
+        }
+        assert!(clone.wait_ids_for_birth(old).is_empty());
+        assert_eq!(clone.wait_ids_for_birth(new), [2]);
+        assert_eq!(clone.legacy_wait_ids_for_thread(7), [1]);
+        assert_eq!(store.wait_ids_for_birth(old), [3, 4]);
+
+        clone.remove(&1).unwrap();
+        clone.remove(&2).unwrap();
+        assert!(clone.tasks.is_empty());
+        assert!(clone.owners.is_empty());
     }
 
     #[test]

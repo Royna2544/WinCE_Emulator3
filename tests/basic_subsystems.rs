@@ -781,7 +781,7 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
                         kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
                     }
                 }
-                SchedulerBlockedWaitKind::ModalMessageBox => kernel.gwe.has_message_filtered(
+                SchedulerBlockedWaitKind::ModalMessageBox { .. } => kernel.gwe.has_message_filtered(
                     blocked.thread_id,
                     None,
                     wince_emulation_v3::ce::gwe::WM_PAINT,
@@ -1333,7 +1333,7 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
             SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
             }
-            SchedulerBlockedWaitKind::ModalMessageBox => false,
+            SchedulerBlockedWaitKind::ModalMessageBox { .. } => false,
             SchedulerBlockedWaitKind::PopupMenuModal { .. } => false,
             SchedulerBlockedWaitKind::ClipboardRender { .. } => false,
         }),
@@ -1443,7 +1443,7 @@ fn remote_serial_injection_queues_scheduler_comm_event_candidates() -> Result<()
             SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
             }
-            SchedulerBlockedWaitKind::ModalMessageBox => false,
+            SchedulerBlockedWaitKind::ModalMessageBox { .. } => false,
             SchedulerBlockedWaitKind::PopupMenuModal { .. } => false,
             SchedulerBlockedWaitKind::ClipboardRender { .. } => false,
         }),

@@ -88,7 +88,9 @@ pub enum SchedulerBlockedWaitKind {
     SendMessage {
         send_id: u64,
     },
-    ModalMessageBox,
+    ModalMessageBox {
+        dialog_hwnd: u32,
+    },
     PopupMenuModal {
         mouse_message_max: u32,
     },
@@ -133,6 +135,10 @@ impl TaskWaitRecord for SchedulerBlockedWait {
 
     fn owner_thread_id(&self) -> u32 {
         self.thread_id
+    }
+
+    fn owner_birth(&self) -> Option<ThreadBirthKey> {
+        self.owner_birth
     }
 }
 
@@ -196,6 +202,9 @@ impl Scheduler {
         self.record_wait_result(reason);
     }
 
+    /// Legacy/fixture compatibility registration for a wait with no known
+    /// canonical birth. Production callers must publish through a verified
+    /// birth-bearing Kernel path instead.
     pub fn register_blocked_wait(
         &mut self,
         thread_id: u32,
@@ -221,8 +230,9 @@ impl Scheduler {
         )
     }
 
-    /// Registers an ordered raw wait set alongside its canonical wake keys.
-    /// The keys are an index, not wait-target lifetime references.
+    /// Legacy/fixture compatibility registration with canonical wake keys.
+    /// The keys are an index, not wait-target lifetime references. Production
+    /// callers must publish through a verified birth-bearing Kernel path.
     pub fn register_blocked_wait_with_keys(
         &mut self,
         thread_id: u32,
@@ -247,8 +257,10 @@ impl Scheduler {
         )
     }
 
-    /// Publishes a fully prepared ordered wait set. Each `Some` pin was
-    /// acquired by Kernel before publication and remains attached to its slot.
+    /// Low-level publication boundary for a fully prepared ordered wait set.
+    /// Each `Some` pin was acquired by Kernel before publication and remains
+    /// attached to its slot. `None` birth is for explicit legacy compatibility
+    /// only; production producers must have Kernel verify a live birth first.
     pub fn register_blocked_wait_with_keys_and_pins(
         &mut self,
         thread_id: u32,
@@ -271,6 +283,13 @@ impl Scheduler {
             pinned_targets.len(),
             "each raw wait handle must have one ordered pin slot"
         );
+        if let Some(birth) = owner_birth {
+            assert_eq!(
+                thread_id,
+                birth.thread_id(),
+                "wait record TID does not match owner birth"
+            );
+        }
         self.next_wait_id = self.next_wait_id.wrapping_add(1).max(1);
         self.next_wait_sequence = self.next_wait_sequence.wrapping_add(1);
         let id = self.next_wait_id;
@@ -294,7 +313,7 @@ impl Scheduler {
             wait.kind,
             SchedulerBlockedWaitKind::GetMessage { .. }
                 | SchedulerBlockedWaitKind::MsgWait { .. }
-                | SchedulerBlockedWaitKind::ModalMessageBox
+                | SchedulerBlockedWaitKind::ModalMessageBox { .. }
                 | SchedulerBlockedWaitKind::PopupMenuModal { .. }
         ) {
             self.message_wait_queues
@@ -406,19 +425,17 @@ impl Scheduler {
         self.blocked_waits.len()
     }
 
-    /// Compatibility task-owned wait IDs, including legacy reentrant frames.
-    /// Kernel cancellation must still use remove_blocked_wait so all derived
-    /// subscriptions and pulse/comm-event bookkeeping are retired normally.
+    /// IDs for explicit legacy records with unknown birth only. Canonical
+    /// task exit must use `waiter_ids_for_birth`; a later birth with this TID
+    /// must not inherit unknown records. Remove by ID to retire subscriptions.
     pub fn waiter_ids_for_thread(&self, thread_id: u32) -> Vec<u64> {
-        self.blocked_waits.wait_ids_for_thread(thread_id)
+        self.blocked_waits.legacy_wait_ids_for_thread(thread_id)
     }
 
+    /// Direct exact-birth owner lookup. The wait store is authoritative;
+    /// subscription queues and the wait-ID locator are derived only.
     pub fn waiter_ids_for_birth(&self, owner_birth: ThreadBirthKey) -> Vec<u64> {
-        self.blocked_waits
-            .values()
-            .filter(|wait| wait.owner_birth == Some(owner_birth))
-            .map(|wait| wait.id)
-            .collect()
+        self.blocked_waits.wait_ids_for_birth(owner_birth)
     }
 
     pub fn waiter_ids_for_handle(&self, handle: u32) -> Vec<u64> {
@@ -604,6 +621,94 @@ pub fn blocked_wait_timed_out(wait: &SchedulerBlockedWait, now_ms: u32) -> bool 
 #[cfg(test)]
 mod tests {
     use super::{Scheduler, SchedulerBlockedWaitKind, blocked_wait_timed_out};
+    use crate::ce::object::{HandleTable, ThreadBirthKey};
+
+    fn reused_thread_births(thread_id: u32) -> (ThreadBirthKey, ThreadBirthKey) {
+        let mut handles = HandleTable::default();
+        let old_handle = handles.try_create_thread(thread_id, 0, 0, false).unwrap();
+        let old = handles.thread_birth_key_for_handle(old_handle).unwrap();
+        assert!(handles.mark_thread_exited_by_birth(old, 0));
+        handles.close(old_handle).unwrap();
+        let new_handle = handles.try_create_thread(thread_id, 0, 0, false).unwrap();
+        let new = handles.thread_birth_key_for_handle(new_handle).unwrap();
+        assert_ne!(old, new);
+        (old, new)
+    }
+
+    fn register_birth_wait(
+        scheduler: &mut Scheduler,
+        birth: ThreadBirthKey,
+        kind: SchedulerBlockedWaitKind,
+    ) -> u64 {
+        scheduler.register_blocked_wait_with_keys_and_pins(
+            birth.thread_id(),
+            Some(birth),
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            kind,
+            100,
+            25,
+        )
+    }
+
+    #[test]
+    fn scheduler_cancels_only_exact_birth_and_keeps_legacy_unknown_separate() {
+        let (old, new) = reused_thread_births(7);
+        let mut scheduler = Scheduler::default();
+        let old_modal = register_birth_wait(
+            &mut scheduler,
+            old,
+            SchedulerBlockedWaitKind::ModalMessageBox {
+                dialog_hwnd: 0x20000,
+            },
+        );
+        let unknown = scheduler.register_blocked_wait(
+            7,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Sleep,
+            100,
+            25,
+        );
+        let new_sleep = register_birth_wait(&mut scheduler, new, SchedulerBlockedWaitKind::Sleep);
+        let old_nested = register_birth_wait(&mut scheduler, old, SchedulerBlockedWaitKind::Sleep);
+        assert_eq!(scheduler.waiter_ids_for_birth(old), [old_modal, old_nested]);
+        assert_eq!(scheduler.waiter_ids_for_birth(new), [new_sleep]);
+        assert_eq!(scheduler.waiter_ids_for_thread(7), [unknown]);
+        assert_eq!(
+            scheduler
+                .blocked_waits()
+                .map(|wait| wait.id)
+                .collect::<Vec<_>>(),
+            [old_modal, unknown, new_sleep, old_nested]
+        );
+        assert_eq!(scheduler.message_waiter_ids_for_thread(7), [old_modal]);
+
+        scheduler.queue_pending_wake_ids([old_modal, new_sleep]);
+        let mut clone = scheduler.clone();
+        for id in clone.waiter_ids_for_birth(old) {
+            clone.remove_blocked_wait(id).unwrap();
+        }
+        assert!(clone.waiter_ids_for_birth(old).is_empty());
+        assert!(clone.message_waiter_ids_for_thread(7).is_empty());
+        assert_eq!(clone.waiter_ids_for_birth(new), [new_sleep]);
+        assert_eq!(clone.waiter_ids_for_thread(7), [unknown]);
+        assert_eq!(scheduler.waiter_ids_for_birth(old), [old_modal, old_nested]);
+        assert!(!blocked_wait_timed_out(
+            clone.blocked_wait(new_sleep).unwrap(),
+            124
+        ));
+        assert!(blocked_wait_timed_out(
+            clone.blocked_wait(new_sleep).unwrap(),
+            125
+        ));
+        clone.remove_blocked_wait(unknown).unwrap();
+        clone.remove_blocked_wait(new_sleep).unwrap();
+        assert_eq!(clone.waiter_count(), 0);
+        assert!(clone.message_waiter_ids_for_thread(7).is_empty());
+    }
 
     #[test]
     fn scheduler_task_owned_cancellation_preserves_other_tasks_and_cleans_subscriptions() {
