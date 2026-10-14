@@ -4,7 +4,7 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-14 Final-Byte Main-Image Sealing, Read-Only Coverage
+## 2026-10-14 E-43 Final-Byte Main-Image Source Gate
 
 - The main EXE loader now partitions its final import- and trampoline-patched
   bytes into sealed R/RX and mutable copy-backed runs. Final one-time branch
@@ -20,9 +20,16 @@ references for historical reconstruction.
   backing, and 5,648,384 B sealed main-image backing. Runtime heap spillover
   and later DLL loads are not in that startup inventory. E-38's 55.78-MiB
   PID-1 `blob_mb` mean is an older live, per-slice truncated total, not a
-  matched byte or speed comparison. Direct native-write safety and final-
-  source validation remain open; no new app launch, mount write, boot timing,
-  or map-readiness claim follows.
+  matched byte or speed comparison.
+- The final source passed the serial release `unicorn,trace,win32-desktop`
+  workspace suite **1,761/0/17 ignored** across 17 result blocks, paired
+  debug no-feature **1,303/0/13 ignored** across 17 blocks, and the debug
+  `unicorn,win32-desktop` no-trace check. Focused patched-branch, mutable-IAT,
+  direct native-write overlap, file-view and malformed-blob controls passed.
+  Earlier reds are diagnostics, not signoff. The [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md)
+  pins exact source, PE-input and raw-log hashes. Exhaustive host-write audit,
+  `PrivatePageBudget` treatment and matched app behavior remain open; there
+  was no new app launch, mount write, boot timing or map-readiness claim.
 
 ## 2026-10-14 E-42 Immutable Image-Page Eligibility Source Gate
 

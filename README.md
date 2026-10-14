@@ -18,11 +18,11 @@ remote-control HTTP/WebSocket surface.
   private-VM native same-VA A→B→A isolation is validated. D-008 public
   shared-view named A→B→A and same-mapping alias controls pass focused tests
   and both frozen-source broad suites. One sealed task/frame-qualified run
-  outcome, image/heap backing, Stage 2 and the Stage 3 task migration remain
-  open. After E-42's historical selector-only gate, the main EXE loader now
-  seals final patched R/RX bytes and retains mutable runs copy-backed; the
-  direct native-write safety gate is still under validation.
-  Persistent-owner architecture is deferred to Stage 8.
+  outcome, remaining image/heap backing, Stage 2 and the Stage 3 task
+  migration remain open. After E-42's historical selector-only gate, the main
+  EXE loader now seals final patched R/RX bytes and retains mutable runs
+  copy-backed. Its E-43 source-bound gate passes, while full Stage 2/live
+  acceptance remains open. Persistent-owner architecture is deferred to Stage 8.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
@@ -114,9 +114,12 @@ remote-control HTTP/WebSocket surface.
   **36,679,680 B (34.980469 MiB)**, including 16 MiB of heap backing, 4 MiB
   of stack backing, and 5,648,384 B of sealed main-image bytes. The earlier
   E-42 selector and 155-page equality-filter results are historical. This
-  probe did not execute iNavi or touch writable mounts; host-write safety,
-  final-source gates, app speed/memory, and map readiness remain unproved
-  ([coverage and blob log](evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-06.raw.log)).
+  probe did not execute iNavi or touch writable mounts. The final source
+  passed release `unicorn,trace,win32-desktop` **1,761/0/17 ignored** and
+  paired debug no-feature **1,303/0/13 ignored**, both across 17 blocks;
+  focused native-write overlap tests and a no-trace check also passed.
+  Exhaustive host-write audit, budget accounting, app speed/memory, and map
+  readiness remain open ([E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md)).
 - An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
   and remained on the genuine splash, not the map. Guest `COM7:` reads
   transferred injected raw NMEA bytes, and tap down/up WNDPROC returns were

@@ -61,11 +61,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   copy-backed. A read-only production-loader probe sealed 1,379/2,168 real
   iNavi image pages (5.386719 MiB), including 1,224 with final patched
   bytes, and counted 36,679,680 B (34.980469 MiB) in the initial owner's
-  mapped blobs. Direct native-write guard coverage, final-source validation,
-  `PrivatePageBudget` treatment, and an approved matched app run remain open.
+  mapped blobs. Focused direct native-write overlap controls and final-source
+  broad gates passed; an exhaustive host-write inventory, memory-mode
+  checkpoint relineage, `PrivatePageBudget` treatment, and an approved matched
+  app run remain open.
   The earlier 155-page original-byte filter result is historical; no new app
   memory, speed, or map-readiness gain has been measured
-  ([load-only log](evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-06.raw.log),
+  ([E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
 - Canonical Task/alias ownership is absent: 12 expected-red Task controls live
   in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are
