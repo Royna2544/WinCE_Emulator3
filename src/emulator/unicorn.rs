@@ -10683,6 +10683,7 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         active_thread_id,
+                        &current_thread_id_hook,
                         &blocked_send_message_timeout_hook,
                         &running_guest_thread_hook,
                     )
@@ -20704,8 +20705,12 @@ fn verified_native_send_message_timeout_birth(
         || wait.owner_birth != Some(birth)
         || birth.thread_id() != blocked.thread_id
         || kernel.handles.thread_birth_key_by_id(blocked.thread_id) != Some(birth)
-        || !kernel.handles.thread_execution_live_by_id(blocked.thread_id)
-        || kernel.handles.thread_creation_owner_by_id(blocked.thread_id)
+        || !kernel
+            .handles
+            .thread_execution_live_by_id(blocked.thread_id)
+        || kernel
+            .handles
+            .thread_creation_owner_by_id(blocked.thread_id)
             != Some(blocked.owner_process_birth)
         || kernel
             .handles
@@ -20719,9 +20724,35 @@ fn verified_native_send_message_timeout_birth(
         && sent.sender_thread_id == Some(blocked.thread_id)
         && sent.sender_process_id == Some(blocked.owner_process_birth.process_id())
         && sent.receiver_thread_id == blocked.receiver_thread_id
-        && sent.result_ptr == (blocked.block_state.result_ptr != 0).then_some(blocked.block_state.result_ptr)
-        && sent.timeout_ms == Some(blocked.block_state.timeout_ms))
-    .then_some(birth)
+        && sent.result_ptr
+            == (blocked.block_state.result_ptr != 0).then_some(blocked.block_state.result_ptr)
+        && sent.timeout_ms == Some(blocked.block_state.timeout_ms)
+        && sent.send_timeout_flags == blocked.block_state.flags)
+        .then_some(birth)
+}
+
+#[cfg(feature = "unicorn")]
+fn native_send_message_timeout_running_handle(
+    kernel: &CeKernel,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    thread_id: u32,
+    birth: crate::ce::object::ThreadBirthKey,
+) -> Option<u32> {
+    let pseudo = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+    let Some((running_id, handle)) = *running_thread.borrow() else {
+        return Some(pseudo);
+    };
+    if running_id != thread_id {
+        return None;
+    }
+    if handle == pseudo || kernel.handles.thread_birth_key_for_handle(handle) == Some(birth) {
+        Some(handle)
+    } else if kernel.handles.thread_birth_key_for_handle(handle).is_none() {
+        // The final public alias may close while the execution birth lives.
+        Some(pseudo)
+    } else {
+        None
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -20750,6 +20781,9 @@ fn retire_stale_send_message_timeout_wait(
         blocked.thread_id,
         blocked.owner_process_birth.process_id(),
         blocked.receiver_thread_id,
+        (blocked.block_state.result_ptr != 0).then_some(blocked.block_state.result_ptr),
+        Some(blocked.block_state.timeout_ms),
+        blocked.block_state.flags,
     );
 }
 
@@ -20781,11 +20815,17 @@ fn try_block_for_send_message_timeout_wait<D>(
         if blocked.thread_id != thread_id {
             return false;
         }
-        if verified_native_send_message_timeout_birth(kernel, &blocked)
-            != Some(blocked.owner_birth)
+        let running_handle = native_send_message_timeout_running_handle(
+            kernel,
+            running_thread,
+            thread_id,
+            blocked.owner_birth,
+        );
+        if verified_native_send_message_timeout_birth(kernel, &blocked) != Some(blocked.owner_birth)
             || verified_native_register_birth(kernel, current_thread_id, thread_id)
                 != Some(blocked.owner_birth)
             || kernel.current_process_birth_key() != Some(blocked.owner_process_birth)
+            || running_handle.is_none()
         {
             retire_stale_send_message_timeout_wait(kernel, &blocked);
             *blocked_smt.borrow_mut() = None;
@@ -20850,6 +20890,7 @@ fn try_block_for_send_message_timeout_wait<D>(
             return true;
         }
         current_thread_id.set_verified(blocked.owner_birth);
+        *running_thread.borrow_mut() = Some((thread_id, running_handle.expect("verified handle")));
         return true;
     }
 
@@ -20864,21 +20905,26 @@ fn try_block_for_send_message_timeout_wait<D>(
         let _ = uc.emu_stop();
         return true;
     };
-    let sender_birth = verified_native_register_birth(kernel, current_thread_id, thread_id).filter(
-        |_| kernel.handles.thread_creation_owner_by_id(thread_id) == Some(owner_process_birth),
-    );
-    let thread_handle = running_thread
-        .borrow()
-        .and_then(|(id, handle)| (id == thread_id).then_some(handle))
-        .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
-    let Some(sender_birth) = sender_birth.filter(|birth| {
-        thread_handle == crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
-            || kernel.handles.thread_birth_key_for_handle(thread_handle) == Some(*birth)
-    }) else {
+    let sender_birth =
+        verified_native_register_birth(kernel, current_thread_id, thread_id).filter(|_| {
+            kernel.handles.thread_creation_owner_by_id(thread_id) == Some(owner_process_birth)
+        });
+    let Some(sender_birth) = sender_birth else {
         tracing::error!(
             target: "ce.gwe",
             thread_id,
             "rejected SendMessageTimeout before queueing from stale or mismatched sender birth"
+        );
+        let _ = uc.emu_stop();
+        return true;
+    };
+    let Some(thread_handle) =
+        native_send_message_timeout_running_handle(kernel, running_thread, thread_id, sender_birth)
+    else {
+        tracing::error!(
+            target: "ce.gwe",
+            thread_id,
+            "rejected SendMessageTimeout with mismatched running-thread metadata"
         );
         let _ = uc.emu_stop();
         return true;
@@ -20953,8 +20999,50 @@ fn try_resume_blocked_send_message_timeout<D>(
     let Some(blocked) = blocked_state else {
         return false;
     };
+    if verified_native_send_message_timeout_birth(kernel, &blocked) != Some(blocked.owner_birth)
+        || kernel.current_process_birth_key() != Some(blocked.owner_process_birth)
+    {
+        retire_stale_send_message_timeout_wait(kernel, &blocked);
+        *blocked_smt.borrow_mut() = None;
+        tracing::error!(
+            target: "ce.gwe",
+            wait_id = blocked.wait_id,
+            thread_id = blocked.thread_id,
+            "retired stale SendMessageTimeout scheduler frame before consuming reply or deadline"
+        );
+        let _ = uc.emu_stop();
+        return true;
+    }
     if active_thread_id == blocked.thread_id {
         return false;
+    }
+    let active_birth = if save_active_context {
+        let Some(birth) =
+            verified_native_register_birth(kernel, current_thread_id, active_thread_id)
+        else {
+            tracing::error!(
+                target: "ce.gwe",
+                active_thread_id,
+                "cannot suspend active native registers without verified birth"
+            );
+            let _ = uc.emu_stop();
+            return true;
+        };
+        Some(birth)
+    } else {
+        None
+    };
+    let active_running_handle = active_birth.and_then(|birth| {
+        native_send_message_timeout_running_handle(kernel, running_thread, active_thread_id, birth)
+    });
+    if save_active_context && active_running_handle.is_none() {
+        tracing::error!(
+            target: "ce.gwe",
+            active_thread_id,
+            "cannot suspend active SendMessageTimeout context with mismatched running metadata"
+        );
+        let _ = uc.emu_stop();
+        return true;
     }
     let now_ms = kernel.timers.tick_count();
     let elapsed = now_ms.wrapping_sub(blocked.block_state.start_ms);
@@ -20966,9 +21054,36 @@ fn try_resume_blocked_send_message_timeout<D>(
     if !result_ready && !timed_out {
         return false;
     }
+    if save_active_context {
+        let mut current = SuspendedGuestThread {
+            thread_id: active_thread_id,
+            thread_birth: active_birth,
+            thread_handle: active_running_handle,
+            regs: capture_mips_gprs(uc),
+            pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
+        };
+        current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
+        if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
+            let _ = uc.emu_stop();
+            return true;
+        }
+    } else {
+        remove_suspended_guest_threads_for_thread(
+            suspended_thread,
+            suspended_queue,
+            active_thread_id,
+            kernel.handles.thread_birth_key_by_id(active_thread_id),
+        );
+    }
+    remove_suspended_guest_threads_for_thread(
+        suspended_thread,
+        suspended_queue,
+        blocked.thread_id,
+        Some(blocked.owner_birth),
+    );
+
     let _ = kernel.remove_blocked_waiter(blocked.wait_id);
     *blocked_smt.borrow_mut() = None;
-
     let (v0, error) = if result_ready {
         let result = kernel
             .take_completed_send_message_result(blocked.block_state.send_id)
@@ -20990,40 +21105,6 @@ fn try_resume_blocked_send_message_timeout<D>(
     };
     kernel.threads.set_last_error(blocked.thread_id, error);
 
-    if save_active_context {
-        let mut current = SuspendedGuestThread {
-            thread_id: active_thread_id,
-            thread_birth: current_thread_id
-                .get()
-                .1
-                .filter(|birth| birth.thread_id() == active_thread_id),
-            thread_handle: running_thread
-                .borrow()
-                .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
-            regs: capture_mips_gprs(uc),
-            pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
-        };
-        current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
-        if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
-            return false;
-        }
-    } else {
-        remove_suspended_guest_threads_for_thread(
-            suspended_thread,
-            suspended_queue,
-            active_thread_id,
-            kernel.handles.thread_birth_key_by_id(active_thread_id),
-        );
-    }
-    remove_suspended_guest_threads_for_thread(
-        suspended_thread,
-        suspended_queue,
-        blocked.thread_id,
-        kernel
-            .handles
-            .thread_birth_key_for_handle(blocked.thread_handle),
-    );
-
     let mut regs = blocked.regs;
     regs.set_v0(v0);
     restore_mips_gprs(uc, &regs);
@@ -21036,9 +21117,21 @@ fn try_resume_blocked_send_message_timeout<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    current_thread_id.set_unverified(blocked.thread_id);
-    let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
-    *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
+    if update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id()).is_err() {
+        let _ = uc.emu_stop();
+        return true;
+    }
+    current_thread_id.set_verified(blocked.owner_birth);
+    let thread_handle = if kernel
+        .handles
+        .thread_birth_key_for_handle(blocked.thread_handle)
+        == Some(blocked.owner_birth)
+    {
+        blocked.thread_handle
+    } else {
+        crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
+    };
+    *running_thread.borrow_mut() = Some((blocked.thread_id, thread_handle));
     true
 }
 
@@ -77013,9 +77106,16 @@ mod unicorn_tests {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let sender_thread = 61;
+        let (sender_handle, sender_thread) = kernel.create_guest_thread(0x0040_6100, 0, false);
+        let sender_birth = kernel
+            .handles
+            .thread_birth_key_by_id(sender_thread)
+            .expect("sender birth");
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+            sender_thread,
+            Some(sender_birth),
+        ));
         let receiver_thread = 62;
-        let sender_handle = 0x0000_0610;
         let result_ptr = 0x0001_0040;
         let return_pc = 0x0040_6100;
         uc.mem_map(0x0001_0000, 0x1000, Prot::ALL).unwrap();
@@ -77050,6 +77150,7 @@ mod unicorn_tests {
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
             sender_thread,
+            &current_thread_id,
             &blocked_smt,
             &running_thread,
         ));
@@ -77081,6 +77182,7 @@ mod unicorn_tests {
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
             sender_thread,
+            &current_thread_id,
             &blocked_smt,
             &running_thread,
         ));
@@ -77112,9 +77214,16 @@ mod unicorn_tests {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let sender_thread = 69;
+        let (sender_handle, sender_thread) = kernel.create_guest_thread(0x0040_6900, 0, false);
+        let sender_birth = kernel
+            .handles
+            .thread_birth_key_by_id(sender_thread)
+            .expect("sender birth");
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+            sender_thread,
+            Some(sender_birth),
+        ));
         let receiver_thread = 70;
-        let sender_handle = 0x0000_0690;
         let result_ptr = 0x0001_3040;
         let return_pc = 0x0040_6900;
         uc.mem_map(0x0001_3000, 0x1000, Prot::ALL).unwrap();
@@ -77149,6 +77258,7 @@ mod unicorn_tests {
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
             sender_thread,
+            &current_thread_id,
             &blocked_smt,
             &running_thread,
         ));
@@ -77179,6 +77289,7 @@ mod unicorn_tests {
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
             sender_thread,
+            &current_thread_id,
             &blocked_smt,
             &running_thread,
         ));
@@ -77207,14 +77318,25 @@ mod unicorn_tests {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let sender_thread = 63;
+        let (sender_handle, sender_thread) = kernel.create_guest_thread(0x0040_6300, 0, false);
+        let sender_birth = kernel
+            .handles
+            .thread_birth_key_by_id(sender_thread)
+            .expect("sender birth");
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+            sender_thread,
+            Some(sender_birth),
+        ));
         let receiver_thread = 64;
-        let active_thread = 65;
-        let sender_handle = 0x0000_0630;
-        let active_handle = 0x0000_0650;
+        let (active_handle, active_thread) = kernel.create_guest_thread(0x0040_6500, 0, false);
+        let active_birth = kernel
+            .handles
+            .thread_birth_key_by_id(active_thread)
+            .expect("active birth");
         let result_ptr = 0x0001_1040;
         let sender_return_pc = 0x0040_6300;
         let active_pc = 0x0040_6500;
+        uc.mem_map(0x0000_5000, 0x1000, Prot::ALL).unwrap();
         uc.mem_map(0x0001_1000, 0x1000, Prot::ALL).unwrap();
         uc.mem_write(u64::from(result_ptr), &0xabcd_ef01_u32.to_le_bytes())
             .unwrap();
@@ -77248,6 +77370,7 @@ mod unicorn_tests {
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
             sender_thread,
+            &current_thread_id,
             &blocked_smt,
             &running_thread,
         ));
@@ -77264,7 +77387,7 @@ mod unicorn_tests {
             .unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x0040_6510).unwrap();
 
-        let current_thread_id = Rc::new(super::NativeCurrentThread::new(active_thread, None));
+        current_thread_id.set_verified(active_birth);
         let suspended_thread = Rc::new(RefCell::new(None));
         assert!(super::try_resume_blocked_send_message_timeout(
             &mut kernel,
@@ -77283,6 +77406,7 @@ mod unicorn_tests {
         assert!(blocked_smt.borrow().is_none());
         assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
         assert_eq!(current_thread_id.get().0, sender_thread);
+        assert_eq!(current_thread_id.get().1, Some(sender_birth));
         assert_eq!(
             *running_thread.borrow(),
             Some((sender_thread, sender_handle))
@@ -77326,14 +77450,25 @@ mod unicorn_tests {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let sender_thread = 66;
+        let (sender_handle, sender_thread) = kernel.create_guest_thread(0x0040_6600, 0, false);
+        let sender_birth = kernel
+            .handles
+            .thread_birth_key_by_id(sender_thread)
+            .expect("sender birth");
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+            sender_thread,
+            Some(sender_birth),
+        ));
         let receiver_thread = 67;
-        let active_thread = 68;
-        let sender_handle = 0x0000_0660;
-        let active_handle = 0x0000_0680;
+        let (active_handle, active_thread) = kernel.create_guest_thread(0x0040_6800, 0, false);
+        let active_birth = kernel
+            .handles
+            .thread_birth_key_by_id(active_thread)
+            .expect("active birth");
         let result_ptr = 0x0001_2040;
         let sender_return_pc = 0x0040_6600;
         let active_pc = 0x0040_6800;
+        uc.mem_map(0x0000_5000, 0x1000, Prot::ALL).unwrap();
         uc.mem_map(0x0001_2000, 0x1000, Prot::ALL).unwrap();
         uc.mem_write(u64::from(result_ptr), &0xface_b00c_u32.to_le_bytes())
             .unwrap();
@@ -77366,6 +77501,7 @@ mod unicorn_tests {
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
             sender_thread,
+            &current_thread_id,
             &blocked_smt,
             &running_thread,
         ));
@@ -77392,7 +77528,7 @@ mod unicorn_tests {
             .unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x0040_6810).unwrap();
 
-        let current_thread_id = Rc::new(super::NativeCurrentThread::new(active_thread, None));
+        current_thread_id.set_verified(active_birth);
         let suspended_thread = Rc::new(RefCell::new(None));
         assert!(super::try_resume_blocked_send_message_timeout(
             &mut kernel,
@@ -77411,6 +77547,7 @@ mod unicorn_tests {
         assert!(blocked_smt.borrow().is_none());
         assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
         assert_eq!(current_thread_id.get().0, sender_thread);
+        assert_eq!(current_thread_id.get().1, Some(sender_birth));
         assert_eq!(
             *running_thread.borrow(),
             Some((sender_thread, sender_handle))
@@ -77445,6 +77582,468 @@ mod unicorn_tests {
         uc.mem_read(u64::from(result_ptr), &mut result_bytes)
             .unwrap();
         assert_eq!(u32::from_le_bytes(result_bytes), 0x2468_ace0);
+    }
+
+    #[test]
+    fn send_message_timeout_rejects_stale_or_contradictory_producer_before_queue()
+    -> crate::Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_7000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("sender A birth");
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x11));
+        assert!(kernel.close_handle(old_handle)?);
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_7100, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("sender B birth");
+        assert_ne!(old_birth, new_birth);
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let result_ptr = 0x0001_7040;
+        uc.mem_map(0x0001_7000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(result_ptr), &0xfeed_7070_u32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x0040_7100).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xbbee_7070).unwrap();
+        let hwnd = kernel.gwe.create_window(1, "SMT_STALE_PRODUCER", "stale");
+        let args = [
+            hwnd,
+            crate::ce::gwe::WM_USER + 270,
+            0,
+            0,
+            0,
+            100,
+            result_ptr,
+        ];
+        let blocked_smt = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(Some((thread_id, new_handle))));
+        let current_thread_id =
+            Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
+        kernel.threads.set_last_error(thread_id, 0x1234_5678);
+
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            thread_id,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+        ));
+        assert!(blocked_smt.borrow().is_none());
+        assert_eq!(kernel.blocked_waiters().count(), 0);
+        assert!(kernel.gwe.sent_message(1).is_none());
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0x1234_5678);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x0040_7100);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0xbbee_7070);
+        let mut bytes = [0; 4];
+        uc.mem_read(u64::from(result_ptr), &mut bytes).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes), 0xfeed_7070);
+
+        // Eligibility remains read-only: zero timeout belongs to the raw API.
+        let mut zero_args = args;
+        zero_args[5] = 0;
+        assert!(!super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &zero_args,
+            thread_id,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+        ));
+        assert!(kernel.gwe.sent_message(1).is_none());
+
+        let mut same_thread_args = args;
+        same_thread_args[0] = kernel.gwe.create_window(thread_id, "SMT_SELF", "self");
+        assert!(!super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &same_thread_args,
+            thread_id,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+        ));
+        let mut unsupported_args = args;
+        unsupported_args[4] = 0x8000_0000;
+        assert!(!super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &unsupported_args,
+            thread_id,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+        ));
+        assert!(kernel.gwe.sent_message(1).is_none());
+
+        current_thread_id.set_verified(new_birth);
+        *running_thread.borrow_mut() = Some((thread_id + 100, new_handle));
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            thread_id,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+        ));
+        assert!(blocked_smt.borrow().is_none());
+        assert!(kernel.gwe.sent_message(1).is_none());
+
+        assert!(kernel.close_handle(new_handle)?);
+        assert!(kernel.handles.thread_execution_live_by_id(thread_id));
+        *running_thread.borrow_mut() = Some((thread_id, new_handle));
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &args,
+            thread_id,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+        ));
+        let blocked = blocked_smt.borrow();
+        let blocked = blocked.as_ref().expect("closed-alias sender still blocks");
+        assert_eq!(
+            blocked.thread_handle,
+            crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
+        );
+        assert_eq!(blocked.owner_birth, new_birth);
+        assert_eq!(
+            kernel
+                .blocked_waiter(blocked.wait_id)
+                .and_then(|wait| wait.owner_birth),
+            Some(new_birth)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn send_message_timeout_live_birth_rejects_false_wait_or_transaction_pair() {
+        for scenario in ["missing_wait", "wrong_result_ptr"] {
+            let config = RuntimeConfig::load_default().unwrap();
+            let mut kernel = CeKernel::boot(config);
+            let (sender_handle, sender_thread) = kernel.create_guest_thread(0x0040_8400, 0, false);
+            let sender_birth = kernel
+                .handles
+                .thread_birth_key_by_id(sender_thread)
+                .expect("live sender birth");
+            let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+                sender_thread,
+                Some(sender_birth),
+            ));
+            let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
+            let blocked_smt = Rc::new(RefCell::new(None));
+            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+            let result_ptr = 0x0001_9040;
+            uc.mem_map(0x0001_9000, 0x1000, Prot::ALL).unwrap();
+            uc.mem_write(u64::from(result_ptr), &0xcafe_8484_u32.to_le_bytes())
+                .unwrap();
+            uc.reg_write(RegisterMIPS::RA, 0x0040_8408).unwrap();
+            let hwnd = kernel.gwe.create_window(1, "SMT_FALSE_PAIR", "pair");
+            let args = [
+                hwnd,
+                crate::ce::gwe::WM_USER + 272,
+                0,
+                0,
+                0,
+                100,
+                result_ptr,
+            ];
+            assert!(super::try_block_for_send_message_timeout_wait(
+                &mut kernel,
+                &mut uc,
+                &super::SealedHostWriteGuard::default(),
+                crate::emulator::imports::ImportModuleKind::Coredll,
+                Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+                &args,
+                sender_thread,
+                &current_thread_id,
+                &blocked_smt,
+                &running_thread,
+            ));
+            let blocked = blocked_smt.borrow().as_ref().expect("blocked send").clone();
+            let send_id = blocked.block_state.send_id;
+            if scenario == "missing_wait" {
+                assert!(kernel.remove_blocked_waiter(blocked.wait_id).is_some());
+            } else {
+                assert!(
+                    kernel
+                        .gwe
+                        .set_sent_message_result_ptr(send_id, result_ptr + 4)
+                );
+            }
+            assert!(kernel.gwe.activate_sent_message_for_receiver(1, send_id));
+            assert_eq!(
+                kernel.complete_active_sent_message(1, 0x1122_3344),
+                Some(send_id)
+            );
+            kernel.threads.set_last_error(sender_thread, 0x8888_9999);
+            uc.reg_write(RegisterMIPS::PC, 0x0040_8440).unwrap();
+            uc.reg_write(RegisterMIPS::V0, 0x1234_8484).unwrap();
+
+            assert!(
+                super::try_block_for_send_message_timeout_wait(
+                    &mut kernel,
+                    &mut uc,
+                    &super::SealedHostWriteGuard::default(),
+                    crate::emulator::imports::ImportModuleKind::Coredll,
+                    Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+                    &args,
+                    sender_thread,
+                    &current_thread_id,
+                    &blocked_smt,
+                    &running_thread,
+                ),
+                "{scenario}"
+            );
+            assert!(blocked_smt.borrow().is_none(), "{scenario}");
+            assert!(
+                kernel.blocked_waiter(blocked.wait_id).is_none(),
+                "{scenario}"
+            );
+            assert_eq!(
+                kernel.gwe.sent_message(send_id).is_some(),
+                scenario == "wrong_result_ptr"
+            );
+            assert_eq!(kernel.threads.get_last_error(sender_thread), 0x8888_9999);
+            assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x0040_8440);
+            assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0x1234_8484);
+            let mut bytes = [0; 4];
+            uc.mem_read(u64::from(result_ptr), &mut bytes).unwrap();
+            assert_eq!(u32::from_le_bytes(bytes), 0xcafe_8484);
+            assert_eq!(current_thread_id.get(), (sender_thread, Some(sender_birth)));
+        }
+    }
+
+    #[test]
+    fn stale_send_message_timeout_slot_never_consumes_reply_or_deadline_for_reused_tid()
+    -> crate::Result<()> {
+        for scenario in [
+            "reentry_ready",
+            "reentry_deadline",
+            "resume_ready",
+            "resume_deadline",
+            "resume_same_tid",
+        ] {
+            let config = RuntimeConfig::load_default()?;
+            let mut kernel = CeKernel::boot(config);
+            let owner = kernel
+                .current_process_birth_key()
+                .expect("boot process birth");
+            let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_8100, 0, false);
+            let old_birth = kernel
+                .handles
+                .thread_birth_key_by_id(thread_id)
+                .expect("sender A birth");
+            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+            let result_ptr = 0x0001_8040;
+            uc.mem_map(0x0001_8000, 0x1000, Prot::ALL).unwrap();
+            uc.mem_write(u64::from(result_ptr), &0xface_8080_u32.to_le_bytes())
+                .unwrap();
+            uc.reg_write(RegisterMIPS::PC, 0x7fff_8100).unwrap();
+            uc.reg_write(RegisterMIPS::RA, 0x0040_8108).unwrap();
+            let hwnd = kernel.gwe.create_window(1, "SMT_STALE_RESUME", "stale");
+            let args = [hwnd, crate::ce::gwe::WM_USER + 271, 0, 0, 0, 25, result_ptr];
+            let current_thread_id =
+                Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
+            let running_thread = Rc::new(RefCell::new(Some((thread_id, old_handle))));
+            let blocked_smt = Rc::new(RefCell::new(None));
+            assert!(super::try_block_for_send_message_timeout_wait(
+                &mut kernel,
+                &mut uc,
+                &super::SealedHostWriteGuard::default(),
+                crate::emulator::imports::ImportModuleKind::Coredll,
+                Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+                &args,
+                thread_id,
+                &current_thread_id,
+                &blocked_smt,
+                &running_thread,
+            ));
+            let blocked = blocked_smt
+                .borrow()
+                .as_ref()
+                .expect("A blocked send")
+                .clone();
+            let send_id = blocked.block_state.send_id;
+            assert_eq!(
+                kernel
+                    .blocked_waiter(blocked.wait_id)
+                    .and_then(|wait| wait.owner_birth),
+                Some(old_birth)
+            );
+
+            if matches!(
+                scenario,
+                "reentry_ready" | "resume_ready" | "resume_same_tid"
+            ) {
+                assert!(kernel.gwe.activate_sent_message_for_receiver(1, send_id));
+                assert_eq!(
+                    kernel.complete_active_sent_message(1, 0x1122_3344),
+                    Some(send_id)
+                );
+                assert!(kernel.sent_message_result_ready(send_id));
+            }
+
+            // Deliberately emulate a torn old native frame: the ordinary Kernel
+            // exit path would already remove this exact wait and queued send.
+            assert!(kernel.handles.mark_thread_exited_by_birth(old_birth, 0x11));
+            assert!(kernel.close_handle(old_handle)?);
+            let new_handle = kernel.handles.try_create_thread_in_birth(
+                owner,
+                thread_id,
+                0x0040_8200,
+                0,
+                false,
+            )?;
+            let new_birth = kernel
+                .handles
+                .thread_birth_key_by_id(thread_id)
+                .expect("sender B birth");
+            assert_ne!(new_birth, old_birth);
+            if matches!(scenario, "reentry_deadline" | "resume_deadline") {
+                kernel.timers.sleep_ms(25);
+            }
+            let (active_handle, active_thread_id, active_birth) =
+                if matches!(scenario, "resume_ready" | "resume_deadline") {
+                    let (handle, id) = kernel.create_guest_thread(0x0040_8300, 0, false);
+                    let birth = kernel
+                        .handles
+                        .thread_birth_key_by_id(id)
+                        .expect("active birth");
+                    (handle, id, birth)
+                } else {
+                    (new_handle, thread_id, new_birth)
+                };
+            current_thread_id.set_verified(active_birth);
+            *running_thread.borrow_mut() = Some((active_thread_id, active_handle));
+            kernel.threads.set_last_error(thread_id, 0x7777_8888);
+            uc.reg_write(RegisterMIPS::PC, 0x0040_8220).unwrap();
+            uc.reg_write(RegisterMIPS::RA, 0x0040_8228).unwrap();
+            uc.reg_write(RegisterMIPS::V0, 0x1234_5678).unwrap();
+            uc.reg_write(RegisterMIPS::S0, 0xabcd_8080).unwrap();
+            let timeout_count_before = kernel.gwe.stats().send_transaction_timeout_count;
+
+            if scenario.starts_with("reentry") {
+                assert!(
+                    super::try_block_for_send_message_timeout_wait(
+                        &mut kernel,
+                        &mut uc,
+                        &super::SealedHostWriteGuard::default(),
+                        crate::emulator::imports::ImportModuleKind::Coredll,
+                        Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+                        &args,
+                        thread_id,
+                        &current_thread_id,
+                        &blocked_smt,
+                        &running_thread,
+                    ),
+                    "{scenario}"
+                );
+            } else {
+                let suspended_thread = Rc::new(RefCell::new(None));
+                assert!(
+                    super::try_resume_blocked_send_message_timeout(
+                        &mut kernel,
+                        &mut uc,
+                        &super::SealedHostWriteGuard::default(),
+                        active_thread_id,
+                        &current_thread_id,
+                        &blocked_smt,
+                        &suspended_thread,
+                        None,
+                        &running_thread,
+                        Some(0x0040_8220),
+                        true,
+                    ),
+                    "{scenario}"
+                );
+                assert!(suspended_thread.borrow().is_none(), "{scenario}");
+            }
+
+            assert!(blocked_smt.borrow().is_none(), "{scenario}");
+            assert!(
+                kernel.blocked_waiter(blocked.wait_id).is_none(),
+                "{scenario}"
+            );
+            assert!(kernel.gwe.sent_message(send_id).is_none(), "{scenario}");
+            assert_eq!(
+                kernel.gwe.stats().send_transaction_timeout_count,
+                timeout_count_before,
+                "{scenario}"
+            );
+            assert_eq!(
+                kernel.threads.get_last_error(thread_id),
+                0x7777_8888,
+                "{scenario}"
+            );
+            assert_eq!(
+                uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
+                0x0040_8220,
+                "{scenario}"
+            );
+            assert_eq!(
+                uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+                0x0040_8228,
+                "{scenario}"
+            );
+            assert_eq!(
+                uc.reg_read(RegisterMIPS::V0).unwrap() as u32,
+                0x1234_5678,
+                "{scenario}"
+            );
+            assert_eq!(
+                uc.reg_read(RegisterMIPS::S0).unwrap() as u32,
+                0xabcd_8080,
+                "{scenario}"
+            );
+            assert_eq!(
+                current_thread_id.get(),
+                (active_thread_id, Some(active_birth)),
+                "{scenario}"
+            );
+            assert_eq!(
+                *running_thread.borrow(),
+                Some((active_thread_id, active_handle)),
+                "{scenario}"
+            );
+            let mut bytes = [0; 4];
+            uc.mem_read(u64::from(result_ptr), &mut bytes).unwrap();
+            assert_eq!(u32::from_le_bytes(bytes), 0xface_8080, "{scenario}");
+        }
+        Ok(())
     }
 
     #[test]
