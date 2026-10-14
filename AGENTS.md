@@ -173,9 +173,14 @@ before result consumption or register restoration; its tested source is sealed
 by a Git HEAD and binary patch. The separate bounded
 [kernel sender-exit gate](evidence/stage3-send-exit-20261015/validation.receipt.md)
 removes queued sends for an exact verified exiting birth and detaches active
-sends on its first successful live exit. Raw synchronous/nonblocking/overlapped
-serial paths, raw queue/socket and MsgWait fallbacks, aliasless Sleep-suspend,
-native `ExitThread` callout/return-stub birth checks, `BlockedSendMessageTimeout`,
+sends on its first successful live exit.
+The bounded [native exit gate](evidence/stage3-native-exit-birth-20261015/validation.receipt.md)
+checks captured thread birth and process lease before native `ExitThread` or
+guest return-stub no-exit-candidate decisions; the return-stub hook itself has
+no end-to-end test, and pending-return KData PID still follows the mutable
+selected process.
+Raw synchronous/nonblocking/overlapped serial paths, raw queue/socket and
+MsgWait fallbacks, aliasless Sleep-suspend, `BlockedSendMessageTimeout`,
 receiver-side delivery, and other parked-wait families remain open. These
 slices do not complete the machine-owned Task/continuation/scheduler core,
 Stage 3, or live-app acceptance. See `PROGRESS.md` and `docs/PLAN.md` for

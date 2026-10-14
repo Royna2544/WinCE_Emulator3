@@ -192,9 +192,16 @@ close only their named gates, not Stage 2 or live acceptance.
   removes exact-birth queued sends and detaches active sends on the first
   successful live thread exit, preserving other senders' queued work. Its
   tested HEAD plus patch passed full release 1,920/0/9 ignored and no-feature
-  1,399/0/3 ignored tests. Native `ExitThread` callout/return-stub birth checks,
-  ordinary `BlockedSendMessageTimeout`, receiver-side delivery and broader GWE
-  lifecycle remain separate.
+  1,399/0/3 ignored tests. The bounded
+  [native exit source gate](../evidence/stage3-native-exit-birth-20261015/validation.receipt.md)
+  verifies captured thread birth and process lease before native `ExitThread`
+  decisions and the guest return-stub no-exit-candidate fallback; its sealed
+  HEAD plus patch passed full release 1,923/0/9 ignored and no-feature
+  1,399/0/3 ignored tests. The return-stub hook lacks an end-to-end control,
+  and pending-return KData PID still uses mutable process selection rather
+  than the captured lease.
+  Ordinary `BlockedSendMessageTimeout`, receiver-side delivery and broader
+  GWE lifecycle remain separate.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE
