@@ -27736,6 +27736,140 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn stale_message_queue_inline_timeout_does_not_replay_into_reused_tid()
+    -> crate::error::Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let read_options = crate::ce::kernel::MessageQueueOptions {
+            flags: 0,
+            max_messages: 1,
+            max_message_bytes: 16,
+            read_access: true,
+        };
+        let (read_queue, _) = kernel.create_message_queue(None, read_options)?;
+        let write_queue = kernel.open_message_queue(
+            read_queue,
+            crate::ce::kernel::MessageQueueOptions {
+                read_access: false,
+                ..read_options
+            },
+        )?;
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("reader A birth");
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x11));
+        assert!(kernel.close_handle(old_handle)?);
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_4000, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("reader B birth");
+        assert_ne!(old_birth, new_birth);
+
+        let base = 0x3250_0000_u32;
+        let output_ptr = base + 0x1000;
+        let bytes_read_ptr = base + 0x2000;
+        let flags_ptr = base + 0x2004;
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(u64::from(base), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(output_ptr), b"keep").unwrap();
+        uc.mem_write(u64::from(bytes_read_ptr), &0xfeed_beefu32.to_le_bytes())
+            .unwrap();
+        uc.mem_write(u64::from(flags_ptr), &0xface_cafeu32.to_le_bytes())
+            .unwrap();
+        let new_pc = 0x0040_4000_u32;
+        let new_ra = 0x0040_4008_u32;
+        let new_sp = base + 0x9000;
+        let new_s0 = 0xbbbb_2222_u32;
+        let new_v0 = 0x5678_1234_u32;
+        uc.reg_write(RegisterMIPS::PC, u64::from(new_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(new_ra)).unwrap();
+        uc.reg_write(RegisterMIPS::SP, u64::from(new_sp)).unwrap();
+        uc.reg_write(RegisterMIPS::S0, u64::from(new_s0)).unwrap();
+        uc.reg_write(RegisterMIPS::V0, u64::from(new_v0)).unwrap();
+        let current_thread_id =
+            std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, Some(new_birth)));
+        assert!(matches!(
+            kernel.write_message_queue(write_queue, b"Bmsg".to_vec(), 0x40),
+            Ok(crate::ce::kernel::MessageQueueWriteStatus::Written),
+        ));
+        assert_eq!(kernel.is_wait_ready(read_queue, thread_id), Some(true));
+        let timeout = 1;
+        let kind = BlockedWaitKind::MessageQueueIo {
+            ordinal: crate::ce::coredll_ordinals::ORD_READ_MSG_QUEUE,
+            args: [
+                read_queue,
+                output_ptr,
+                16,
+                bytes_read_ptr,
+                timeout,
+                flags_ptr,
+            ],
+        };
+
+        // The caller captured A before the same TID became B. Exercise the
+        // inline completion boundary directly, past publication preflight.
+        assert!(super::complete_current_message_queue_io_timeout(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            thread_id,
+            &current_thread_id,
+            old_birth,
+            timeout,
+            0x0040_3004,
+            false,
+            kind,
+        ));
+
+        assert_eq!(current_thread_id.get(), (thread_id, None));
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(output_ptr), 4).unwrap(),
+            b"keep".to_vec(),
+        );
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(bytes_read_ptr), 4).unwrap(),
+            0xfeed_beefu32.to_le_bytes().to_vec(),
+        );
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(flags_ptr), 4).unwrap(),
+            0xface_cafeu32.to_le_bytes().to_vec(),
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, new_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, new_ra);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, new_sp);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, new_s0);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, new_v0);
+        assert!(matches!(
+            kernel.read_message_queue(read_queue, 16),
+            Ok(crate::ce::kernel::MessageQueueReadStatus::Message(ref message))
+                if message.bytes == b"Bmsg" && message.flags == 0x40
+        ));
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE),
+        );
+        Ok(())
+    }
+
+    #[test]
     fn stale_message_queue_read_capture_does_not_publish_reused_tid_birth()
     -> crate::error::Result<()> {
         use unicorn_engine::RegisterMIPS;
