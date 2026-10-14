@@ -71541,16 +71541,16 @@ mod tests {
     fn get_message_preserves_queued_heap_pointer_when_growth_is_out_of_budget() -> Result<()> {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let hwnd = kernel.gwe.create_window_ex_with_process_and_rect(
-            1,
-            1,
-            "PAYLOAD",
-            "",
-            None,
-            0,
-            0,
-            0,
-            Rect::default(),
+        let hwnd =
+            kernel.create_window_ex_w_with_rect(1, "PAYLOAD", "", None, 0, 0, 0, Rect::default());
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd)
+                .unwrap()
+                .delivery_owner()
+                .process_birth(),
+            Some(owner)
         );
         let heap_base = 0x3000_0000;
         assert_eq!(
@@ -71803,16 +71803,16 @@ mod tests {
     fn peek_remove_preserves_queued_heap_pointer_when_growth_is_out_of_budget() -> Result<()> {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let hwnd = kernel.gwe.create_window_ex_with_process_and_rect(
-            1,
-            1,
-            "PAYLOAD",
-            "",
-            None,
-            0,
-            0,
-            0,
-            Rect::default(),
+        let hwnd =
+            kernel.create_window_ex_w_with_rect(1, "PAYLOAD", "", None, 0, 0, 0, Rect::default());
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd)
+                .unwrap()
+                .delivery_owner()
+                .process_birth(),
+            Some(owner)
         );
         let heap_base = 0x3000_0000;
         assert_eq!(
@@ -71878,16 +71878,16 @@ mod tests {
     fn peek_remove_rejects_undersized_registered_payload_without_dequeue() -> Result<()> {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let hwnd = kernel.gwe.create_window_ex_with_process_and_rect(
-            1,
-            1,
-            "PAYLOAD",
-            "",
-            None,
-            0,
-            0,
-            0,
-            Rect::default(),
+        let hwnd =
+            kernel.create_window_ex_w_with_rect(1, "PAYLOAD", "", None, 0, 0, 0, Rect::default());
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd)
+                .unwrap()
+                .delivery_owner()
+                .process_birth(),
+            Some(owner)
         );
         let ptr = kernel
             .memory
