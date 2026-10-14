@@ -4,6 +4,20 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 parked Sleep/object-wait birth source slice
+
+- Native bounded Sleep and single/multiple-object waits now verify the birth
+  that owns captured MIPS registers before publishing a parked wait. Ready
+  Sleep/object waits verify the paired scheduler record and live owner birth
+  before acquiring a wake or restoring registers. A stale A→B TID reuse
+  cannot consume B's event token or restore A's registers; the exact stale
+  subscription is retired, and an ordinary ready wait carries verified birth
+  into the next native slice. Four expected-red regressions turned green. The
+  bounded [source gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
+  passed 1,395/0/3 ignored no-feature and 1,891/0/9 ignored release tests;
+  the matching EXE/PDB pair is hash-preserved. Other parked-wait families,
+  aliasless Sleep-suspend, full Stage 3 and live-app behavior remain open.
+
 ## 2026-10-15 Stage 3 stale-TID continuation and native-stamp source slice
 
 - Pending guest-thread returns and suspended guest contexts now retain the
@@ -18,9 +32,9 @@ references for historical reconstruction.
   The bounded [source gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
   passed 1,395/0/3 ignored no-feature and 1,887/0/9 ignored release tests,
   plus desktop no-trace and all-tests compile checks. A matching release
-  EXE/PDB pair is hash-preserved with the receipt. Sleep/object blocked-wait
-  resume still marks its restored register provenance unverified; other
-  blocked payload families, full Stage 3 and live-app behavior remain open.
+  EXE/PDB pair is hash-preserved with the receipt. A later bounded Sleep/object
+  wait gate above covers those parked paths; other blocked payload families,
+  full Stage 3 and live-app behavior remain open.
 
 ## 2026-10-15 Stage 3 prepared task-wait transaction
 

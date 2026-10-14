@@ -22,10 +22,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    aliasless Sleep-suspend, and generic parked-wait continuation. The bounded
    stale-TID/native-stamp [source gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
    birth-verifies pending thread returns, suspended thread contexts, native
-   slice-end staging, and the GetMessage compatibility bridge. Sleep/object
-   blocked-wait resume still restores registers and then marks the current-thread
-   provenance tracker unverified, so a following native slice may reject; finish
-   that handoff before claiming caller parity. O-K3 execution and registered Thread/Process
+   slice-end staging, and the GetMessage compatibility bridge. The later bounded
+   [Sleep/object parked-wait gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
+   verifies native register ownership before publication and wake consumption,
+   then stamps the resumed birth. Next migrate MsgWait, serial, Winsock,
+   message-queue I/O and SendMessage blocked payloads; do not treat this as
+   generic parked-wait closure or caller parity. O-K3 execution and registered Thread/Process
    wait-target pins passed a bounded source gate
    ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); opaque
    non-task wait slots remain compatibility-only and unpinned. The subsequent
