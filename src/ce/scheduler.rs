@@ -822,11 +822,21 @@ mod tests {
 
         assert_eq!(scheduler.queue_message_wake_candidates_for_birth(new), 1);
         assert_eq!(
-            scheduler.pending_wake_ids.iter().copied().collect::<Vec<_>>(),
+            scheduler
+                .pending_wake_ids
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
             [new_id]
         );
-        assert_eq!(scheduler.blocked_wait(old_id).unwrap().owner_birth, Some(old));
-        assert_eq!(scheduler.blocked_wait(unknown_id).unwrap().owner_birth, None);
+        assert_eq!(
+            scheduler.blocked_wait(old_id).unwrap().owner_birth,
+            Some(old)
+        );
+        assert_eq!(
+            scheduler.blocked_wait(unknown_id).unwrap().owner_birth,
+            None
+        );
     }
 
     #[test]

@@ -830,7 +830,20 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
 
     let post_global = register_global_ready_wait(&mut kernel, 1);
     let post_wait = register_msg_wait(&mut kernel, 42, QS_POSTMESSAGE);
-    assert!(kernel.post_thread_message_w(42, WM_USER + 10, 1, 2));
+    // This composite scheduler fixture has no canonical TID 42. Keep its
+    // numeric-only queue input explicit rather than making the production
+    // PostThreadMessageW path infer a recipient birth.
+    kernel.gwe.post_thread_message_legacy_unknown(
+        42,
+        wince_emulation_v3::ce::gwe::Message::new(
+            0,
+            WM_USER + 10,
+            1,
+            2,
+            kernel.timers.tick_count(),
+        ),
+    );
+    kernel.queue_message_wake_candidates(42);
     assert_eq!(select_ready(&kernel, 1, 0), Some(post_wait));
     kernel.remove_blocked_waiter(post_wait).unwrap();
     kernel.remove_blocked_waiter(post_global).unwrap();
@@ -873,7 +886,10 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
 
     let quit_global = register_global_ready_wait(&mut kernel, 4);
     let quit_wait = register_msg_wait(&mut kernel, 45, QS_POSTMESSAGE);
-    kernel.post_quit_message(45, 0x45);
+    kernel
+        .gwe
+        .post_quit_message_legacy_unknown(45, 0x45, kernel.timers.tick_count());
+    kernel.queue_message_wake_candidates(45);
     assert_eq!(select_ready(&kernel, 1, 0), Some(quit_wait));
     kernel.remove_blocked_waiter(quit_wait).unwrap();
     kernel.remove_blocked_waiter(quit_global).unwrap();
@@ -1913,6 +1929,13 @@ fn public_message_entrypoints_record_durable_gwe_trace() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     let window_thread = 51;
     let sender_thread = 52;
+    let sender_owner = kernel
+        .current_process_birth_key()
+        .expect("boot process birth");
+    let _sender_handle =
+        kernel
+            .handles
+            .try_create_thread_in_birth(sender_owner, sender_thread, 0, 0, false)?;
     let hwnd = kernel.create_window_ex_w(window_thread, "TRACEPOST", "trace", None, 1, 0, 0);
 
     assert!(kernel.post_message_w_for_thread(sender_thread, hwnd, WM_USER + 0x51, 0x51, 0x52,));
