@@ -332,12 +332,12 @@ pub struct CeKernel {
     process_module_base: u32,
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
-    process_name_guest_ptrs: BTreeMap<ProcessBirthKey, u32>,
+    process_name_guest_ptrs: BTreeMap<ProcessBirthKey, (String, u32)>,
     module_heap_info_guest_ptrs: BTreeMap<ProcessBirthKey, u32>,
     typed_payload_recipients: BTreeMap<(ProcessBirthKey, u32), u32>,
     delivered_typed_payload_messages: BTreeMap<(ProcessBirthKey, u32, u32), Message>,
     process_command_line: String,
-    command_line_guest_ptrs: BTreeMap<ProcessBirthKey, u32>,
+    command_line_guest_ptrs: BTreeMap<ProcessBirthKey, (String, u32)>,
     process_current_directory: Option<String>,
     process_stdio_paths: BTreeMap<(u32, u32), String>,
     process_show_cmd: u32,
@@ -2759,10 +2759,6 @@ impl CeKernel {
         let path = path.into();
         self.files.set_root_relative_guest_path(&path);
         self.process_module_path = path;
-        // The text is still global process context. Loader handoff changes it
-        // before switching the current-process selector, so invalidate all
-        // birth-qualified pointer caches rather than guessing its owner.
-        self.process_name_guest_ptrs.clear();
     }
 
     pub fn process_module_path(&self) -> &str {
@@ -2770,11 +2766,14 @@ impl CeKernel {
     }
 
     pub fn process_name_guest_ptr_for(&self, owner: ProcessBirthKey) -> Option<u32> {
-        self.process_name_guest_ptrs.get(&owner).copied()
+        self.process_name_guest_ptrs
+            .get(&owner)
+            .and_then(|(text, ptr)| (text == &self.process_module_path).then_some(*ptr))
     }
 
     pub fn set_process_name_guest_ptr_for(&mut self, owner: ProcessBirthKey, ptr: u32) {
-        self.process_name_guest_ptrs.insert(owner, ptr);
+        self.process_name_guest_ptrs
+            .insert(owner, (self.process_module_path.clone(), ptr));
     }
 
     pub fn module_heap_info_guest_ptr_for(&self, owner: ProcessBirthKey) -> Option<u32> {
@@ -2795,8 +2794,6 @@ impl CeKernel {
 
     pub fn set_process_command_line(&mut self, command_line: impl Into<String>) {
         self.process_command_line = command_line.into();
-        // The loader changes this text before/after selector handoff as well.
-        self.command_line_guest_ptrs.clear();
     }
 
     pub fn process_command_line(&self) -> &str {
@@ -2807,11 +2804,14 @@ impl CeKernel {
     /// Allocates a LMEM block just large enough to hold the null-terminated UTF-16
     /// command line on first call.  Returns 0 only when the memory system is full.
     pub fn command_line_guest_ptr_for(&self, owner: ProcessBirthKey) -> Option<u32> {
-        self.command_line_guest_ptrs.get(&owner).copied()
+        self.command_line_guest_ptrs
+            .get(&owner)
+            .and_then(|(text, ptr)| (text == &self.process_command_line).then_some(*ptr))
     }
 
     pub fn set_command_line_guest_ptr_for(&mut self, owner: ProcessBirthKey, ptr: u32) {
-        self.command_line_guest_ptrs.insert(owner, ptr);
+        self.command_line_guest_ptrs
+            .insert(owner, (self.process_command_line.clone(), ptr));
     }
 
     pub fn set_process_current_directory(&mut self, directory: Option<String>) {
@@ -12007,5 +12007,114 @@ mod tests {
         assert_eq!(kernel.command_line_guest_ptr_for(owner_b), None);
         assert_eq!(kernel.module_heap_info_guest_ptr_for(owner_a), Some(0x5555));
         assert_eq!(kernel.module_heap_info_guest_ptr_for(owner_b), None);
+    }
+
+    #[test]
+    fn delivered_typed_message_destroy_is_exact_birth_even_at_same_guest_va() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let owner_a = kernel.current_process_birth_key().unwrap();
+        let hwnd_a = kernel.create_window_ex_w(11, "DELIVERED_A", "", None, 0, WS_VISIBLE, 0);
+        let launch_b = kernel.queue_process_launch(None, None);
+        let owner_b = kernel.handles.process_birth_key(launch_b.process_id).unwrap();
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel.create_window_ex_w(22, "DELIVERED_B", "", None, 0, WS_VISIBLE, 0);
+        kernel.set_current_process_id(1);
+        let position = |hwnd| WindowPos {
+            hwnd,
+            insert_after: HWND_TOP,
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+            flags: 0,
+        };
+        let (_, ptr_a) = kernel.queue_window_pos_payload(hwnd_a, position(hwnd_a)).unwrap();
+        let (_, ptr_b) = kernel.queue_window_pos_payload(hwnd_b, position(hwnd_b)).unwrap();
+        assert_eq!(ptr_a, ptr_b);
+        assert!(kernel.post_window_typed_payload_message(hwnd_a, WM_WINDOWPOSCHANGED, 0, ptr_a, owner_a));
+        assert!(kernel.post_window_typed_payload_message(hwnd_b, WM_WINDOWPOSCHANGED, 0, ptr_b, owner_b));
+        let message_a = kernel.take_ready_visible_message_w_filtered(11, Some(hwnd_a), WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED).unwrap();
+        let message_b = kernel.take_ready_visible_message_w_filtered(22, Some(hwnd_b), WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED).unwrap();
+        kernel.record_delivered_typed_payload_message(owner_a, 11, 0x2000, &message_a);
+        kernel.record_delivered_typed_payload_message(owner_b, 22, 0x2000, &message_b);
+
+        assert!(kernel.destroy_window(hwnd_a));
+        assert!(kernel.message_pointer_payload(owner_a, ptr_a).is_none());
+        assert!(kernel.message_pointer_payload(owner_b, ptr_b).is_some());
+        let mut stale_a = Message::new(hwnd_a, WM_WINDOWPOSCHANGED, 0, ptr_a, 0);
+        kernel.reattach_delivered_typed_payload_message(owner_a, 11, 0x2000, &mut stale_a);
+        assert_eq!(stale_a.typed_payload_owner, None);
+        assert_eq!(kernel.dispatch_message_w_for_thread(11, message_a), 0);
+        assert!(kernel.message_pointer_payload(owner_b, ptr_b).is_some());
+
+        let mut ready_b = Message::new(hwnd_b, WM_WINDOWPOSCHANGED, 0, ptr_b, 0);
+        kernel.reattach_delivered_typed_payload_message(owner_b, 22, 0x2000, &mut ready_b);
+        assert_eq!(ready_b.typed_payload_owner, Some(owner_b));
+        assert_eq!(kernel.dispatch_message_w_for_thread(22, ready_b), 0);
+        assert!(kernel.message_pointer_payload(owner_b, ptr_b).is_none());
+    }
+
+    #[test]
+    fn process_text_pointer_cache_survives_a_b_a_loader_handoff() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let owner_a = kernel.current_process_birth_key().unwrap();
+        let launch_b = kernel.queue_process_launch(None, None);
+        let owner_b = kernel.handles.process_birth_key(launch_b.process_id).unwrap();
+        kernel.set_process_module_path("\\A\\parent.exe");
+        kernel.set_process_command_line("parent args");
+        kernel.set_process_name_guest_ptr_for(owner_a, 0x1000);
+        kernel.set_command_line_guest_ptr_for(owner_a, 0x2000);
+        kernel.set_process_module_path("\\B\\child.exe");
+        kernel.set_process_command_line("child args");
+        kernel.set_current_process_id(launch_b.process_id);
+        assert_eq!(kernel.process_name_guest_ptr_for(owner_a), None);
+        assert_eq!(kernel.command_line_guest_ptr_for(owner_a), None);
+        kernel.set_process_name_guest_ptr_for(owner_b, 0x3000);
+        kernel.set_command_line_guest_ptr_for(owner_b, 0x4000);
+        kernel.set_process_module_path("\\A\\parent.exe");
+        kernel.set_process_command_line("parent args");
+        kernel.set_current_process_id(1);
+        assert_eq!(kernel.process_name_guest_ptr_for(owner_a), Some(0x1000));
+        assert_eq!(kernel.command_line_guest_ptr_for(owner_a), Some(0x2000));
+        assert_eq!(kernel.process_name_guest_ptr_for(owner_b), None);
+        assert_eq!(kernel.command_line_guest_ptr_for(owner_b), None);
+    }
+
+    #[test]
+    fn overwritten_peek_msg_slot_does_not_free_still_queued_typed_payload() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let owner = kernel.current_process_birth_key().unwrap();
+        let hwnd = kernel.create_window_ex_w(11, "PEEK_TYPED", "", None, 0, WS_VISIBLE, 0);
+        let (_, ptr) = kernel
+            .queue_window_pos_payload(
+                hwnd,
+                WindowPos {
+                    hwnd,
+                    insert_after: HWND_TOP,
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                    flags: 0,
+                },
+            )
+            .unwrap();
+        assert!(kernel.post_window_typed_payload_message(hwnd, WM_WINDOWPOSCHANGED, 0, ptr, owner));
+        let peeked = kernel.peek_ready_visible_message_w_filtered(11, Some(hwnd), WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED).unwrap();
+        kernel.record_delivered_typed_payload_message(owner, 11, 0x2000, &peeked);
+        kernel.record_delivered_typed_payload_message(
+            owner,
+            11,
+            0x2000,
+            &Message::new(hwnd, crate::ce::gwe::WM_USER + 1, 0, ptr, 0),
+        );
+        assert!(kernel.message_pointer_payload(owner, ptr).is_some());
+        let taken = kernel.take_ready_visible_message_w_filtered(11, Some(hwnd), WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED).unwrap();
+        kernel.record_delivered_typed_payload_message(owner, 11, 0x2000, &taken);
+        let mut dispatched = Message::new(hwnd, WM_WINDOWPOSCHANGED, 0, ptr, 0);
+        kernel.reattach_delivered_typed_payload_message(owner, 11, 0x2000, &mut dispatched);
+        assert_eq!(dispatched.typed_payload_owner, Some(owner));
+        assert_eq!(kernel.dispatch_message_w_for_thread(11, dispatched), 0);
+        assert!(kernel.message_pointer_payload(owner, ptr).is_none());
     }
 }
