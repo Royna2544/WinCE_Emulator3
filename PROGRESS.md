@@ -4,6 +4,25 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-35 Public Private-VM Slab Gate
+
+- Public COREDLL private `VirtualAlloc` and current-target Ex now use
+  owner-qualified stable 4-KiB page backing with checked native map/change
+  publication; the former internal test-only slab selector is gone. The
+  public fresh-native-owner ordinal first failed at the intended pre-switch
+  canonical-backing assertion, then passed 1/0/0 on frozen source. The raw
+  integration control also passed 1/0/0. Full release passed **1,727/0/15
+  ignored**, no-feature **1,292/0/13 ignored**; both no-trace checks and the
+  release build passed. [E-35 receipt](evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)
+  records exact source/log/EXE hashes and commands.
+- Negative monitor checkpoint guards, independent private-page clone bytes,
+  64 checked unmap cycles, and a pre-`uc.mem_unmap` failure retaining the pin
+  and budget charge passed in the release suite. This closes only the bounded
+  E-35 public private-family gate. O-P4 checked close/fresh-default, native
+  two-process A→B→A same-VA byte isolation, shared-view slabs, Stage 3
+  checkpoint relineage, and live-app readiness remain open. No app run or
+  writable-mount operation occurred ([ledger E-35](docs/evidence/ledger.md)).
+
 ## 2026-10-14 E-34 O-P1 Stop Classification
 
 - Typed JR repair and a real-MIPS mixed deadline/peer-yield continuation control close O-P1 stop classification only; report/failure hardening, Stage 2 and app readiness remain open ([ledger E-34](docs/evidence/ledger.md)).
@@ -86,12 +105,12 @@ references for historical reconstruction.
     `ReadyParkedPeerYield`); `CountLimit` only from the vendored
     `UC_QUERY_COUNT_STOP` witness; native errors hard-fail (E-15, E-17, E-19,
     E-28).
-  - Under `LegacySeed`, a fresh owner loses guest-written private bytes. This is
-    green only through the `cfg(test)` slab opt-in (E-18, E-25). D-008 selects
-    AddressSpace-owned stable slabs mapped with `mem_map_ptr`.
+  - At the E-25 checkpoint, `LegacySeed` lost guest-written private bytes on
+    a fresh owner; only the `cfg(test)` slab opt-in made E-18 green. D-008
+    selected AddressSpace-owned stable slabs mapped with `mem_map_ptr`.
   - Process birth keys and alias lifetime; owner-qualified private-VA metadata
-    and file-view mutation. The public two-PID same-VA allocation is still red
-    (E-20 to E-24).
+    and file-view mutation. The public two-PID same-VA allocation was still
+    red at that checkpoint (E-20 to E-24).
   - The 13 historical Task controls live in `tests/` (1 pass, 12 expected red)
     (E-26).
   - Bounded 330 s live runs exit 0 but stay on the splash. GPS bytes and taps

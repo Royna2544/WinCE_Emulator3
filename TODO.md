@@ -7,21 +7,16 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-1. Implement the connected public `VirtualAlloc` private-slab gate in
-   `docs/evidence/public-virtualalloc-slab-migration-gate-20261014.md`: stage
-   public expected-red controls and the owner-qualified transaction first;
-   enable `StablePrivatePage` by default only after its publication, lifecycle,
-   failure and clone/close boundaries pass. Then delete the private
-   `initial_bytes` reseed and `cfg(test)` slab opt-in, point E-18 at the public
-   path, and run the full suite with raw logs (D-008, ledger E-25).
-2. Make fresh-default ownership the default (O-P4): turn the E-7 closed-owner
+1. Make fresh-default ownership the default (O-P4): turn the E-7 closed-owner
    red green and delete `close_idle_owner_preserving_snapshot_for_test`. Run the
-   full suite plus one bounded live run, and report the memory peak against the
-   persistent-owner runs (about 1.5 GiB; E-22, E-27, E-29) and BED2 (E-1).
-3. Then migrate the remaining D-008 families: the E-20 public two-PID same-VA
-   case (global native overlap fence), shared file views on slabs, and
-   image/heap blobs.
-4. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
+   full suite; only after fresh user approval, make one bounded live run and
+   compare its memory peak with the persistent-owner runs (about 1.5 GiB;
+   E-22, E-27, E-29) and BED2 (E-1). Close each fresh owner after hook
+   removal and document the vendored Unicorn teardown guarantees and their
+   upgrade recheck so private-slab pins are released with that owner.
+2. Then finish the remaining D-008 families: real native E-20 two-PID same-VA
+   A→B→A byte isolation, shared file views on slabs, and image/heap blobs.
+3. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
 ## Parallel lanes (never gate the queue above)

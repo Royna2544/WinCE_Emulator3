@@ -27,13 +27,16 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   phase (Stage 8 diagnostic, ledger E-12). Legacy in-hook register helpers
   still zero failed reads and drop write errors; o32 float-return restore sites
   are unaudited (CPU page, E-12 follow-ups).
-- Fresh-per-slice is not yet safe: public `VirtualAlloc` private pages are still
-  `LegacySeed`, and E-18 is green only through the `cfg(test)` slab opt-in
-  (E-25). The public two-PID same-VA allocation control (E-20) is red because
-  of the global native overlap fence. A same-PID DIB view without VA metadata
-  can Flush but not Unmap. The immediate CreateProcess view-sync failure path
-  has no fault injection. `VirtualAllocEx`/`VirtualQueryEx` are not exported.
-  History: ledger E-14, E-16, E-18, E-20, E-22 to E-25.
+- Fresh-per-slice is not yet the default (O-P4). E-35 validates the public
+  private-slab family and two-PID same-VA metadata, but real native A→B→A
+  byte isolation and shared-view slab coherence remain unproved. Checked
+  native-engine close and hook teardown are still absent: an unverifiable
+  close conservatively retains slab pins and their host memory, which can
+  accumulate across uncertain closes. A same-PID DIB view without VA
+  metadata can Flush but not Unmap; the immediate CreateProcess view-sync
+  failure path has no fault injection. `VirtualAllocEx`/`VirtualQueryEx` name
+  exports remain absent. History: ledger E-14, E-16, E-18, E-20, E-22 to
+  E-25 and E-35.
 - Canonical Task/alias ownership is absent: 12 expected-red Task controls live
   in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are
   fixed (E-21); thread/task aliases, wait pins and clone lineage are not.
