@@ -1004,64 +1004,101 @@ impl MemorySystem {
         size: u32,
         protect: u32,
     ) -> Option<u32> {
-        let page_size = STABLE_PRIVATE_PAGE_SIZE as u32;
-        if !source.is_native_fixed()
-            || base < POINTER_FLOOR
-            || base & (page_size - 1) != 0
-            || size == 0
-            || size & (page_size - 1) != 0
-            || base.checked_add(size).is_none()
-            || protect != 0x04
-            || (source == VirtualAllocationSource::ProcessHeapArena && base != HEAP_PTR_BASE)
-        {
-            return None;
-        }
-        if let Some(existing) = self.virtual_allocation(owner, base) {
-            return (existing.size == size
-                && existing.source == source
-                && existing.backing == VirtualAllocationBacking::StablePrivateSlab
-                && existing.protect == protect)
-                .then_some(base);
-        }
-        // Heap allocations are intentional occupants of the process heap
-        // reservation; a stack retains the ordinary heap collision fence.
-        let overlaps = if source == VirtualAllocationSource::ProcessHeapArena {
-            self.virtual_allocations.values().any(|allocation| {
-                (allocation.owner == owner
-                    || allocation.backing == VirtualAllocationBacking::LegacySeed)
-                    && ranges_overlap(base, size, allocation.base, allocation.size)
-            }) || self
-                .pending_private_holes
-                .iter()
-                .any(|((hole_owner, hole_base), hole_size)| {
-                    *hole_owner == owner && ranges_overlap(base, size, *hole_base, *hole_size)
-                })
-        } else {
-            self.private_vm_overlaps(owner, base, size)
-        };
-        if overlaps {
-            return None;
-        }
-        let incarnation = self.next_virtual_incarnation;
-        self.next_virtual_incarnation = incarnation.checked_add(1)?;
-        self.virtual_allocations.insert(
-            (owner, base),
-            VirtualAllocation {
-                base,
-                size,
-                allocation_type: MEM_RESERVE,
-                protect,
-                initial_bytes: Vec::new(),
-                owner,
-                incarnation,
-                source,
-                backing: VirtualAllocationBacking::StablePrivateSlab,
-                private_committed_pages: BTreeMap::new(),
-            },
-        );
-        self.stable_private_slabs_seen = true;
-        self.bump_virtual_generation();
+        self.reserve_fixed_private_ranges(owner, &[(source, base, size, protect)])?;
         Some(base)
+    }
+
+    /// Publish a set of fixed reservations together. Validation is complete
+    /// before any record, incarnation, or generation changes, so a bad later
+    /// stack cannot strand a newly reserved process heap. Exact existing
+    /// reservations are accepted without modifying their committed pages.
+    pub fn reserve_fixed_private_ranges(
+        &mut self,
+        owner: ProcessBirthKey,
+        ranges: &[(VirtualAllocationSource, u32, u32, u32)],
+    ) -> Option<Vec<(u32, u32)>> {
+        let page_size = STABLE_PRIVATE_PAGE_SIZE as u32;
+        let mut new_ranges = Vec::new();
+        new_ranges.try_reserve_exact(ranges.len()).ok()?;
+        let mut result = Vec::new();
+        result.try_reserve_exact(ranges.len()).ok()?;
+        for (index, &(source, base, size, protect)) in ranges.iter().enumerate() {
+            if !source.is_native_fixed()
+                || base < POINTER_FLOOR
+                || base & (page_size - 1) != 0
+                || size == 0
+                || size & (page_size - 1) != 0
+                || base.checked_add(size).is_none()
+                || protect != 0x04
+                || (source == VirtualAllocationSource::ProcessHeapArena && base != HEAP_PTR_BASE)
+                || ranges[..index]
+                    .iter()
+                    .any(|&(_, earlier_base, earlier_size, _)| {
+                        ranges_overlap(base, size, earlier_base, earlier_size)
+                    })
+            {
+                return None;
+            }
+            result.push((base, size));
+            if let Some(existing) = self.virtual_allocation(owner, base) {
+                if existing.size != size
+                    || existing.source != source
+                    || existing.backing != VirtualAllocationBacking::StablePrivateSlab
+                    || existing.protect != protect
+                {
+                    return None;
+                }
+                continue;
+            }
+            // Heap allocations intentionally occupy the heap reservation;
+            // stacks retain the ordinary heap collision fence.
+            let overlaps = if source == VirtualAllocationSource::ProcessHeapArena {
+                self.virtual_allocations.values().any(|allocation| {
+                    (allocation.owner == owner
+                        || allocation.backing == VirtualAllocationBacking::LegacySeed)
+                        && ranges_overlap(base, size, allocation.base, allocation.size)
+                }) || self.pending_private_holes.iter().any(
+                    |((hole_owner, hole_base), hole_size)| {
+                        *hole_owner == owner && ranges_overlap(base, size, *hole_base, *hole_size)
+                    },
+                )
+            } else {
+                self.private_vm_overlaps(owner, base, size)
+            };
+            if overlaps {
+                return None;
+            }
+            new_ranges.push((source, base, size, protect));
+        }
+        let next_incarnation = self
+            .next_virtual_incarnation
+            .checked_add(u64::try_from(new_ranges.len()).ok()?)?;
+        let inserted = !new_ranges.is_empty();
+        let mut incarnation = self.next_virtual_incarnation;
+        for (source, base, size, protect) in new_ranges {
+            self.virtual_allocations.insert(
+                (owner, base),
+                VirtualAllocation {
+                    base,
+                    size,
+                    allocation_type: MEM_RESERVE,
+                    protect,
+                    initial_bytes: Vec::new(),
+                    owner,
+                    incarnation,
+                    source,
+                    backing: VirtualAllocationBacking::StablePrivateSlab,
+                    private_committed_pages: BTreeMap::new(),
+                },
+            );
+            incarnation += 1;
+        }
+        self.next_virtual_incarnation = next_incarnation;
+        if inserted {
+            self.stable_private_slabs_seen = true;
+            self.bump_virtual_generation();
+        }
+        Some(result)
     }
 
     /// Prepare only the faulting 4-KiB page of a fixed stack reservation.
@@ -4330,6 +4367,9 @@ mod tests {
         );
         assert_eq!(memory.private_commit_used_bytes(), 0);
         memory.set_private_commit_limit_bytes(3 * STABLE_PRIVATE_PAGE_SIZE as u64);
+        // GlobalMemoryStatus.dwAvailPhys reports this same available-byte
+        // field, so detached preparation must debit the full high-water rise.
+        let available_before = memory.private_commit_available_bytes();
         let prepared = memory.prepare_fixed_heap_growth(owner, high_water).unwrap();
         assert_eq!(prepared.result_ptr(), HEAP_PTR_BASE + 0x3000);
         assert_eq!(prepared.new_page_pins().len(), 3);
@@ -4340,6 +4380,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             memory.private_commit_used_bytes(),
+            3 * STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert_eq!(
+            available_before - memory.private_commit_available_bytes(),
             3 * STABLE_PRIVATE_PAGE_SIZE as u64
         );
         assert!(memory.private_page_pin(owner, HEAP_PTR_BASE).is_none());
@@ -4401,6 +4445,7 @@ mod tests {
         let _child_handle = handles.create_process(2);
         let second_owner = handles.process_birth_key(2).unwrap();
         let mut memory = MemorySystem::default();
+        let mut available_before = memory.private_commit_available_bytes();
         for owner in [first_owner, second_owner] {
             assert_eq!(
                 memory.reserve_fixed_private_range(
@@ -4420,6 +4465,13 @@ mod tests {
                 memory.commit_prepared_private_vm(prepared),
                 Some(STACK_BASE)
             );
+            // This is the source for GlobalMemoryStatus.dwAvailPhys: one
+            // newly touched stack page subtracts exactly 4 KiB.
+            assert_eq!(
+                available_before - memory.private_commit_available_bytes(),
+                STABLE_PRIVATE_PAGE_SIZE as u64
+            );
+            available_before = memory.private_commit_available_bytes();
         }
         let first = memory.private_page_pin(first_owner, STACK_BASE).unwrap();
         let second = memory.private_page_pin(second_owner, STACK_BASE).unwrap();
@@ -4439,6 +4491,130 @@ mod tests {
         );
         assert!(!memory.intersects_foreign_virtual_allocation(first_owner, STACK_BASE, 1));
         assert!(!memory.intersects_foreign_virtual_allocation(second_owner, STACK_BASE, 1));
+    }
+
+    #[test]
+    fn fixed_reservation_batch_rejects_later_stack_without_stranding_heap() {
+        const OLD_STACK: u32 = 0x7100_0000;
+        const NEW_STACK: u32 = 0x7200_0000;
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        assert_eq!(
+            memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ThreadStack,
+                OLD_STACK,
+                0x2000,
+                4,
+            ),
+            Some(OLD_STACK)
+        );
+        let page = memory.prepare_fixed_private_page(owner, OLD_STACK).unwrap();
+        memory.commit_prepared_private_vm(page).unwrap();
+        let existing_pin = memory.private_page_pin(owner, OLD_STACK).unwrap();
+        let existing_incarnation = memory
+            .virtual_allocation(owner, OLD_STACK)
+            .unwrap()
+            .incarnation;
+        let generation = memory.virtual_generation();
+        let next_incarnation = memory.next_virtual_incarnation;
+        let available = memory.private_commit_available_bytes();
+
+        let bad_later_stack = [
+            (
+                VirtualAllocationSource::ProcessHeapArena,
+                HEAP_PTR_BASE,
+                0x10000,
+                4,
+            ),
+            (VirtualAllocationSource::ThreadStack, OLD_STACK, 0x3000, 4),
+        ];
+        assert!(
+            memory
+                .reserve_fixed_private_ranges(owner, &bad_later_stack)
+                .is_none()
+        );
+        assert!(memory.fixed_heap_reservation(owner).is_none());
+        assert_eq!(memory.virtual_generation(), generation);
+        assert_eq!(memory.next_virtual_incarnation, next_incarnation);
+        assert_eq!(memory.private_commit_available_bytes(), available);
+        assert_eq!(
+            memory
+                .private_page_pin(owner, OLD_STACK)
+                .unwrap()
+                .native_ptr(),
+            existing_pin.native_ptr()
+        );
+        assert_eq!(
+            memory
+                .virtual_allocation(owner, OLD_STACK)
+                .unwrap()
+                .incarnation,
+            existing_incarnation
+        );
+
+        let valid = [
+            (
+                VirtualAllocationSource::ProcessHeapArena,
+                HEAP_PTR_BASE,
+                0x10000,
+                4,
+            ),
+            (VirtualAllocationSource::ThreadStack, NEW_STACK, 0x2000, 4),
+            (VirtualAllocationSource::ThreadStack, OLD_STACK, 0x2000, 4),
+        ];
+        assert_eq!(
+            memory.reserve_fixed_private_ranges(owner, &valid),
+            Some(vec![
+                (HEAP_PTR_BASE, 0x10000),
+                (NEW_STACK, 0x2000),
+                (OLD_STACK, 0x2000)
+            ])
+        );
+        assert_eq!(memory.virtual_generation(), generation + 1);
+        assert_eq!(memory.next_virtual_incarnation, next_incarnation + 2);
+        assert_eq!(memory.private_commit_available_bytes(), available);
+        let published_generation = memory.virtual_generation();
+        assert_eq!(
+            memory.reserve_fixed_private_ranges(owner, &valid),
+            Some(vec![
+                (HEAP_PTR_BASE, 0x10000),
+                (NEW_STACK, 0x2000),
+                (OLD_STACK, 0x2000)
+            ])
+        );
+        assert_eq!(memory.virtual_generation(), published_generation);
+        assert_eq!(memory.next_virtual_incarnation, next_incarnation + 2);
+        assert_eq!(
+            memory
+                .private_page_pin(owner, OLD_STACK)
+                .unwrap()
+                .native_ptr(),
+            existing_pin.native_ptr()
+        );
+
+        let duplicate = [valid[0], valid[0]];
+        assert!(
+            memory
+                .reserve_fixed_private_ranges(owner, &duplicate)
+                .is_none()
+        );
+        let cross_source_overlap = [
+            valid[0],
+            (
+                VirtualAllocationSource::ThreadStack,
+                HEAP_PTR_BASE + 0x1000,
+                0x2000,
+                4,
+            ),
+        ];
+        assert!(
+            memory
+                .reserve_fixed_private_ranges(owner, &cross_source_overlap)
+                .is_none()
+        );
+        assert_eq!(memory.virtual_generation(), published_generation);
+        assert_eq!(memory.private_commit_available_bytes(), available);
     }
 
     #[test]
