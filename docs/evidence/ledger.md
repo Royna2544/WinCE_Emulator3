@@ -1412,6 +1412,32 @@ documents default whole-section `SEC_COMMIT` at creation for CE 4.2/5;
 CE6 device-specific accounting is unmeasured. No iNavi launch or writable
 mount operation occurred in E-41.
 
+## E-42 Immutable PE image-page eligibility source gate (2026-10-14, executed)
+
+A pure loader helper selects complete 4-KiB image pages from PE section
+characteristics, returning R or RX permissions and borrowed slices of supplied
+image bytes. It excludes headers, writable/execute-only sections, partial or
+mixed pages, patch overlaps and the trampoline tail beyond `SizeOfImage`;
+invalid extents fail closed. One synthetic test manually patched a supplied
+`Vec` before selection. This proves byte borrowing from that input, **not**
+that actual relocation, import and trampoline patches ran before publication.
+
+The expected-red control failed to compile at the missing helper. On
+`src/emulator/pe_loader.rs` SHA-256
+`30791E94E6F47DD0A8B4B2DA0F1CA42253F4B07519B48CC12C2A083C0F68016A`,
+final no-feature focused and debug Unicorn-feature focused runs each passed
+**5/0**; the full no-feature suite passed **1,302/0/13 ignored** across 17
+blocks. The [E-42 receipt](../../evidence/immutable-image-pages-20261014/validation.receipt.md)
+holds exact raw-log hashes and commands. No full release-feature suite is
+claimed for E-42.
+
+Production image mapping remains RWX with the old copy path. Sealed segmented
+storage, clone isolation, typed native pins, host-write and readback guards,
+native write protection, 200-slice churn, memory-budget treatment and a
+synthetic 56-MiB setup benchmark remain separate gates. No E-42 iNavi run,
+writable-mount operation, timing gain, map readiness or Stage 2 acceptance is
+claimed.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
