@@ -13675,8 +13675,7 @@ impl KernelMemoryMappings {
 }
 
 #[cfg(feature = "unicorn")]
-type ActivePrivatePageGuards =
-    RefCell<BTreeMap<usize, StablePrivatePageExecutionGuard>>;
+type ActivePrivatePageGuards = RefCell<BTreeMap<usize, StablePrivatePageExecutionGuard>>;
 
 #[cfg(feature = "unicorn")]
 fn native_page_perms<D>(uc: &unicorn_engine::Unicorn<'_, D>, page: u32) -> Result<Option<u32>> {
@@ -13732,8 +13731,7 @@ fn map_private_slab_page<D>(
         allocation.backing,
         VirtualAllocationBacking::StablePrivateSlab
             | VirtualAllocationBacking::StableSharedViewSlab
-    )
-        || allocation.incarnation != identity.allocation_incarnation()
+    ) || allocation.incarnation != identity.allocation_incarnation()
     {
         return Err(Error::Backend(format!(
             "private slab identity for 0x{page:08x} changed before native map"
@@ -14484,13 +14482,15 @@ fn sync_file_mapping_views_from_unicorn<D>(
         .file_mappings()
         .filter_map(|mapping| mapping.legacy_data().map(|data| (mapping, data)))
         .flat_map(|(mapping, data)| {
-            mapping.views.iter().filter(|view| view.process_birth.is_none()).map(|view| {
-                let start = (view.offset as usize).min(data.len());
-                let end = start
-                    .saturating_add(view.size as usize)
-                    .min(data.len());
-                (view.base, data[start..end].to_vec())
-            })
+            mapping
+                .views
+                .iter()
+                .filter(|view| view.process_birth.is_none())
+                .map(|view| {
+                    let start = (view.offset as usize).min(data.len());
+                    let end = start.saturating_add(view.size as usize).min(data.len());
+                    (view.base, data[start..end].to_vec())
+                })
         })
         .collect();
     for (base, bytes) in seeds {
@@ -14532,9 +14532,7 @@ fn sync_file_mapping_views_to_unicorn<D>(
                 Error::Backend("legacy file-view seed reached slab authority".to_owned())
             })?;
             let start = view.offset as usize;
-            let end = start
-                .saturating_add(view.size as usize)
-                .min(data.len());
+            let end = start.saturating_add(view.size as usize).min(data.len());
             if start >= end {
                 continue;
             }
@@ -56385,7 +56383,11 @@ mod unicorn_tests {
             .expect("actual slice-end handoff parked the writer");
         assert_eq!(phase1_counter(&outgoing.cpu), 0x3006);
         assert_eq!(
-            &kernel.handles.file_mapping(mapping_handle)?.legacy_data().unwrap()[..4],
+            &kernel
+                .handles
+                .file_mapping(mapping_handle)?
+                .legacy_data()
+                .unwrap()[..4],
             &0x3006u32.to_le_bytes(),
             "outgoing native view bytes must reach canonical mapping backing before PID rotation"
         );
@@ -56528,7 +56530,11 @@ mod unicorn_tests {
         );
         assert_eq!(phase1_counter(&active), 0x3006);
         assert_eq!(
-            &kernel.handles.file_mapping(mapping_handle)?.legacy_data().unwrap()[..4],
+            &kernel
+                .handles
+                .file_mapping(mapping_handle)?
+                .legacy_data()
+                .unwrap()[..4],
             &0x3006u32.to_le_bytes(),
             "outgoing native view readback must precede checked finish"
         );
@@ -56719,12 +56725,20 @@ mod unicorn_tests {
             .regs
             .regs[9];
         let parent_data_after_parent = u32::from_le_bytes(
-            kernel.handles.file_mapping(parent_mapping)?.legacy_data().unwrap()[..4]
+            kernel
+                .handles
+                .file_mapping(parent_mapping)?
+                .legacy_data()
+                .unwrap()[..4]
                 .try_into()
                 .unwrap(),
         );
         let child_data_after_parent = u32::from_le_bytes(
-            kernel.handles.file_mapping(child_mapping)?.legacy_data().unwrap()[..4]
+            kernel
+                .handles
+                .file_mapping(child_mapping)?
+                .legacy_data()
+                .unwrap()[..4]
                 .try_into()
                 .unwrap(),
         );
@@ -56756,12 +56770,20 @@ mod unicorn_tests {
             .regs
             .regs[9];
         let parent_data_after_child = u32::from_le_bytes(
-            kernel.handles.file_mapping(parent_mapping)?.legacy_data().unwrap()[..4]
+            kernel
+                .handles
+                .file_mapping(parent_mapping)?
+                .legacy_data()
+                .unwrap()[..4]
                 .try_into()
                 .unwrap(),
         );
         let child_data_after_child = u32::from_le_bytes(
-            kernel.handles.file_mapping(child_mapping)?.legacy_data().unwrap()[..4]
+            kernel
+                .handles
+                .file_mapping(child_mapping)?
+                .legacy_data()
+                .unwrap()[..4]
                 .try_into()
                 .unwrap(),
         );
@@ -56818,12 +56840,20 @@ mod unicorn_tests {
             "the resumed parent must read its own bytes from a new native owner"
         );
         assert_eq!(
-            &kernel.handles.file_mapping(parent_mapping)?.legacy_data().unwrap()[..4],
+            &kernel
+                .handles
+                .file_mapping(parent_mapping)?
+                .legacy_data()
+                .unwrap()[..4],
             &(PARENT_BYTES + 2).to_le_bytes(),
             "A's second guest store must reach only A's canonical mapping"
         );
         assert_eq!(
-            &kernel.handles.file_mapping(child_mapping)?.legacy_data().unwrap()[..4],
+            &kernel
+                .handles
+                .file_mapping(child_mapping)?
+                .legacy_data()
+                .unwrap()[..4],
             &(CHILD_BYTES + 1).to_le_bytes(),
             "A's resumed native readback must not overwrite B's mapping"
         );
@@ -56871,7 +56901,10 @@ mod unicorn_tests {
             panic!("closed live-view object changed type");
         };
         assert!(mapping.closed);
-        assert_eq!(&mapping.legacy_data().unwrap()[..4], &0xaabb_ccddu32.to_le_bytes());
+        assert_eq!(
+            &mapping.legacy_data().unwrap()[..4],
+            &0xaabb_ccddu32.to_le_bytes()
+        );
         Ok(())
     }
 
@@ -56902,7 +56935,10 @@ mod unicorn_tests {
             .handles
             .create_file_mapping(None, SIZE as u32, 4, None);
         let mapping = kernel.handles.file_mapping_mut(handle)?;
-        mapping.legacy_data_mut().unwrap().copy_from_slice(&canonical);
+        mapping
+            .legacy_data_mut()
+            .unwrap()
+            .copy_from_slice(&canonical);
         mapping.views.push(crate::ce::object::FileMappingView {
             base,
             size: SIZE as u32,
@@ -56915,7 +56951,10 @@ mod unicorn_tests {
         // A fresh owner may finish a slice without touching this view at all.
         // Its canonical seed must survive rather than causing READ_UNMAPPED.
         super::sync_file_mapping_views_from_unicorn(&mut uc, &mut kernel, owner.process_id())?;
-        assert_eq!(kernel.handles.file_mapping(handle)?.legacy_data().unwrap(), canonical);
+        assert_eq!(
+            kernel.handles.file_mapping(handle)?.legacy_data().unwrap(),
+            canonical
+        );
         assert_eq!(
             kernel
                 .memory
@@ -56935,7 +56974,10 @@ mod unicorn_tests {
         super::sync_file_mapping_views_from_unicorn(&mut uc, &mut kernel, owner.process_id())?;
         let mut expected = canonical;
         expected[..4].copy_from_slice(&0xaabb_ccddu32.to_le_bytes());
-        assert_eq!(kernel.handles.file_mapping(handle)?.legacy_data().unwrap(), expected);
+        assert_eq!(
+            kernel.handles.file_mapping(handle)?.legacy_data().unwrap(),
+            expected
+        );
         assert_eq!(
             kernel
                 .memory
@@ -56975,7 +57017,10 @@ mod unicorn_tests {
             .handles
             .create_file_mapping(None, SIZE as u32, 4, None);
         let mapping = kernel.handles.file_mapping_mut(handle)?;
-        mapping.legacy_data_mut().unwrap().copy_from_slice(&canonical);
+        mapping
+            .legacy_data_mut()
+            .unwrap()
+            .copy_from_slice(&canonical);
         mapping.views.push(crate::ce::object::FileMappingView {
             base,
             size: SIZE as u32,
@@ -57001,7 +57046,10 @@ mod unicorn_tests {
         uc.mem_read(u64::from(base), &mut actual).unwrap();
         assert_eq!(actual, canonical[..4]);
         assert!(uc.mem_read(u64::from(base) + 0x1000, &mut [0; 4]).is_err());
-        assert_eq!(kernel.handles.file_mapping(handle)?.legacy_data().unwrap(), canonical);
+        assert_eq!(
+            kernel.handles.file_mapping(handle)?.legacy_data().unwrap(),
+            canonical
+        );
         Ok(())
     }
 
@@ -57028,7 +57076,10 @@ mod unicorn_tests {
         let mut actual = [0; 4];
         uc.mem_read(u64::from(base), &mut actual).unwrap();
         assert_eq!(actual, 0xaabb_ccddu32.to_le_bytes());
-        assert_eq!(kernel.handles.file_mapping(handle)?.legacy_data().unwrap(), canonical);
+        assert_eq!(
+            kernel.handles.file_mapping(handle)?.legacy_data().unwrap(),
+            canonical
+        );
         Ok(())
     }
 
@@ -57154,11 +57205,11 @@ mod unicorn_tests {
             view_base
         );
         assert!(cpu.native_engine_identity_for_test().is_none());
-        assert!(kernel.memory.shared_mapping_write(
-            mapping_handle,
-            0,
-            &INITIAL.to_le_bytes()
-        ));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_write(mapping_handle, 0, &INITIAL.to_le_bytes())
+        );
 
         let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
@@ -57184,7 +57235,11 @@ mod unicorn_tests {
         assert_eq!(saved.pc, entry + 0x14);
         assert_eq!(saved.regs.regs[8], 7);
         let mut canonical = [0; 4];
-        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut canonical));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping_handle, 0, &mut canonical)
+        );
         assert_eq!(canonical, INITIAL.to_le_bytes());
         assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
@@ -57319,9 +57374,17 @@ mod unicorn_tests {
             "guest read after GetTickCount"
         );
         let mut canonical = [0; 4];
-        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut canonical));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping_handle, 0, &mut canonical)
+        );
         assert_eq!(canonical, WRITTEN.to_le_bytes());
-        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0x1000, &mut canonical));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping_handle, 0x1000, &mut canonical)
+        );
         assert_eq!(canonical, SECOND_PAGE.to_le_bytes());
         assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
@@ -57468,9 +57531,17 @@ mod unicorn_tests {
                 || kernel.current_process_id() != birth.process_id()
         );
         let mut canonical = [0; 4];
-        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut canonical));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping_handle, 0, &mut canonical)
+        );
         assert_eq!(canonical, WRITTEN.to_le_bytes());
-        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0x1000, &mut canonical));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping_handle, 0x1000, &mut canonical)
+        );
         assert_eq!(canonical, SECOND_PAGE.to_le_bytes());
         assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
@@ -58448,10 +58519,12 @@ mod unicorn_tests {
         let parent_birth = kernel.current_process_birth_key().expect("parent birth");
         let launch =
             kernel.queue_process_launch(Some("\\Test\\shared-view-child.exe".to_owned()), None);
-        assert!(kernel
-            .take_pending_process_launches()
-            .iter()
-            .any(|queued| queued.process_id == launch.process_id));
+        assert!(
+            kernel
+                .take_pending_process_launches()
+                .iter()
+                .any(|queued| queued.process_id == launch.process_id)
+        );
         let child_state = crate::ce::kernel::CurrentProcessState {
             process_id: launch.process_id,
             exit_code: crate::ce::kernel::STILL_ACTIVE,
@@ -58474,48 +58547,48 @@ mod unicorn_tests {
             write_vec_u32(&mut bytes, 0x178 + 8, 0x200); // include the UTF-16 name
             write_vec_u32(&mut bytes, 0x380, 0x0000_0058); // "X\0" at NAME_VA
             let words = [
-                0x3c08_0000 | (NAME_VA >> 16),    // lui t0,NAME_VA high
-                0x3508_0000 | (NAME_VA & 0xffff), // ori t0,t0,NAME_VA low
-                0x2404_ffff,                       // addiu a0,zero,-1: anonymous section
-                0x0000_2821,                       // addu a1,zero,zero: attributes
-                0x2406_0004,                       // addiu a2,zero,PAGE_READWRITE
-                0x0000_3821,                       // addu a3,zero,zero: size high
-                0x2409_1000,                       // addiu t1,zero,4096
-                0xafa9_0010,                       // sw t1,16(sp): size low
-                0xafa8_0014,                       // sw t0,20(sp): UTF-16 name
-                0x3c19_0000 | (create_trap >> 16), // lui t9,CreateFileMappingW high
+                0x3c08_0000 | (NAME_VA >> 16),        // lui t0,NAME_VA high
+                0x3508_0000 | (NAME_VA & 0xffff),     // ori t0,t0,NAME_VA low
+                0x2404_ffff,                          // addiu a0,zero,-1: anonymous section
+                0x0000_2821,                          // addu a1,zero,zero: attributes
+                0x2406_0004,                          // addiu a2,zero,PAGE_READWRITE
+                0x0000_3821,                          // addu a3,zero,zero: size high
+                0x2409_1000,                          // addiu t1,zero,4096
+                0xafa9_0010,                          // sw t1,16(sp): size low
+                0xafa8_0014,                          // sw t0,20(sp): UTF-16 name
+                0x3c19_0000 | (create_trap >> 16),    // lui t9,CreateFileMappingW high
                 0x3739_0000 | (create_trap & 0xffff), // ori t9,t9,low
-                0x0320_f809,                       // jalr t9
-                0,                                 // delay slot
-                0x0040_8021,                       // addu s0,v0,zero: mapping handle
-                0x0200_2021,                       // addu a0,s0,zero
-                0x0000_2821,                       // addu a1,zero,zero: access
-                0x0000_3021,                       // addu a2,zero,zero: offset high
-                0x0000_3821,                       // addu a3,zero,zero: offset low
-                0x3c19_0000 | (view_trap >> 16),   // lui t9,MapViewOfFile high
-                0x3739_0000 | (view_trap & 0xffff), // ori t9,t9,low
-                0x0320_f809,                       // jalr t9
-                0,                                 // delay slot
-                0x0040_8821,                       // addu s1,v0,zero: first view
-                0x8e2a_0000,                       // lw t2,0(s1): prior owner's bytes
-                0x3c09_0000 | (initial >> 16),     // lui t1,initial high
-                0x3529_0000 | (initial & 0xffff),  // ori t1,t1,initial low
-                0xae29_0000,                       // sw t1,0(s1): canonical page
-                0x8e2a_0000,                       // resume: lw t2,0(s1)
-                0x0200_2021,                       // addu a0,s0,zero
-                0x0000_2821,                       // addu a1,zero,zero
-                0x0000_3021,                       // addu a2,zero,zero
-                0x0000_3821,                       // addu a3,zero,zero
-                0x3c19_0000 | (view_trap >> 16),   // lui t9,MapViewOfFile high
-                0x3739_0000 | (view_trap & 0xffff), // ori t9,t9,low
-                0x0320_f809,                       // jalr t9: second A alias
-                0,                                 // delay slot
-                0x0040_9021,                       // addu s2,v0,zero: alias view
-                0x3c0b_0000 | (ALIAS_BYTES >> 16), // lui t3,alias high
+                0x0320_f809,                          // jalr t9
+                0,                                    // delay slot
+                0x0040_8021,                          // addu s0,v0,zero: mapping handle
+                0x0200_2021,                          // addu a0,s0,zero
+                0x0000_2821,                          // addu a1,zero,zero: access
+                0x0000_3021,                          // addu a2,zero,zero: offset high
+                0x0000_3821,                          // addu a3,zero,zero: offset low
+                0x3c19_0000 | (view_trap >> 16),      // lui t9,MapViewOfFile high
+                0x3739_0000 | (view_trap & 0xffff),   // ori t9,t9,low
+                0x0320_f809,                          // jalr t9
+                0,                                    // delay slot
+                0x0040_8821,                          // addu s1,v0,zero: first view
+                0x8e2a_0000,                          // lw t2,0(s1): prior owner's bytes
+                0x3c09_0000 | (initial >> 16),        // lui t1,initial high
+                0x3529_0000 | (initial & 0xffff),     // ori t1,t1,initial low
+                0xae29_0000,                          // sw t1,0(s1): canonical page
+                0x8e2a_0000,                          // resume: lw t2,0(s1)
+                0x0200_2021,                          // addu a0,s0,zero
+                0x0000_2821,                          // addu a1,zero,zero
+                0x0000_3021,                          // addu a2,zero,zero
+                0x0000_3821,                          // addu a3,zero,zero
+                0x3c19_0000 | (view_trap >> 16),      // lui t9,MapViewOfFile high
+                0x3739_0000 | (view_trap & 0xffff),   // ori t9,t9,low
+                0x0320_f809,                          // jalr t9: second A alias
+                0,                                    // delay slot
+                0x0040_9021,                          // addu s2,v0,zero: alias view
+                0x3c0b_0000 | (ALIAS_BYTES >> 16),    // lui t3,alias high
                 0x356b_0000 | (ALIAS_BYTES & 0xffff), // ori t3,t3,alias low
-                0xae2b_0000,                       // sw t3,0(s1): no flush/import
-                0x8e4c_0000,                       // lw t4,0(s2): alias sees store
-                0x1000_ffff,                       // bounded safety spinner
+                0xae2b_0000,                          // sw t3,0(s1): no flush/import
+                0x8e4c_0000,                          // lw t4,0(s2): alias sees store
+                0x1000_ffff,                          // bounded safety spinner
                 0,
             ];
             for (index, word) in words.into_iter().enumerate() {
@@ -58542,14 +58615,15 @@ mod unicorn_tests {
                     "MapViewOfFile",
                 ),
             ] {
-                cpu.import_traps.insert(crate::emulator::imports::ImportTrap {
-                    address,
-                    module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
-                    module_name: "COREDLL.dll".to_owned(),
-                    ordinal: Some(ordinal),
-                    name: Some(import_name.to_owned()),
-                    iat_va: 0,
-                });
+                cpu.import_traps
+                    .insert(crate::emulator::imports::ImportTrap {
+                        address,
+                        module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                        module_name: "COREDLL.dll".to_owned(),
+                        ordinal: Some(ordinal),
+                        name: Some(import_name.to_owned()),
+                        iat_va: 0,
+                    });
             }
             super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
             let entry = cpu.entry.expect("fixture PE entry");
@@ -58591,7 +58665,10 @@ mod unicorn_tests {
         assert_ne!(mapping_handle, 0, "public CreateFileMappingW result");
         assert_ne!(view_base, 0, "public MapViewOfFile result");
         assert_eq!(a_saved.regs.regs[10], 0, "new anonymous page starts zero");
-        assert_eq!(kernel.memory.private_commit_used_bytes(), committed_before + 4096);
+        assert_eq!(
+            kernel.memory.private_commit_used_bytes(),
+            committed_before + 4096
+        );
         assert_eq!(
             kernel
                 .memory
@@ -58606,7 +58683,11 @@ mod unicorn_tests {
             .expect("A's canonical shared page pin");
         let mut actual = [0; 4];
         // Flush/write-back must source the page, even before an explicit flush.
-        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut actual));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping_handle, 0, &mut actual)
+        );
         assert_eq!(actual, A_BYTES.to_le_bytes());
         assert_eq!(
             kernel.handles.file_mapping(mapping_handle)?.views[0].process_birth,
@@ -58634,13 +58715,20 @@ mod unicorn_tests {
         assert_eq!(b_saved.regs.regs[16], mapping_handle, "named reopen");
         assert_eq!(b_saved.regs.regs[17], view_base, "same guest VA, new owner");
         assert_eq!(b_saved.regs.regs[10], A_BYTES, "B loaded A's guest store");
-        assert_eq!(kernel.memory.private_commit_used_bytes(), committed_before + 4096);
+        assert_eq!(
+            kernel.memory.private_commit_used_bytes(),
+            committed_before + 4096
+        );
         let b_pin = kernel
             .memory
             .stable_page_pin(child_birth, view_base)
             .expect("B's canonical shared page pin");
         assert_eq!(a_pin.native_ptr(), b_pin.native_ptr(), "one shared page");
-        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut actual));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping_handle, 0, &mut actual)
+        );
         assert_eq!(actual, B_BYTES.to_le_bytes());
 
         kernel.set_current_process_state(parent_state);
@@ -58669,13 +58757,20 @@ mod unicorn_tests {
             a_saved.regs.regs[12], ALIAS_BYTES,
             "A's alias loaded its unflushed same-slice guest store"
         );
-        assert_eq!(kernel.memory.private_commit_used_bytes(), committed_before + 4096);
+        assert_eq!(
+            kernel.memory.private_commit_used_bytes(),
+            committed_before + 4096
+        );
         let alias_pin = kernel
             .memory
             .stable_page_pin(parent_birth, alias_base)
             .expect("A's second shared view pin");
         assert_eq!(a_pin.native_ptr(), alias_pin.native_ptr(), "alias one page");
-        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut actual));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping_handle, 0, &mut actual)
+        );
         assert_eq!(actual, ALIAS_BYTES.to_le_bytes());
         let views = &kernel.handles.file_mapping(mapping_handle)?.views;
         assert_eq!(views.len(), 3);
