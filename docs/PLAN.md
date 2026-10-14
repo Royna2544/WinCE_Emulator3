@@ -133,9 +133,12 @@ close only their named gates, not Stage 2 or live acceptance.
   debug no-default gate passed 1,364/0/5 and release unicorn/trace/desktop
   passed 1,829/0/11, with desktop no-trace check also green
   ([receipt](../evidence/stage3-owner-20261014/validation.receipt.md)).
-  Four ownership/pin controls remain deliberately ignored. This is not Stage
-  3 acceptance or a live-app result. Next, prove all-worker process
-  termination, durable primary/parked-child completion and wait pins.
+  Four ownership/pin controls remain deliberately ignored. A later bounded
+  child-exit slice adds exact-birth completion, worker retirement at verified
+  exit, request-only parked-child retention and deferred real-process signaling.
+  It does not establish the TerminateProcess execution-stop handshake, exact
+  worker birth across same-process TID reuse, wait-target pins, root-process
+  completion or live-app behavior. Neither slice is full Stage 3 acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full

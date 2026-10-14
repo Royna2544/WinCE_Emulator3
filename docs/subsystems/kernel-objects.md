@@ -16,7 +16,7 @@ The entry slice stores thread mutable state once in `HandleTable` and gives publ
 
 The same clone-by-value problem affects every object kind that is not a file, find, volume or notification handle. `CeKernel::duplicate_handle` (`src/ce/kernel.rs:6410-6453`) hands the cloned value to its `other => other` arm. A duplicated event, mutex, semaphore or file mapping therefore becomes an independent copy. Signalling the copy, or mapping a view through it, does not reach the source. CE's HNDLDuplicate (`handle.c` 775–829) instead points the new handle at the same PHDATA. The reviewed first alias slice below covers thread/process handles only; generic Event/Mutex/Semaphore/FileMapping aliasing is an explicitly open following slice, not a D-008 memory shortcut. Until then, a cross-process shared-view test should use a named `CreateFileMappingW` reopen as its public route: `HandleTable::create_file_mapping` (`src/ce/object.rs:696-725`) returns the existing object's handle.
 
-`HandleTable::try_insert` checks public handle-number exhaustion for typed alias issuance, but infallible birth creation and generic objects still call `insert`; those paths are not a complete failure transaction. Child launch completion now marks its known primary TID by ID and emits a canonical process wake once, but its launch record carries bare PID/TID, not durable birth keys. Other workers are not swept on process exit, and a request-only parked child can be dropped before checked completion. A durable child ProcessIdentity and primary TaskKey are required.
+`HandleTable::try_insert` checks public handle-number exhaustion for typed alias issuance, but infallible birth creation and generic objects still call `insert`; those paths are not a complete failure transaction. The child launch record carries checked process and primary-thread births. Verified, exact-birth child completion signals the process wait and sweeps owned workers; a request-only parked child is retained rather than treated as exited. This is a bounded source-tested boundary, not full TaskDirectory retirement: exact worker birth across same-process TID reuse, root-process handoff, wait pins and the TerminateProcess execution-stop handshake remain open.
 
 Other object types have individual conventions: `OpenProcess(current PID)` now returns a distinct closable alias, while `GetCurrentProcess` remains pseudo. File duplication uses file-system bookkeeping and mapped views use canonical mapping data with process ownership. Named Event/Mapping CloseHandle can return success without removing a public handle, duplicated file/find contexts have separate cursors, and shared mapping pages are still keyed by a public handle. These exceptions do not establish a universal alias/lifetime model. Current global handle numbers and virtual-allocation metadata do not enforce CE6 per-process handle-table/address-space isolation.
 
@@ -116,9 +116,11 @@ registered thread birth. The active
 after launch-queue drain, process rotation and adversarial selector changes.
 Boot-main enumeration and durable child-primary identity controls remain
 ignored; an aliasless boot record alone does not satisfy their full contracts.
-This owner key is a prerequisite, not proof, of a later TerminateProcess sweep
-of every owned thread (including aliasless workers), fixed-stack budget
-release or request-only parked-child completion. The owner-slice
+The historical owner key was a prerequisite, not proof, of process cleanup.
+A subsequent child-exit slice sweeps workers and releases fixed-stack backing
+only after exact-birth verified completion; request-only parked children are
+retained. A TerminateProcess request still does not stop a running child, and
+exact worker birth and wait-target pins remain open. The owner-slice
 [receipt](../../evidence/stage3-owner-20261014/validation.receipt.md) records
 its source-bound gates; no live app behavior was measured.
 
