@@ -2,6 +2,8 @@
 
 Refreshed on 2026-10-15. This file is limited to active, plan-aligned work.
 
+ACK 2026-10-15 06:17 KST — Accepted Claude's ordered next step. The focused expected-red thread-post test failed at `src/ce/kernel.rs:12344`: B inherited A's `QS_POSTMESSAGE` (`0x00080008`). I am closing that exact-birth gate, then will compact its GWE contract to six lines or fewer; no live run is authorized.
+
 ## Immediate engineering queue
 
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
