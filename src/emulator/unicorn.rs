@@ -68584,10 +68584,33 @@ mod unicorn_tests {
             })
             .sum();
         assert_eq!(sealed_blob_bytes != 0, !writable);
-        let kernel = phase1_kernel(name)?;
+        let mut kernel = phase1_kernel(name)?;
         let birth = kernel
             .current_process_birth_key()
             .expect("boot process birth");
+        let system_slab_ranges = super::reserve_fixed_system_slabs(
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &mut kernel,
+            Some(birth),
+        )?;
+        assert_eq!(system_slab_ranges.len(), 2);
+        for region in cpu
+            .memory
+            .regions()
+            .filter(|region| matches!(region.name.as_str(), "ce-heap-arena" | "guest-stack"))
+        {
+            assert!(system_slab_ranges.contains(&(region.base, region.size)));
+        }
+        assert!(!cpu.mapped_blobs.iter().any(|blob| {
+            matches!(blob.name.as_str(), "ram:ce-heap-arena" | "ram:guest-stack")
+        }));
+        let stack_base = cpu
+            .memory
+            .regions()
+            .find(|region| region.name == "guest-stack")
+            .expect("guest stack descriptor")
+            .base;
         let expected =
             super::expected_sealed_image_runs(&cpu.mapped_blobs, &cpu.memory, Some(birth))?;
         let sealed_host_write_guard =
@@ -68595,18 +68618,25 @@ mod unicorn_tests {
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let pins = super::NativeMappingPins::default();
         let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+        mapped.system_slab_ranges = system_slab_ranges.clone();
+        mapped.system_slab_owner = Some(birth);
 
         let fresh_started = std::time::Instant::now();
-        mapped.ranges = super::reconcile_persistent_native_memory_with_private(
+        mapped.ranges = super::reconcile_persistent_native_memory_with_private_and_system_slabs(
             &mut uc,
             &cpu.memory,
             &cpu.mapped_blobs,
             &HashSet::new(),
             &BTreeMap::new(),
             &expected,
+            &system_slab_ranges,
         )?;
         let fresh_pins_before = pins.image_len();
         super::map_sealed_image_runs(&mut uc, &cpu.mapped_blobs, &mut mapped, &expected, &pins)?;
+        super::map_private_slab_pages(&mut uc, &kernel, &mut mapped, birth, &pins, None)?;
+        assert!(mapped.private_pages.is_empty());
+        assert_eq!(super::native_page_perms(&uc, super::GUEST_HEAP_ARENA_BASE)?, None);
+        assert_eq!(super::native_page_perms(&uc, stack_base)?, None);
         let fresh_ptr_map_calls = pins.image_len() - fresh_pins_before;
         let fresh_ptr_map_bytes: u64 = mapped
             .sealed_image_runs
@@ -68631,17 +68661,22 @@ mod unicorn_tests {
         let fresh_readback_ms = fresh_readback_started.elapsed().as_secs_f64() * 1000.0;
 
         let reused_started = std::time::Instant::now();
-        let reused_ranges = super::reconcile_persistent_native_memory_with_private(
+        let reused_ranges = super::reconcile_persistent_native_memory_with_private_and_system_slabs(
             &mut uc,
             &cpu.memory,
             &cpu.mapped_blobs,
             &mapped.virtual_pages,
             &mapped.private_pages,
             &expected,
+            &system_slab_ranges,
         )?;
         mapped.ranges = reused_ranges;
         let reused_pins_before = pins.image_len();
         super::map_sealed_image_runs(&mut uc, &cpu.mapped_blobs, &mut mapped, &expected, &pins)?;
+        super::map_private_slab_pages(&mut uc, &kernel, &mut mapped, birth, &pins, None)?;
+        assert!(mapped.private_pages.is_empty());
+        assert_eq!(super::native_page_perms(&uc, super::GUEST_HEAP_ARENA_BASE)?, None);
+        assert_eq!(super::native_page_perms(&uc, stack_base)?, None);
         let reused_ptr_map_calls = pins.image_len() - reused_pins_before;
         let reused_blob_write_bytes = super::sync_persisted_blobs_to_native(
             &mut uc,
