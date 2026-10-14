@@ -2175,7 +2175,7 @@ impl UnicornMips {
             msg: message.msg,
             wparam: message.wparam,
             lparam: message.lparam,
-            typed_payload_owner: None,
+            typed_payload_owner: message.typed_payload_owner,
             wndproc,
             return_pc: GUEST_THREAD_RETURN_STUB_ADDR,
             return_sp,
@@ -2447,7 +2447,7 @@ impl UnicornMips {
             msg: message.msg,
             wparam: message.wparam,
             lparam: message.lparam,
-            typed_payload_owner: None,
+            typed_payload_owner: message.typed_payload_owner,
             wndproc,
             return_pc,
             return_sp,
@@ -2642,7 +2642,7 @@ impl UnicornMips {
             msg: message.msg,
             wparam: message.wparam,
             lparam: message.lparam,
-            typed_payload_owner: None,
+            typed_payload_owner: message.typed_payload_owner,
             wndproc,
             return_pc: saved.pc,
             return_sp,
@@ -5796,7 +5796,7 @@ impl UnicornMips {
             msg: message.msg,
             wparam: message.wparam,
             lparam: message.lparam,
-            typed_payload_owner: None,
+            typed_payload_owner: message.typed_payload_owner,
             wndproc,
             return_pc: blocked.import_pc,
             return_sp,
@@ -8816,9 +8816,11 @@ impl UnicornMips {
                             .gwe
                             .record_destroy_lifecycle_message(callout.hwnd, callout.msg);
                     }
-                    if callout.msg == crate::ce::gwe::WM_WINDOWPOSCHANGED {
+                    if callout.msg == crate::ce::gwe::WM_WINDOWPOSCHANGED
+                        && let Some(owner) = callout.typed_payload_owner
+                    {
                         let _ = unsafe { &mut *kernel_ptr }
-                            .release_message_pointer_payload(callout.lparam);
+                            .release_message_pointer_payload(owner, callout.lparam);
                     }
                     let _ = finish_guest_paint_after_wndproc_return(
                         unsafe { &mut *kernel_ptr },
@@ -17634,7 +17636,7 @@ fn enter_get_message_sent_callout<D>(
         msg: message.msg,
         wparam: message.wparam,
         lparam: message.lparam,
-        typed_payload_owner: None,
+        typed_payload_owner: message.typed_payload_owner,
         wndproc,
         return_pc: import_pc,
         return_sp,
@@ -34138,7 +34140,7 @@ mod guest_thread_stack_tests {
             assert_eq!(canonical_heap_bytes(&kernel, message.lparam, 28)?, expected);
             let owner = kernel.current_process_birth_key().expect("fixture birth");
             assert!(kernel.memory.allocation(owner, message.lparam).is_some());
-            assert!(kernel.message_pointer_payload(message.lparam).is_some());
+            assert!(kernel.message_pointer_payload_for_message(&message).is_some());
             assert!(
                 kernel
                     .peek_ready_visible_message_w_filtered(
@@ -34711,45 +34713,53 @@ mod guest_thread_stack_tests {
         assert!(blobs.is_empty());
         Ok(())
     }
-
     #[test]
-    fn initial_guest_allocation_rejects_readonly_nonram_and_cross_region_destinations() -> Result<()>
-    {
+    fn initial_guest_allocation_rejects_foreign_native_pages_and_nonram_blobs() -> Result<()> {
         use crate::ce::memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE};
         for kind in 0..3 {
             let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
-            let candidate = kernel.memory.heap_high_water_mark();
-            let generation = kernel.memory.heap_generation();
-            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-            let size = if kind == 2 { 0x2000 } else { 0x1000 };
-            uc.mem_map(
-                u64::from(candidate),
-                0x1000,
-                if kind == 0 { Prot::READ } else { Prot::ALL },
-            )
-            .unwrap();
-            if kind == 2 {
-                uc.mem_map(u64::from(candidate + 0x1000), 0x1000, Prot::READ)
-                    .unwrap();
+            let owner = kernel.current_process_birth_key().expect("fixture birth");
+            let candidate = kernel.memory.heap_high_water_mark(owner);
+            if kind == 1 {
+                let mut source = MemoryMap::default();
+                source.map(
+                    GUEST_HEAP_ARENA_BASE,
+                    GUEST_HEAP_ARENA_SIZE,
+                    MemoryPerms::READ | MemoryPerms::WRITE,
+                    "ce-heap-arena",
+                )?;
+                let blob = MappedBlob {
+                    name: "module:test".to_owned(),
+                    base: candidate,
+                    bytes: vec![0xa5; 0x1000].into(),
+                };
+                assert!(reserve_fixed_system_slabs(&source, &[blob], &mut kernel, Some(owner)).is_err());
+                assert!(kernel.memory.fixed_heap_reservation(owner).is_none());
+                continue;
             }
-            uc.mem_write(u64::from(candidate), &vec![0xa5; size])
-                .unwrap();
-            let mut blobs = vec![MappedBlob {
-                name: if kind == 1 {
-                    "module:test"
-                } else {
-                    "ram:ce-heap-arena"
-                }
-                .to_owned(),
-                base: candidate,
-                bytes: vec![0xa5; size].into(),
-            }];
-            let original = blobs[0].bytes.clone();
-            let mapped = RefCell::new(KernelMemoryMappings::new(&blobs));
+            let mapped = canonical_heap_test_mapping(&mut kernel)?;
+            let pins = NativeMappingPins::default();
+            let guards = RefCell::new(BTreeMap::new());
+            let terminal_error = RefCell::new(None);
+            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+            let collision = candidate + if kind == 2 { 0x1000 } else { 0 };
+            uc.mem_map(u64::from(collision), 0x1000, Prot::READ).unwrap();
+            uc.mem_write(u64::from(collision), &[0xa5; 32]).unwrap();
+            let generation = kernel.memory.heap_generation();
+            let budget = kernel.memory.private_commit_available_bytes();
+            let mut blobs = Vec::new();
             let request = if kind == 2 { 0x1001 } else { 32 };
             let allocated = {
-                let mut memory =
-                    unsafe { UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs) };
+                let mut memory = unsafe {
+                    UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs)
+                }
+                .with_private_vm_mapping(UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                });
                 crate::ce::coredll::allocate_guest_heap(
                     &mut kernel,
                     &mut memory,
@@ -34758,19 +34768,15 @@ mod guest_thread_stack_tests {
                     request,
                 )
             };
-            assert_eq!(allocated, None, "destination kind {kind}");
-            assert!(kernel.memory.allocation(candidate).is_none());
+            assert_eq!(allocated, None, "foreign native page kind {kind}");
+            assert!(kernel.memory.allocation(owner, candidate).is_none());
             assert_eq!(kernel.memory.heap_generation(), generation);
-            assert_eq!(blobs.len(), 1);
-            assert_eq!(blobs[0].bytes, original);
-            assert_eq!(
-                uc.mem_read_as_vec(u64::from(candidate), size).unwrap(),
-                original
-            );
+            assert_eq!(kernel.memory.private_commit_available_bytes(), budget);
+            assert_eq!(uc.mem_read_as_vec(u64::from(collision), 32).unwrap(), [0xa5; 32]);
+            assert!(blobs.is_empty());
         }
         Ok(())
     }
-
     #[test]
     fn initial_guest_allocation_failed_create_returns_zero_and_does_not_publish_window()
     -> Result<()> {
@@ -44122,7 +44128,7 @@ fn try_enter_set_window_pos_callout<D>(
         msg: message.msg,
         wparam: message.wparam,
         lparam: message.lparam,
-        typed_payload_owner: None,
+        typed_payload_owner: message.typed_payload_owner,
         wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -44923,6 +44929,7 @@ fn try_enter_def_dlg_proc_callout<D>(
         msg,
         wparam,
         lparam,
+        typed_payload_owner: None,
         wndproc: dlgproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -45039,6 +45046,7 @@ fn try_enter_enable_window_callout<D>(
         msg,
         wparam,
         lparam,
+        typed_payload_owner: None,
         wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -45175,6 +45183,7 @@ fn enter_destroy_window_wm_destroy_callout<D>(
         msg: crate::ce::gwe::WM_DESTROY,
         wparam: 0,
         lparam: 0,
+        typed_payload_owner: None,
         wndproc: first.wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -48473,6 +48482,7 @@ fn enter_wndproc_continuation<D>(
         msg: continuation.msg,
         wparam: continuation.wparam,
         lparam: continuation.lparam,
+        typed_payload_owner: None,
         wndproc,
         return_pc: previous.return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -48582,6 +48592,7 @@ fn try_enter_is_dialog_message_callout<D>(
         msg: call_msg,
         wparam: call_wparam,
         lparam: call_lparam,
+        typed_payload_owner: None,
         wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -48689,6 +48700,7 @@ fn try_enter_update_window_callout<D>(
         msg,
         wparam,
         lparam,
+        typed_payload_owner: None,
         wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -48795,6 +48807,7 @@ fn try_enter_dialog_init_callout<D>(
         msg,
         wparam: 0,
         lparam: init_param,
+        typed_payload_owner: None,
         wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -49553,6 +49566,7 @@ fn try_enter_call_window_proc_callout<D>(
         msg,
         wparam,
         lparam,
+        typed_payload_owner: None,
         wndproc: call_wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -53104,6 +53118,7 @@ mod unicorn_tests {
                 msg: 0x0401,
                 wparam: 0,
                 lparam: 0,
+                typed_payload_owner: None,
                 wndproc: entry,
                 return_pc,
                 return_sp,
@@ -55837,6 +55852,7 @@ mod unicorn_tests {
             msg: 0x5237,
             wparam: 0,
             lparam: 0,
+            typed_payload_owner: None,
             wndproc: 0x0001_0000,
             return_pc,
             return_sp: context.regs[29],
@@ -56342,6 +56358,7 @@ mod unicorn_tests {
             msg: crate::ce::gwe::WM_PAINT,
             wparam: 0,
             lparam: 0,
+            typed_payload_owner: None,
             wndproc: 0x6004_f2b8,
             return_pc: 0x0034_26d4,
             return_sp: 0x7ffb_f5d8,
@@ -56410,6 +56427,7 @@ mod unicorn_tests {
                 msg: 0x5237,
                 wparam: 0,
                 lparam: 0,
+                typed_payload_owner: None,
                 wndproc: 0x6004_f0f4,
                 return_pc,
                 return_sp: 0x7ffd_f578,
@@ -64345,6 +64363,7 @@ mod unicorn_tests {
                 msg: 0x5237,
                 wparam: 0,
                 lparam: 0,
+                typed_payload_owner: None,
                 wndproc: 0x6004_f0f4,
                 return_pc,
                 return_sp: 0x7ffd_f578,
@@ -65946,6 +65965,7 @@ mod unicorn_tests {
             msg: crate::ce::gwe::WM_CANCELMODE,
             wparam: 0,
             lparam: 0,
+            typed_payload_owner: None,
             wndproc,
             return_pc,
             return_sp: 0x7ffd_fee8,
