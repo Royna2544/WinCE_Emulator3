@@ -22,8 +22,9 @@ use super::cpu_mips::{
 use super::native_engine::{NativeMappingPins, ProcessNativeEngine};
 #[cfg(feature = "unicorn")]
 use crate::ce::memory::{
-    PrivatePageIdentity, STABLE_PRIVATE_PAGE_SIZE, StablePrivatePageExecutionGuard,
-    StablePrivatePagePin, VirtualAllocationBacking,
+    PreparedPrivateVm, PreparedPrivateVmChange, PrivatePageIdentity, PrivateVmNativePageChange,
+    STABLE_PRIVATE_PAGE_SIZE, StablePrivatePageExecutionGuard, StablePrivatePagePin,
+    VirtualAllocationBacking,
 };
 #[cfg(all(test, feature = "unicorn"))]
 use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, USER_KDATA_PAGE_BASE, user_kdata_page};
@@ -6379,19 +6380,19 @@ impl UnicornMips {
         report.start_process_id = Some(native_owner_pid);
         report.start_process_birth = kernel.current_process_birth_key();
         report.start_thread_id = Some(self.current_thread_id);
-        let diagnostic_private = kernel.memory.has_stable_private_slabs();
-        // Pointer-backed pages require exact birth identity. Legacy attempts
-        // have historically allowed synthetic PIDs without a live birth and
-        // continue to use the VA-global mapper in that case.
-        let native_owner_birth = if diagnostic_private {
-            Some(kernel.current_process_birth_key().ok_or_else(|| {
-                Error::Backend(format!(
-                    "private slab native attempt has no live process birth for pid {native_owner_pid}"
-                ))
-            })?)
-        } else {
-            None
-        };
+        // Capture once, before any import can create the first public slab.
+        // A later selected-PID change must not retarget this native attempt.
+        let native_owner_birth = kernel.current_process_birth_key();
+        let diagnostic_private =
+            native_owner_birth.is_some() || kernel.memory.has_stable_private_slabs();
+        if kernel.memory.has_stable_private_slabs() && native_owner_birth.is_none() {
+            return Err(Error::Backend(format!(
+                "private slab native attempt has no live process birth for pid {native_owner_pid}"
+            )));
+        }
+        // Legacy synthetic-PID attempts without a birth continue to use the
+        // VA-global mapper. A real process must take the private fail-closed
+        // path even before its first public VirtualAlloc import creates slabs.
         // Once a pointer-backed page can be installed in native memory, any
         // fallible exit (including context restore or hook installation below)
         // must prevent a later run from reusing an older continuation. Keep
@@ -9332,6 +9333,15 @@ impl UnicornMips {
                         mapped_blobs_ptr,
                     )
                 };
+                if let Some(owner) = native_owner_birth {
+                    memory = memory.with_private_vm_mapping(UnicornPrivateVmMapping {
+                        mapped: mapped_kernel_memory_hook.as_ref(),
+                        owner,
+                        native_pins: &native_mapping_pins_import,
+                        active_guards: active_private_page_guards_import.as_ref(),
+                        terminal_error: immediate_process_sync_error_hook.as_ref(),
+                    });
+                }
                 if let Some(setjmp_result) = trap.as_ref().and_then(|trap| {
                     try_handle_setjmp_longjmp(
                         &mut memory,
@@ -9769,6 +9779,12 @@ impl UnicornMips {
                     let _ = memory.uc.emu_stop();
                     return;
                 };
+                // A private-VM adapter may have seen a partial native map,
+                // unmap or protection side effect. Its terminal latch takes
+                // precedence over the COREDLL return and later generic map.
+                if immediate_process_sync_error_hook.borrow().is_some() {
+                    return;
+                }
                 let result = import_return.v0;
                 if let Err(err) = map_kernel_memory_allocations_for_owner(
                     memory.uc,
@@ -13712,7 +13728,16 @@ fn map_private_slab_page<D>(
             "private slab identity for 0x{page:08x} changed before native map"
         )));
     }
-    let perms = unicorn_perms(virtual_allocation_perms(allocation.protect));
+    let page_protect = allocation
+        .private_committed_pages
+        .get(&page)
+        .copied()
+        .ok_or_else(|| {
+            Error::Backend(format!(
+                "private slab page 0x{page:08x} has no committed-page protection"
+            ))
+        })?;
+    let perms = unicorn_perms(virtual_allocation_perms(page_protect));
     let expected = NativePrivatePageRecord {
         identity,
         host_address: pin.native_ptr() as usize,
@@ -13757,6 +13782,75 @@ fn map_private_slab_page<D>(
         )
     }
     .map_err(|err| Error::Backend(format!("map private slab page 0x{page:08x}: {err:?}")))?;
+    mapped.private_pages.insert(page, expected);
+    mapped.ranges.push((page, STABLE_PRIVATE_PAGE_SIZE as u32));
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn map_prepared_private_slab_page<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    mapped: &mut KernelMemoryMappings,
+    prepared: &PreparedPrivateVm,
+    pin: &StablePrivatePagePin,
+    native_pins: &NativeMappingPins,
+    active_guards: &ActivePrivatePageGuards,
+) -> Result<()> {
+    let identity = pin.identity();
+    let page = identity.page_base();
+    let allocation = prepared.allocation();
+    if !prepared
+        .new_page_pins()
+        .iter()
+        .any(|candidate| std::ptr::eq(candidate, pin))
+        || identity.owner() != prepared.owner()
+        || identity.allocation_base() != prepared.base()
+        || identity.allocation_incarnation() != allocation.incarnation
+        || page as usize % STABLE_PRIVATE_PAGE_SIZE != 0
+        || (pin.native_ptr() as usize) % STABLE_PRIVATE_PAGE_SIZE != 0
+    {
+        return Err(Error::Backend(format!(
+            "prepared private slab page 0x{page:08x} has stale identity or alignment"
+        )));
+    }
+    let page_protect = prepared.protection_for_page(page).ok_or_else(|| {
+        Error::Backend(format!(
+            "prepared private slab page 0x{page:08x} is not committed"
+        ))
+    })?;
+    let perms = unicorn_perms(virtual_allocation_perms(page_protect));
+    let expected = NativePrivatePageRecord {
+        identity,
+        host_address: pin.native_ptr() as usize,
+        perms: perms.0 as u32,
+    };
+    if mapped.private_pages.contains_key(&page)
+        || native_page_perms(uc, page)?.is_some()
+        || is_guest_page_mapped(mapped, page)
+    {
+        return Err(Error::Backend(format!(
+            "prepared private slab page 0x{page:08x} collides with a native mapping"
+        )));
+    }
+    // Keep a lease-owned strong pin before the raw pointer crosses the FFI.
+    // An uncertain map failure poisons the attempt; the pin is quarantined
+    // with that native owner rather than dropped with the detached token.
+    native_pins.pin(pin.clone());
+    let guard = pin.begin_native_execution().map_err(|err| {
+        Error::Backend(format!("fence prepared private slab 0x{page:08x}: {err:?}"))
+    })?;
+    active_guards.borrow_mut().insert(identity, guard);
+    // SAFETY: this exact aligned 4-KiB page is pinned through the native
+    // owner, and active_guards fences host access while emu_start resumes.
+    unsafe {
+        uc.mem_map_ptr(
+            u64::from(page),
+            STABLE_PRIVATE_PAGE_SIZE as u64,
+            perms,
+            pin.native_ptr(),
+        )
+    }
+    .map_err(|err| Error::Backend(format!("map prepared private slab 0x{page:08x}: {err:?}")))?;
     mapped.private_pages.insert(page, expected);
     mapped.ranges.push((page, STABLE_PRIVATE_PAGE_SIZE as u32));
     Ok(())
@@ -14887,6 +14981,7 @@ fn is_guest_page_mapped(mapped: &KernelMemoryMappings, page_base: u32) -> bool {
 
 #[cfg(feature = "unicorn")]
 fn virtual_allocation_perms(protect: u32) -> MemoryPerms {
+    const PAGE_NOACCESS: u32 = 0x01;
     const PAGE_READONLY: u32 = 0x02;
     const PAGE_READWRITE: u32 = 0x04;
     const PAGE_WRITECOPY: u32 = 0x08;
@@ -14896,6 +14991,7 @@ fn virtual_allocation_perms(protect: u32) -> MemoryPerms {
     const PAGE_EXECUTE_WRITECOPY: u32 = 0x80;
 
     match protect & 0xff {
+        PAGE_NOACCESS => MemoryPerms::empty(),
         PAGE_READONLY => MemoryPerms::READ,
         PAGE_READWRITE | PAGE_WRITECOPY => MemoryPerms::READ | MemoryPerms::WRITE,
         PAGE_EXECUTE => MemoryPerms::EXEC,
@@ -31783,6 +31879,8 @@ fn prepare_native_message_pointer_payload<D>(
         let mut memory = UnicornGuestMemory {
             uc,
             heap_mapping: Some(mapping),
+            private_vm_mapping: None,
+            private_vm_applied_generation: None,
         };
         memory.ensure_heap_mapped(message.lparam, len)?;
     }
@@ -49899,6 +49997,8 @@ fn validate_heap_destination<D>(
 struct UnicornGuestMemory<'a, 'uc, D> {
     uc: &'a mut unicorn_engine::Unicorn<'uc, D>,
     heap_mapping: Option<UnicornHeapMapping<'a>>,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'a>>,
+    private_vm_applied_generation: Option<u64>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -49909,11 +50009,23 @@ struct UnicornHeapMapping<'a> {
 }
 
 #[cfg(feature = "unicorn")]
+#[derive(Clone, Copy)]
+struct UnicornPrivateVmMapping<'a> {
+    mapped: &'a RefCell<KernelMemoryMappings>,
+    owner: crate::ce::object::ProcessBirthKey,
+    native_pins: &'a NativeMappingPins,
+    active_guards: &'a ActivePrivatePageGuards,
+    terminal_error: &'a RefCell<Option<Error>>,
+}
+
+#[cfg(feature = "unicorn")]
 impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
     fn new(uc: &'a mut unicorn_engine::Unicorn<'uc, D>) -> Self {
         Self {
             uc,
             heap_mapping: None,
+            private_vm_mapping: None,
+            private_vm_applied_generation: None,
         }
     }
 
@@ -49928,12 +50040,229 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
                 mapped,
                 mapped_blobs,
             }),
+            private_vm_mapping: None,
+            private_vm_applied_generation: None,
         }
+    }
+
+    fn with_private_vm_mapping(mut self, mapping: UnicornPrivateVmMapping<'a>) -> Self {
+        self.private_vm_mapping = Some(mapping);
+        self
     }
 }
 
 #[cfg(feature = "unicorn")]
 impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
+    fn apply_prepared_private_vm(
+        &mut self,
+        kernel: &CeKernel,
+        prepared: &PreparedPrivateVm,
+    ) -> Result<()> {
+        let mapping = self.private_vm_mapping.ok_or_else(|| {
+            Error::Unsupported(
+                "public private VM has no captured native mapping context".to_owned(),
+            )
+        })?;
+        if prepared.owner() != mapping.owner
+            || kernel.handles.process_birth_key(mapping.owner.process_id()) != Some(mapping.owner)
+        {
+            return Err(Error::Backend(format!(
+                "prepared private VM owner differs from native process {}",
+                mapping.owner.process_id()
+            )));
+        }
+        let mut mapped = mapping.mapped.borrow_mut();
+        if mapped.heap_generation != kernel.memory.heap_generation()
+            || mapped.virtual_generation != kernel.memory.virtual_generation()
+        {
+            return Err(Error::Backend(
+                "private VM native ledger is stale before allocation".to_owned(),
+            ));
+        }
+        let applied_generation = mapped.virtual_generation;
+        if prepared.creates_reservation() {
+            // A reservation is a guest-VA promise even when no page is yet
+            // committed. Do not publish it over image, stack, heap or another
+            // native region that a later commit would be unable to own.
+            let start = u64::from(prepared.base());
+            let end = start + u64::from(prepared.allocation().size);
+            let regions = self.uc.mem_regions().map_err(|err| {
+                Error::Backend(format!("preflight native private reservation: {err:?}"))
+            })?;
+            if regions.iter().any(|region| {
+                let region_end = region.end.saturating_add(1);
+                start < region_end && region.begin < end
+            }) || mapped.ranges.iter().any(|(base, size)| {
+                let other_start = u64::from(*base);
+                let other_end = other_start + u64::from(*size);
+                start < other_end && other_start < end
+            }) {
+                return Err(Error::Backend(format!(
+                    "prepared private reservation 0x{:08x}+0x{:x} overlaps native guest memory",
+                    prepared.base(),
+                    prepared.allocation().size
+                )));
+            }
+        }
+        for pin in prepared.new_page_pins() {
+            map_prepared_private_slab_page(
+                self.uc,
+                &mut mapped,
+                prepared,
+                pin,
+                mapping.native_pins,
+                mapping.active_guards,
+            )?;
+        }
+        self.private_vm_applied_generation = Some(applied_generation);
+        Ok(())
+    }
+
+    fn apply_prepared_private_vm_change(
+        &mut self,
+        kernel: &CeKernel,
+        change: &PreparedPrivateVmChange,
+    ) -> Result<()> {
+        let mapping = self.private_vm_mapping.ok_or_else(|| {
+            Error::Unsupported(
+                "private VM change has no captured native mapping context".to_owned(),
+            )
+        })?;
+        if change.owner() != mapping.owner
+            || kernel.handles.process_birth_key(mapping.owner.process_id()) != Some(mapping.owner)
+        {
+            return Err(Error::Backend(format!(
+                "private VM change owner differs from native process {}",
+                mapping.owner.process_id()
+            )));
+        }
+        let mut mapped = mapping.mapped.borrow_mut();
+        if mapped.heap_generation != kernel.memory.heap_generation()
+            || mapped.virtual_generation != kernel.memory.virtual_generation()
+        {
+            return Err(Error::Backend(
+                "private VM native ledger is stale before change".to_owned(),
+            ));
+        }
+        let applied_generation = mapped.virtual_generation;
+        for action in change.native_page_changes() {
+            let pin = action.pin();
+            let identity = pin.identity();
+            let page = identity.page_base();
+            if identity.owner() != mapping.owner
+                || identity.allocation_base() != change.allocation_base()
+                || !kernel.memory.contains_private_page_pin(pin)
+            {
+                return Err(Error::Backend(format!(
+                    "private VM change has stale page identity 0x{page:08x}"
+                )));
+            }
+            let expected = mapped.private_pages.get(&page).ok_or_else(|| {
+                Error::Backend(format!(
+                    "private VM change page 0x{page:08x} has no native owner record"
+                ))
+            })?;
+            if expected.identity != identity
+                || expected.host_address != pin.native_ptr() as usize
+                || native_page_perms(self.uc, page)? != Some(expected.perms)
+            {
+                return Err(Error::Backend(format!(
+                    "private VM change page 0x{page:08x} differs from native owner"
+                )));
+            }
+            match action {
+                PrivateVmNativePageChange::Unmap(_) => {
+                    self.uc
+                        .mem_unmap(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64)
+                        .map_err(|err| {
+                            Error::Backend(format!("unmap private VM page 0x{page:08x}: {err:?}"))
+                        })?;
+                    mapped.private_pages.remove(&page);
+                    remove_mapped_guest_page(&mut mapped, page);
+                }
+                PrivateVmNativePageChange::Protect { new_protect, .. } => {
+                    let perms = unicorn_perms(virtual_allocation_perms(*new_protect));
+                    self.uc
+                        .mem_protect(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64, perms)
+                        .map_err(|err| {
+                            Error::Backend(format!("protect private VM page 0x{page:08x}: {err:?}"))
+                        })?;
+                    mapped
+                        .private_pages
+                        .get_mut(&page)
+                        .expect("validated native page record")
+                        .perms = perms.0 as u32;
+                }
+            }
+        }
+        self.private_vm_applied_generation = Some(applied_generation);
+        Ok(())
+    }
+
+    fn private_vm_commit_complete(&mut self, generation: u64) {
+        let Some(mapping) = self.private_vm_mapping else {
+            return;
+        };
+        let Some(applied_generation) = self.private_vm_applied_generation.take() else {
+            self.note_private_vm_transaction_failure(Error::Backend(
+                "private VM metadata committed without a checked native apply".to_owned(),
+            ));
+            return;
+        };
+        let mut mapped = mapping.mapped.borrow_mut();
+        if mapped.virtual_generation != applied_generation
+            || generation != applied_generation.wrapping_add(1)
+        {
+            drop(mapped);
+            self.note_private_vm_transaction_failure(Error::Backend(
+                "private VM generation changed during native transaction".to_owned(),
+            ));
+            return;
+        }
+        // The checked token applied every private page change to this same
+        // native ledger. A later generic import mapper must see this as
+        // already synchronized, not start a new fallible publication step.
+        mapped.virtual_generation = generation;
+    }
+
+    fn validate_writable_u32(&self, addr: u32) -> Result<()> {
+        let end = addr.checked_add(4).ok_or_else(|| {
+            Error::InvalidArgument("VirtualProtect output pointer wraps guest VA".to_owned())
+        })?;
+        let regions = self.uc.mem_regions().map_err(|err| {
+            Error::Backend(format!("preflight VirtualProtect output pointer: {err:?}"))
+        })?;
+        let write = unicorn_engine::Prot::WRITE.0 as u32;
+        for byte in addr..end {
+            if !regions.iter().any(|region| {
+                u64::from(byte) >= region.begin
+                    && u64::from(byte) <= region.end
+                    && region.perms & write == write
+            }) {
+                return Err(Error::InvalidArgument(format!(
+                    "VirtualProtect output 0x{addr:08x} is not writable guest memory"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn note_private_vm_transaction_failure(&mut self, error: Error) {
+        let Some(mapping) = self.private_vm_mapping else {
+            return;
+        };
+        let error = match self.uc.emu_stop() {
+            Ok(()) => error,
+            Err(stop_error) => Error::Backend(format!(
+                "private VM transaction failed: {error}; stop native attempt: {stop_error:?}"
+            )),
+        };
+        let mut terminal = mapping.terminal_error.borrow_mut();
+        if terminal.is_none() {
+            *terminal = Some(error);
+        }
+    }
+
     fn read_u8(&self, addr: u32) -> Result<u8> {
         let mut bytes = [0; 1];
         self.uc
