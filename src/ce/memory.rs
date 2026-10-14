@@ -1796,6 +1796,7 @@ impl MemorySystem {
     /// Set a raw private-page budget with no boot reservation. Low-level
     /// controls use this to exercise exact page counts independently of the
     /// device's reported boot-time memory occupancy.
+    #[cfg(test)]
     pub fn set_private_commit_limit_bytes(&mut self, bytes: u64) {
         self.private_page_budget.limit_bytes.set(bytes);
         self.private_page_budget.boot_reserved_bytes.set(0);
