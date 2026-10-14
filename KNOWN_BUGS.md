@@ -113,9 +113,14 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   result completion. The bounded
   [kernel sender-exit source gate](evidence/stage3-send-exit-20261015/validation.receipt.md)
   removes queued sends and detaches active sends for an exact verified exiting
-  birth; numeric-TID native `ExitThread` callout and guest return-stub paths
-  still need captured-birth checks. Ordinary `BlockedSendMessageTimeout`,
-  receiver-side delivery and broader GWE send lifecycle remain outside these
+  birth. The bounded
+  [native exit source gate](evidence/stage3-native-exit-birth-20261015/validation.receipt.md)
+  checks captured thread birth and process lease before native `ExitThread`
+  decisions and the guest return-stub no-exit-candidate fallback. Its
+  return-stub hook has no end-to-end control, and pending-return KData PID still
+  uses mutable process selection rather than the captured lease. Ordinary
+  `BlockedSendMessageTimeout`, receiver-side delivery and broader GWE send
+  lifecycle remain outside these
   gates. Boot-main
   enumeration, aliasless Sleep-suspend, unpinned-worker lineage (currently
   fails closed), other parked-wait continuation, raw

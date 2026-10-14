@@ -39,11 +39,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    send publication and paired result consumption. The bounded
    [kernel sender-exit gate](evidence/stage3-send-exit-20261015/validation.receipt.md)
    cleans queued sends and detaches active sends after exact live-birth exit.
-   Next birth-gate the numeric-TID native `ExitThread` callout and guest
-   return-stub paths; separately gate `BlockedSendMessageTimeout`, receiver-side
-   delivery and broader GWE lifecycle. Other blocked payloads remain separate.
-   Raw synchronous/nonblocking
-   queue/socket paths, raw synchronous/nonblocking/overlapped serial paths,
+   The bounded [native exit gate](evidence/stage3-native-exit-birth-20261015/validation.receipt.md)
+   checks captured thread birth and process lease before native `ExitThread`
+   decisions and the guest return-stub no-exit-candidate fallback. Add an
+   end-to-end return-stub hook control and make pending-return KData PID follow
+   the captured lease, not mutable process selection. Separately gate
+   `BlockedSendMessageTimeout`, receiver-side delivery and broader GWE
+   lifecycle. Other blocked payloads remain separate. Raw synchronous/nonblocking
+   queue/socket paths and raw synchronous/nonblocking/overlapped serial paths,
    opaque non-task pins, generic parked-wait closure and caller parity remain
    separate. O-K3 execution and registered Thread/Process
    wait-target pins passed a bounded source gate

@@ -4,6 +4,28 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 native guest-exit birth source slice
+
+- Native `ExitThread` now verifies the live captured `NativeCurrentThread`
+  birth and process-lease birth before choosing a pending worker return or
+  running worker, consuming continuation/stack state, or marking exit; kernel
+  dispatch uses exact `ThreadBirthKey`. The guest return-stub's
+  no-exit-candidate fallback checks native birth and owner before wait/timer
+  work. The bounded
+  [receipt](evidence/stage3-native-exit-birth-20261015/validation.receipt.md)
+  seals HEAD `24eec859058900005e43e471b185cd422ed53ec0` plus the exact
+  [source patch](evidence/stage3-native-exit-birth-20261015/source-at-seal.patch)
+  (SHA-256 `A2D8B529EC2D12F03F2A762A388350D51B2718923662C913FF49356DEAC0C30B`).
+  Full [release a01](evidence/stage3-native-exit-birth-20261015/release-a01.raw.log)
+  passed 1,923/0/9 ignored; full
+  [no-feature a01](evidence/stage3-native-exit-birth-20261015/nofeature-a01.raw.log)
+  passed 1,399/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
+  receipt. The guest return-stub hook was not exercised end-to-end: its
+  no-exit-candidate gate has only a helper-level control. Pending-return KData
+  PID writes still use the mutable selected process, not the captured lease
+  PID. `BlockedSendMessageTimeout`, receiver-side delivery, full Stage 3 and
+  live-app behavior remain open.
+
 ## 2026-10-15 Stage 3 kernel sender-exit cleanup source slice
 
 - On the first successful exit of an exact live `ThreadBirthKey`, `CeKernel`
@@ -19,9 +41,10 @@ references for historical reconstruction.
   passed 1,920/0/9 ignored; full
   [no-feature a01](evidence/stage3-send-exit-20261015/nofeature-a01.raw.log)
   passed 1,399/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
-  receipt. Native `ExitThread` callout and guest return-stub paths still use
-  numeric TIDs; `BlockedSendMessageTimeout`, receiver-side delivery, broader
-  GWE lifecycle, full Stage 3 and live-app behavior remain unaccepted.
+  receipt. The later bounded native exit gate above checks captured birth and
+  process lease before exit decisions; `BlockedSendMessageTimeout`,
+  receiver-side delivery, broader GWE lifecycle, full Stage 3 and live-app
+  behavior remain unaccepted.
 
 ## 2026-10-15 Stage 3 parked SendMessage birth source slice
 
