@@ -1,6 +1,6 @@
 use std::{
     alloc::{Layout, alloc_zeroed, dealloc},
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
     fmt,
@@ -277,6 +277,7 @@ impl PrivatePageBudget {
 /// Every live page and native pin keeps its exact block alive.
 struct HostPrivateBlock {
     base: NonNull<u8>,
+    occupied: RefCell<[bool; FIXED_PRIVATE_BLOCK_SIZE / STABLE_PRIVATE_PAGE_SIZE]>,
 }
 
 impl HostPrivateBlock {
@@ -288,6 +289,7 @@ impl HostPrivateBlock {
         };
         Some(Rc::new(Self {
             base: NonNull::new(base.cast())?,
+            occupied: RefCell::new([false; FIXED_PRIVATE_BLOCK_SIZE / STABLE_PRIVATE_PAGE_SIZE]),
         }))
     }
 
@@ -301,14 +303,26 @@ impl HostPrivateBlock {
         if offset >= FIXED_PRIVATE_BLOCK_SIZE || offset % STABLE_PRIVATE_PAGE_SIZE != 0 {
             return None;
         }
+        let index = offset / STABLE_PRIVATE_PAGE_SIZE;
+        if self.occupied.borrow()[index] {
+            // A concurrent detached proposal must not become a second byte
+            // authority for an already committed offset in this block.
+            return None;
+        }
         // SAFETY: the checked offset is wholly inside this live reservation.
         let wanted = unsafe { self.base.as_ptr().add(offset) };
         // SAFETY: MEM_COMMIT of one previously reserved page returns its exact
         // address or null. The block is retained by the resulting page.
-        let actual = unsafe {
-            host_virtual_alloc(wanted.cast(), STABLE_PRIVATE_PAGE_SIZE, 0x1000, 0x04)
-        };
-        (actual.cast::<u8>() == wanted).then_some(NonNull::new(actual.cast())?)
+        let actual =
+            unsafe { host_virtual_alloc(wanted.cast(), STABLE_PRIVATE_PAGE_SIZE, 0x1000, 0x04) };
+        let bytes = NonNull::new(actual.cast::<u8>())?;
+        if bytes.as_ptr() != wanted {
+            // Explicit-address VirtualAlloc should never choose another VA.
+            // Do not publish an unexpected host pointer as a page.
+            return None;
+        }
+        self.occupied.borrow_mut()[index] = true;
+        Some(bytes)
     }
 
     #[cfg(not(windows))]
@@ -318,10 +332,18 @@ impl HostPrivateBlock {
 
     #[cfg(windows)]
     fn decommit_page(&self, offset: usize) -> bool {
+        let index = offset / STABLE_PRIVATE_PAGE_SIZE;
+        if offset >= FIXED_PRIVATE_BLOCK_SIZE || !self.occupied.borrow()[index] {
+            return false;
+        }
         // SAFETY: every stored offset came from commit_page, and this block
         // remains reserved until its last strong reference drops.
         let address = unsafe { self.base.as_ptr().add(offset) };
-        unsafe { host_virtual_free(address.cast(), STABLE_PRIVATE_PAGE_SIZE, 0x4000) != 0 }
+        if unsafe { host_virtual_free(address.cast(), STABLE_PRIVATE_PAGE_SIZE, 0x4000) } == 0 {
+            return false;
+        }
+        self.occupied.borrow_mut()[index] = false;
+        true
     }
 
     #[cfg(not(windows))]
@@ -565,7 +587,10 @@ impl StablePrivatePagePin {
                     && self.identity.owner == next.identity.owner
                     && self.identity.allocation_base == next.identity.allocation_base
                     && self.identity.allocation_incarnation == next.identity.allocation_incarnation
-                    && self.identity.page_base.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)
+                    && self
+                        .identity
+                        .page_base
+                        .checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)
                         == Some(next.identity.page_base)
             }
             _ => false,
@@ -1393,13 +1418,13 @@ impl MemorySystem {
                     page_base: block_base.checked_add(FIXED_PRIVATE_BLOCK_SIZE as u32)?,
                     ..identity
                 };
-                let existing = self
-                    .stable_private_pages
-                    .range(first..last)
-                    .find_map(|(_, page)| match &page.storage {
-                        PrivatePageStorage::HostBlock { block, .. } => Some(Rc::clone(block)),
-                        PrivatePageStorage::Independent => None,
-                    });
+                let existing =
+                    self.stable_private_pages
+                        .range(first..last)
+                        .find_map(|(_, page)| match &page.storage {
+                            PrivatePageStorage::HostBlock { block, .. } => Some(Rc::clone(block)),
+                            PrivatePageStorage::Independent => None,
+                        });
                 let block = match existing {
                     Some(block) => block,
                     None => HostPrivateBlock::reserve()?,
@@ -5165,6 +5190,89 @@ mod tests {
             memory.private_commit_used_bytes(),
             3 * STABLE_PRIVATE_PAGE_SIZE as u64
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fixed_block_sparse_pages_clone_and_detached_slot_do_not_alias() {
+        const STACK_BASE: u32 = 0x7000_0000;
+        let mut source = MemorySystem::default();
+        let owner = boot_owner();
+        assert_eq!(
+            source.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ThreadStack,
+                STACK_BASE,
+                0x20_0000,
+                4,
+            ),
+            Some(STACK_BASE)
+        );
+        for page in [STACK_BASE, STACK_BASE + 0x2000] {
+            let proposal = source.prepare_fixed_private_page(owner, page).unwrap();
+            assert_eq!(source.commit_prepared_private_vm(proposal), Some(page));
+        }
+        let first = source.private_page_pin(owner, STACK_BASE).unwrap();
+        let third = source.private_page_pin(owner, STACK_BASE + 0x2000).unwrap();
+        assert!(first.is_host_block_backed() && third.is_host_block_backed());
+        assert_eq!(
+            third.native_ptr() as usize - first.native_ptr() as usize,
+            0x2000
+        );
+        assert!(
+            source
+                .private_page_pin(owner, STACK_BASE + 0x1000)
+                .is_none()
+        );
+        assert_eq!(source.private_commit_used_bytes(), 0x2000);
+        first.write_bytes(0, &[0x41]).unwrap();
+        third.write_bytes(0, &[0x43]).unwrap();
+
+        // A detached proposal occupies its block offset before publication.
+        // A competing proposal must not receive that same host pointer.
+        let pending = source
+            .prepare_fixed_private_page(owner, STACK_BASE + 0x1000)
+            .unwrap();
+        assert!(
+            source
+                .prepare_fixed_private_page(owner, STACK_BASE + 0x1000)
+                .is_none()
+        );
+        assert_eq!(source.private_commit_used_bytes(), 0x3000);
+        drop(pending);
+        assert_eq!(source.private_commit_used_bytes(), 0x2000);
+        let replacement = source
+            .prepare_fixed_private_page(owner, STACK_BASE + 0x1000)
+            .unwrap();
+        assert_eq!(
+            source.commit_prepared_private_vm(replacement),
+            Some(STACK_BASE + 0x1000)
+        );
+
+        let mut clone = source.clone();
+        let clone_first = clone.private_page_pin(owner, STACK_BASE).unwrap();
+        let clone_third = clone.private_page_pin(owner, STACK_BASE + 0x2000).unwrap();
+        assert!(clone_first.is_host_block_backed() && clone_third.is_host_block_backed());
+        assert_ne!(clone_first.native_ptr(), first.native_ptr());
+        assert_eq!(
+            clone_third.native_ptr() as usize - clone_first.native_ptr() as usize,
+            0x2000
+        );
+        clone_first.write_bytes(0, &[0x99]).unwrap();
+        let mut byte = [0];
+        first.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x41]);
+        clone_first.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x99]);
+        assert_eq!(source.private_commit_used_bytes(), 0x3000);
+        assert_eq!(clone.private_commit_used_bytes(), 0x3000);
+        source.retire_fixed_private_ranges_for_owner(owner);
+        clone.retire_fixed_private_ranges_for_owner(owner);
+        assert_eq!(source.private_commit_used_bytes(), 0x2000);
+        assert_eq!(clone.private_commit_used_bytes(), 0x2000);
+        drop((first, third, clone_first, clone_third));
+        assert_eq!(source.private_commit_used_bytes(), 0);
+        assert_eq!(clone.private_commit_used_bytes(), 0);
     }
 
     #[test]
