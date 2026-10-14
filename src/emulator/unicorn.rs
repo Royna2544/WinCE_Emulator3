@@ -266,7 +266,7 @@ struct ParkedProcess {
 #[cfg(feature = "unicorn")]
 struct UnicornRunStateHandles<'a> {
     parked_child_processes: &'a std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
-    current_thread_id: &'a std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &'a std::rc::Rc<NativeCurrentThread>,
     pending_guest_thread_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     pending_qsort_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
@@ -315,6 +315,38 @@ struct UnicornRunStateHandles<'a> {
 struct SavedCpuContext {
     pc: u32,
     regs: MipsGuestContext,
+}
+
+/// The native CPU's currently executing thread and the birth that supplied
+/// its registers. An unverified switch must not inherit the previous birth,
+/// even when the numeric TID happens to be unchanged.
+#[cfg(feature = "unicorn")]
+struct NativeCurrentThread {
+    state: std::cell::Cell<(u32, Option<crate::ce::object::ThreadBirthKey>)>,
+}
+
+#[cfg(feature = "unicorn")]
+impl NativeCurrentThread {
+    fn new(thread_id: u32, birth: Option<crate::ce::object::ThreadBirthKey>) -> Self {
+        Self {
+            state: std::cell::Cell::new((
+                thread_id,
+                birth.filter(|birth| birth.thread_id() == thread_id),
+            )),
+        }
+    }
+
+    fn get(&self) -> (u32, Option<crate::ce::object::ThreadBirthKey>) {
+        self.state.get()
+    }
+
+    fn set_unverified(&self, thread_id: u32) {
+        self.state.set((thread_id, None));
+    }
+
+    fn set_verified(&self, birth: crate::ce::object::ThreadBirthKey) {
+        self.state.set((birth.thread_id(), Some(birth)));
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -884,7 +916,9 @@ fn pop_pending_guest_thread_return_for_thread(
     let index = pending_returns
         .iter()
         .rposition(|pending| pending.worker_thread_id == thread_id)?;
-    if pending_guest_thread_return_stale_reason(kernel, &pending_returns, thread_id).is_some() {
+    if pending_guest_thread_return_stale_reason(kernel, pending_returns.as_slice(), thread_id)
+        .is_some()
+    {
         return None;
     }
     Some(pending_returns.remove(index))
@@ -896,29 +930,32 @@ fn pending_guest_thread_return_stale_reason(
     pending_returns: &[PendingGuestThreadReturn],
     thread_id: u32,
 ) -> Option<String> {
-    let pending = pending_returns
+    for pending in pending_returns
         .iter()
-        .rfind(|pending| pending.worker_thread_id == thread_id)?;
-    let live_worker_birth = kernel.handles.thread_birth_key_by_id(thread_id);
-    let live_creator_birth = kernel
-        .handles
-        .thread_birth_key_by_id(pending.creator_thread_id);
-    if live_worker_birth == Some(pending.worker_birth)
-        && kernel.handles.thread_execution_live_by_id(thread_id)
-        && live_creator_birth == Some(pending.creator_birth)
-        && kernel
-            .handles
-            .thread_execution_live_by_id(pending.creator_thread_id)
+        .filter(|pending| pending.worker_thread_id == thread_id)
     {
-        return None;
+        let live_worker_birth = kernel.handles.thread_birth_key_by_id(thread_id);
+        let live_creator_birth = kernel
+            .handles
+            .thread_birth_key_by_id(pending.creator_thread_id);
+        if live_worker_birth == Some(pending.worker_birth)
+            && kernel.handles.thread_execution_live_by_id(thread_id)
+            && live_creator_birth == Some(pending.creator_birth)
+            && kernel
+                .handles
+                .thread_execution_live_by_id(pending.creator_thread_id)
+        {
+            continue;
+        }
+        return Some(format!(
+            "stale native CreateThread continuation: worker TID {thread_id}, expected worker {:?}, live worker {:?}, expected creator {:?}, live creator {:?}",
+            pending.worker_birth,
+            live_worker_birth,
+            pending.creator_birth,
+            live_creator_birth,
+        ));
     }
-    Some(format!(
-        "stale native CreateThread continuation: worker TID {thread_id}, expected worker {:?}, live worker {:?}, expected creator {:?}, live creator {:?}",
-        pending.worker_birth,
-        live_worker_birth,
-        pending.creator_birth,
-        live_creator_birth,
-    ))
+    None
 }
 
 #[cfg(feature = "unicorn")]
@@ -930,13 +967,13 @@ fn stop_stale_pending_guest_thread_return<D>(
 ) -> bool {
     let reason = pending_guest_thread_return_stale_reason(
         kernel,
-        &pending_returns.borrow(),
+        pending_returns.borrow().as_slice(),
         thread_id,
     );
     let Some(reason) = reason else {
         return false;
     };
-    tracing::warn!(target: "ce.scheduler", thread_id, reason, "refused stale native CreateThread continuation");
+    tracing::warn!(target: "ce.scheduler", thread_id, reason = reason.as_str(), "refused stale native CreateThread continuation");
     let _ = uc.emu_stop();
     true
 }
@@ -4261,7 +4298,7 @@ impl UnicornMips {
 
         let active = SuspendedGuestThread {
             thread_id: active_thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+            thread_birth: self.saved_context_thread_birth,
             thread_handle: self
                 .running_guest_thread
                 .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -4330,7 +4367,7 @@ impl UnicornMips {
 
         let active = SuspendedGuestThread {
             thread_id: active_thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+            thread_birth: self.saved_context_thread_birth,
             thread_handle: self
                 .running_guest_thread
                 .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -4679,7 +4716,7 @@ impl UnicornMips {
             .borrow_mut()
             .drain(..)
             .collect();
-        self.current_thread_id = *state.current_thread_id.borrow();
+        self.current_thread_id = state.current_thread_id.get().0;
         self.pending_guest_thread_returns = state
             .pending_guest_thread_returns
             .borrow_mut()
@@ -5373,7 +5410,7 @@ impl UnicornMips {
         self.remove_stale_blocked_waits_for_thread(kernel, thread_id);
         self.remove_stale_blocked_get_message_for_thread(kernel, thread_id);
         self.remove_stale_displaced_get_messages_for_thread(kernel, thread_id);
-        self.remove_persisted_suspended_guest_thread(thread_id);
+        self.remove_persisted_suspended_guest_thread(thread_id, expected_birth);
         self.self_suspended_guest_threads.remove(&thread_id);
         self.pending_guest_thread_returns
             .retain(|callout| callout.worker_thread_id != thread_id);
@@ -7772,7 +7809,10 @@ impl UnicornMips {
         let code_hook_previous_pc = Rc::new(Cell::new(None::<u32>));
         let code_hook_previous_pc_hook = Rc::clone(&code_hook_previous_pc);
         let live_trampoline_state_wall_clock_hook = Rc::clone(&live_trampoline_state);
-        let current_thread_id = Rc::new(RefCell::new(self.current_thread_id));
+        let current_thread_id = Rc::new(NativeCurrentThread::new(
+            self.current_thread_id,
+            slice_entry_thread_birth,
+        ));
         let current_thread_id_hook = Rc::clone(&current_thread_id);
         let current_thread_id_code_hook = Rc::clone(&current_thread_id);
         let current_thread_id_fast_code_hook = Rc::clone(&current_thread_id);
@@ -8331,7 +8371,7 @@ impl UnicornMips {
                             if live_pump && pending_stop_reason.get().is_none() {
                                 let kernel = unsafe { &*kernel_ptr };
                                 let parked = parked_child_processes.borrow();
-                                let active_thread_id = *current_thread_id_fast_code_hook.borrow();
+                                let active_thread_id = current_thread_id_fast_code_hook.get().0;
                                 let visible =
                                     Self::live_pump_active_should_yield_to_visible_parked_process(
                                         &parked,
@@ -8845,7 +8885,7 @@ impl UnicornMips {
                 }
             }
             if !scheduler_timeslice_pending_hook.get() {
-                let active_thread_id = *current_thread_id_timeslice_hook.borrow();
+                let active_thread_id = current_thread_id_timeslice_hook.get().0;
                 let kernel_ref = unsafe { &*kernel_ptr };
                 if blocked_get_message_has_visible_receiver_work(
                     &blocked_guest_thread_timeslice_hook,
@@ -8910,7 +8950,7 @@ impl UnicornMips {
                     no_pending_guest_returns,
                     &parked_child_processes_timeslice_hook.borrow(),
                     unsafe { &*kernel_ptr },
-                    *current_thread_id_timeslice_hook.borrow(),
+                    current_thread_id_timeslice_hook.get().0,
                 ) {
                     let safe_pc_write = uc.reg_write(RegisterMIPS::PC, u64::from(yield_pc));
                     let stop_request = uc.emu_stop();
@@ -9015,10 +9055,10 @@ impl UnicornMips {
                 || !pending_dll_lifecycle_returns_timeslice_hook
                     .borrow()
                     .is_empty());
-            let active_thread_id = *current_thread_id_timeslice_hook.borrow();
+            let active_thread_id = current_thread_id_timeslice_hook.get().0;
             if let Some(reason) = pending_guest_thread_return_stale_reason(
                 unsafe { &*kernel_ptr },
-                &pending_guest_thread_returns_timeslice_hook.borrow(),
+                pending_guest_thread_returns_timeslice_hook.borrow().as_slice(),
                 active_thread_id,
             ) {
                 tracing::warn!(target: "ce.scheduler", active_thread_id, reason = reason.as_str(), "stale native CreateThread continuation at timeslice");
@@ -9252,10 +9292,10 @@ impl UnicornMips {
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
             move |uc, address, _size| {
                 let address = address as u32;
-                let active_thread_id = *current_thread_id_hook.borrow();
+                let active_thread_id = current_thread_id_hook.get().0;
                 if let Some(reason) = pending_guest_thread_return_stale_reason(
                     unsafe { &*kernel_ptr },
-                    &pending_guest_thread_returns_hook.borrow(),
+                    pending_guest_thread_returns_hook.borrow().as_slice(),
                     active_thread_id,
                 ) {
                     tracing::warn!(target: "ce.scheduler", active_thread_id, reason = reason.as_str(), "stale native CreateThread continuation at import trap");
@@ -9293,7 +9333,7 @@ impl UnicornMips {
                     }
                 }
                 if address == THREAD_EXIT_STUB_ADDR {
-                    let active_thread_id = *current_thread_id_hook.borrow();
+                    let active_thread_id = current_thread_id_hook.get().0;
                     let no_running_thread = running_guest_thread_hook.borrow().is_none();
                     if no_running_thread && active_thread_id != process_primary_thread_id {
                         let expected_birth = (active_thread_id == slice_entry_thread_id)
@@ -9346,6 +9386,7 @@ impl UnicornMips {
                             &suspended_guest_thread_hook,
                             Some(&suspended_guest_thread_queue_hook),
                             active_thread_id,
+                            unsafe { &*kernel_ptr }.handles.thread_birth_key_by_id(active_thread_id),
                         );
                         unsafe { &mut *kernel_ptr }
                             .mark_guest_thread_exited_by_id(active_thread_id, exit_code);
@@ -9454,7 +9495,7 @@ impl UnicornMips {
                             uc,
                             &last_wndproc_returns_hook,
                             unsafe { &*trampoline_jumps_ptr },
-                            *current_thread_id_hook.borrow(),
+                            current_thread_id_hook.get().0,
                         ) {
                             return;
                         }
@@ -9462,7 +9503,7 @@ impl UnicornMips {
                         tracing::warn!(
                             target: "ce.gwe",
                             call_sp = format_args!("0x{call_sp:08x}"),
-                            current_thread_id = *current_thread_id_hook.borrow(),
+                            current_thread_id = current_thread_id_hook.get().0,
                             pending_wndproc_returns = pending_wndproc_returns_hook.borrow().len(),
                             last_return = ?last_return,
                             "orphaned WNDPROC return stub with no pending callout"
@@ -9480,7 +9521,7 @@ impl UnicornMips {
                         return_pc = format_args!("0x{:08x}", callout.return_pc),
                         return_sp = format_args!("0x{:08x}", callout.return_sp),
                         call_sp = format_args!("0x{call_sp:08x}"),
-                        current_thread_id = *current_thread_id_hook.borrow(),
+                        current_thread_id = current_thread_id_hook.get().0,
                         pending_wndproc_returns = pending_wndproc_returns_hook.borrow().len(),
                         result = format_args!("0x{result:08x}"),
                         "popped WNDPROC return callout"
@@ -9639,7 +9680,7 @@ impl UnicornMips {
                     }
                     if let Some(resume) = callout.resume_import.clone() {
                         restore_mips_gprs(uc, &resume.regs);
-                        *current_thread_id_hook.borrow_mut() = resume.thread_id;
+                        current_thread_id_hook.set_unverified(resume.thread_id);
                         let _ = update_user_kdata_current_ids(
                             uc,
                             resume.thread_id,
@@ -9744,7 +9785,7 @@ impl UnicornMips {
                             _ => None,
                         };
                         restore_mips_gprs(uc, &blocked.regs);
-                        *current_thread_id_hook.borrow_mut() = restore.sender_thread_id;
+                        current_thread_id_hook.set_unverified(restore.sender_thread_id);
                         let _ = update_user_kdata_current_ids(
                             uc,
                             restore.sender_thread_id,
@@ -9876,7 +9917,7 @@ impl UnicornMips {
                     return;
                 }
                 if address == FSDMGR_FILE_LOCK_RETURN_STUB_ADDR {
-                    let active_thread_id = *current_thread_id_hook.borrow();
+                    let active_thread_id = current_thread_id_hook.get().0;
                     if !handle_fsdmgr_file_lock_return_stub(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -9890,7 +9931,7 @@ impl UnicornMips {
                 }
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
                     let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
-                    let active_thread_id = *current_thread_id_hook.borrow();
+                    let active_thread_id = current_thread_id_hook.get().0;
                     if let Some(callout) = pop_pending_guest_thread_return_for_thread(
                         &pending_guest_thread_returns_hook,
                         unsafe { &*kernel_ptr },
@@ -9902,7 +9943,7 @@ impl UnicornMips {
                             &guest_thread_stack_slots_hook,
                             callout.worker_thread_id,
                         );
-                        *current_thread_id_hook.borrow_mut() = callout.creator_thread_id;
+                        current_thread_id_hook.set_verified(callout.creator_birth);
                         let _ = update_user_kdata_current_ids(
                             uc,
                             callout.creator_thread_id,
@@ -10002,13 +10043,15 @@ impl UnicornMips {
                         let _ = uc.emu_stop();
                         return;
                     };
-                    activate_suspended_thread(
+                    if !activate_suspended_thread(
                         uc,
                         unsafe { &*kernel_ptr },
                         &current_thread_id_hook,
                         &running_guest_thread_hook,
                         &suspended,
-                    );
+                    ) {
+                        return;
+                    }
                     tracing::debug!(
                         target: "ce.imports",
                         thread_id = worker_thread_id,
@@ -10168,7 +10211,7 @@ impl UnicornMips {
                         watched_slot,
                     );
                 }
-                let active_thread_id = *current_thread_id_hook.borrow();
+                let active_thread_id = current_thread_id_hook.get().0;
                 if trap.as_ref().is_some_and(|trap| {
                     complete_escaped_get_message_sent_callout(
                         unsafe { &mut *kernel_ptr },
@@ -11677,7 +11720,7 @@ impl UnicornMips {
         // A ready wait may consume kernel state and switch the selected thread.
         // Defer that choice until all fallible pre-entry setup has succeeded.
         if running_guest_thread.borrow().is_none() {
-            let active_thread_id = *current_thread_id.borrow();
+            let active_thread_id = current_thread_id.get().0;
             if try_resume_blocked_wait_with_active_pc(
                 kernel,
                 &mut uc,
@@ -11779,7 +11822,7 @@ impl UnicornMips {
             }
         }
         let slice_hooks_elapsed = slice_profile.elapsed();
-        let native_start_tid = *current_thread_id.borrow();
+        let native_start_tid = current_thread_id.get().0;
         report.start_thread_id = Some(native_start_tid);
         report.start_pc = Some(start_pc);
         let result = uc.emu_start(
@@ -11810,7 +11853,7 @@ impl UnicornMips {
         // authentic context produced by this attempt. Any subsequent scalar
         // repair, callback preparation or thread selection invalidates its key.
         let native_capture_result = capture_saved_cpu_context_checked(&uc)
-            .and_then(|context| uc.capture((*current_thread_id.borrow(), context)));
+            .and_then(|context| uc.capture((current_thread_id.get().0, context)));
         report.context_capture = match &native_capture_result {
             Ok(_) => AttemptObservation::Value(()),
             Err(err) => AttemptObservation::Error(format!("{err:?}")),
@@ -11819,7 +11862,7 @@ impl UnicornMips {
         // deferred child may change Kernel selection immediately afterward.
         report.end_process_id = Some(native_owner_pid);
         report.end_process_birth = report.start_process_birth;
-        report.end_thread_id = Some(*current_thread_id.borrow());
+        report.end_thread_id = Some(current_thread_id.get().0);
         report.raw_stop_pc = match uc.reg_read(RegisterMIPS::PC) {
             Ok(value) => match u32::try_from(value) {
                 Ok(pc) => AttemptObservation::Value(pc),
@@ -12052,7 +12095,7 @@ impl UnicornMips {
                 trap.module_kind,
                 trap.ordinal,
                 snapshot_pc,
-                *current_thread_id.borrow(),
+                current_thread_id.get().0,
                 &pending_wndproc_returns,
             );
             if completed_sent_callout {
@@ -12060,11 +12103,11 @@ impl UnicornMips {
             }
         }
         let snapshot_context_result = capture_saved_cpu_context_checked(&uc);
-        let executed_thread_id = *current_thread_id.borrow();
+        let executed_thread_id = current_thread_id.get().0;
         let pc_region = self.address_region_label(snapshot_pc, kernel);
         let ra_region = self.address_region_label(snapshot_ra, kernel);
         let thread_state = describe_guest_thread_state(
-            *current_thread_id.borrow(),
+            current_thread_id.get().0,
             *running_guest_thread.borrow(),
             suspended_guest_thread.borrow().as_ref(),
             suspended_guest_thread_queue.borrow().len(),
@@ -12204,7 +12247,7 @@ impl UnicornMips {
                 .sum::<usize>()
                 / (1024 * 1024)) as u64,
             process_id = kernel.current_process_id(),
-            thread_id = *current_thread_id.borrow(),
+            thread_id = current_thread_id.get().0,
             start_pc = format_args!("0x{start_pc:08x}"),
             native_start_pid,
             native_start_tid,
@@ -18866,7 +18909,7 @@ fn try_enter_get_message_sent_callout<D>(
     args: &[u32],
     import_pc: u32,
     thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
@@ -18994,7 +19037,7 @@ fn enter_get_message_sent_callout<D>(
     message: crate::ce::gwe::Message,
     import_pc: u32,
     thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
     original_regs: MipsGuestContext,
@@ -19014,7 +19057,7 @@ fn enter_get_message_sent_callout<D>(
     else {
         let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
         restore_mips_gprs(uc, &original_regs);
-        *current_thread_id.borrow_mut() = thread_id;
+        current_thread_id.set_unverified(thread_id);
         let _ = update_user_kdata_current_ids(uc, thread_id, kernel.current_process_id());
         *running_thread.borrow_mut() = original_running_thread;
         let _ = uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc));
@@ -19024,7 +19067,7 @@ fn enter_get_message_sent_callout<D>(
     if !is_guest_wndproc(wndproc) {
         let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
         restore_mips_gprs(uc, &original_regs);
-        *current_thread_id.borrow_mut() = thread_id;
+        current_thread_id.set_unverified(thread_id);
         let _ = update_user_kdata_current_ids(uc, thread_id, kernel.current_process_id());
         *running_thread.borrow_mut() = original_running_thread;
         let _ = uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc));
@@ -19390,7 +19433,7 @@ fn try_block_empty_get_message<D>(
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     pending_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
@@ -19504,7 +19547,7 @@ fn try_block_empty_get_message<D>(
         });
         record_message_import(uc, module_kind, ordinal, args, None, last_messages);
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -19860,7 +19903,7 @@ fn try_resume_blocked_modal_message_box<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     mut framebuffer: Option<&mut dyn Framebuffer>,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_modal: &std::rc::Rc<std::cell::RefCell<Option<BlockedModalMessageBox>>>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
     blocked_guest_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -19911,9 +19954,15 @@ fn try_resume_blocked_modal_message_box<D>(
             suspended_thread,
             suspended_queue,
             active_thread_id,
+            kernel.handles.thread_birth_key_by_id(active_thread_id),
         );
     }
-    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, modal.thread_id);
+    remove_suspended_guest_threads_for_thread(
+        suspended_thread,
+        suspended_queue,
+        modal.thread_id,
+        kernel.handles.thread_birth_key_for_handle(modal.thread_handle),
+    );
 
     let mut regs = modal.regs;
     regs.set_v0(result);
@@ -19927,7 +19976,7 @@ fn try_resume_blocked_modal_message_box<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    *current_thread_id.borrow_mut() = modal.thread_id;
+    current_thread_id.set_unverified(modal.thread_id);
     let _ = update_user_kdata_current_ids(uc, modal.thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((modal.thread_id, modal.thread_handle));
     true
@@ -20080,7 +20129,7 @@ fn try_resume_blocked_popup_menu_modal<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_popup: &std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -20152,12 +20201,14 @@ fn try_resume_blocked_popup_menu_modal<D>(
                     suspended_thread,
                     suspended_queue,
                     active_thread_id,
+                    kernel.handles.thread_birth_key_by_id(active_thread_id),
                 );
             }
             remove_suspended_guest_threads_for_thread(
                 suspended_thread,
                 suspended_queue,
                 modal_thread_id,
+                kernel.handles.thread_birth_key_for_handle(thread_handle),
             );
 
             let mut regs = regs;
@@ -20172,7 +20223,7 @@ fn try_resume_blocked_popup_menu_modal<D>(
                 let _ = uc.emu_stop();
                 return true;
             }
-            *current_thread_id.borrow_mut() = modal_thread_id;
+            current_thread_id.set_unverified(modal_thread_id);
             let _ = update_user_kdata_current_ids(uc, modal_thread_id, kernel.current_process_id());
             *running_thread.borrow_mut() = Some((modal_thread_id, thread_handle));
             true
@@ -20297,7 +20348,7 @@ fn try_resume_blocked_send_message_timeout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_smt: &std::rc::Rc<std::cell::RefCell<Option<BlockedSendMessageTimeout>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_queue: Option<&SuspendedGuestThreadQueue>,
@@ -20367,9 +20418,15 @@ fn try_resume_blocked_send_message_timeout<D>(
             suspended_thread,
             suspended_queue,
             active_thread_id,
+            kernel.handles.thread_birth_key_by_id(active_thread_id),
         );
     }
-    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
+    remove_suspended_guest_threads_for_thread(
+        suspended_thread,
+        suspended_queue,
+        blocked.thread_id,
+        kernel.handles.thread_birth_key_for_handle(blocked.thread_handle),
+    );
 
     let mut regs = blocked.regs;
     regs.set_v0(v0);
@@ -20383,7 +20440,7 @@ fn try_resume_blocked_send_message_timeout<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    *current_thread_id.borrow_mut() = blocked.thread_id;
+    current_thread_id.set_unverified(blocked.thread_id);
     let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
     true
@@ -20598,7 +20655,7 @@ fn try_resume_blocked_clipboard_data<D>(
     mapped_blobs: *mut Vec<MappedBlob>,
     private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_cbd: &std::rc::Rc<std::cell::RefCell<Option<BlockedClipboardData>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_queue: Option<&SuspendedGuestThreadQueue>,
@@ -20662,9 +20719,15 @@ fn try_resume_blocked_clipboard_data<D>(
             suspended_thread,
             suspended_queue,
             active_thread_id,
+            kernel.handles.thread_birth_key_by_id(active_thread_id),
         );
     }
-    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
+    remove_suspended_guest_threads_for_thread(
+        suspended_thread,
+        suspended_queue,
+        blocked.thread_id,
+        kernel.handles.thread_birth_key_for_handle(blocked.thread_handle),
+    );
 
     let mut regs = blocked.regs;
     regs.set_v0(handle);
@@ -20678,7 +20741,7 @@ fn try_resume_blocked_clipboard_data<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    *current_thread_id.borrow_mut() = blocked.thread_id;
+    current_thread_id.set_unverified(blocked.thread_id);
     let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
     true
@@ -21370,7 +21433,7 @@ fn try_block_message_queue_io<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -21465,7 +21528,7 @@ fn try_block_message_queue_io<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -21705,7 +21768,7 @@ fn try_block_wait_for_single_object<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -21805,7 +21868,7 @@ fn try_block_wait_for_single_object<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -22404,7 +22467,7 @@ fn try_block_sleep<D>(
     import_milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastImport>>>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -22502,7 +22565,7 @@ fn try_block_sleep<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -22881,7 +22944,7 @@ fn try_suspend_sleep<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     thread_id: u32,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_queue: &SuspendedGuestThreadQueue,
     self_suspended_threads: &std::rc::Rc<
@@ -22891,10 +22954,11 @@ fn try_suspend_sleep<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    let capture = |thread_handle| {
+    let suspended_thread_birth = kernel.handles.thread_birth_key_by_id(thread_id);
+    let capture = |uc: &unicorn_engine::Unicorn<'_, D>, thread_handle| {
         let mut suspended = SuspendedGuestThread {
             thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(thread_id),
+            thread_birth: suspended_thread_birth,
             thread_handle: Some(thread_handle),
             regs: capture_mips_gprs(uc),
             pc: read_mips_reg(uc, RegisterMIPS::RA),
@@ -22917,12 +22981,12 @@ fn try_suspend_sleep<D>(
         ) {
             return false;
         }
-        capture(callout.thread_handle);
+        capture(uc, callout.thread_handle);
 
         let mut creator_regs = callout.creator_regs;
         creator_regs.set_v0(callout.thread_handle);
         restore_mips_gprs(uc, &creator_regs);
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -22949,7 +23013,7 @@ fn try_suspend_sleep<D>(
     ) {
         return false;
     }
-    capture(thread_handle);
+    capture(uc, thread_handle);
     *running_thread.borrow_mut() = None;
     if let Some(suspended) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue)) {
         activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
@@ -22965,7 +23029,7 @@ fn try_yield_sleep<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     thread_id: u32,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
@@ -22983,7 +23047,12 @@ fn try_yield_sleep<D>(
     };
     yielding.regs.set_v0(0);
 
-    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
+        return true;
+    }
+    if let Some(callout) =
+        pop_pending_guest_thread_return_for_thread(pending_returns, kernel, thread_id)
+    {
         kernel.record_thread_yield();
         yielding.thread_handle = Some(callout.thread_handle);
         if !push_suspended_guest_thread(suspended_thread, Some(suspended_queue), yielding) {
@@ -22993,7 +23062,7 @@ fn try_yield_sleep<D>(
         let mut creator_regs = callout.creator_regs;
         creator_regs.set_v0(callout.thread_handle);
         restore_mips_gprs(uc, &creator_regs);
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -23023,6 +23092,10 @@ fn try_yield_sleep<D>(
         }
         return true;
     };
+    if !suspended_guest_thread_has_live_birth(kernel, &resume) {
+        reject_stale_suspended_guest_thread(uc, kernel, &resume);
+        return true;
+    }
 
     kernel.record_thread_yield();
     if !push_suspended_guest_thread(suspended_thread, Some(suspended_queue), yielding) {
@@ -23043,7 +23116,7 @@ fn try_block_wait_for_multiple_objects<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -23178,7 +23251,7 @@ fn try_block_wait_for_multiple_objects<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -23354,7 +23427,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
@@ -23488,7 +23561,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -23800,7 +23873,7 @@ fn try_block_serial_read_file<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
@@ -23881,7 +23954,7 @@ fn block_serial_read_file<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     handle: u32,
@@ -23904,7 +23977,12 @@ fn block_serial_read_file<D>(
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
-    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
+        return true;
+    }
+    if let Some(callout) =
+        pop_pending_guest_thread_return_for_thread(pending_returns, kernel, thread_id)
+    {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
@@ -23926,7 +24004,7 @@ fn block_serial_read_file<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -24037,7 +24115,7 @@ fn try_block_wait_comm_event<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
@@ -24081,7 +24159,7 @@ fn block_wait_comm_event<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     handle: u32,
@@ -24100,7 +24178,12 @@ fn block_wait_comm_event<D>(
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
-    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
+        return true;
+    }
+    if let Some(callout) =
+        pop_pending_guest_thread_return_for_thread(pending_returns, kernel, thread_id)
+    {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
@@ -24122,7 +24205,7 @@ fn block_wait_comm_event<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -24198,7 +24281,7 @@ fn try_block_winsock_read<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
@@ -24504,7 +24587,7 @@ fn block_winsock_read<D>(
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     socket: u32,
@@ -24535,7 +24618,12 @@ fn block_winsock_read<D>(
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
-    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
+        return true;
+    }
+    if let Some(callout) =
+        pop_pending_guest_thread_return_for_thread(pending_returns, kernel, thread_id)
+    {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
@@ -24557,7 +24645,7 @@ fn block_winsock_read<D>(
             return_pc,
         });
         *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -24626,7 +24714,7 @@ fn try_resume_blocked_wait<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
@@ -24652,7 +24740,7 @@ fn try_resume_blocked_wait_with_native_mapping<D>(
     sealed_host_write_guard: &SealedHostWriteGuard,
     private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
@@ -24681,7 +24769,7 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     sealed_host_write_guard: &SealedHostWriteGuard,
     private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     suspended_thread: &SuspendedGuestThreadSlot,
     suspended_queue: Option<&SuspendedGuestThreadQueue>,
@@ -24903,7 +24991,12 @@ fn try_resume_blocked_wait_with_active_pc<D>(
             return false;
         }
     }
-    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
+    remove_suspended_guest_threads_for_thread(
+        suspended_thread,
+        suspended_queue,
+        blocked.thread_id,
+        kernel.handles.thread_birth_key_for_handle(blocked.thread_handle),
+    );
 
     let resumed_running_thread = match blocked.kind {
         BlockedWaitKind::SendMessage {
@@ -24923,7 +25016,7 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    *current_thread_id.borrow_mut() = blocked.thread_id;
+    current_thread_id.set_unverified(blocked.thread_id);
     let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = resumed_running_thread;
     true
@@ -24991,7 +25084,7 @@ fn try_wait_and_resume_blocked_wait<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
@@ -25864,7 +25957,7 @@ mod wait_scheduler_tests {
         use unicorn_engine::RegisterMIPS;
 
         let config = RuntimeConfig::load_default().unwrap();
-        let kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
             unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
@@ -25873,25 +25966,32 @@ mod wait_scheduler_tests {
         let worker_thread_id = 7;
         let worker_thread_handle = 0x707;
         let worker_pc = 0x0040_7000;
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(1));
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _worker_alias = kernel
+            .handles
+            .try_create_thread_in_birth(owner, worker_thread_id, worker_pc, 0, false)
+            .unwrap();
+        let worker_birth = kernel.handles.thread_birth_key_by_id(worker_thread_id);
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(1, None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let mut regs = super::MipsGuestContext::zero();
         regs.regs[16] = 0x1234_5678;
 
-        activate_suspended_thread(
+        assert!(activate_suspended_thread(
             &mut uc,
             &kernel,
             &current_thread_id,
             &running_thread,
             &SuspendedGuestThread {
                 thread_id: worker_thread_id,
+                thread_birth: worker_birth,
                 thread_handle: Some(worker_thread_handle),
                 regs,
                 pc: worker_pc,
             },
-        );
+        ));
 
-        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(current_thread_id.get().0, worker_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((worker_thread_id, worker_thread_handle))
@@ -25973,7 +26073,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -26095,7 +26195,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -26166,7 +26266,7 @@ mod wait_scheduler_tests {
             &suspended_thread,
             &running_thread,
         ));
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
         assert_eq!(
             uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
@@ -26229,7 +26329,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -26339,7 +26439,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -26444,7 +26544,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -26596,7 +26696,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -26741,7 +26841,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -26898,7 +26998,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -27053,7 +27153,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -27198,7 +27298,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -27346,7 +27446,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -27473,7 +27573,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -27608,7 +27708,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -27699,7 +27799,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -27868,7 +27968,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -27999,7 +28099,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -28139,7 +28239,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -28358,7 +28458,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -28535,7 +28635,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -28665,7 +28765,7 @@ mod wait_scheduler_tests {
             .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -28947,7 +29047,7 @@ mod wait_scheduler_tests {
             return_pc: 0,
         });
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -28969,7 +29069,7 @@ mod wait_scheduler_tests {
         ));
 
         assert_eq!(*running_thread.borrow(), None);
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         assert!(kernel.blocked_waiter(stale_wait_id).is_none());
         let blocked_waits = blocked_waits.borrow();
         assert_eq!(blocked_waits.len(), 1);
@@ -29047,7 +29147,7 @@ mod wait_scheduler_tests {
             return_pc: worker_return_pc,
         }]));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
             active_thread_id,
@@ -29071,7 +29171,7 @@ mod wait_scheduler_tests {
         ));
 
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
-        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(current_thread_id.get().0, worker_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((worker_thread_id, worker_thread_handle))
@@ -29128,7 +29228,7 @@ mod wait_scheduler_tests {
 
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -29186,7 +29286,7 @@ mod wait_scheduler_tests {
 
         assert!(blocked_waits.borrow().is_empty());
         assert!(kernel.blocked_waiters().next().is_none());
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
         assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x1234_5678);
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
@@ -29253,7 +29353,7 @@ mod wait_scheduler_tests {
             return_pc: worker_return_pc,
         }]));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
             active_thread_id,
@@ -29280,7 +29380,7 @@ mod wait_scheduler_tests {
         ));
 
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
-        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(current_thread_id.get().0, worker_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((worker_thread_id, worker_thread_handle))
@@ -29396,7 +29496,7 @@ mod wait_scheduler_tests {
 
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -29421,7 +29521,7 @@ mod wait_scheduler_tests {
         ));
 
         assert_eq!(*running_thread.borrow(), None);
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         let blocked_waits = blocked_waits.borrow();
         assert_eq!(blocked_waits.len(), 1);
         let blocked = &blocked_waits[0];
@@ -29667,7 +29767,7 @@ mod wait_scheduler_tests {
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -29751,7 +29851,7 @@ mod wait_scheduler_tests {
             return_pc: 0x0040_2000,
         }]));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -29843,14 +29943,22 @@ mod wait_scheduler_tests {
         }]));
         let pending_return = super::PendingGuestThreadReturn {
             creator_thread_id: super::MAIN_GUEST_THREAD_ID,
+            creator_birth: kernel
+                .handles
+                .thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID)
+                .expect("main thread birth"),
             worker_thread_id: thread_id,
+            worker_birth: kernel
+                .handles
+                .thread_birth_key_by_id(thread_id)
+                .expect("worker birth"),
             thread_handle,
             return_pc: 0x0040_7000,
             creator_regs: super::MipsGuestContext::zero(),
         };
         let pending_returns =
             std::rc::Rc::new(std::cell::RefCell::new(vec![pending_return.clone()]));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -29903,7 +30011,7 @@ mod wait_scheduler_tests {
         assert_eq!(blocked_waits.borrow()[0].wait_id, old_wait_id);
         assert!(kernel.blocked_waiter(old_wait_id).is_some());
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         assert_eq!(
             kernel.handles.wait_target_pin_count(target_pin),
             Some(u32::MAX)
@@ -29954,7 +30062,7 @@ mod wait_scheduler_tests {
         assert_eq!(replacement.len(), 1);
         assert_eq!(replacement[0].wait_handles, vec![target_handle]);
         assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(1));
-        assert_eq!(*current_thread_id.borrow(), super::MAIN_GUEST_THREAD_ID);
+        assert_eq!(current_thread_id.get().0, super::MAIN_GUEST_THREAD_ID);
         assert_eq!(*running_thread.borrow(), None);
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, thread_handle);
         assert_eq!(
@@ -30007,7 +30115,7 @@ mod wait_scheduler_tests {
             return_pc: 0x0040_2000,
         }]));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -30103,7 +30211,7 @@ mod wait_scheduler_tests {
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -30187,7 +30295,7 @@ mod wait_scheduler_tests {
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -30264,7 +30372,7 @@ mod wait_scheduler_tests {
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -30359,7 +30467,7 @@ mod wait_scheduler_tests {
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -30426,7 +30534,7 @@ mod wait_scheduler_tests {
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -30520,7 +30628,7 @@ mod wait_scheduler_tests {
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -30559,7 +30667,7 @@ mod wait_scheduler_tests {
             false,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), ready_thread_id);
+        assert_eq!(current_thread_id.get().0, ready_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((ready_thread_id, ready_thread_handle))
@@ -30601,7 +30709,7 @@ mod wait_scheduler_tests {
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -30635,7 +30743,7 @@ mod wait_scheduler_tests {
             false,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
         assert!(blocked_waits.borrow().is_empty());
         assert!(blocked_get_message.borrow().is_none());
@@ -30712,7 +30820,7 @@ mod wait_scheduler_tests {
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let blocked_get_message =
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::BlockedGuestThread {
                 wait_id: getmsg_wait_id,
@@ -30771,7 +30879,7 @@ mod wait_scheduler_tests {
             false,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), main_thread_id);
+        assert_eq!(current_thread_id.get().0, main_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((main_thread_id, main_thread_handle))
@@ -30852,7 +30960,7 @@ mod wait_scheduler_tests {
                 min_msg: 0,
                 max_msg: 0,
             })));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(main_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(main_thread_id, None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -30871,7 +30979,7 @@ mod wait_scheduler_tests {
             &pending_wndproc_returns,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), main_thread_id);
+        assert_eq!(current_thread_id.get().0, main_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((main_thread_id, main_thread_handle))
@@ -31195,7 +31303,7 @@ mod wait_scheduler_tests {
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -31238,7 +31346,7 @@ mod wait_scheduler_tests {
             false,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(current_thread_id.get().0, worker_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((worker_thread_id, worker_thread_handle))
@@ -31311,7 +31419,7 @@ mod wait_scheduler_tests {
             return_pc: worker_return_pc,
         }]));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
         let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
@@ -31350,7 +31458,7 @@ mod wait_scheduler_tests {
         ));
 
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
-        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(current_thread_id.get().0, worker_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((worker_thread_id, worker_thread_handle))
@@ -31417,7 +31525,7 @@ mod wait_scheduler_tests {
             return_pc: worker_return_pc,
         }]));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
             active_thread_id,
@@ -31451,7 +31559,7 @@ mod wait_scheduler_tests {
         ));
 
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
-        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(current_thread_id.get().0, worker_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((worker_thread_id, worker_thread_handle))
@@ -31511,7 +31619,7 @@ mod wait_scheduler_tests {
             regs: super::MipsGuestContext::zero(),
             return_pc: ready_return_pc,
         }]));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
             active_thread_id,
@@ -31535,7 +31643,7 @@ mod wait_scheduler_tests {
             true,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), ready_thread_id);
+        assert_eq!(current_thread_id.get().0, ready_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((ready_thread_id, ready_thread_handle))
@@ -31606,7 +31714,7 @@ mod wait_scheduler_tests {
             regs: super::MipsGuestContext::zero(),
             return_pc: ready_return_pc,
         }]));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((active_thread_id, 0x101))));
@@ -31686,10 +31794,11 @@ mod wait_scheduler_tests {
             regs: ready_regs,
             return_pc: ready_return_pc,
         }]));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
                 thread_id: old_suspended_thread_id,
+                thread_birth: None,
                 thread_handle: Some(0x104),
                 regs: super::MipsGuestContext::zero(),
                 pc: 0x4444_0000,
@@ -31700,6 +31809,7 @@ mod wait_scheduler_tests {
             .borrow_mut()
             .push_back(super::SuspendedGuestThread {
                 thread_id: ready_thread_id,
+                thread_birth: None,
                 thread_handle: Some(ready_thread_handle),
                 regs: super::MipsGuestContext::zero(),
                 pc: 0x6666_0000,
@@ -31728,7 +31838,7 @@ mod wait_scheduler_tests {
             true,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), ready_thread_id);
+        assert_eq!(current_thread_id.get().0, ready_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((ready_thread_id, ready_thread_handle))
@@ -31759,7 +31869,7 @@ mod wait_scheduler_tests {
     #[test]
     fn timeslice_can_switch_from_main_thread_without_running_handle() {
         let config = RuntimeConfig::load_default().unwrap();
-        let kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
             unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
@@ -31768,12 +31878,19 @@ mod wait_scheduler_tests {
         let main_thread_id = super::MAIN_GUEST_THREAD_ID;
         let worker_thread_id = 6;
         let worker_thread_handle = 0x106;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _worker_alias = kernel
+            .handles
+            .try_create_thread_in_birth(owner, worker_thread_id, 0x5555_0000, 0, false)
+            .unwrap();
+        let worker_birth = kernel.handles.thread_birth_key_by_id(worker_thread_id);
         let main_pc = 0x3333_0000_u32;
         let worker_pc = 0x5555_0000_u32;
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(main_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(main_thread_id, None));
         let suspended_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
                 thread_id: worker_thread_id,
+                thread_birth: worker_birth,
                 thread_handle: Some(worker_thread_handle),
                 regs: super::MipsGuestContext::zero(),
                 pc: worker_pc,
@@ -31795,7 +31912,7 @@ mod wait_scheduler_tests {
             &running_thread,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(current_thread_id.get().0, worker_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((worker_thread_id, worker_thread_handle))
@@ -31826,6 +31943,12 @@ mod wait_scheduler_tests {
         let stale_thread_id = 6;
         let visible_thread_id = 7;
         let visible_thread_handle = 0x107;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _visible_alias = kernel
+            .handles
+            .try_create_thread_in_birth(owner, visible_thread_id, 0x7777_0000, 0, false)
+            .unwrap();
+        let visible_birth = kernel.handles.thread_birth_key_by_id(visible_thread_id);
         let active_pc = 0x3333_0000_u32;
         let visible_pc = 0x7777_0000_u32;
         let hwnd = kernel.create_window_ex_w(
@@ -31839,10 +31962,11 @@ mod wait_scheduler_tests {
         );
         assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_USER + 0x55, 0x56, 0x57));
 
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
                 thread_id: stale_thread_id,
+                thread_birth: None,
                 thread_handle: Some(0x106),
                 regs: super::MipsGuestContext::zero(),
                 pc: 0x6666_0000,
@@ -31853,6 +31977,7 @@ mod wait_scheduler_tests {
             .borrow_mut()
             .push_back(super::SuspendedGuestThread {
                 thread_id: visible_thread_id,
+                thread_birth: visible_birth,
                 thread_handle: Some(visible_thread_handle),
                 regs: super::MipsGuestContext::zero(),
                 pc: visible_pc,
@@ -31873,7 +31998,7 @@ mod wait_scheduler_tests {
             &running_thread,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), visible_thread_id);
+        assert_eq!(current_thread_id.get().0, visible_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((visible_thread_id, visible_thread_handle))
@@ -31899,6 +32024,7 @@ mod wait_scheduler_tests {
         let visible_thread_id = 7;
         let slot = std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
             thread_id: 6,
+            thread_birth: None,
             thread_handle: Some(0x106),
             regs: super::MipsGuestContext::zero(),
             pc: 0x6666_0000,
@@ -31906,6 +32032,7 @@ mod wait_scheduler_tests {
         let queue = std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
         queue.borrow_mut().push_back(super::SuspendedGuestThread {
             thread_id: visible_thread_id,
+            thread_birth: None,
             thread_handle: Some(0x107),
             regs: super::MipsGuestContext::zero(),
             pc: 0x7777_0000,
@@ -31934,7 +32061,19 @@ mod wait_scheduler_tests {
         .unwrap();
         let creator_thread_id = super::MAIN_GUEST_THREAD_ID;
         let worker_thread_id = 7;
-        let worker_thread_handle = 0x107;
+        let owner = kernel.current_process_birth_key().expect("boot process birth");
+        let worker_thread_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, worker_thread_id, 0x0014_e310, 0, false)
+            .expect("worker birth");
+        let creator_birth = kernel
+            .handles
+            .thread_birth_key_by_id(creator_thread_id)
+            .expect("creator birth");
+        let worker_birth = kernel
+            .handles
+            .thread_birth_key_by_id(worker_thread_id)
+            .expect("worker birth");
         let worker_pc = 0x0014_e310_u32;
         let creator_return_pc = 0x0040_2000_u32;
         let hwnd = kernel.create_window_ex_w(
@@ -31948,11 +32087,13 @@ mod wait_scheduler_tests {
         );
         assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_USER + 0x44, 0x45, 0x46));
 
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(worker_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(worker_thread_id, None));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(vec![
             super::PendingGuestThreadReturn {
                 creator_thread_id,
+                creator_birth,
                 worker_thread_id,
+                worker_birth,
                 thread_handle: worker_thread_handle,
                 return_pc: creator_return_pc,
                 creator_regs: {
@@ -31987,7 +32128,7 @@ mod wait_scheduler_tests {
             &running_thread,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), creator_thread_id);
+        assert_eq!(current_thread_id.get().0, creator_thread_id);
         assert_eq!(*running_thread.borrow(), None);
         assert!(pending_returns.borrow().is_empty());
         assert_eq!(
@@ -32072,46 +32213,83 @@ mod wait_scheduler_tests {
 
     #[test]
     fn pending_guest_thread_return_is_owned_by_worker_thread() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot process birth");
+        let creator_birth = kernel.handles.thread_birth_key_by_id(1).expect("creator birth");
+        let worker_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, 6, 0x0040_3000, 0, false)
+            .expect("worker birth");
+        let worker_birth = kernel.handles.thread_birth_key_by_id(6).expect("worker birth");
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(vec![
             super::PendingGuestThreadReturn {
                 creator_thread_id: 1,
+                creator_birth,
                 worker_thread_id: 6,
-                thread_handle: 0x106,
+                worker_birth,
+                thread_handle: worker_handle,
                 return_pc: 0x1111_0000,
                 creator_regs: super::MipsGuestContext::zero(),
             },
         ]));
 
-        assert!(super::pop_pending_guest_thread_return_for_thread(&pending_returns, 7).is_none());
+        assert!(
+            super::pop_pending_guest_thread_return_for_thread(&pending_returns, &kernel, 7)
+                .is_none()
+        );
         assert_eq!(pending_returns.borrow().len(), 1);
 
-        let callout =
-            super::pop_pending_guest_thread_return_for_thread(&pending_returns, 6).unwrap();
+        let callout = super::pop_pending_guest_thread_return_for_thread(&pending_returns, &kernel, 6)
+            .unwrap();
         assert_eq!(callout.worker_thread_id, 6);
         assert!(pending_returns.borrow().is_empty());
     }
 
     #[test]
     fn pending_guest_thread_return_can_complete_below_newer_worker() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot process birth");
+        let creator_one_birth = kernel.handles.thread_birth_key_by_id(1).expect("main birth");
+        let _creator_three_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, 3, 0x0040_3000, 0, false)
+            .expect("second creator birth");
+        let creator_three_birth = kernel.handles.thread_birth_key_by_id(3).expect("creator birth");
+        let worker_six_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, 6, 0x0040_6000, 0, false)
+            .expect("first worker birth");
+        let worker_six_birth = kernel.handles.thread_birth_key_by_id(6).expect("first worker birth");
+        let worker_eight_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, 8, 0x0040_8000, 0, false)
+            .expect("second worker birth");
+        let worker_eight_birth = kernel.handles.thread_birth_key_by_id(8).expect("second worker birth");
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(vec![
             super::PendingGuestThreadReturn {
                 creator_thread_id: 1,
+                creator_birth: creator_one_birth,
                 worker_thread_id: 6,
-                thread_handle: 0x106,
+                worker_birth: worker_six_birth,
+                thread_handle: worker_six_handle,
                 return_pc: 0x1111_0000,
                 creator_regs: super::MipsGuestContext::zero(),
             },
             super::PendingGuestThreadReturn {
                 creator_thread_id: 3,
+                creator_birth: creator_three_birth,
                 worker_thread_id: 8,
-                thread_handle: 0x108,
+                worker_birth: worker_eight_birth,
+                thread_handle: worker_eight_handle,
                 return_pc: 0x3333_0000,
                 creator_regs: super::MipsGuestContext::zero(),
             },
         ]));
 
-        let callout =
-            super::pop_pending_guest_thread_return_for_thread(&pending_returns, 6).unwrap();
+        let callout = super::pop_pending_guest_thread_return_for_thread(&pending_returns, &kernel, 6)
+            .unwrap();
         assert_eq!(callout.worker_thread_id, 6);
         let remaining = pending_returns.borrow();
         assert_eq!(remaining.len(), 1);
@@ -32132,7 +32310,7 @@ mod wait_scheduler_tests {
         .unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x0040_1000).unwrap();
         uc.reg_write(RegisterMIPS::SP, 0x7fff_0000).unwrap();
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(1_u32));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(1_u32, None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let stack_slots =
@@ -34076,6 +34254,7 @@ mod wait_scheduler_tests {
         }];
         scheduler.suspended_guest_thread = Some(SuspendedGuestThread {
             thread_id,
+            thread_birth: Some(birth),
             thread_handle: Some(thread_handle),
             regs: super::MipsGuestContext::zero(),
             pc: 0x0040_4000,
@@ -34251,6 +34430,7 @@ mod wait_scheduler_tests {
             kernel.guest_thread_exit_code(new_handle),
             Some(crate::ce::kernel::STILL_ACTIVE)
         );
+
         Ok(())
     }
 
@@ -34337,6 +34517,7 @@ mod wait_scheduler_tests {
         old_regs.regs[29] = 0x0010_0e00;
         let stale = SuspendedGuestThread {
             thread_id,
+            thread_birth: Some(old_birth),
             thread_handle: Some(old_handle),
             regs: old_regs,
             pc: 0x0040_3000,
@@ -34368,22 +34549,22 @@ mod wait_scheduler_tests {
         uc.reg_write(RegisterMIPS::PC, u64::from(new_pc)).unwrap();
         uc.reg_write(RegisterMIPS::SP, u64::from(new_sp)).unwrap();
         uc.reg_write(RegisterMIPS::S0, u64::from(new_s0)).unwrap();
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, new_handle))));
 
-        activate_suspended_thread(
+        assert!(!activate_suspended_thread(
             &mut uc,
             &kernel,
             &current_thread_id,
             &running_thread,
             &stale,
-        );
+        ));
 
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, new_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, new_sp);
         assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, new_s0);
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         assert_eq!(*running_thread.borrow(), Some((thread_id, new_handle)));
         assert_eq!(scheduler.guest_thread_stack_slots.get(&thread_id), Some(&9));
         assert!(kernel.handles.contains_thread_birth(new_birth));
@@ -34391,6 +34572,30 @@ mod wait_scheduler_tests {
             kernel.guest_thread_exit_code(new_handle),
             Some(crate::ce::kernel::STILL_ACTIVE)
         );
+
+        let suspended_slot = std::rc::Rc::new(std::cell::RefCell::new(Some(SuspendedGuestThread {
+            thread_id,
+            thread_birth: Some(new_birth),
+            thread_handle: Some(new_handle),
+            regs: super::MipsGuestContext::zero(),
+            pc: new_pc,
+        })));
+        let suspended_queue =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+        assert!(super::push_suspended_guest_thread(
+            &suspended_slot,
+            Some(&suspended_queue),
+            stale.clone(),
+        ));
+        assert_eq!(
+            suspended_slot.borrow().as_ref().and_then(|thread| thread.thread_birth),
+            Some(new_birth),
+        );
+        assert_eq!(suspended_queue.borrow().len(), 1);
+        let popped = super::pop_suspended_guest_thread(&suspended_slot, Some(&suspended_queue))
+            .expect("replacement worker continuation");
+        assert_eq!(popped.thread_birth, Some(new_birth));
+        assert_eq!(suspended_queue.borrow()[0].thread_birth, Some(old_birth));
         Ok(())
     }
 
@@ -34513,7 +34718,7 @@ mod wait_scheduler_tests {
             regs,
             return_pc,
         }]));
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(1_u32));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(1_u32, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
 
@@ -34540,7 +34745,7 @@ mod wait_scheduler_tests {
 
         assert!(kernel.blocked_waiter(wait_id).is_none());
         assert!(blocked_waits.borrow().is_empty());
-        assert_eq!(*current_thread_id.borrow(), blocked_thread_id);
+        assert_eq!(current_thread_id.get().0, blocked_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((blocked_thread_id, blocked_thread_handle))
@@ -34718,10 +34923,11 @@ mod wait_scheduler_tests {
             .begin_cross_thread_send_message_w(9, hwnd, crate::ce::gwe::WM_USER + 152, 1, 0, None)
             .expect("queued send");
 
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
                 thread_id: older_suspended_thread_id,
+                thread_birth: None,
                 thread_handle: Some(0x106),
                 regs: super::MipsGuestContext::zero(),
                 pc: 0x5555_0000,
@@ -34730,6 +34936,7 @@ mod wait_scheduler_tests {
             std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::from([
                 super::SuspendedGuestThread {
                     thread_id: receiver_thread_id,
+                    thread_birth: kernel.handles.thread_birth_key_by_id(receiver_thread_id),
                     thread_handle: Some(receiver_thread_handle),
                     regs: super::MipsGuestContext::zero(),
                     pc: receiver_pc,
@@ -34752,7 +34959,7 @@ mod wait_scheduler_tests {
             &running_thread,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), receiver_thread_id);
+        assert_eq!(current_thread_id.get().0, receiver_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((receiver_thread_id, receiver_thread_handle))
@@ -34798,7 +35005,7 @@ fn try_exit_guest_thread_callout<D>(
     ordinal: Option<u32>,
     args: &[u32],
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     stack_slots: &GuestThreadStackSlots,
@@ -34812,7 +35019,7 @@ fn try_exit_guest_thread_callout<D>(
     }
 
     let exit_code = args.first().copied().unwrap_or(0);
-    let exiting_thread_id = *current_thread_id.borrow();
+    let exiting_thread_id = current_thread_id.get().0;
     if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, exiting_thread_id) {
         return true;
     }
@@ -34821,7 +35028,7 @@ fn try_exit_guest_thread_callout<D>(
     {
         kernel.mark_guest_thread_exited_by_id(callout.worker_thread_id, exit_code);
         release_guest_thread_stack_slot(stack_slots, callout.worker_thread_id);
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
             uc,
             callout.creator_thread_id,
@@ -34864,7 +35071,7 @@ fn try_enter_create_thread_callout<D>(
     args: &[u32],
     creator_thread_id: u32,
     process_stack_top: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     stack_slots: &GuestThreadStackSlots,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
@@ -34978,7 +35185,7 @@ fn try_enter_create_thread_callout<D>(
         return_pc,
         creator_regs,
     });
-    *current_thread_id.borrow_mut() = worker_thread_id;
+    current_thread_id.set_unverified(worker_thread_id);
     let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
     let active_stack_pointer = read_mips_reg(uc, RegisterMIPS::SP);
@@ -35019,7 +35226,7 @@ fn try_enter_resumed_thread_callout<D>(
     result: u32,
     creator_thread_id: u32,
     process_stack_top: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_queue: &SuspendedGuestThreadQueue,
     self_suspended_threads: &std::rc::Rc<
@@ -35050,6 +35257,10 @@ fn try_enter_resumed_thread_callout<D>(
     if result == 1
         && let Some(resumed) = self_suspended_threads.borrow_mut().remove(&thread_handle)
     {
+        if !suspended_guest_thread_has_live_birth(kernel, &resumed) {
+            reject_stale_suspended_guest_thread(uc, kernel, &resumed);
+            return true;
+        }
         let mut creator = SuspendedGuestThread {
             thread_id: creator_thread_id,
             thread_birth: kernel.handles.thread_birth_key_by_id(creator_thread_id),
@@ -35083,7 +35294,7 @@ fn try_enter_resumed_thread_callout<D>(
     if !push_suspended_guest_thread(suspended_thread, Some(suspended_queue), creator) {
         return false;
     }
-    *current_thread_id.borrow_mut() = worker_thread_id;
+    current_thread_id.set_unverified(worker_thread_id);
     let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
 
@@ -35112,7 +35323,7 @@ fn try_resume_blocked_get_message<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -35144,7 +35355,7 @@ fn try_resume_blocked_get_message_after_current_blocked<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -35177,7 +35388,7 @@ fn try_wait_and_resume_blocked_get_message<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -35212,7 +35423,7 @@ fn try_wait_and_resume_blocked_get_message_after_current_blocked<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -35247,7 +35458,7 @@ fn try_wait_and_resume_blocked_get_message_with_save<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -35328,7 +35539,7 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
     displaced_blocked_get_messages: &std::rc::Rc<std::cell::RefCell<Vec<BlockedGuestThread>>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
@@ -35456,17 +35667,19 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
                 suspended_thread,
                 suspended_queue,
                 active_thread_id,
+                kernel.handles.thread_birth_key_by_id(active_thread_id),
             );
         }
         remove_suspended_guest_threads_for_thread(
             suspended_thread,
             suspended_queue,
             blocked.thread_id,
+            kernel.handles.thread_birth_key_for_handle(blocked.thread_handle),
         );
 
         let regs = blocked.regs.clone();
         restore_mips_gprs(uc, &regs);
-        *current_thread_id.borrow_mut() = blocked.thread_id;
+        current_thread_id.set_unverified(blocked.thread_id);
         let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
         *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
         if let Some(index) = displaced_index {
@@ -35558,9 +35771,15 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
             suspended_thread,
             suspended_queue,
             active_thread_id,
+            kernel.handles.thread_birth_key_by_id(active_thread_id),
         );
     }
-    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
+    remove_suspended_guest_threads_for_thread(
+        suspended_thread,
+        suspended_queue,
+        blocked.thread_id,
+        kernel.handles.thread_birth_key_for_handle(blocked.thread_handle),
+    );
 
     let mut regs = blocked.regs;
     regs.set_v0(u32::from(message.msg != crate::ce::gwe::WM_QUIT));
@@ -35573,7 +35792,7 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    *current_thread_id.borrow_mut() = blocked.thread_id;
+    current_thread_id.set_unverified(blocked.thread_id);
     let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
     if let Some(index) = displaced_index {
@@ -35597,31 +35816,40 @@ fn suspended_guest_thread_has_live_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn reject_stale_suspended_guest_thread<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    suspended: &SuspendedGuestThread,
+) {
+    tracing::error!(
+        target: "ce.scheduler",
+        thread_id = suspended.thread_id,
+        saved_birth = ?suspended.thread_birth,
+        current_birth = ?kernel.handles.thread_birth_key_by_id(suspended.thread_id),
+        "stale suspended guest thread continuation rejected"
+    );
+    let _ = uc.emu_stop();
+}
+
+#[cfg(feature = "unicorn")]
 fn activate_suspended_thread<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &CeKernel,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     suspended: &SuspendedGuestThread,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
     if !suspended_guest_thread_has_live_birth(kernel, suspended) {
-        tracing::error!(
-            target: "ce.scheduler",
-            thread_id = suspended.thread_id,
-            saved_birth = ?suspended.thread_birth,
-            current_birth = ?kernel.handles.thread_birth_key_by_id(suspended.thread_id),
-            "stale suspended guest thread continuation rejected"
-        );
-        let _ = uc.emu_stop();
+        reject_stale_suspended_guest_thread(uc, kernel, suspended);
         return false;
     }
     let active_thread_id = suspended
         .thread_handle
         .and_then(|handle| kernel.guest_thread_id(handle))
         .unwrap_or(suspended.thread_id);
-    *current_thread_id.borrow_mut() = active_thread_id;
+    current_thread_id.set_unverified(active_thread_id);
     let _ = update_user_kdata_current_ids(uc, active_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = suspended
         .thread_handle
@@ -35747,7 +35975,7 @@ fn try_timeslice_to_suspended_thread<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     active_thread_id: u32,
     active_pc: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &SuspendedGuestThreadSlot,
     suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
@@ -35777,6 +36005,10 @@ fn try_timeslice_to_suspended_thread<D>(
         push_suspended_guest_thread(suspended_thread, Some(suspended_queue), resume);
         return false;
     }
+    if !suspended_guest_thread_has_live_birth(kernel, &resume) {
+        reject_stale_suspended_guest_thread(uc, kernel, &resume);
+        return true;
+    }
     let active = SuspendedGuestThread {
         thread_id: active_thread_id,
         thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
@@ -35800,7 +36032,7 @@ fn try_timeslice_to_pending_guest_thread_creator<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     active_thread_id: u32,
     active_pc: u32,
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     suspended_thread: &SuspendedGuestThreadSlot,
     suspended_queue: &SuspendedGuestThreadQueue,
@@ -35843,7 +36075,7 @@ fn try_timeslice_to_pending_guest_thread_creator<D>(
     creator_regs.set_v0(callout.thread_handle);
     creator_regs.regs[31] = callout.return_pc;
     restore_mips_gprs(uc, &creator_regs);
-    *current_thread_id.borrow_mut() = callout.creator_thread_id;
+    current_thread_id.set_verified(callout.creator_birth);
     let _ =
         update_user_kdata_current_ids(uc, callout.creator_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = None;
@@ -36416,24 +36648,42 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn pending_guest_thread_return_pop_selects_matching_worker_thread() {
+        let config = crate::config::RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot process birth");
+        let creator_birth = kernel.handles.thread_birth_key_by_id(1).expect("creator birth");
+        let worker_five_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, 5, 0x0040_5000, 0, false)
+            .expect("first worker birth");
+        let worker_five_birth = kernel.handles.thread_birth_key_by_id(5).expect("first worker birth");
+        let worker_six_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, 6, 0x0040_6000, 0, false)
+            .expect("second worker birth");
+        let worker_six_birth = kernel.handles.thread_birth_key_by_id(6).expect("second worker birth");
         let pending = std::rc::Rc::new(std::cell::RefCell::new(vec![
             PendingGuestThreadReturn {
                 creator_thread_id: 1,
+                creator_birth,
                 worker_thread_id: 5,
-                thread_handle: 0x1050,
+                worker_birth: worker_five_birth,
+                thread_handle: worker_five_handle,
                 return_pc: 0x1000,
                 creator_regs: MipsGuestContext::default(),
             },
             PendingGuestThreadReturn {
                 creator_thread_id: 1,
+                creator_birth,
                 worker_thread_id: 6,
-                thread_handle: 0x1054,
+                worker_birth: worker_six_birth,
+                thread_handle: worker_six_handle,
                 return_pc: 0x2000,
                 creator_regs: MipsGuestContext::default(),
             },
         ]));
 
-        let selected = pop_pending_guest_thread_return_for_thread(&pending, 5).unwrap();
+        let selected = pop_pending_guest_thread_return_for_thread(&pending, &kernel, 5).unwrap();
 
         assert_eq!(selected.worker_thread_id, 5);
         let remaining = pending.borrow();
@@ -36452,7 +36702,7 @@ mod guest_thread_stack_tests {
         .unwrap();
         let thread_id = 7;
         let thread_handle = 0x0000_1050;
-        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let self_suspended_threads = std::rc::Rc::new(std::cell::RefCell::new(BTreeMap::new()));
         let running_thread =
@@ -36476,7 +36726,7 @@ mod guest_thread_stack_tests {
             &stack_slots,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
         assert!(suspended_thread.borrow().is_none());
         assert!(stack_slots.borrow().is_empty());
@@ -39786,6 +40036,7 @@ mod guest_thread_stack_tests {
         target_regs.regs[16] = 0xbbbb_0001;
         scheduler.suspended_guest_thread = Some(SuspendedGuestThread {
             thread_id: target_thread,
+            thread_birth: kernel.handles.thread_birth_key_by_id(target_thread),
             thread_handle: Some(target_handle),
             regs: target_regs,
             pc: 0x0040_1000,
@@ -39837,6 +40088,7 @@ mod guest_thread_stack_tests {
         });
         scheduler.suspended_guest_thread = Some(SuspendedGuestThread {
             thread_id: target_thread,
+            thread_birth: kernel.handles.thread_birth_key_by_id(target_thread),
             thread_handle: Some(0x101),
             regs: MipsGuestContext::zero(),
             pc: 0x0040_1000,
@@ -39868,6 +40120,10 @@ mod guest_thread_stack_tests {
         let mut scheduler = UnicornMips::new()?;
         let active_thread = 6;
         let target_thread = 3;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _target_alias = kernel
+            .handles
+            .try_create_thread_in_birth(owner, target_thread, 0x0040_3000, 0, false)?;
 
         scheduler.set_initial_thread_id(target_thread);
         scheduler.current_thread_id = active_thread;
@@ -39882,6 +40138,7 @@ mod guest_thread_stack_tests {
         target_regs.regs[16] = 0xbbbb_0003;
         scheduler.suspended_guest_thread = Some(SuspendedGuestThread {
             thread_id: target_thread,
+            thread_birth: kernel.handles.thread_birth_key_by_id(target_thread),
             thread_handle: Some(0x103),
             regs: target_regs,
             pc: 0x0040_3000,
@@ -39975,6 +40232,7 @@ mod guest_thread_stack_tests {
             target_thread,
             SuspendedGuestThread {
                 thread_id: target_thread,
+                thread_birth: kernel.handles.thread_birth_key_by_id(target_thread),
                 thread_handle: Some(0x101),
                 regs: target_regs,
                 pc: 0x0040_2000,
@@ -47960,7 +48218,7 @@ fn try_enter_send_message_callout<D>(
     args: &[u32],
     active_thread_id: u32,
     trampoline_jumps: &[MipsTrampolineJump],
-    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
@@ -48239,7 +48497,7 @@ fn try_enter_send_message_callout<D>(
             regs: sender_regs,
             return_pc,
         });
-        *current_thread_id.borrow_mut() = target_thread_id;
+        current_thread_id.set_unverified(target_thread_id);
         let _ = update_user_kdata_current_ids(uc, target_thread_id, kernel.current_process_id());
         *running_thread.borrow_mut() = kernel
             .guest_thread_handle_by_id(target_thread_id)
@@ -48334,7 +48592,7 @@ fn try_enter_send_message_callout<D>(
                     *running_thread.borrow_mut() = previous_running_thread
                         .or_else(|| blocked_running_thread(kernel, &blocked));
                 }
-                *current_thread_id.borrow_mut() = restore.sender_thread_id;
+                current_thread_id.set_unverified(restore.sender_thread_id);
                 let _ = update_user_kdata_current_ids(
                     uc,
                     restore.sender_thread_id,
@@ -60641,7 +60899,7 @@ mod unicorn_tests {
 
     struct NativeWaitHandoffFixture {
         kernel: RefCell<CeKernel>,
-        current_thread_id: Rc<RefCell<u32>>,
+        current_thread_id: Rc<super::NativeCurrentThread>,
         blocked_waits: Rc<RefCell<Vec<super::BlockedWaitThread>>>,
         suspended: super::SuspendedGuestThreadSlot,
         queue: super::SuspendedGuestThreadQueue,
@@ -60908,6 +61166,7 @@ mod unicorn_tests {
         let active_context = super::capture_mips_gprs(&uc);
         let suspended = Rc::new(RefCell::new(Some(super::SuspendedGuestThread {
             thread_id: 1,
+            thread_birth: kernel.handles.thread_birth_key_by_id(1),
             thread_handle: Some(0x101),
             regs: active_context.clone(),
             pc: active_start,
@@ -60933,7 +61192,7 @@ mod unicorn_tests {
         }
         let fixture = Rc::new(NativeWaitHandoffFixture {
             kernel: RefCell::new(kernel),
-            current_thread_id: Rc::new(RefCell::new(2)),
+            current_thread_id: Rc::new(super::NativeCurrentThread::new(2, None)),
             blocked_waits: Rc::new(RefCell::new(Vec::new())),
             suspended,
             queue: Rc::new(RefCell::new(VecDeque::new())),
@@ -60988,7 +61247,7 @@ mod unicorn_tests {
         assert_eq!(native_wait_context.regs[31], WAIT_RETURN);
         assert_eq!(fixture.blocked_waits.borrow()[0].regs, native_wait_context);
         let wait_id = fixture.blocked_waits.borrow()[0].wait_id;
-        assert_eq!(*fixture.current_thread_id.borrow(), 1);
+        assert_eq!(fixture.current_thread_id.get().0, 1);
         assert_eq!(
             uc.reg_read(RegisterMIPS::PC).unwrap(),
             u64::from(active_start)
@@ -61185,7 +61444,7 @@ mod unicorn_tests {
         assert_eq!(super::read_unicorn_u32(&uc, DATA), Some(5));
         assert_eq!(super::read_unicorn_u32(&uc, DATA + 4), Some(0x7a));
         assert_eq!(super::read_unicorn_u32(&uc, IAT), Some(IAT_TARGET));
-        assert_eq!(*fixture.current_thread_id.borrow(), 2);
+        assert_eq!(fixture.current_thread_id.get().0, 2);
         assert_eq!(*fixture.running.borrow(), Some((2, 0x102)));
         assert!(fixture.blocked_waits.borrow().is_empty());
         assert!(fixture.kernel.borrow().blocked_waiter(wait_id).is_none());
@@ -61196,13 +61455,13 @@ mod unicorn_tests {
         drop(switch);
         uc.remove_hook(block_hook).unwrap();
         uc.remove_hook(interrupt_hook).unwrap();
-        super::activate_suspended_thread(
+        assert!(super::activate_suspended_thread(
             &mut uc,
             &fixture.kernel.borrow(),
             &fixture.current_thread_id,
             &fixture.running,
             &saved_active,
-        );
+        ));
         // Restart the genuine parked caller and prove its remaining branch
         // path, not merely the recipient's register values.
         uc.emu_start(
@@ -61271,7 +61530,7 @@ mod unicorn_tests {
             uc.reg_read(RegisterMIPS::K1).unwrap(),
             u64::from(active_context.regs[27])
         );
-        assert_eq!(*fixture.current_thread_id.borrow(), 1);
+        assert_eq!(fixture.current_thread_id.get().0, 1);
         assert_eq!(*fixture.running.borrow(), Some((1, 0x101)));
     }
 
@@ -68623,7 +68882,7 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::FP, 0x1234_5678).unwrap();
         uc.reg_write(RegisterMIPS::S0, 0x7777_0010).unwrap();
 
-        let current_thread_id = Rc::new(RefCell::new(thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let running_thread = Rc::new(RefCell::new(Some((thread_id, 0x0000_0120))));
         let blocked_waits = Rc::new(RefCell::new(Vec::new()));
         let pending = Rc::new(RefCell::new(Vec::new()));
@@ -68646,7 +68905,7 @@ mod unicorn_tests {
             &cross_process_send_yield,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(current_thread_id.get().0, thread_id);
         assert!(blocked_waits.borrow().is_empty());
         assert!(cross_process_send_yield.borrow().is_none());
         assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, hwnd);
@@ -68691,7 +68950,7 @@ mod unicorn_tests {
             .unwrap();
         uc.reg_write(RegisterMIPS::S0, 0x7777_0001).unwrap();
 
-        let current_thread_id = Rc::new(RefCell::new(sender_thread));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(sender_thread, None));
         let running_thread = Rc::new(RefCell::new(Some((sender_thread, 0x0000_0120))));
         let blocked_waits = Rc::new(RefCell::new(Vec::new()));
         let pending = Rc::new(RefCell::new(Vec::new()));
@@ -68714,7 +68973,7 @@ mod unicorn_tests {
             &cross_process_send_yield,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), receiver_thread);
+        assert_eq!(current_thread_id.get().0, receiver_thread);
         assert_eq!(
             *running_thread.borrow(),
             Some((receiver_thread, receiver_handle))
@@ -68808,7 +69067,7 @@ mod unicorn_tests {
             command_line: "child".to_owned(),
             current_directory: None,
         }])));
-        let current_thread_id = Rc::new(RefCell::new(sender_thread));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(sender_thread, None));
         let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
         let blocked_waits = Rc::new(RefCell::new(Vec::new()));
         let pending = Rc::new(RefCell::new(Vec::new()));
@@ -70041,7 +70300,7 @@ mod unicorn_tests {
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
         kernel.set_current_process_id(sender_process);
 
-        let current_thread_id = Rc::new(RefCell::new(sender_thread));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(sender_thread, None));
         let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
         let blocked_waits = Rc::new(RefCell::new(Vec::new()));
         let pending = Rc::new(RefCell::new(Vec::new()));
@@ -70082,7 +70341,7 @@ mod unicorn_tests {
         assert!(pending.borrow().is_empty());
         assert!(cross_process_send_yield.borrow().is_none());
         assert!(kernel.gwe.sent_message(1).is_none());
-        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(current_thread_id.get().0, sender_thread);
         assert_eq!(
             *running_thread.borrow(),
             Some((sender_thread, sender_handle))
@@ -70859,7 +71118,7 @@ mod unicorn_tests {
             Some(send_id)
         );
 
-        let current_thread_id = Rc::new(RefCell::new(receiver_thread));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(receiver_thread, None));
         let suspended = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(None));
         assert!(super::try_resume_blocked_wait(
@@ -70873,7 +71132,7 @@ mod unicorn_tests {
             &running_thread,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(current_thread_id.get().0, sender_thread);
         assert_eq!(
             *running_thread.borrow(),
             Some((sender_thread, sender_handle))
@@ -71147,7 +71406,7 @@ mod unicorn_tests {
             .unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x0040_6510).unwrap();
 
-        let current_thread_id = Rc::new(RefCell::new(active_thread));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(active_thread, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         assert!(super::try_resume_blocked_send_message_timeout(
             &mut kernel,
@@ -71165,7 +71424,7 @@ mod unicorn_tests {
 
         assert!(blocked_smt.borrow().is_none());
         assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
-        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(current_thread_id.get().0, sender_thread);
         assert_eq!(
             *running_thread.borrow(),
             Some((sender_thread, sender_handle))
@@ -71275,7 +71534,7 @@ mod unicorn_tests {
             .unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x0040_6810).unwrap();
 
-        let current_thread_id = Rc::new(RefCell::new(active_thread));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(active_thread, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         assert!(super::try_resume_blocked_send_message_timeout(
             &mut kernel,
@@ -71293,7 +71552,7 @@ mod unicorn_tests {
 
         assert!(blocked_smt.borrow().is_none());
         assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
-        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(current_thread_id.get().0, sender_thread);
         assert_eq!(
             *running_thread.borrow(),
             Some((sender_thread, sender_handle))
@@ -71394,7 +71653,7 @@ mod unicorn_tests {
             Some(send_id)
         );
 
-        let current_thread_id = Rc::new(RefCell::new(receiver_thread));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(receiver_thread, None));
         let suspended = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(None));
         assert!(super::try_resume_blocked_wait(
@@ -71408,7 +71667,7 @@ mod unicorn_tests {
             &running_thread,
         ));
 
-        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(current_thread_id.get().0, sender_thread);
         assert_eq!(
             *running_thread.borrow(),
             Some((sender_thread, sender_handle))
@@ -71455,7 +71714,7 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(None));
         let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
         let pending_returns = Rc::new(RefCell::new(Vec::new()));
-        let current_thread_id = Rc::new(RefCell::new(thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(Some((thread_id, thread_handle))));
         let last_messages = Rc::new(RefCell::new(Vec::new()));
@@ -71540,7 +71799,7 @@ mod unicorn_tests {
         })));
         let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
         let pending_returns = Rc::new(RefCell::new(Vec::new()));
-        let current_thread_id = Rc::new(RefCell::new(thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(Some((thread_id, thread_handle))));
         let last_messages = Rc::new(RefCell::new(Vec::new()));
@@ -71701,7 +71960,7 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(None));
         let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
         let pending_returns = Rc::new(RefCell::new(Vec::new()));
-        let current_thread_id = Rc::new(RefCell::new(main_thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(main_thread_id, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(Some((main_thread_id, main_thread_handle))));
         let last_messages = Rc::new(RefCell::new(Vec::new()));
@@ -71739,7 +71998,7 @@ mod unicorn_tests {
 
         assert!(blocked_waits.borrow().is_empty());
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
-        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(current_thread_id.get().0, worker_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((worker_thread_id, worker_thread_handle))
@@ -71810,13 +72069,14 @@ mod unicorn_tests {
             max_msg: 0,
         })));
         let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
-        let current_thread_id = Rc::new(RefCell::new(active_thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         let suspended_queue = Rc::new(RefCell::new(std::collections::VecDeque::new()));
         suspended_queue
             .borrow_mut()
             .push_back(super::SuspendedGuestThread {
                 thread_id: main_thread_id,
+                thread_birth: kernel.handles.thread_birth_key_by_id(main_thread_id),
                 thread_handle: Some(main_thread_handle),
                 regs: super::MipsGuestContext::zero(),
                 pc: 0x0040_0000,
@@ -71852,7 +72112,7 @@ mod unicorn_tests {
         ));
         assert!(kernel.blocked_waiter(getmsg_wait_id).is_some());
         assert!(blocked_guest_thread.borrow().is_some());
-        assert_eq!(*current_thread_id.borrow(), active_thread_id);
+        assert_eq!(current_thread_id.get().0, active_thread_id);
 
         uc.reg_write(RegisterMIPS::RA, 0xdead_beef).unwrap();
         assert!(super::try_resume_blocked_get_message_with_active_pc(
@@ -71875,7 +72135,7 @@ mod unicorn_tests {
         assert!(kernel.blocked_waiter(getmsg_wait_id).is_none());
         assert!(kernel.blocked_waiter(serial_wait_id).is_some());
         assert!(blocked_guest_thread.borrow().is_none());
-        assert_eq!(*current_thread_id.borrow(), main_thread_id);
+        assert_eq!(current_thread_id.get().0, main_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((main_thread_id, main_thread_handle))
@@ -71929,7 +72189,7 @@ mod unicorn_tests {
             max_msg: 0,
         })));
         let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
-        let current_thread_id = Rc::new(RefCell::new(active_thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(None));
         assert!(kernel.post_thread_message_w(
@@ -71954,7 +72214,7 @@ mod unicorn_tests {
 
         assert!(kernel.blocked_waiter(wait_id).is_none());
         assert!(blocked_guest_thread.borrow().is_none());
-        assert_eq!(*current_thread_id.borrow(), main_thread_id);
+        assert_eq!(current_thread_id.get().0, main_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((main_thread_id, main_thread_handle))
@@ -71983,7 +72243,7 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(None));
         let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
         let pending_returns = Rc::new(RefCell::new(Vec::new()));
-        let current_thread_id = Rc::new(RefCell::new(thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(None));
         let last_messages = Rc::new(RefCell::new(Vec::new()));
@@ -72077,7 +72337,7 @@ mod unicorn_tests {
             max_msg: 0,
         })));
         let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
-        let current_thread_id = Rc::new(RefCell::new(active_thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(active_thread_id, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(Some((active_thread_id, active_thread_handle))));
 
@@ -72098,7 +72358,7 @@ mod unicorn_tests {
         ));
 
         assert!(kernel.blocked_waiter(wait_id).is_none());
-        assert_eq!(*current_thread_id.borrow(), main_thread_id);
+        assert_eq!(current_thread_id.get().0, main_thread_id);
         assert_eq!(
             *running_thread.borrow(),
             Some((main_thread_id, main_thread_handle))
@@ -72151,7 +72411,7 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(None));
         let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
         let pending_returns = Rc::new(RefCell::new(Vec::new()));
-        let current_thread_id = Rc::new(RefCell::new(thread_id));
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(thread_id, None));
         let suspended_thread = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(Some((thread_id, thread_handle))));
         let last_messages = Rc::new(RefCell::new(Vec::new()));
