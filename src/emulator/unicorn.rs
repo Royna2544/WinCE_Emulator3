@@ -1934,8 +1934,10 @@ impl UnicornMips {
         else {
             return Ok(());
         };
+        let mut fixed_ranges = Vec::new();
         if let Some(owner) = kernel.current_process_birth_key() {
-            reserve_fixed_system_slabs(&self.memory, &self.mapped_blobs, kernel, Some(owner))?;
+            fixed_ranges =
+                reserve_fixed_system_slabs(&self.memory, &self.mapped_blobs, kernel, Some(owner))?;
             if let Some((base, size)) = kernel.memory.fixed_heap_reservation(owner) {
                 let start = u64::from(message.lparam);
                 let end = start
@@ -1965,8 +1967,7 @@ impl UnicornMips {
                         start < blob_end && blob_start < end
                     }) {
                         return Err(Error::Backend(
-                            "queued fixed heap payload overlaps a persisted byte blob"
-                                .to_owned(),
+                            "queued fixed heap payload overlaps a persisted byte blob".to_owned(),
                         ));
                     }
                     let prepared = kernel
@@ -2011,14 +2012,25 @@ impl UnicornMips {
                     for (pin, offset, consumed, len) in writes {
                         pin.write_bytes(offset, &bytes[consumed..consumed + len])
                             .map_err(|err| {
-                                Error::Backend(format!(
-                                    "write queued fixed heap payload: {err:?}"
-                                ))
+                                Error::Backend(format!("write queued fixed heap payload: {err:?}"))
                             })?;
                     }
                     return Ok(());
                 }
             }
+        }
+        let payload_start = u64::from(message.lparam);
+        let payload_end = payload_start
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| Error::InvalidArgument("queued payload range overflow".to_owned()))?;
+        if fixed_ranges.iter().any(|(base, size)| {
+            let slab_start = u64::from(*base);
+            let slab_end = slab_start + u64::from(*size);
+            payload_start < slab_end && slab_start < payload_end
+        }) {
+            return Err(Error::InvalidArgument(
+                "queued payload overlaps a fixed slab outside the canonical heap path".to_owned(),
+            ));
         }
         write_persisted_message_payload(
             &self.memory,
@@ -6446,9 +6458,11 @@ impl UnicornMips {
             let stack = kernel
                 .memory
                 .virtual_allocations_visible_to(owner)
-                .find(|allocation| allocation.source == VirtualAllocationSource::ThreadStack
-                    && command_line >= allocation.base
-                    && end <= u64::from(allocation.base) + u64::from(allocation.size))
+                .find(|allocation| {
+                    allocation.source == VirtualAllocationSource::ThreadStack
+                        && command_line >= allocation.base
+                        && end <= u64::from(allocation.base) + u64::from(allocation.size)
+                })
                 .ok_or_else(|| {
                     Error::Backend("entry command line exceeds fixed guest stack".to_owned())
                 })?;
@@ -6715,14 +6729,24 @@ impl UnicornMips {
         }
         let mut persisted_kernel_mappings =
             prior_mapping_metadata.unwrap_or_else(|| KernelMemoryMappings::new(&self.mapped_blobs));
+        let system_slab_owner = (!system_slab_ranges.is_empty())
+            .then_some(native_owner_birth)
+            .flatten();
         if native_engine_reused
-            && persisted_kernel_mappings.system_slab_ranges != system_slab_ranges
+            && (persisted_kernel_mappings.system_slab_ranges != system_slab_ranges
+                || persisted_kernel_mappings.system_slab_owner != system_slab_owner)
         {
             return Err(Error::Backend(
                 "reused native owner has different fixed system slab reservations".to_owned(),
             ));
         }
+        if persisted_kernel_mappings.fatal_payload_error.is_some() {
+            return Err(Error::Backend(
+                "native owner retained a failed message payload write".to_owned(),
+            ));
+        }
         persisted_kernel_mappings.system_slab_ranges = system_slab_ranges.clone();
+        persisted_kernel_mappings.system_slab_owner = system_slab_owner;
         let setup_result = (|| -> Result<u64> {
             let expected_image_runs =
                 expected_sealed_image_runs(&self.mapped_blobs, &self.memory, native_owner_birth)?;
@@ -6756,14 +6780,14 @@ impl UnicornMips {
             }
             persisted_kernel_mappings.ranges =
                 reconcile_persistent_native_memory_with_private_and_system_slabs(
-                &mut uc,
-                &self.memory,
-                &self.mapped_blobs,
-                &persisted_kernel_mappings.virtual_pages,
-                &persisted_kernel_mappings.private_pages,
-                &expected_image_runs,
-                &system_slab_ranges,
-            )?;
+                    &mut uc,
+                    &self.memory,
+                    &self.mapped_blobs,
+                    &persisted_kernel_mappings.virtual_pages,
+                    &persisted_kernel_mappings.private_pages,
+                    &expected_image_runs,
+                    &system_slab_ranges,
+                )?;
             map_sealed_image_runs(
                 &mut uc,
                 &self.mapped_blobs,
@@ -8029,8 +8053,7 @@ impl UnicornMips {
         let mapped_kernel_memory_timeslice_hook = Rc::clone(&mapped_kernel_memory);
         let native_mapping_pins_timeslice_hook = native_mapping_pins.clone();
         let active_private_page_guards_timeslice_hook = Rc::clone(&active_private_page_guards);
-        let immediate_process_sync_error_timeslice_hook =
-            Rc::clone(&immediate_process_sync_error);
+        let immediate_process_sync_error_timeslice_hook = Rc::clone(&immediate_process_sync_error);
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
         let trampoline_jump_index_timeslice_hook = trampoline_jump_index.clone();
         let host_wall_clock_stop_timeslice_hook = Rc::clone(&host_wall_clock_stop);
@@ -9239,6 +9262,28 @@ impl UnicornMips {
                     })
                 };
                 if trap.is_none() {
+                    return;
+                }
+                // A prior host-owned message may have committed canonical
+                // heap bytes without mapping its page into this still-live
+                // owner. Reconcile before an import reads guest memory: host
+                // uc_mem_read does not trigger the guest UNMAPPED hook.
+                if let Err(err) = map_kernel_memory_allocations_for_owner(
+                    uc,
+                    unsafe { &*kernel_ptr },
+                    &mut mapped_kernel_memory_hook.borrow_mut(),
+                    unsafe { &mut *mapped_blobs_ptr },
+                    native_owner_birth,
+                    Some(&native_mapping_pins_import),
+                    Some(active_private_page_guards_import.as_ref()),
+                ) {
+                    let err = match uc.emu_stop() {
+                        Ok(()) => err,
+                        Err(stop_err) => Error::Backend(format!(
+                            "pre-import native map failed: {err}; stop native attempt: {stop_err:?}"
+                        )),
+                    };
+                    *immediate_process_sync_error_hook.borrow_mut() = Some(err);
                     return;
                 }
                 if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
@@ -10984,7 +11029,16 @@ impl UnicornMips {
                 .as_ref()
                 .map(|probe| probe.pc)
         });
-        let immediate_process_sync_failure = immediate_process_sync_error.borrow_mut().take();
+        let immediate_process_sync_failure = immediate_process_sync_error
+            .borrow_mut()
+            .take()
+            .or_else(|| {
+                mapped_kernel_memory
+                    .borrow_mut()
+                    .fatal_payload_error
+                    .take()
+                    .map(Error::Backend)
+            });
         let slice_run_elapsed = slice_profile.elapsed();
         self.run_slice_generation = self.run_slice_generation.wrapping_add(1);
         let native_requested_pc_stop = limits.stop_pc.filter(|target| {
@@ -12478,23 +12532,26 @@ fn reserve_fixed_system_slabs(
         return Ok(Vec::new());
     };
     if kernel.handles.process_birth_key(owner.process_id()) != Some(owner) {
-        return Err(Error::Backend("fixed system slab has stale process birth".to_owned()));
+        return Err(Error::Backend(
+            "fixed system slab has stale process birth".to_owned(),
+        ));
     }
-    let mut ranges = Vec::new();
+    let mut reservations = Vec::new();
     for region in memory.regions() {
         let source = match region.name.as_str() {
             "ce-heap-arena" => VirtualAllocationSource::ProcessHeapArena,
             "guest-stack" => VirtualAllocationSource::ThreadStack,
             _ => continue,
         };
-        if !region.perms.contains(MemoryPerms::READ | MemoryPerms::WRITE)
+        if !region
+            .perms
+            .contains(MemoryPerms::READ | MemoryPerms::WRITE)
             || region.perms.contains(MemoryPerms::EXEC)
             || region.base & 0xfff != 0
             || region.size == 0
             || region.size & 0xfff != 0
             || (source == VirtualAllocationSource::ProcessHeapArena
-                && (region.base != GUEST_HEAP_ARENA_BASE
-                    || region.size != GUEST_HEAP_ARENA_SIZE))
+                && (region.base != GUEST_HEAP_ARENA_BASE || region.size != GUEST_HEAP_ARENA_SIZE))
         {
             return Err(Error::Backend(format!(
                 "invalid fixed system slab {} at 0x{:08x}",
@@ -12512,21 +12569,12 @@ fn reserve_fixed_system_slabs(
                 region.name
             )));
         }
-        if kernel.memory.reserve_fixed_private_range(
-            owner,
-            source,
-            region.base,
-            region.size,
-            0x04,
-        ) != Some(region.base) {
-            return Err(Error::Backend(format!(
-                "reserve fixed system slab {} at 0x{:08x} failed",
-                region.name, region.base
-            )));
-        }
-        ranges.push((region.base, region.size));
+        reservations.push((source, region.base, region.size, 0x04));
     }
-    Ok(ranges)
+    kernel
+        .memory
+        .reserve_fixed_private_ranges(owner, &reservations)
+        .ok_or_else(|| Error::Backend("atomic fixed system slab reservation failed".to_owned()))
 }
 
 #[cfg(feature = "unicorn")]
@@ -14350,6 +14398,8 @@ struct KernelMemoryMappings {
     // Exact named MemoryMap heap/stack reservations owned by this birth.
     // These VAs must never receive ordinary uc_mem_map or a writable blob.
     system_slab_ranges: Vec<(u32, u32)>,
+    system_slab_owner: Option<crate::ce::object::ProcessBirthKey>,
+    fatal_payload_error: Option<String>,
     virtual_pages: HashSet<u32>,
     // Observed pointer mappings only. The native lease separately retains
     // strong page pins before FFI and across all metadata transfers.
@@ -14388,6 +14438,8 @@ impl KernelMemoryMappings {
         Self {
             ranges,
             system_slab_ranges: Vec::new(),
+            system_slab_owner: None,
+            fatal_payload_error: None,
             virtual_pages: HashSet::new(),
             private_pages: BTreeMap::new(),
             sealed_image_runs: BTreeMap::new(),
@@ -14402,11 +14454,14 @@ impl KernelMemoryMappings {
 fn overlaps_fixed_system_slab(mapped: &KernelMemoryMappings, base: u32, len: u32) -> bool {
     let start = u64::from(base);
     let end = start + u64::from(len);
-    mapped.system_slab_ranges.iter().any(|(slab_base, slab_len)| {
-        let slab_start = u64::from(*slab_base);
-        let slab_end = slab_start + u64::from(*slab_len);
-        start < slab_end && slab_start < end
-    })
+    mapped
+        .system_slab_ranges
+        .iter()
+        .any(|(slab_base, slab_len)| {
+            let slab_start = u64::from(*slab_base);
+            let slab_end = slab_start + u64::from(*slab_len);
+            start < slab_end && slab_start < end
+        })
 }
 
 #[cfg(feature = "unicorn")]
@@ -14988,6 +15043,11 @@ fn map_heap_spillover_through<D>(
         .checked_add(GUEST_HEAP_SPILLOVER_GRANULARITY - 1)
         .map(|end| end & !(GUEST_HEAP_SPILLOVER_GRANULARITY - 1))
         .ok_or_else(|| Error::InvalidArgument("heap spillover cursor overflow".to_owned()))?;
+    if overlaps_fixed_system_slab(mapped, base, mapped_end - base) {
+        return Err(Error::Backend(
+            "heap spillover overlaps a reserved fixed system slab".to_owned(),
+        ));
+    }
     let (spans, _) = unmapped_guest_spans(mapped, base, mapped_end, "heap spillover", true)?;
     for (span_base, span_size) in spans {
         // Register persistent backing before exposing each span to host writes.
@@ -15106,7 +15166,11 @@ fn repair_missing_virtual_page_for_fault<D>(
             .virtual_allocations_visible_to(owner)
             .find(contains_fault)
             .cloned(),
-        None => kernel.memory.virtual_allocations().find(contains_fault).cloned(),
+        None => kernel
+            .memory
+            .virtual_allocations()
+            .find(contains_fault)
+            .cloned(),
     };
     let Some(allocation) = allocation else {
         return Ok(false);
@@ -15142,9 +15206,7 @@ fn repair_missing_virtual_page_for_fault<D>(
                 .memory
                 .prepare_fixed_private_page(owner, address)
                 .ok_or_else(|| {
-                    Error::Backend(format!(
-                        "prepare fixed stack page 0x{page_base:08x} failed"
-                    ))
+                    Error::Backend(format!("prepare fixed stack page 0x{page_base:08x} failed"))
                 })?;
             if prepared.new_page_pins().len() != 1 {
                 return Err(Error::Backend(format!(
@@ -33402,6 +33464,133 @@ fn prepare_native_message_pointer_payload<D>(
         Error::InvalidArgument("native message payload range overflow".to_owned())
     })?;
     sealed_host_write_guard.check_write(u64::from(message.lparam), bytes.len())?;
+    if let Some(owner) = mapping.mapped.borrow().system_slab_owner {
+        if kernel.current_process_birth_key() != Some(owner)
+            || kernel.handles.process_birth_key(owner.process_id()) != Some(owner)
+        {
+            return Err(Error::Backend(
+                "native message payload owner differs from fixed heap birth".to_owned(),
+            ));
+        }
+        if let Some((heap_base, heap_size)) = kernel.memory.fixed_heap_reservation(owner) {
+            let heap_end = u64::from(heap_base) + u64::from(heap_size);
+            if u64::from(message.lparam) < heap_end && u64::from(heap_base) < u64::from(end) {
+                if message.lparam < heap_base || u64::from(end) > heap_end {
+                    return Err(Error::InvalidArgument(
+                        "native message payload crosses fixed heap arena".to_owned(),
+                    ));
+                }
+                if u64::from(end) > u64::from(kernel.memory.heap_high_water_mark()) {
+                    return Err(Error::Backend(
+                        "native message payload exceeds committed heap high-water".to_owned(),
+                    ));
+                }
+                let blobs = unsafe { &*mapping.mapped_blobs };
+                if blobs.iter().any(|blob| {
+                    let blob_start = u64::from(blob.base);
+                    let blob_end = blob_start + blob.bytes.len() as u64;
+                    u64::from(message.lparam) < blob_end && blob_start < u64::from(end)
+                }) {
+                    return Err(Error::Backend(
+                        "native fixed heap payload overlaps a persisted byte blob".to_owned(),
+                    ));
+                }
+                let prepared = kernel
+                    .memory
+                    .prepare_fixed_heap_growth(owner, kernel.memory.heap_high_water_mark())
+                    .ok_or_else(|| {
+                        Error::Backend("native fixed heap growth exceeds guest RAM".to_owned())
+                    })?;
+                // Preflight every destination before canonical publication or
+                // the first byte write. A page already mapped by this native
+                // owner is accessed through Unicorn while its host pin stays
+                // fenced; an unmapped page is written through its sole pin.
+                let mut writes = Vec::new();
+                let mut consumed = 0usize;
+                while consumed < bytes.len() {
+                    let address = message.lparam + consumed as u32;
+                    let page = address & !0xfff;
+                    let offset = (address & 0xfff) as usize;
+                    let count = (STABLE_PRIVATE_PAGE_SIZE - offset).min(bytes.len() - consumed);
+                    let pin = prepared
+                        .new_page_pins()
+                        .iter()
+                        .find(|pin| pin.identity().page_base() == page)
+                        .cloned()
+                        .or_else(|| kernel.memory.private_page_pin(owner, page))
+                        .ok_or_else(|| {
+                            Error::Backend(format!(
+                                "native fixed heap page 0x{page:08x} has no canonical pin"
+                            ))
+                        })?;
+                    let recorded = mapping.mapped.borrow().private_pages.get(&page).copied();
+                    if let Some(record) = recorded {
+                        let needed =
+                            (unicorn_engine::Prot::READ | unicorn_engine::Prot::WRITE).0 as u32;
+                        if record.identity != pin.identity()
+                            || record.identity.owner() != owner
+                            || record.host_address != pin.native_ptr() as usize
+                            || record.perms & needed != needed
+                            || native_page_perms(uc, page)? != Some(record.perms)
+                            || !kernel.memory.contains_stable_page_pin(&pin)
+                        {
+                            return Err(Error::Backend(format!(
+                                "native fixed heap page 0x{page:08x} differs from owner ledger"
+                            )));
+                        }
+                    } else {
+                        if native_page_perms(uc, page)?.is_some() {
+                            return Err(Error::Backend(format!(
+                                "native fixed heap page 0x{page:08x} has an unowned mapping"
+                            )));
+                        }
+                        pin.read_bytes(0, &mut []).map_err(|err| {
+                            Error::Backend(format!(
+                                "native fixed heap page 0x{page:08x} is fenced: {err:?}"
+                            ))
+                        })?;
+                    }
+                    writes.push((pin, address, offset, consumed, count, recorded.is_some()));
+                    consumed += count;
+                }
+                if !prepared.new_page_pins().is_empty()
+                    && kernel.memory.commit_prepared_private_vm(prepared).is_none()
+                {
+                    return Err(Error::Backend(
+                        "native fixed heap growth changed before publication".to_owned(),
+                    ));
+                }
+                for (pin, address, offset, consumed, count, native_mapped) in writes {
+                    let result =
+                        if native_mapped {
+                            checked_host_write(
+                                uc,
+                                sealed_host_write_guard,
+                                u64::from(address),
+                                &bytes[consumed..consumed + count],
+                            )
+                            .map_err(|err| {
+                                Error::Backend(format!(
+                                    "write mapped native fixed heap page 0x{address:08x}: {err:?}"
+                                ))
+                            })
+                        } else {
+                            pin.write_bytes(offset, &bytes[consumed..consumed + count])
+                            .map_err(|err| Error::Backend(format!(
+                                "write unmapped native fixed heap page 0x{address:08x}: {err:?}"
+                            )))
+                        };
+                    if let Err(err) = result {
+                        let _ = uc.emu_stop();
+                        mapping.mapped.borrow_mut().fatal_payload_error =
+                            Some(format!("partial native fixed heap payload write: {err}"));
+                        return Err(err);
+                    }
+                }
+                return Ok(());
+            }
+        }
+    }
     {
         let mut memory = UnicornGuestMemory {
             uc,
@@ -51899,26 +52088,33 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         if u64::from(addr) >= heap_end || u64::from(end) <= u64::from(heap_base) {
             return self.ensure_heap_mapped(addr, len);
         }
-        if addr < heap_base || u64::from(end) > heap_end {
+        if addr < heap_base {
             return Err(Error::InvalidArgument(
-                "heap mapping crosses fixed arena reservation".to_owned(),
+                "heap mapping begins before fixed arena reservation".to_owned(),
             ));
         }
+        let fixed_end = u64::from(end).min(heap_end) as u32;
+        let fixed_len = fixed_end - addr;
         self.sealed_host_write_guard
             .check_write(u64::from(addr), len as usize)?;
         // Complete preflight before any native map. Growth has already been
         // published by the allocator's checked private-VM transaction; host
         // access must never manufacture an uncommitted heap page.
         let first_page = addr & !0xfff;
-        let last_page = (end - 1) & !0xfff;
+        let last_page = (fixed_end - 1) & !0xfff;
         let mut pins = Vec::new();
         let mut page = first_page;
         loop {
-            pins.push(kernel.memory.private_page_pin(mapping.owner, page).ok_or_else(|| {
-                Error::InvalidArgument(format!(
-                    "fixed heap page 0x{page:08x} is not committed by HeapAlloc"
-                ))
-            })?);
+            pins.push(
+                kernel
+                    .memory
+                    .private_page_pin(mapping.owner, page)
+                    .ok_or_else(|| {
+                        Error::InvalidArgument(format!(
+                            "fixed heap page 0x{page:08x} is not committed by HeapAlloc"
+                        ))
+                    })?,
+            );
             if page == last_page {
                 break;
             }
@@ -51944,7 +52140,15 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             )));
             return Err(err);
         }
-        self.validate_private_host_access(addr, len as usize, unicorn_engine::Prot::WRITE.0 as u32)
+        self.validate_private_host_access(
+            addr,
+            fixed_len as usize,
+            unicorn_engine::Prot::WRITE.0 as u32,
+        )?;
+        if u64::from(end) > heap_end {
+            self.ensure_heap_mapped(heap_end as u32, end - heap_end as u32)?;
+        }
+        Ok(())
     }
 
     fn apply_prepared_private_vm(
@@ -52300,9 +52504,10 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         if len == 0 {
             return Ok(());
         }
-        if self.private_vm_mapping.is_some_and(|mapping| {
-            overlaps_fixed_system_slab(&mapping.mapped.borrow(), addr, len)
-        }) {
+        if self
+            .private_vm_mapping
+            .is_some_and(|mapping| overlaps_fixed_system_slab(&mapping.mapped.borrow(), addr, len))
+        {
             return Err(Error::InvalidArgument(
                 "ordinary native mapping cannot own fixed system slab pages".to_owned(),
             ));
@@ -52336,9 +52541,10 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         if len == 0 {
             return Ok(());
         }
-        if self.private_vm_mapping.is_some_and(|mapping| {
-            overlaps_fixed_system_slab(&mapping.mapped.borrow(), addr, len)
-        }) {
+        if self
+            .private_vm_mapping
+            .is_some_and(|mapping| overlaps_fixed_system_slab(&mapping.mapped.borrow(), addr, len))
+        {
             return Err(Error::InvalidArgument(
                 "fixed heap requires owner-qualified canonical page pins".to_owned(),
             ));
@@ -59032,7 +59238,7 @@ mod unicorn_tests {
     #[test]
     fn native_virtual_generation_maps_new_page_without_reseeding_guest_store() -> crate::Result<()>
     {
-        let (kernel, _handle, base, canonical) =
+        let (mut kernel, _handle, base, canonical) =
             two_page_legacy_view_seed_fixture("generation-seed.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
@@ -59041,7 +59247,7 @@ mod unicorn_tests {
         let active_guards = RefCell::new(BTreeMap::new());
         assert!(super::repair_missing_virtual_page_for_fault(
             &mut uc,
-            &kernel,
+            &mut kernel,
             &mut mapped,
             base,
             Some(owner),
@@ -59146,7 +59352,7 @@ mod unicorn_tests {
         let ranges_before_repair = mapped.ranges.clone();
         let err = super::repair_missing_virtual_page_for_fault(
             &mut uc,
-            &kernel,
+            &mut kernel,
             &mut mapped,
             sealed.base,
             Some(owner),
