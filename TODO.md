@@ -67,6 +67,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 
 ## Next
 
+- Make `GlobalMemoryStatus` report from the configured guest physical RAM
+  setting rather than its current 64 MiB total / 48 MiB available constants;
+  give that change its own public API test after the E-35 private-slab gate.
 - Add raw/non-Unicorn loader fixture variants for loader paths where Unicorn
   runtime coverage is currently stronger.
 - Expand PE icon/resource tests for uncommon formats, malformed resource tables,
