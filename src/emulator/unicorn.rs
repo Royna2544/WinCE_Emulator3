@@ -6237,7 +6237,10 @@ impl UnicornMips {
         parked.cpu.blocked_wait_threads.iter().find_map(|blocked| {
             if matches!(
                 blocked.kind,
-                BlockedWaitKind::MessageQueueIo { .. } | BlockedWaitKind::WinsockRead { .. }
+                BlockedWaitKind::SerialRead { .. }
+                    | BlockedWaitKind::SerialCommEvent { .. }
+                    | BlockedWaitKind::MessageQueueIo { .. }
+                    | BlockedWaitKind::WinsockRead { .. }
             ) && verified_native_blocked_wait_birth(kernel, blocked).is_none()
             {
                 return None;
@@ -21239,7 +21242,10 @@ fn blocked_wait_has_visible_receiver_work(
 fn blocked_wait_can_resume(blocked: &BlockedWaitThread, kernel: &CeKernel, now_ms: u32) -> bool {
     if matches!(
         blocked.kind,
-        BlockedWaitKind::MessageQueueIo { .. } | BlockedWaitKind::WinsockRead { .. }
+        BlockedWaitKind::SerialRead { .. }
+            | BlockedWaitKind::SerialCommEvent { .. }
+            | BlockedWaitKind::MessageQueueIo { .. }
+            | BlockedWaitKind::WinsockRead { .. }
     ) && verified_native_blocked_wait_birth(kernel, blocked).is_none()
     {
         return false;
@@ -24423,6 +24429,45 @@ fn try_complete_current_msg_wait_timeout<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn verified_serial_wait_candidate_birth<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    thread_id: u32,
+) -> Option<crate::ce::object::ThreadBirthKey> {
+    let Some(captured_birth) = verified_native_register_birth(kernel, current_thread_id, thread_id)
+    else {
+        tracing::error!(target: "ce.scheduler", thread_id, current = ?current_thread_id.get(), "serial wait candidate has no verified register birth");
+        current_thread_id.set_unverified(thread_id);
+        let _ = uc.emu_stop();
+        return None;
+    };
+    if pending_returns.borrow().iter().any(|pending| {
+        pending.worker_thread_id == thread_id && pending.worker_birth != captured_birth
+    }) {
+        tracing::error!(target: "ce.scheduler", thread_id, ?captured_birth, "serial wait candidate disagrees with pending worker birth");
+        current_thread_id.set_unverified(thread_id);
+        let _ = uc.emu_stop();
+        return None;
+    }
+    if let Some((running_thread_id, _)) = *running_thread.borrow()
+        && running_thread_id != thread_id
+    {
+        tracing::error!(target: "ce.scheduler", thread_id, running_thread_id, "serial wait candidate running owner differs from native registers");
+        current_thread_id.set_unverified(thread_id);
+        let _ = uc.emu_stop();
+        return None;
+    }
+    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
+        current_thread_id.set_unverified(thread_id);
+        return None;
+    }
+    Some(captured_birth)
+}
+
+#[cfg(feature = "unicorn")]
 fn try_block_serial_read_file<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -24451,6 +24496,20 @@ fn try_block_serial_read_file<D>(
     let overlapped_ptr = args.get(4).copied().unwrap_or(0);
     if overlapped_ptr != 0 {
         return false;
+    }
+    if requested != 0
+        && kernel.is_serial_device_handle(handle)
+        && verified_serial_wait_candidate_birth(
+            kernel,
+            uc,
+            pending_returns,
+            current_thread_id,
+            running_thread,
+            thread_id,
+        )
+        .is_none()
+    {
+        return true;
     }
     kernel.poll_host_serial_to_handle(handle, requested as usize);
     if requested == 0
@@ -24526,6 +24585,16 @@ fn block_serial_read_file<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
+    let Some(captured_native_birth) = verified_serial_wait_candidate_birth(
+        kernel,
+        uc,
+        pending_returns,
+        current_thread_id,
+        running_thread,
+        thread_id,
+    ) else {
+        return true;
+    };
     kernel.record_blocked_single_wait(timeout_ms);
     let wait_started_ms = kernel.timers.tick_count();
     let kind = BlockedWaitKind::SerialRead {
@@ -24538,21 +24607,46 @@ fn block_serial_read_file<D>(
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
-    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
-        return true;
-    }
-    if let Some(callout) =
-        pop_pending_guest_thread_return_for_thread(pending_returns, kernel, thread_id)
-    {
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+    let pending_callout = pending_returns
+        .borrow()
+        .iter()
+        .rfind(|pending| pending.worker_thread_id == thread_id)
+        .cloned();
+    if let Some(pending_callout) = pending_callout {
         let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
-            callout.thread_handle,
+            pending_callout.thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_ms,
         );
+        if verified_registered_native_wait_birth(
+            kernel,
+            wait_id,
+            thread_id,
+            pending_callout.thread_handle,
+            &[],
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        ) != Some(captured_native_birth)
+        {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+            tracing::error!(target: "ce.scheduler", thread_id, wait_id, ?captured_native_birth, "serial read pending wait birth disagrees with captured registers");
+            current_thread_id.set_unverified(thread_id);
+            let _ = uc.emu_stop();
+            return true;
+        }
+        let Some(callout) =
+            pop_pending_guest_thread_return_for_thread(pending_returns, kernel, thread_id)
+        else {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+            current_thread_id.set_unverified(thread_id);
+            let _ = uc.emu_stop();
+            return true;
+        };
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -24585,7 +24679,6 @@ fn block_serial_read_file<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
@@ -24594,6 +24687,24 @@ fn block_serial_read_file<D>(
             wait_started_ms,
             timeout_ms,
         );
+        if verified_registered_native_wait_birth(
+            kernel,
+            wait_id,
+            thread_id,
+            thread_handle,
+            &[],
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        ) != Some(captured_native_birth)
+        {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+            tracing::error!(target: "ce.scheduler", thread_id, wait_id, ?captured_native_birth, "serial read running wait birth disagrees with captured registers");
+            current_thread_id.set_unverified(thread_id);
+            let _ = uc.emu_stop();
+            return true;
+        }
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -24637,6 +24748,20 @@ fn block_serial_read_file<D>(
                 let _ = uc.emu_stop();
                 return true;
             };
+            let candidate = blocked_waits.borrow()[index].clone();
+            let Some(resumed_birth) = verified_native_blocked_wait_birth(kernel, &candidate) else {
+                blocked_waits.borrow_mut().remove(index);
+                let _ = kernel.remove_blocked_waiter(wait_id);
+                tracing::error!(target: "ce.scheduler", thread_id, wait_id, "retired serial read timeout with stale or mismatched captured birth");
+                if let Some(mapping) = private_vm_mapping {
+                    *mapping.terminal_error.borrow_mut() = Some(Error::Backend(format!(
+                        "native serial read wait {wait_id} has stale or mismatched captured birth"
+                    )));
+                }
+                current_thread_id.set_unverified(thread_id);
+                let _ = uc.emu_stop();
+                return true;
+            };
             let blocked = blocked_waits.borrow_mut().remove(index);
             let _ = kernel.remove_blocked_waiter(blocked.wait_id);
             let result = complete_blocked_serial_read(
@@ -24655,6 +24780,7 @@ fn block_serial_read_file<D>(
             if writes.into_iter().any(|write| write.is_err()) {
                 let _ = uc.emu_stop();
             }
+            current_thread_id.set_verified(resumed_birth);
             *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
             return true;
         }
@@ -24728,6 +24854,16 @@ fn block_wait_comm_event<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
+    let Some(captured_native_birth) = verified_serial_wait_candidate_birth(
+        kernel,
+        uc,
+        pending_returns,
+        current_thread_id,
+        running_thread,
+        thread_id,
+    ) else {
+        return true;
+    };
     let timeout_ms = crate::ce::timer::INFINITE;
     kernel.record_blocked_single_wait(timeout_ms);
     let wait_started_ms = kernel.timers.tick_count();
@@ -24739,21 +24875,46 @@ fn block_wait_comm_event<D>(
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
-    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
-        return true;
-    }
-    if let Some(callout) =
-        pop_pending_guest_thread_return_for_thread(pending_returns, kernel, thread_id)
-    {
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+    let pending_callout = pending_returns
+        .borrow()
+        .iter()
+        .rfind(|pending| pending.worker_thread_id == thread_id)
+        .cloned();
+    if let Some(pending_callout) = pending_callout {
         let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
-            callout.thread_handle,
+            pending_callout.thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_ms,
         );
+        if verified_registered_native_wait_birth(
+            kernel,
+            wait_id,
+            thread_id,
+            pending_callout.thread_handle,
+            &[],
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        ) != Some(captured_native_birth)
+        {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+            tracing::error!(target: "ce.scheduler", thread_id, wait_id, ?captured_native_birth, "serial comm event pending wait birth disagrees with captured registers");
+            current_thread_id.set_unverified(thread_id);
+            let _ = uc.emu_stop();
+            return true;
+        }
+        let Some(callout) =
+            pop_pending_guest_thread_return_for_thread(pending_returns, kernel, thread_id)
+        else {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+            current_thread_id.set_unverified(thread_id);
+            let _ = uc.emu_stop();
+            return true;
+        };
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -24786,7 +24947,6 @@ fn block_wait_comm_event<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
@@ -24795,6 +24955,24 @@ fn block_wait_comm_event<D>(
             wait_started_ms,
             timeout_ms,
         );
+        if verified_registered_native_wait_birth(
+            kernel,
+            wait_id,
+            thread_id,
+            thread_handle,
+            &[],
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        ) != Some(captured_native_birth)
+        {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+            tracing::error!(target: "ce.scheduler", thread_id, wait_id, ?captured_native_birth, "serial comm event running wait birth disagrees with captured registers");
+            current_thread_id.set_unverified(thread_id);
+            let _ = uc.emu_stop();
+            return true;
+        }
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -25489,6 +25667,8 @@ fn try_resume_blocked_wait_with_active_pc<D>(
             (matches!(
                 blocked.kind,
                 BlockedWaitKind::MsgWait { .. }
+                    | BlockedWaitKind::SerialRead { .. }
+                    | BlockedWaitKind::SerialCommEvent { .. }
                     | BlockedWaitKind::MessageQueueIo { .. }
                     | BlockedWaitKind::WinsockRead { .. }
             ) && verified_native_blocked_wait_birth(kernel, blocked).is_none())
@@ -25566,6 +25746,8 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         BlockedWaitKind::Sleep
             | BlockedWaitKind::Kernel
             | BlockedWaitKind::MsgWait { .. }
+            | BlockedWaitKind::SerialRead { .. }
+            | BlockedWaitKind::SerialCommEvent { .. }
             | BlockedWaitKind::MessageQueueIo { .. }
             | BlockedWaitKind::WinsockRead { .. }
     );
@@ -25981,7 +26163,9 @@ fn has_ready_blocked_waiter(
         .select_ready_blocked_waiter(active_thread_id, now_ms, |blocked, kernel| {
             let native_pair_valid = if matches!(
                 blocked.kind,
-                crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. }
+                crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. }
+                    | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { .. }
+                    | crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. }
             ) {
                 blocked_waits
                     .borrow()
@@ -26601,7 +26785,9 @@ fn scheduler_blocked_wait_is_ready(
     // an error, so reject an obsolete task incarnation first.
     if matches!(
         blocked.kind,
-        crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. }
+        crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. }
+            | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { .. }
+            | crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. }
     ) && !blocked.owner_birth.is_some_and(|birth| {
         birth.thread_id() == blocked.thread_id
             && kernel.handles.thread_birth_key_by_id(blocked.thread_id) == Some(birth)
@@ -26792,6 +26978,38 @@ mod wait_scheduler_tests {
             .thread_birth_key_by_id(thread_id)
             .expect("registered native test thread birth");
         (handle, birth)
+    }
+
+    fn retired_reused_native_test_thread(
+        kernel: &mut crate::ce::kernel::CeKernel,
+    ) -> crate::error::Result<(
+        u32,
+        u32,
+        crate::ce::object::ThreadBirthKey,
+        u32,
+        crate::ce::object::ThreadBirthKey,
+    )> {
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker A birth");
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x11));
+        assert!(kernel.close_handle(old_handle)?);
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_4000, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker B birth");
+        assert_ne!(old_birth, new_birth);
+        Ok((thread_id, old_handle, old_birth, new_handle, new_birth))
     }
 
     fn blocked_comm_event(
@@ -30548,6 +30766,676 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn stale_serial_read_capture_does_not_publish_or_inline_timeout_reused_tid()
+    -> crate::error::Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let serial = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+        let (thread_id, old_handle, old_birth, new_handle, new_birth) =
+            retired_reused_native_test_thread(&mut kernel)?;
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3320_0000_u32;
+        let buffer = base + 0x1000;
+        let transferred_ptr = base + 0x2000;
+        let old_pc = 0x0040_3000_u32;
+        let old_sp = base + 0x8000;
+        uc.mem_map(u64::from(base), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(buffer), b"keep").unwrap();
+        uc.mem_write(u64::from(transferred_ptr), &0xfeed_beefu32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(old_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(old_pc + 4))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::SP, u64::from(old_sp)).unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0xaaaa_1111).unwrap();
+        let current_thread_id =
+            std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, old_handle))));
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let stats_before = kernel.scheduler_stats();
+
+        assert!(block_serial_read_file(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            None,
+            &[],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+            serial,
+            buffer,
+            4,
+            transferred_ptr,
+            1,
+        ));
+
+        assert!(blocked_waits.borrow().is_empty());
+        assert_eq!(
+            kernel.scheduler_stats().waiter_register_count,
+            stats_before.waiter_register_count,
+            "A's captured registers must not publish a wait owned by B",
+        );
+        assert_eq!(
+            kernel.scheduler_stats().wait_single_count,
+            stats_before.wait_single_count,
+        );
+        assert!(
+            kernel
+                .blocked_waiters()
+                .all(|wait| wait.thread_id != thread_id || wait.owner_birth != Some(new_birth))
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, old_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, old_sp);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0xaaaa_1111);
+        assert_eq!(uc.mem_read_as_vec(u64::from(buffer), 4).unwrap(), b"keep");
+        assert_eq!(
+            super::read_unicorn_u32(&uc, transferred_ptr),
+            Some(0xfeed_beef),
+        );
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_comm_event_capture_does_not_publish_reused_tid() -> crate::error::Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        const EV_RXCHAR: u32 = 0x0001;
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let serial = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+        kernel.set_comm_mask(serial, EV_RXCHAR)?;
+        let (thread_id, old_handle, old_birth, new_handle, new_birth) =
+            retired_reused_native_test_thread(&mut kernel)?;
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3330_0000_u32;
+        let event_ptr = base + 0x1000;
+        let old_pc = 0x0040_3000_u32;
+        let old_sp = base + 0x8000;
+        uc.mem_map(u64::from(base), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(event_ptr), &0xfeed_beefu32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(old_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(old_pc + 4))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::SP, u64::from(old_sp)).unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0xaaaa_1111).unwrap();
+        let current_thread_id =
+            std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, old_handle))));
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let stats_before = kernel.scheduler_stats();
+
+        assert!(super::block_wait_comm_event(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            None,
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+            serial,
+            event_ptr,
+        ));
+
+        assert!(blocked_waits.borrow().is_empty());
+        assert_eq!(
+            kernel.scheduler_stats().waiter_register_count,
+            stats_before.waiter_register_count,
+        );
+        assert_eq!(
+            kernel.scheduler_stats().wait_single_count,
+            stats_before.wait_single_count,
+        );
+        assert!(
+            kernel
+                .blocked_waiters()
+                .all(|wait| wait.thread_id != thread_id || wait.owner_birth != Some(new_birth))
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, old_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, old_sp);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0xaaaa_1111);
+        assert_eq!(super::read_unicorn_u32(&uc, event_ptr), Some(0xfeed_beef));
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_serial_read_wait_preserves_rx_and_reused_tid_output() -> crate::error::Result<()> {
+        use crate::ce::object::KernelObject;
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let serial = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+        let (thread_id, old_handle, old_birth, new_handle, new_birth) =
+            retired_reused_native_test_thread(&mut kernel)?;
+        let KernelObject::Device(device) = kernel.handles.get_mut(serial)? else {
+            panic!("serial device handle");
+        };
+        device.enqueue_rx(b"wake");
+        let base = 0x3340_0000_u32;
+        let buffer = base + 0x1000;
+        let transferred_ptr = base + 0x2000;
+        let kind = BlockedWaitKind::SerialRead {
+            handle: serial,
+            buffer,
+            requested: 4,
+            transferred_ptr,
+            owner_birth: Some(owner),
+        };
+        let wait_started_ms = kernel.timers.tick_count();
+        let wait_id = kernel.scheduler.register_blocked_wait_with_keys_and_pins(
+            thread_id,
+            Some(old_birth),
+            old_handle,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            super::scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            INFINITE,
+        );
+        let mut old_regs = super::MipsGuestContext::zero();
+        old_regs.regs[16] = 0xaaaa_1111;
+        old_regs.regs[29] = base + 0x8000;
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle: old_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms: INFINITE,
+            regs: old_regs,
+            return_pc: 0x0040_3004,
+        }]));
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(
+                super::MAIN_GUEST_THREAD_ID,
+                kernel.timers.tick_count(),
+                |wait, kernel| scheduler_blocked_wait_is_ready(wait, kernel),
+            ),
+            None,
+            "a stale serial-read owner must be rejected before readiness",
+        );
+
+        let boot_birth = kernel
+            .handles
+            .thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID)
+            .expect("boot thread birth");
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            super::MAIN_GUEST_THREAD_ID,
+            Some(boot_birth),
+        ));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(u64::from(base), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(buffer), b"keep").unwrap();
+        uc.mem_write(u64::from(transferred_ptr), &0xfeed_beefu32.to_le_bytes())
+            .unwrap();
+        let new_pc = 0x0040_4000_u32;
+        let new_sp = base + 0x9000;
+        uc.reg_write(RegisterMIPS::PC, u64::from(new_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::SP, u64::from(new_sp)).unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0xbbbb_2222).unwrap();
+        let mapped = std::cell::RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let pins = super::NativeMappingPins::default();
+        let guards = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let terminal_error = std::cell::RefCell::new(None);
+
+        assert!(super::try_resume_blocked_wait_with_active_pc(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            Some(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            }),
+            super::MAIN_GUEST_THREAD_ID,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            None,
+            &running_thread,
+            None,
+            false,
+        ));
+
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(blocked_waits.borrow().is_empty());
+        let KernelObject::Device(device) = kernel.handles.get(serial)? else {
+            panic!("serial device handle");
+        };
+        assert_eq!(device.rx_len(), 4, "A's stale frame must not consume RX");
+        assert_eq!(uc.mem_read_as_vec(u64::from(buffer), 4).unwrap(), b"keep");
+        assert_eq!(
+            super::read_unicorn_u32(&uc, transferred_ptr),
+            Some(0xfeed_beef)
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, new_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, new_sp);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0xbbbb_2222);
+        assert_eq!(
+            current_thread_id.get(),
+            (super::MAIN_GUEST_THREAD_ID, Some(boot_birth))
+        );
+        assert!(running_thread.borrow().is_none());
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_comm_event_wait_preserves_reused_tid_output_and_rx_ready() -> crate::error::Result<()>
+    {
+        use crate::ce::object::KernelObject;
+        use unicorn_engine::RegisterMIPS;
+
+        const EV_RXCHAR: u32 = 0x0001;
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let serial = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+        kernel.set_comm_mask(serial, EV_RXCHAR)?;
+        let (thread_id, old_handle, old_birth, new_handle, new_birth) =
+            retired_reused_native_test_thread(&mut kernel)?;
+        let KernelObject::Device(device) = kernel.handles.get_mut(serial)? else {
+            panic!("serial device handle");
+        };
+        device.enqueue_rx(b"wake");
+        let base = 0x3350_0000_u32;
+        let event_ptr = base + 0x1000;
+        let kind = BlockedWaitKind::SerialCommEvent {
+            handle: serial,
+            event_ptr,
+            owner_birth: Some(owner),
+        };
+        let wait_started_ms = kernel.timers.tick_count();
+        let wait_id = kernel.scheduler.register_blocked_wait_with_keys_and_pins(
+            thread_id,
+            Some(old_birth),
+            old_handle,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            super::scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            INFINITE,
+        );
+        let mut old_regs = super::MipsGuestContext::zero();
+        old_regs.regs[16] = 0xaaaa_1111;
+        old_regs.regs[29] = base + 0x8000;
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle: old_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms: INFINITE,
+            regs: old_regs,
+            return_pc: 0x0040_3004,
+        }]));
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(
+                super::MAIN_GUEST_THREAD_ID,
+                kernel.timers.tick_count(),
+                |wait, kernel| scheduler_blocked_wait_is_ready(wait, kernel),
+            ),
+            None,
+            "a stale comm-event owner must be rejected before readiness",
+        );
+
+        let boot_birth = kernel
+            .handles
+            .thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID)
+            .expect("boot thread birth");
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            super::MAIN_GUEST_THREAD_ID,
+            Some(boot_birth),
+        ));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(u64::from(base), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(event_ptr), &0xfeed_beefu32.to_le_bytes())
+            .unwrap();
+        let new_pc = 0x0040_4000_u32;
+        let new_sp = base + 0x9000;
+        uc.reg_write(RegisterMIPS::PC, u64::from(new_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::SP, u64::from(new_sp)).unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0xbbbb_2222).unwrap();
+        let mapped = std::cell::RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let pins = super::NativeMappingPins::default();
+        let guards = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let terminal_error = std::cell::RefCell::new(None);
+
+        assert!(super::try_resume_blocked_wait_with_active_pc(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            Some(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            }),
+            super::MAIN_GUEST_THREAD_ID,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            None,
+            &running_thread,
+            None,
+            false,
+        ));
+
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(kernel.serial_comm_event_ready(serial));
+        let KernelObject::Device(device) = kernel.handles.get(serial)? else {
+            panic!("serial device handle");
+        };
+        assert_eq!(device.rx_len(), 4);
+        assert_eq!(super::read_unicorn_u32(&uc, event_ptr), Some(0xfeed_beef));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, new_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, new_sp);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0xbbbb_2222);
+        assert_eq!(
+            current_thread_id.get(),
+            (super::MAIN_GUEST_THREAD_ID, Some(boot_birth))
+        );
+        assert!(running_thread.borrow().is_none());
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ready_serial_read_resumes_with_verified_worker_birth() -> crate::error::Result<()> {
+        use crate::ce::object::KernelObject;
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let serial = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+        let thread_id = 7;
+        let (thread_handle, thread_birth) = registered_native_test_thread(&mut kernel, thread_id);
+        let base = 0x3360_0000_u32;
+        let buffer = base + 0x1000;
+        let transferred_ptr = base + 0x2000;
+        let return_pc = 0x0040_7004_u32;
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(u64::from(base), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0xaaaa_1111).unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            thread_id,
+            Some(thread_birth),
+        ));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(block_serial_read_file(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            None,
+            &[],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+            serial,
+            buffer,
+            4,
+            transferred_ptr,
+            INFINITE,
+        ));
+        assert_eq!(blocked_waits.borrow().len(), 1);
+        let wait_id = blocked_waits.borrow()[0].wait_id;
+        assert_eq!(
+            kernel
+                .blocked_waiter(wait_id)
+                .and_then(|wait| wait.owner_birth),
+            Some(thread_birth),
+        );
+        assert!(running_thread.borrow().is_none());
+
+        let KernelObject::Device(device) = kernel.handles.get_mut(serial)? else {
+            panic!("serial device handle");
+        };
+        device.enqueue_rx(b"wake");
+        let boot_birth = kernel
+            .handles
+            .thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID)
+            .expect("boot thread birth");
+        current_thread_id.set_verified(boot_birth);
+        uc.reg_write(RegisterMIPS::PC, 0x0040_1000).unwrap();
+        let mapped = std::cell::RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let pins = super::NativeMappingPins::default();
+        let guards = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let terminal_error = std::cell::RefCell::new(None);
+
+        assert!(super::try_resume_blocked_wait_with_active_pc(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            Some(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            }),
+            super::MAIN_GUEST_THREAD_ID,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            None,
+            &running_thread,
+            None,
+            false,
+        ));
+
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(terminal_error.borrow().is_none());
+        assert_eq!(current_thread_id.get(), (thread_id, Some(thread_birth)));
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0xaaaa_1111);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.mem_read_as_vec(u64::from(buffer), 4).unwrap(), b"wake");
+        assert_eq!(super::read_unicorn_u32(&uc, transferred_ptr), Some(4));
+        let KernelObject::Device(device) = kernel.handles.get(serial)? else {
+            panic!("serial device handle");
+        };
+        assert_eq!(device.rx_len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn ready_comm_event_resumes_with_verified_worker_birth() -> crate::error::Result<()> {
+        use crate::ce::object::KernelObject;
+        use unicorn_engine::RegisterMIPS;
+
+        const EV_RXCHAR: u32 = 0x0001;
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let serial = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+        kernel.set_comm_mask(serial, EV_RXCHAR)?;
+        let thread_id = 8;
+        let (thread_handle, thread_birth) = registered_native_test_thread(&mut kernel, thread_id);
+        let base = 0x3370_0000_u32;
+        let event_ptr = base + 0x1000;
+        let return_pc = 0x0040_8004_u32;
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(u64::from(base), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0xaaaa_1111).unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            thread_id,
+            Some(thread_birth),
+        ));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::block_wait_comm_event(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            None,
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+            serial,
+            event_ptr,
+        ));
+        assert_eq!(blocked_waits.borrow().len(), 1);
+        let wait_id = blocked_waits.borrow()[0].wait_id;
+        assert_eq!(
+            kernel
+                .blocked_waiter(wait_id)
+                .and_then(|wait| wait.owner_birth),
+            Some(thread_birth),
+        );
+        assert!(running_thread.borrow().is_none());
+
+        let KernelObject::Device(device) = kernel.handles.get_mut(serial)? else {
+            panic!("serial device handle");
+        };
+        device.enqueue_rx(b"wake");
+        let boot_birth = kernel
+            .handles
+            .thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID)
+            .expect("boot thread birth");
+        current_thread_id.set_verified(boot_birth);
+        uc.reg_write(RegisterMIPS::PC, 0x0040_1000).unwrap();
+        let mapped = std::cell::RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let pins = super::NativeMappingPins::default();
+        let guards = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let terminal_error = std::cell::RefCell::new(None);
+
+        assert!(super::try_resume_blocked_wait_with_active_pc(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            Some(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            }),
+            super::MAIN_GUEST_THREAD_ID,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            None,
+            &running_thread,
+            None,
+            false,
+        ));
+
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(terminal_error.borrow().is_none());
+        assert_eq!(current_thread_id.get(), (thread_id, Some(thread_birth)));
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0xaaaa_1111);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(super::read_unicorn_u32(&uc, event_ptr), Some(EV_RXCHAR));
+        let KernelObject::Device(device) = kernel.handles.get(serial)? else {
+            panic!("serial device handle");
+        };
+        assert_eq!(device.rx_len(), 4, "WaitCommEvent must not read bytes");
+        Ok(())
+    }
+
+    #[test]
     fn blocked_wait_comm_event_resume_writes_rxchar_event() {
         const EV_RXCHAR: u32 = 0x0001;
         let config = RuntimeConfig::load_default().unwrap();
@@ -30753,7 +31641,7 @@ mod wait_scheduler_tests {
         uc.mem_map(event_ptr.into(), 0x1000, unicorn_engine::Prot::ALL)
             .unwrap();
         let thread_id = 8;
-        let thread_handle = 0x808;
+        let (thread_handle, thread_birth) = registered_native_test_thread(&mut kernel, thread_id);
         let return_pc = 0x0040_8000u32;
         uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
             .unwrap();
@@ -30782,7 +31670,10 @@ mod wait_scheduler_tests {
             return_pc: 0,
         });
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            thread_id,
+            Some(thread_birth),
+        ));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -30804,7 +31695,7 @@ mod wait_scheduler_tests {
         ));
 
         assert_eq!(*running_thread.borrow(), None);
-        assert_eq!(current_thread_id.get().0, thread_id);
+        assert_eq!(current_thread_id.get(), (thread_id, Some(thread_birth)));
         assert!(kernel.blocked_waiter(stale_wait_id).is_none());
         let blocked_waits = blocked_waits.borrow();
         assert_eq!(blocked_waits.len(), 1);
@@ -30951,7 +31842,7 @@ mod wait_scheduler_tests {
         uc.mem_map(0x2000_0000, 0x1000, unicorn_engine::Prot::ALL)
             .unwrap();
         let thread_id = 6;
-        let thread_handle = 0x606;
+        let (thread_handle, thread_birth) = registered_native_test_thread(&mut kernel, thread_id);
         let return_pc = 0x0040_6000;
         let buffer = 0x2000_0100;
         let transferred_ptr = 0x2000_0200;
@@ -30966,7 +31857,10 @@ mod wait_scheduler_tests {
 
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            thread_id,
+            Some(thread_birth),
+        ));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -31024,7 +31918,7 @@ mod wait_scheduler_tests {
 
         assert!(blocked_waits.borrow().is_empty());
         assert!(kernel.blocked_waiters().next().is_none());
-        assert_eq!(current_thread_id.get().0, thread_id);
+        assert_eq!(current_thread_id.get(), (thread_id, Some(thread_birth)));
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
         assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x1234_5678);
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
