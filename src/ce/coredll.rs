@@ -2575,7 +2575,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_OPEN_THREAD => {
             // OpenThread(dwDesiredAccess, bInheritHandle, dwThreadId) — open thread handle.
             let requested_id = raw_arg(args, 2);
-            if let Some(handle) = kernel.guest_thread_handle_by_id(requested_id) {
+            if let Some(handle) = kernel.open_thread_handle(requested_id) {
                 kernel.threads.set_last_error(thread_id, 0);
                 Some(CoredllValue::Handle(handle))
             } else {
