@@ -4,10 +4,10 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-14 Stage 2 source gates E-30 to E-44
+## 2026-10-14 Stage 2 source gates E-30 to E-44 and O-M2
 
 Suite tallies, hashes and receipts are in `docs/evidence/ledger.md` (E-30 to
-E-44); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
+E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
 
 - Native attempt reports reach an optional host observer (E-30). O-P1 stop
   classification is closed; hardening remains (E-31, E-34).
@@ -19,9 +19,9 @@ E-44); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
   Stage 8 opt-in (E-36).
 - Fresh-owner view sync reads and seeds only natively mapped pages, and the
   generation mapper seeds only newly mapped pages (E-37).
-- E-38, the only live run on the fresh default (preserved E-37 EXE): exit 0 at
-  330 s, splash only, no map; RSS peak 430.7 MiB (BED2 555.6 MiB, persistent
-  runs ~1.5 GiB); iNavi busy-slice 26.4 MIPS, inside E-9's 22–34; live heap
+- E-38, the only 330-second run on the fresh default (preserved E-37 EXE):
+  exit 0 at 330 s, splash only, no map; RSS peak 430.7 MiB (BED2 555.6 MiB,
+  persistent runs ~1.5 GiB); iNavi busy-slice 26.4 MIPS, inside E-9's 22–34; live heap
   reached 31.5 MB. That approval is spent.
 - Real native two-process same-VA A→B→A isolation holds for public private
   pages and injected views (E-39). GlobalMemoryStatus uses one budget with
@@ -35,9 +35,14 @@ E-44); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
 - The initial heap arena and thread stacks are owner-qualified fixed slabs;
   heap commits at the allocation high-water, stack on fault or guarded host
   writes (E-44). Synthetic owned-blob copy fell from 21,049,344 B to 77,824 B.
-- Open: O-M2 per-birth heap (in progress), heap spillover, unconverted direct
-  stack outputs, writable image/DLL pages, Stage 3, and a combined live run
-  (needs fresh approval).
+- O-M2 birth-qualified heap cursor, handles, blocks, queued typed payloads and
+  sparse fixed pages; copied spillover was removed. Final paired source suites
+  passed release **1,803/0/17 ignored** and debug **1,341/0/13 ignored**;
+  desktop no-trace check passed ([receipt](evidence/om2-heap-20261014/validation.receipt.md)).
+- Open: safe heap address reuse, remote-heap target/cross-birth clipboard,
+  unconverted direct stack outputs, writable image/DLL pages, Stage 3, and a
+  combined live run (needs fresh approval). No O-M2 app speed/RSS is measured.
+
 ## 2026-10-13 Parallel Continuation
 
 - Stage 2 facts on the D: checkout, 2026-10-13/14. Details, receipts and suite

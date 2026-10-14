@@ -53,38 +53,25 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
 - GMS's boot-reserved physical RAM and stable private-page commit use one
   budget, with four public controls passing both E-39 broad suites. Only
   stable private pages, D-008 stable shared-view pages, and E-44's committed
-  fixed heap/stack slabs enter the source-gated accounting path. Persistent
-  native pin budget release is deferred until checked owner closure, while
-  image, spillover and legacy-view memory are not charged by this budget.
+  fixed heap/stack slabs (including O-M2's sparse heap growth) enter the
+  source-gated accounting path. Persistent native pin budget release is
+  deferred until checked owner closure, while image and legacy-view memory
+  are not charged by this budget. Copied heap spillover was removed in O-M2.
   It is not a complete guest-memory census
-  ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
+  ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md),
+  [O-M2 receipt](evidence/om2-heap-20261014/validation.receipt.md)).
 - The new main-EXE sealed R/RX path does not cover mutable image pages,
-  preloaded or runtime DLLs, trap pages, heap spillover, or stack/heap slabs.
-  At E-43, the initial heap and stack were still copy-backed: a read-only
-  production-loader probe sealed 1,379/2,168 real iNavi image pages
-  (5.386719 MiB), including 1,224 with final patched bytes, and counted
-  36,679,680 B (34.980469 MiB) in the initial owner's mapped blobs. E-44
-  source now replaces those initial heap/stack blobs with owner-qualified
-  fixed slabs; its paired source-bound broad gates pass. Heap
-  spillover remains copy-backed. The native pins must remain retained through
-  checked owner/unmap closure; persistent-pin budget release is deferred until
-  that closure. Exhaustive host-write inventory, memory-mode checkpoint
-  relineage, `PrivatePageBudget` treatment, and an approved matched app run
-  remain open. Registry, time, geometry, find-data and module/path startup
-  outputs use guarded hooks with whole-span preflight, but unconverted direct-
-  import outputs can still fail closed on a cold, untouched stack page. The
-  shared sparse `ThreadStack` has no per-thread/slot committed low-water;
-  a 128-KiB per-slot contiguous `[page(SP), slot_top)` commit is a conditional
-  follow-up only if an approved live run encounters that bypass. The exact-path
-  blocked serial/NMEA focused control passes across two untouched stack pages
-  and a fresh owner, but stale different-birth rejection has not been
-  independently tested. The synthetic 56-MiB RX release and debug profiles
-  reduced owned blob capacity/fresh writes/readback by 20,971,520 B against
-  the pre-slab debug control; this is a logical blob-byte result, not host RSS
-  or app speed (one sample per mode and slab reservation outside timed setup).
-  The earlier 155-page original-byte filter result is historical; no new app
-  memory, speed, or map-readiness gain has been measured
-  ([E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md),
+  preloaded/runtime DLLs or trap pages. E-44 source-gated fixed initial
+  heap/stack slabs; O-M2 birth-qualified the sparse fixed heap and removed
+  copied spillover. Exhaustive host-write inventory, memory-mode checkpoint
+  relineage, `PrivatePageBudget` treatment and an approved matched app run
+  remain open. Unconverted direct-import outputs can still fail closed on a
+  cold, untouched stack page; a per-thread/slot 128-KiB contiguous low-water
+  is conditional on an approved live run encountering that bypass. O-M2's
+  exact stale different-birth serial/NMEA control passes, but no new iNavi
+  memory, speed or map-readiness result has been measured
+  ([O-M2 receipt](evidence/om2-heap-20261014/validation.receipt.md),
+  [E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md),
   [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
 - Canonical Task/alias ownership is absent: 12 expected-red Task controls live
@@ -100,14 +87,15 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   exploratory same-handle nested-start hook probe crashed with an AV of
   unknown cause and was removed from default tests. Receipts: ledger E-28 to
   E-31.
-- HeapFree does not reuse addresses or release per-process spillover pages.
-  Initial/reallocation mapping, ZERO and metadata ordering are now validated,
-  but the global heap cursor and ownerless allocation metadata can cross-charge
-  process births or admit foreign `HeapFree`/`HeapSize`. O-M2 must give these
-  operations birth-qualified authority before Stage 3. Failed prepared
-  allocations can leave monotonic high-water/OOM holes; immutable reservation
-  footprint and incarnation identity are still needed for safe reuse. No free
-  list, cross-process page reuse or speculative unmapping has landed.
+- `HeapFree` does not reuse addresses. O-M2 prevents foreign-only heap
+  free/size/validate and cross-birth cursor charges, but failed prepared
+  allocations can leave birth-local monotonic high-water/OOM holes. Original
+  reservation footprint and allocation incarnation are still needed before
+  safe reuse; no free list, cross-process page reuse or speculative unmapping
+  has landed. `ORD_REMOTE_HEAP_*` currently ignores its target argument and
+  acts under the selected birth; `GetClipboardDataAlloc` sizes a global
+  source handle under the current birth, so those cross-birth paths remain
+  unresolved ([O-M2 receipt](evidence/om2-heap-20261014/validation.receipt.md)).
 - Host footprint and phase behavior still need work. Older persistent-owner
   bounded 330 s runs peaked at about 1.49-1.55 GiB working set (E-22, E-27,
   E-29), and E-32 crashed at 1.65 GiB. The preserved fresh-default E-37

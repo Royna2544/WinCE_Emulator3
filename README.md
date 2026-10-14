@@ -18,12 +18,13 @@ remote-control HTTP/WebSocket surface.
   private-VM native same-VA A→B→A isolation is validated. D-008 public
   shared-view named A→B→A and same-mapping alias controls pass focused tests
   and both frozen-source broad suites. One sealed task/frame-qualified run
-  outcome, remaining writable-image/DLL/heap-spillover backing, Stage 2 and
+  outcome, remaining writable-image/DLL backing, Stage 2 and
   Stage 3 task migration remain open. After E-42's historical selector-only
   gate, the main EXE loader now seals final patched R/RX bytes and retains
-  mutable runs copy-backed. Its E-43 source-bound gate passes. E-44 separately source-gated
-  the initial heap/stack fixed slabs; full Stage 2/live acceptance remains
-  open. Persistent-owner architecture is deferred to Stage 8.
+  mutable runs copy-backed. Its E-43 source-bound gate passes. E-44 separately
+  source-gated the initial heap/stack fixed slabs; O-M2 then made the fixed
+  process heap birth-qualified and removed copied spillover. Full Stage 2/live
+  acceptance remains open. Persistent-owner architecture is deferred to Stage 8.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
@@ -88,8 +89,9 @@ remote-control HTTP/WebSocket surface.
   **1,296/0/13 ignored**; the four public GMS tests passed in both. GMS now
   includes boot-reserved RAM in its stable-private-page budget. At that E-39
   gate the initial heap, image and legacy views were not charged; E-44 later
-  added committed initial heap/stack slabs to the stable-page budget, while
-  image, spillover and legacy views remain outside it. These are source gates,
+  added committed initial heap/stack slabs to the stable-page budget; O-M2
+  extends the sparse heap window without reintroducing copied spillover. Image
+  and legacy views remain outside that budget. These are source gates,
   not another app run
   ([E-20 receipt](evidence/e20-native-same-va-20261014/validation.receipt.md),
   [GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
@@ -135,6 +137,12 @@ remote-control HTTP/WebSocket surface.
   stale different-birth rejection was not independently tested. There was no
   E-44 iNavi run or map-readiness result
   ([E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md)).
+- O-M2 made heap high-water, block metadata, handles and queued typed payloads
+  birth-qualified, enlarged the sparse fixed heap reservation to 256 MiB, and
+  removed the copied spillover path. Paired all-target source suites and a
+  no-trace check pass. Heap address reuse, full clone relineage and live app
+  speed, host RSS or map readiness remain unproved
+  ([O-M2 receipt](evidence/om2-heap-20261014/validation.receipt.md)).
 - An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
   and remained on the genuine splash, not the map. Guest `COM7:` reads
   transferred injected raw NMEA bytes, and tap down/up WNDPROC returns were
