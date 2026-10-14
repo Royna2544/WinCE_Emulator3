@@ -214,25 +214,37 @@ pub enum PrivatePageAccessError {
 #[derive(Debug)]
 struct PrivatePageBudget {
     limit_bytes: Cell<u64>,
+    // Guest RAM occupied by the OS and other boot-time consumers in the
+    // device dump. This is not a private slab, but it reduces the amount a
+    // private MEM_COMMIT may charge.
+    boot_reserved_bytes: Cell<u64>,
     // Includes detached proposals and pages retained by native/quarantine
     // pins even after canonical VM metadata has been released.
     used_bytes: Cell<u64>,
 }
 
 impl PrivatePageBudget {
-    fn new(limit_bytes: u64) -> Self {
+    fn new(limit_bytes: u64, boot_reserved_bytes: u64) -> Self {
         Self {
             limit_bytes: Cell::new(limit_bytes),
+            boot_reserved_bytes: Cell::new(boot_reserved_bytes),
             used_bytes: Cell::new(0),
         }
+    }
+
+    fn available_bytes(&self) -> u64 {
+        self.limit_bytes.get().saturating_sub(
+            self.boot_reserved_bytes
+                .get()
+                .saturating_add(self.used_bytes.get()),
+        )
     }
 
     fn can_fit(&self, new_pages: usize) -> bool {
         u64::try_from(new_pages)
             .ok()
             .and_then(|count| count.checked_mul(STABLE_PRIVATE_PAGE_SIZE as u64))
-            .and_then(|bytes| self.used_bytes.get().checked_add(bytes))
-            .is_some_and(|total| total <= self.limit_bytes.get())
+            .is_some_and(|bytes| bytes <= self.available_bytes())
     }
 }
 
@@ -264,7 +276,7 @@ impl StablePrivatePage {
             .used_bytes
             .get()
             .checked_add(STABLE_PRIVATE_PAGE_SIZE as u64)?;
-        if charged > budget.limit_bytes.get() {
+        if budget.available_bytes() < STABLE_PRIVATE_PAGE_SIZE as u64 {
             return None;
         }
         budget.used_bytes.set(charged);
@@ -566,6 +578,7 @@ impl Clone for MemorySystem {
     fn clone(&self) -> Self {
         let private_page_budget = Rc::new(PrivatePageBudget::new(
             self.private_page_budget.limit_bytes.get(),
+            self.private_page_budget.boot_reserved_bytes.get(),
         ));
         Self {
             instance: Rc::new(()),
@@ -622,7 +635,10 @@ impl Default for MemorySystem {
             virtual_allocations: BTreeMap::new(),
             pending_private_holes: BTreeMap::new(),
             stable_private_pages: BTreeMap::new(),
-            private_page_budget: Rc::new(PrivatePageBudget::new(DEFAULT_GUEST_PHYSICAL_RAM_BYTES)),
+            private_page_budget: Rc::new(PrivatePageBudget::new(
+                DEFAULT_GUEST_PHYSICAL_RAM_BYTES,
+                0,
+            )),
             stable_private_slabs_seen: false,
         }
     }
@@ -1777,10 +1793,28 @@ impl MemorySystem {
         self.virtual_generation
     }
 
-    /// Set the single guest-physical-RAM budget used for private committed
-    /// pages. Boot config applies this before guest allocations are possible.
+    /// Set a raw private-page budget with no boot reservation. Low-level
+    /// controls use this to exercise exact page counts independently of the
+    /// device's reported boot-time memory occupancy.
     pub fn set_private_commit_limit_bytes(&mut self, bytes: u64) {
         self.private_page_budget.limit_bytes.set(bytes);
+        self.private_page_budget.boot_reserved_bytes.set(0);
+    }
+
+    /// Configure guest physical RAM at boot. The device dump reports
+    /// 164_368_384 available of 195_350_528 total bytes before private pages;
+    /// preserve that ratio for overrides so allocation and status agree.
+    pub fn configure_guest_physical_ram_bytes(&mut self, bytes: u64) {
+        const DEVICE_BOOT_AVAIL_BYTES: u64 = 164_368_384;
+        let available = u64::try_from(
+            (u128::from(bytes) * u128::from(DEVICE_BOOT_AVAIL_BYTES))
+                / u128::from(DEFAULT_GUEST_PHYSICAL_RAM_BYTES),
+        )
+        .unwrap_or(u64::MAX);
+        self.private_page_budget.limit_bytes.set(bytes);
+        self.private_page_budget
+            .boot_reserved_bytes
+            .set(bytes.saturating_sub(available));
     }
 
     pub fn private_commit_limit_bytes(&self) -> u64 {
@@ -1789,6 +1823,10 @@ impl MemorySystem {
 
     pub fn private_commit_used_bytes(&self) -> u64 {
         self.private_page_budget.used_bytes.get()
+    }
+
+    pub fn private_commit_available_bytes(&self) -> u64 {
+        self.private_page_budget.available_bytes()
     }
 
     pub fn contains_allocated_range(&self, owner: ProcessBirthKey, ptr: u32, size: u32) -> bool {

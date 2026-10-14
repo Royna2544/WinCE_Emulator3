@@ -1172,7 +1172,7 @@ impl CeKernel {
 
     pub fn boot(config: RuntimeConfig) -> Self {
         let mut memory = MemorySystem::default();
-        memory.set_private_commit_limit_bytes(config.guest_physical_ram_bytes);
+        memory.configure_guest_physical_ram_bytes(config.guest_physical_ram_bytes);
         let mut registry = Registry::from_dump(config.registry);
         seed_testime_sample_dictionary(&mut registry);
         let files = HostFileSystem::from_storage(config.storage);

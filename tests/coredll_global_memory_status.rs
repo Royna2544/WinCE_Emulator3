@@ -7,6 +7,7 @@ use wince_emulation_v3::{
         memory::{
             MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PreparedPrivateVm, PreparedPrivateVmChange,
         },
+        thread::ERROR_NOT_ENOUGH_MEMORY,
     },
     config::RuntimeConfig,
 };
@@ -224,5 +225,133 @@ fn public_global_memory_status_tracks_committed_private_page_delta() -> Result<(
     ));
     assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
     assert_eq!(query_status(&table, &mut kernel, &mut memory)?, baseline);
+    Ok(())
+}
+
+#[test]
+fn public_private_commit_stops_when_reported_physical_memory_is_consumed() -> Result<()> {
+    // This configured total scales the device's boot-available bytes to
+    // exactly two 4-KiB pages, allowing an exact zero-availability boundary.
+    const TOTAL_BYTES: u64 = 9_737;
+    const AVAILABLE_BYTES: u32 = 8_192;
+    let table = CoredllExportTable::default();
+    let mut config = RuntimeConfig::load_default()?;
+    config.guest_physical_ram_bytes = TOTAL_BYTES;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = MemoryStatusGuestMemory::default();
+    memory.0.map_words(STATUS_PTR, 8);
+
+    assert_eq!(
+        kernel.memory.private_commit_available_bytes(),
+        u64::from(AVAILABLE_BYTES)
+    );
+    assert_eq!(
+        query_status(&table, &mut kernel, &mut memory)?[3],
+        AVAILABLE_BYTES
+    );
+    let reserved_ptr = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        1,
+        ORD_VIRTUAL_ALLOC,
+        [0, 4096, MEM_RESERVE, 0x04],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("VirtualAlloc reserve result: {other:?}"),
+    };
+    assert_ne!(reserved_ptr, 0);
+    assert_eq!(
+        kernel.memory.private_commit_available_bytes(),
+        u64::from(AVAILABLE_BYTES)
+    );
+    let mut private_ptrs = Vec::new();
+    for expected_available in [4_096, 0] {
+        let ptr = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            1,
+            ORD_VIRTUAL_ALLOC,
+            [0, 4096, MEM_RESERVE | MEM_COMMIT, 0x04], // PAGE_READWRITE
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(ptr),
+                ..
+            } => ptr,
+            other => panic!("VirtualAlloc result: {other:?}"),
+        };
+        assert_ne!(ptr, 0);
+        private_ptrs.push(ptr);
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            expected_available
+        );
+        assert_eq!(
+            query_status(&table, &mut kernel, &mut memory)?[3],
+            expected_available as u32
+        );
+    }
+    assert_eq!(kernel.memory.private_commit_used_bytes(), 8_192);
+    assert_eq!(query_status(&table, &mut kernel, &mut memory)?[1], 100);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            1,
+            ORD_VIRTUAL_ALLOC,
+            [reserved_ptr, 4096, MEM_COMMIT, 0x04],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+    assert_eq!(kernel.memory.private_commit_used_bytes(), 8_192);
+    assert_eq!(query_status(&table, &mut kernel, &mut memory)?[3], 0);
+
+    for (ptr, expected_available) in private_ptrs.into_iter().zip([4_096, 8_192]) {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                1,
+                ORD_VIRTUAL_FREE,
+                [ptr, 0, MEM_RELEASE],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            expected_available
+        );
+        assert_eq!(
+            query_status(&table, &mut kernel, &mut memory)?[3],
+            expected_available as u32
+        );
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            1,
+            ORD_VIRTUAL_FREE,
+            [reserved_ptr, 0, MEM_RELEASE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.memory.private_commit_available_bytes(),
+        u64::from(AVAILABLE_BYTES)
+    );
     Ok(())
 }
