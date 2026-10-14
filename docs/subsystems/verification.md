@@ -20,8 +20,10 @@ page owns only how to read it:
   splash; it is not the current source's release executable. A passing suite
   (the 650 build passed 1,618 tests) and a clean elapsed exit do not prove map
   readiness; the 650 failure (E-2) is positive evidence to preserve, and
-  memory-growth correlation does not establish its cause. No bounded live-app
-  run has validated the current E-19 source.
+  memory-growth correlation does not establish its cause. Later E-29 completed
+  a bounded splash-only run, while E-32's E-31-source run host-crashed before
+  its tap; neither validates map readiness. The current E-33 native-patched
+  source has not completed a live-app run.
 - Isolated native controls (E-4 to E-6) establish bounded Stage 8 fixture behavior only.
   Their elapsed time includes native timeout service and observation overhead, so
   it is not application throughput or cache speed, and they did not run the

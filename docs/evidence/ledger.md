@@ -1160,6 +1160,22 @@ RVA `0x89618c`; the missing arena bounds prevent assigning the known Windows
 VEH commit-tail defect as the cause. Neither O-P1 nor Stage 2 nor map
 acceptance is closed. [Full E-32 receipt](../../evidence/e22-live-20261014T002535Z/analysis.receipt.md).
 
+## E-33 Windows TCG commit-tail repair (2026-10-14, executed)
+
+The pristine vendored Windows handler's final-commit branch left a full
+4-MiB request even when less reservation remained. The new one-MiB
+pre-init real-MIPS test exited `0xC0000005` against that handler, then passed
+after a local `min(4 MiB, right - base)` repair. An isolated 2-MiB test and
+the combined 1/2/8-MiB/default four-case test passed with the patch. Full
+release passed **1,695/0/17 ignored** and no-feature **1,265/0/14 ignored**;
+alternate checks, release build, format and diff checks passed. Default
+arena size was unchanged; the new test does not fault at the final tail of a
+larger arena. Neither the missing E-32 arena bounds nor E-2's app fault is
+resolved by this isolated differential. No app rerun occurred, and the E-32
+one-run RW approval is exhausted. The
+[E-33 repair receipt](../../evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)
+retains source/test/build hashes and the exact limitations.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

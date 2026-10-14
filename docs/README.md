@@ -20,7 +20,7 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Decisions | D-001 to D-008 decided; D-008 selects the O-M1 backing design, not its implementation. Next gates: O-P1, O-M1 and O-P4 (Stage 2), then O-T1, O-K1 to O-K3 (Stage 3) |
 | Source control | D-004 now permits an external supervisor's unsigned backup commits on `main`; those snapshots are not reviewed releases and do not replace frozen test evidence |
 | Source of truth | One active source dir (this repo) and one Cargo target dir (D-007). The D working tree still contains the persistent-owner experiment; E-7 stop/error controls pass and O-P1 stop taxonomy is partial. O-P4 fresh-default/VM coherence remains open |
-| Next action | Reproduce and validate the Windows TCG arena tail boundary in an isolated native control; E-32's crash dump identifies host code emission, not its cause. Complete O-P1 and private-VM gates and the full E-29 attempt trace before interpreting another app run. E-30 only connected the host report consumer. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
+| Next action | E-33's narrow Windows TCG commit-tail repair passed native and broad suites, but E-32's app crash is still unattributed. Complete O-P1 and private-VM gates and the full E-29 attempt trace before interpreting another app run; any further original-mount run needs new approval. E-30 only connected the host report consumer. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
 
 ## Standalone boundaries
 
