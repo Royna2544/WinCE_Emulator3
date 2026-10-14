@@ -4,9 +4,12 @@ use crate::ce::{
         read_guest_bytes, write_guest_bytes, write_guest_u16, write_guest_u32,
     },
     file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_ALWAYS, OPEN_EXISTING},
-    memory::HEAP_MAX_ALLOC,
     kernel::CeKernel,
-    thread::{ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY},
+    memory::HEAP_MAX_ALLOC,
+    thread::{
+        ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
+        ERROR_NOT_ENOUGH_MEMORY,
+    },
 };
 
 const CRT_ACP_CODE_PAGE: u32 = 949;
@@ -539,7 +542,9 @@ pub(crate) fn malloc_raw<M: CoredllGuestMemory>(
 
 pub(crate) fn msize_raw(kernel: &mut CeKernel, thread_id: u32, ptr: u32) -> u32 {
     let Some(owner) = kernel.current_process_birth_key() else {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
     match kernel.memory.allocation(owner, ptr) {
@@ -571,11 +576,16 @@ pub(crate) fn realloc_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let Some(owner) = kernel.current_process_birth_key() else {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
     let heap = kernel.memory.get_process_heap();
-    match kernel.memory.prepare_heap_re_alloc(owner, heap, 0, ptr, bytes) {
+    match kernel
+        .memory
+        .prepare_heap_re_alloc(owner, heap, 0, ptr, bytes)
+    {
         Some(prepared) => {
             let result = apply_prepared_reallocation(kernel, memory, thread_id, prepared);
             if result != 0 {

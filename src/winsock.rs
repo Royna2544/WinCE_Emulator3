@@ -1699,7 +1699,9 @@ fn write_hostent<M: CoredllGuestMemory>(
     })();
     if result.is_none() {
         for ptr in candidates {
-            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+            if let Some(owner) = kernel.current_process_birth_key() {
+                let _ = kernel.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
+            }
         }
     }
     result
@@ -1740,7 +1742,9 @@ fn write_heap_c_string<M: CoredllGuestMemory>(
     if memory.write_bytes(ptr, text.as_bytes()).is_err()
         || memory.write_u8(ptr + text.len() as u32, 0).is_err()
     {
-        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+        if let Some(owner) = kernel.current_process_birth_key() {
+            let _ = kernel.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
+        }
         return None;
     }
     set_wsa_error(kernel, thread_id, 0);

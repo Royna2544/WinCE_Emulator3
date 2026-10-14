@@ -224,6 +224,7 @@ fn coredll_raw_initial_allocation_zeroes_predirtied_extent_and_aliases() -> Resu
     };
     let table = CoredllExportTable::default();
     let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = FaultingHeapMemory::default();
     let heap = kernel.memory.get_process_heap();
     for (ordinal, args) in [
@@ -237,7 +238,7 @@ fn coredll_raw_initial_allocation_zeroes_predirtied_extent_and_aliases() -> Resu
         (ORD_IMM_CREATE_IMCC, vec![31]),
         (ORD_CALLOC, vec![1, 31]),
     ] {
-        let candidate = kernel.memory.heap_high_water_mark();
+        let candidate = kernel.memory.heap_high_water_mark(owner);
         memory.write_bytes(candidate, &[0xa5; 32]);
         let ptr = allocation_return(table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -257,7 +258,7 @@ fn coredll_raw_initial_allocation_zeroes_predirtied_extent_and_aliases() -> Resu
         (ORD_MALLOC, vec![7]),
         (ORD_REALLOC, vec![0, 7]),
     ] {
-        let ptr = kernel.memory.heap_high_water_mark();
+        let ptr = kernel.memory.heap_high_water_mark(owner);
         memory.write_bytes(ptr, &[0x73; 8]);
         assert_eq!(
             allocation_return(table.dispatch_raw_ordinal_with_memory(
@@ -279,13 +280,14 @@ fn coredll_raw_initial_allocation_zeroes_predirtied_extent_and_aliases() -> Resu
 fn coredll_raw_initial_allocation_zero_size_has_one_physical_zero_byte() -> Result<()> {
     let table = CoredllExportTable::default();
     let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = FaultingHeapMemory::default();
     let heap = kernel.memory.get_process_heap();
     for (ordinal, args) in [
         (ORD_HEAP_ALLOC, vec![heap, HEAP_ZERO_MEMORY, 0]),
         (ORD_LOCAL_ALLOC, vec![LMEM_ZEROINIT, 0]),
     ] {
-        let candidate = kernel.memory.heap_high_water_mark();
+        let candidate = kernel.memory.heap_high_water_mark(owner);
         memory.write_bytes(candidate, &[0xa5, 0x6b]);
         let ptr = allocation_return(table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -296,7 +298,7 @@ fn coredll_raw_initial_allocation_zero_size_has_one_physical_zero_byte() -> Resu
         ));
         assert_eq!(ptr, candidate);
         assert_eq!(memory.read_bytes(ptr, 2), vec![0, 0x6b]);
-        let allocation = kernel.memory.allocation(ptr).unwrap();
+        let allocation = kernel.memory.allocation(owner, ptr).unwrap();
         assert_eq!(allocation.requested_size, 0);
         assert_eq!(allocation.actual_size, 1);
         assert_eq!(memory.heap_maps.last(), Some(&(ptr, 1)));
@@ -316,9 +318,10 @@ fn coredll_raw_initial_allocation_map_and_zero_failures_publish_no_live_pointer(
             ORD_IMM_CREATE_IMCC,
         ] {
             let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+            let owner = kernel.current_process_birth_key().expect("boot birth");
             let mut memory = FaultingHeapMemory::default();
             let heap = kernel.memory.get_process_heap();
-            let candidate = kernel.memory.heap_high_water_mark();
+            let candidate = kernel.memory.heap_high_water_mark(owner);
             let generation = kernel.memory.heap_generation();
             memory.write_bytes(candidate, &[0xa5; 32]);
             memory.fail_heap_map = fail_map;
@@ -339,10 +342,10 @@ fn coredll_raw_initial_allocation_map_and_zero_failures_publish_no_live_pointer(
                 )),
                 0
             );
-            assert!(kernel.memory.allocation(candidate).is_none());
+            assert!(kernel.memory.allocation(owner, candidate).is_none());
             assert!(kernel.gwe.ime_component(candidate).is_none());
             assert_eq!(kernel.memory.heap_generation(), generation);
-            assert_eq!(kernel.memory.heap_high_water_mark(), candidate + 32);
+            assert_eq!(kernel.memory.heap_high_water_mark(owner), candidate + 32);
             assert_eq!(
                 memory.read_bytes(candidate, 3),
                 if fail_map { vec![0xa5; 3] } else { vec![0; 3] }
@@ -379,8 +382,9 @@ fn coredll_raw_initial_allocation_header_and_cache_write_failures_stay_unpublish
         (ORD_GET_PROC_NAME, vec![]),
     ] {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
         let mut memory = FaultingHeapMemory::default();
-        let candidate = kernel.memory.heap_high_water_mark();
+        let candidate = kernel.memory.heap_high_water_mark(owner);
         memory.fail_write_range = Some((candidate, candidate + 4));
         assert_eq!(
             allocation_return(table.dispatch_raw_ordinal_with_memory(
@@ -393,16 +397,151 @@ fn coredll_raw_initial_allocation_header_and_cache_write_failures_stay_unpublish
             0
         );
         assert!(
-            kernel.memory.allocation(candidate).is_none(),
+            kernel.memory.allocation(owner, candidate).is_none(),
             "ordinal {ordinal}"
         );
-        assert_eq!(kernel.module_heap_info_guest_ptr(), 0);
-        assert_eq!(kernel.command_line_guest_ptr(), 0);
-        assert_eq!(kernel.process_name_guest_ptr(), 0);
-        assert!(kernel.memory.heap_high_water_mark() > candidate);
+        assert_eq!(kernel.module_heap_info_guest_ptr_for(owner), None);
+        assert_eq!(kernel.command_line_guest_ptr_for(owner), None);
+        assert_eq!(kernel.process_name_guest_ptr_for(owner), None);
+        assert!(kernel.memory.heap_high_water_mark(owner) > candidate);
     }
     Ok(())
 }
+
+#[test]
+fn coredll_raw_module_heap_info_replaces_guest_freed_cached_pointer() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
+    let mut memory = TestGuestMemory::default();
+    let heap = kernel.memory.get_process_heap();
+    let first = allocation_return(table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        11,
+        ORD_CE_GET_MODULE_HEAP_INFO,
+        [],
+    ));
+    assert_ne!(first, 0);
+    assert_eq!(kernel.module_heap_info_guest_ptr_for(owner), Some(first));
+    assert_eq!(
+        kernel.memory.heap_size(owner, heap, 0, first),
+        Some(28 * 4 + 4 + 24)
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            11,
+            ORD_HEAP_FREE,
+            [heap, 0, first],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let second = allocation_return(table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        11,
+        ORD_CE_GET_MODULE_HEAP_INFO,
+        [],
+    ));
+    assert_ne!(second, first);
+    assert_eq!(kernel.module_heap_info_guest_ptr_for(owner), Some(second));
+    assert_eq!(kernel.memory.heap_size(owner, heap, 0, first), None);
+    assert_eq!(memory.read_u32(second)?, heap);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_process_text_pointers_are_birth_scoped_and_replace_freed_cache() -> Result<()> {
+    use wince_emulation_v3::ce::coredll_ordinals::{ORD_GET_COMMAND_LINE_W, ORD_GET_PROC_NAME};
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    kernel.set_process_command_line("parent args");
+    kernel.set_process_module_path("\\Program Files\\INavi\\INavi.exe");
+    let parent = kernel.current_process_birth_key().expect("boot birth");
+    let parent_command = allocation_return(table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        11,
+        ORD_GET_COMMAND_LINE_W,
+        [],
+    ));
+    let parent_name = allocation_return(table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        11,
+        ORD_GET_PROC_NAME,
+        [],
+    ));
+    assert_ne!(parent_command, 0);
+    assert_ne!(parent_name, 0);
+
+    let _child_handle = kernel.handles.create_process(2);
+    kernel.set_current_process_id(2);
+    let child = kernel.current_process_birth_key().expect("child birth");
+    let heap = kernel.memory.get_process_heap();
+    let _offset = kernel
+        .memory
+        .heap_alloc(child, heap, 0, 0x100)
+        .expect("child-only cursor offset");
+    let child_command = allocation_return(table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        11,
+        ORD_GET_COMMAND_LINE_W,
+        [],
+    ));
+    let child_name = allocation_return(table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        11,
+        ORD_GET_PROC_NAME,
+        [],
+    ));
+    assert_ne!(child_command, parent_command);
+    assert_ne!(child_name, parent_name);
+    assert_eq!(
+        kernel.command_line_guest_ptr_for(child),
+        Some(child_command)
+    );
+    assert_eq!(kernel.process_name_guest_ptr_for(child), Some(child_name));
+    assert_eq!(kernel.memory.local_size(child, parent_command), None);
+    assert_eq!(kernel.memory.local_size(parent, child_command), None);
+
+    kernel.set_current_process_id(1);
+    assert_eq!(
+        allocation_return(table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            11,
+            ORD_GET_COMMAND_LINE_W,
+            [],
+        )),
+        parent_command
+    );
+    assert!(kernel.memory.local_free(parent, parent_command));
+    let replacement = allocation_return(table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        11,
+        ORD_GET_COMMAND_LINE_W,
+        [],
+    ));
+    assert_ne!(replacement, parent_command);
+    assert_eq!(kernel.command_line_guest_ptr_for(parent), Some(replacement));
+    assert_eq!(
+        kernel.command_line_guest_ptr_for(child),
+        Some(child_command)
+    );
+    Ok(())
+}
+
 const ERROR_DIRECTORY: u32 = 267;
 const ERROR_INVALID_FLAGS: u32 = 1004;
 
@@ -1267,6 +1406,7 @@ fn coredll_raw_realloc_allocates_copies_and_frees_process_heap_blocks() -> Resul
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 11;
     let process_heap = kernel.memory.get_process_heap();
@@ -1285,7 +1425,10 @@ fn coredll_raw_realloc_allocates_copies_and_frees_process_heap_blocks() -> Resul
         other => panic!("realloc(NULL, size) did not allocate: {other:?}"),
     };
     assert_ne!(ptr, 0);
-    assert_eq!(kernel.memory.heap_size(process_heap, 0, ptr), Some(16));
+    assert_eq!(
+        kernel.memory.heap_size(owner, process_heap, 0, ptr),
+        Some(16)
+    );
 
     memory.write_bytes(ptr, b"ce-realloc-proof");
     let grown = match table.dispatch_raw_ordinal_with_memory(
@@ -1303,8 +1446,11 @@ fn coredll_raw_realloc_allocates_copies_and_frees_process_heap_blocks() -> Resul
     };
     assert_ne!(grown, 0);
     assert_ne!(grown, ptr);
-    assert_eq!(kernel.memory.heap_size(process_heap, 0, ptr), None);
-    assert_eq!(kernel.memory.heap_size(process_heap, 0, grown), Some(64));
+    assert_eq!(kernel.memory.heap_size(owner, process_heap, 0, ptr), None);
+    assert_eq!(
+        kernel.memory.heap_size(owner, process_heap, 0, grown),
+        Some(64)
+    );
     assert_eq!(&memory.read_bytes(grown, 16), b"ce-realloc-proof");
 
     assert!(matches!(
@@ -1320,7 +1466,7 @@ fn coredll_raw_realloc_allocates_copies_and_frees_process_heap_blocks() -> Resul
             ..
         }
     ));
-    assert_eq!(kernel.memory.heap_size(process_heap, 0, grown), None);
+    assert_eq!(kernel.memory.heap_size(owner, process_heap, 0, grown), None);
     Ok(())
 }
 
@@ -1329,14 +1475,15 @@ fn coredll_raw_heap_and_local_realloc_copy_prefix_and_zero_only_growth_tail() ->
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 11;
     let heap = kernel.memory.get_process_heap();
 
-    let heap_source = kernel.memory.heap_alloc(heap, 0, 5).unwrap();
+    let heap_source = kernel.memory.heap_alloc(owner, heap, 0, 5).unwrap();
     let heap_prefix = [0x11, 0x22, 0x33, 0x44, 0x55];
     memory.write_bytes(heap_source, &heap_prefix);
-    let heap_destination = kernel.memory.heap_high_water_mark();
+    let heap_destination = kernel.memory.heap_high_water_mark(owner);
     memory.fill(heap_destination, 0xa5, 16);
 
     let heap_grown = match table.dispatch_raw_ordinal_with_memory(
@@ -1375,7 +1522,7 @@ fn coredll_raw_heap_and_local_realloc_copy_prefix_and_zero_only_growth_tail() ->
     assert_eq!(heap_shrunk, heap_grown);
     assert_eq!(memory.read_bytes(heap_shrunk, 13), retained);
 
-    let zero_sized = kernel.memory.heap_alloc(heap, 0, 0).unwrap();
+    let zero_sized = kernel.memory.heap_alloc(owner, heap, 0, 0).unwrap();
     memory.write_bytes(zero_sized, &[0xa7]);
     let one_byte = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -1408,10 +1555,10 @@ fn coredll_raw_heap_and_local_realloc_copy_prefix_and_zero_only_growth_tail() ->
     };
     assert_eq!(memory.read_bytes(two_bytes, 2), vec![0xa7, 0]);
 
-    let local_source = kernel.memory.local_alloc(0, 6).unwrap();
+    let local_source = kernel.memory.local_alloc(owner, 0, 6).unwrap();
     let local_prefix = [0x61, 0x62, 0x63, 0x64, 0x65, 0x66];
     memory.write_bytes(local_source, &local_prefix);
-    let local_destination = kernel.memory.heap_high_water_mark();
+    let local_destination = kernel.memory.heap_high_water_mark(owner);
     memory.fill(local_destination, 0x5a, 16);
 
     let local_grown = match table.dispatch_raw_ordinal_with_memory(
@@ -1452,13 +1599,14 @@ fn assert_faulted_realloc_keeps_old_allocation(
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = FaultingHeapMemory::default();
     let thread_id = 11;
     let heap = kernel.memory.get_process_heap();
-    let source = kernel.memory.heap_alloc(heap, 0, 5).unwrap();
+    let source = kernel.memory.heap_alloc(owner, heap, 0, 5).unwrap();
     let source_bytes = [0xd1, 0xd2, 0xd3, 0xd4, 0xd5];
     memory.write_bytes(source, &source_bytes);
-    let high_water_before = kernel.memory.heap_high_water_mark();
+    let high_water_before = kernel.memory.heap_high_water_mark(owner);
     memory.fail_heap_map = fail_map;
     memory.fail_read_range = fail_read.then_some((source, source + 1));
     memory.fail_write_range = fail_write_offset.map(|offset| {
@@ -1502,9 +1650,12 @@ fn assert_faulted_realloc_keeps_old_allocation(
             ..
         }
     ));
-    assert_eq!(kernel.memory.heap_size(heap, 0, source), Some(5));
-    assert_eq!(kernel.memory.allocation(high_water_before), None);
-    assert_eq!(kernel.memory.heap_high_water_mark(), high_water_before + 32);
+    assert_eq!(kernel.memory.heap_size(owner, heap, 0, source), Some(5));
+    assert_eq!(kernel.memory.allocation(owner, high_water_before), None);
+    assert_eq!(
+        kernel.memory.heap_high_water_mark(owner),
+        high_water_before + 32
+    );
     assert_eq!(memory.read_bytes(source, source_bytes.len()), source_bytes);
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
@@ -1560,16 +1711,17 @@ fn coredll_raw_failed_realloc_does_not_reuse_dirty_storage_for_zero_allocations(
         for local_allocation in [false, true] {
             let config = RuntimeConfig::load_default()?;
             let mut kernel = CeKernel::boot(config);
+            let owner = kernel.current_process_birth_key().expect("boot birth");
             let mut memory = FaultingHeapMemory::default();
             // Model the initially zero-filled heap arena, not just absent-byte
             // fallback in the test adapter. The failed destination stays dirty.
             memory.inner.map_bytes(0x3000_0000, 0x1000);
             let thread_id = 11;
             let heap = kernel.memory.get_process_heap();
-            let source = kernel.memory.heap_alloc(heap, 0, 5).unwrap();
+            let source = kernel.memory.heap_alloc(owner, heap, 0, 5).unwrap();
             let source_bytes = [0xd1, 0xd2, 0xd3, 0xd4, 0xd5];
             memory.write_bytes(source, &source_bytes);
-            let failed_destination = kernel.memory.heap_high_water_mark();
+            let failed_destination = kernel.memory.heap_high_water_mark(owner);
             memory.fail_write_range = Some((
                 failed_destination + fail_offset,
                 failed_destination + fail_offset + 1,
@@ -1589,9 +1741,14 @@ fn coredll_raw_failed_realloc_does_not_reuse_dirty_storage_for_zero_allocations(
                 }
             ));
             assert_eq!(memory.read_bytes(failed_destination, 2), source_bytes[..2]);
-            assert_eq!(kernel.memory.heap_size(heap, 0, source), Some(5));
+            assert_eq!(kernel.memory.heap_size(owner, heap, 0, source), Some(5));
             assert_eq!(memory.read_bytes(source, 5), source_bytes);
-            assert!(kernel.memory.allocation(failed_destination).is_none());
+            assert!(
+                kernel
+                    .memory
+                    .allocation(owner, failed_destination)
+                    .is_none()
+            );
 
             memory.fail_write_range = None;
             let dispatch = if local_allocation {
@@ -1633,6 +1790,7 @@ fn coredll_raw_imm_resize_imcc_uses_transactional_reallocation() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = FaultingHeapMemory::default();
     let thread_id = 11;
 
@@ -1651,7 +1809,7 @@ fn coredll_raw_imm_resize_imcc_uses_transactional_reallocation() -> Result<()> {
     };
     let source_bytes = [0x41, 0x42, 0x43, 0x44, 0x45];
     memory.write_bytes(source, &source_bytes);
-    let destination = kernel.memory.heap_high_water_mark();
+    let destination = kernel.memory.heap_high_water_mark(owner);
     memory.inner.fill(destination, 0xa5, 32);
     memory.fail_read_range = Some((source, source + 1));
 
@@ -1668,13 +1826,16 @@ fn coredll_raw_imm_resize_imcc_uses_transactional_reallocation() -> Result<()> {
             ..
         }
     ));
-    assert_eq!(kernel.memory.heap_high_water_mark(), destination + 32);
-    assert_eq!(kernel.memory.allocation(source).unwrap().actual_size, 5);
+    assert_eq!(kernel.memory.heap_high_water_mark(owner), destination + 32);
+    assert_eq!(
+        kernel.memory.allocation(owner, source).unwrap().actual_size,
+        5
+    );
     assert_eq!(kernel.gwe.ime_component(source).unwrap().size, 5);
     assert_eq!(memory.read_bytes(source, 5), source_bytes);
 
     memory.fail_read_range = None;
-    let destination = kernel.memory.heap_high_water_mark();
+    let destination = kernel.memory.heap_high_water_mark(owner);
     memory.inner.fill(destination, 0xa5, 32);
     let resized = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -3655,6 +3816,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
     let root = unique_test_root("raw_memory_file");
     fs::create_dir_all(&root).unwrap();
     let sdmmc_root = root.join("sdmmc");
@@ -3732,8 +3894,8 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         } => ptr,
         other => panic!("LocalAlloc did not return a pointer: {other:?}"),
     };
-    assert_eq!(kernel.memory.local_size(local), Some(1));
-    assert!(kernel.memory.allocation(local).unwrap().zeroed);
+    assert_eq!(kernel.memory.local_size(owner, local), Some(1));
+    assert!(kernel.memory.allocation(owner, local).unwrap().zeroed);
 
     let local = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -3868,10 +4030,13 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         other => panic!("SDK operator new ordinal did not return a pointer: {other:?}"),
     };
     assert_eq!(
-        kernel.memory.heap_size(process_heap, 0, malloc_ptr),
+        kernel.memory.heap_size(owner, process_heap, 0, malloc_ptr),
         Some(16)
     );
-    assert_eq!(kernel.memory.heap_size(process_heap, 0, new_ptr), Some(8));
+    assert_eq!(
+        kernel.memory.heap_size(owner, process_heap, 0, new_ptr),
+        Some(8)
+    );
     let new_array_ptr = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -3887,7 +4052,9 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     };
     assert_ne!(new_array_ptr, 0);
     assert_eq!(
-        kernel.memory.heap_size(process_heap, 0, new_array_ptr),
+        kernel
+            .memory
+            .heap_size(owner, process_heap, 0, new_array_ptr),
         Some(24)
     );
     assert!(matches!(
@@ -3906,7 +4073,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     assert!(
         kernel
             .memory
-            .heap_size(process_heap, 0, new_array_ptr)
+            .heap_size(owner, process_heap, 0, new_array_ptr)
             .is_none()
     );
     assert!(matches!(
@@ -3922,7 +4089,12 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             ..
         }
     ));
-    assert!(kernel.memory.heap_size(process_heap, 0, new_ptr).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(owner, process_heap, 0, new_ptr)
+            .is_none()
+    );
 
     memory.map_bytes(0x5f00, 32);
     memory.write_wide_z(0x5f00, " -123abc");
@@ -4179,7 +4351,12 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         other => panic!("SDK _wcsdup ordinal did not return a pointer: {other:?}"),
     };
     assert_eq!(memory.read_wide_z(dup, 32), "INavi.exe");
-    assert!(kernel.memory.heap_size(process_heap, 0, dup).is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(owner, process_heap, 0, dup)
+            .is_some()
+    );
     let afx = 0x6800;
     let afx_lower = 0x6840;
     let solution = 0x6880;
@@ -4305,7 +4482,12 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             ..
         }
     ));
-    assert!(kernel.memory.heap_size(process_heap, 0, dup).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(owner, process_heap, 0, dup)
+            .is_none()
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -18208,7 +18390,11 @@ fn coredll_raw_file_mapping_multiple_views_share_flushed_backing() -> Result<()>
     let mapping_state = kernel.handles.file_mapping(mapping)?;
     assert!(mapping_state.is_slab());
     let mut canonical = [0; 10];
-    assert!(kernel.memory.shared_mapping_read(mapping, 32, &mut canonical));
+    assert!(
+        kernel
+            .memory
+            .shared_mapping_read(mapping, 32, &mut canonical)
+    );
     assert_eq!(&canonical, b"unmap-sync");
     Ok(())
 }
@@ -22481,6 +22667,7 @@ fn coredll_raw_dpa_dsa_null_callbacks_do_not_need_unicorn_callouts() -> Result<(
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 11;
 
@@ -22544,7 +22731,7 @@ fn coredll_raw_dpa_dsa_null_callbacks_do_not_need_unicorn_callouts() -> Result<(
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    assert!(kernel.memory.allocation(hdpa).is_some());
+    assert!(kernel.memory.allocation(owner, hdpa).is_some());
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -22561,7 +22748,7 @@ fn coredll_raw_dpa_dsa_null_callbacks_do_not_need_unicorn_callouts() -> Result<(
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert!(
-        kernel.memory.allocation(hdpa).is_none(),
+        kernel.memory.allocation(owner, hdpa).is_none(),
         "null DPA_DestroyCallback should still destroy the DPA"
     );
 
@@ -22627,7 +22814,7 @@ fn coredll_raw_dpa_dsa_null_callbacks_do_not_need_unicorn_callouts() -> Result<(
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    assert!(kernel.memory.allocation(hdsa).is_some());
+    assert!(kernel.memory.allocation(owner, hdsa).is_some());
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -22644,7 +22831,7 @@ fn coredll_raw_dpa_dsa_null_callbacks_do_not_need_unicorn_callouts() -> Result<(
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert!(
-        kernel.memory.allocation(hdsa).is_none(),
+        kernel.memory.allocation(owner, hdsa).is_none(),
         "null DSA_DestroyCallback should still destroy the DSA"
     );
 

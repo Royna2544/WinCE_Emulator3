@@ -6956,13 +6956,14 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..LoadedModuleMetadata::default()
         },
     );
+    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
     let heap_alloc_a = kernel
         .memory
-        .heap_alloc(PROCESS_HEAP_HANDLE, 0, 32)
+        .heap_alloc(heap_birth, PROCESS_HEAP_HANDLE, 0, 32)
         .expect("process heap allocation");
     let heap_alloc_b = kernel
         .memory
-        .heap_alloc(PROCESS_HEAP_HANDLE, 0, 48)
+        .heap_alloc(heap_birth, PROCESS_HEAP_HANDLE, 0, 48)
         .expect("process heap allocation");
 
     let process_snapshot = match table.dispatch_raw_ordinal_with_memory(
@@ -14410,17 +14411,18 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     assert!(kernel.resources.icon(bitfields_icon).is_none());
     assert!(kernel.resources.bitmap(bitfields_color_bitmap).is_none());
     assert!(kernel.resources.bitmap(bitfields_mask_bitmap).is_none());
+    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, bitfields_color_bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, bitfields_color_bits_ptr)
             .is_none(),
         "DestroyIcon should free PE-extracted icon color bitmap storage"
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, bitfields_mask_bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, bitfields_mask_bits_ptr)
             .is_none(),
         "DestroyIcon should free PE-extracted icon mask bitmap storage"
     );
@@ -16682,6 +16684,7 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 45;
     let path_ptr = 0x2_4000;
@@ -19392,13 +19395,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, extracted_color_bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, extracted_color_bits_ptr)
             .is_none()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, extracted_mask_bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, extracted_mask_bits_ptr)
             .is_none()
     );
     let mask_handle_duplicate = match table.dispatch_raw_ordinal_with_memory(
@@ -19473,13 +19476,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
             .is_some()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
             .is_some()
     );
     assert!(matches!(
@@ -19506,13 +19509,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
             .is_none()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
             .is_none()
     );
     assert!(
@@ -19660,13 +19663,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, original_bitmap_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, original_bitmap_bits)
             .is_none()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, original_mask_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, original_mask_bits)
             .is_none()
     );
     let replace_cleanup_list = match table.dispatch_raw_ordinal_with_memory(
@@ -19737,13 +19740,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, replaced_bitmap_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, replaced_bitmap_bits)
             .is_none()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, replaced_mask_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, replaced_mask_bits)
             .is_none()
     );
     let replace_icon_cleanup_list = match table.dispatch_raw_ordinal_with_memory(
@@ -19821,13 +19824,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, icon_replaced_bitmap_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, icon_replaced_bitmap_bits)
             .is_none()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, icon_replaced_mask_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, icon_replaced_mask_bits)
             .is_none()
     );
     let dither_mask_list = match table.dispatch_raw_ordinal_with_memory(
@@ -19931,13 +19934,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
             .is_some()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
             .is_some()
     );
     assert!(matches!(
@@ -19958,13 +19961,13 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
             .is_none()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
             .is_none()
     );
 
@@ -22816,6 +22819,7 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 46;
     let app_hwnd = kernel.create_window_ex_w(thread_id, "SHELL_NOTIFY_APP", "", None, 0, 0, 0);
@@ -22874,7 +22878,7 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
         .expect("taskbar payload queued")
         .lparam;
     assert_eq!(
-        kernel.memory.heap_size(PROCESS_HEAP_HANDLE, 0, queued_nid),
+        kernel.memory.heap_size(birth, PROCESS_HEAP_HANDLE, 0, queued_nid),
         Some(152)
     );
     // CE6 serializes only the 152-byte form, even when a synthetic raw caller
@@ -22906,7 +22910,7 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
     let copied_nid = memory.read_u32(msg_ptr + 12)?;
     assert_ne!(copied_nid, 0);
     assert_eq!(
-        kernel.gwe.message_pointer_payload(copied_nid),
+        kernel.gwe.message_pointer_payload(birth, copied_nid),
         Some(MessagePointerPayload::NotifyIcon(
             wince_emulation_v3::ce::gwe::NotifyIconMessage {
                 hwnd: app_hwnd,
@@ -22942,7 +22946,7 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
+            .heap_size(birth, PROCESS_HEAP_HANDLE, 0, copied_nid)
             .is_some()
     );
     assert!(matches!(
@@ -22958,11 +22962,11 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(copied_nid).is_none());
+    assert!(kernel.gwe.message_pointer_payload(birth, copied_nid).is_none());
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
+            .heap_size(birth, PROCESS_HEAP_HANDLE, 0, copied_nid)
             .is_none()
     );
 
@@ -23099,7 +23103,7 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(copied_modify).is_none());
+    assert!(kernel.gwe.message_pointer_payload(birth, copied_modify).is_none());
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -23156,7 +23160,7 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(copied_delete).is_none());
+    assert!(kernel.gwe.message_pointer_payload(birth, copied_delete).is_none());
 
     memory.write_word(data + 12, NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE);
     memory.write_word(data + 16, WM_USER + 123);
@@ -23210,7 +23214,7 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(copied_readd).is_none());
+    assert!(kernel.gwe.message_pointer_payload(birth, copied_readd).is_none());
 
     assert!(kernel.destroy_window(taskbar_hwnd));
     memory.write_word(data + 12, NIF_TIP);
@@ -23312,6 +23316,7 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 46;
     let hwnd = kernel.create_window_ex_w(thread_id, "PRIVATE_PAYLOAD", "", None, 0, 0, 0);
@@ -23319,7 +23324,7 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
     memory.map_words(msg_ptr, 7);
     let payload_ptr = kernel
         .memory
-        .heap_alloc(PROCESS_HEAP_HANDLE, 0, 28)
+        .heap_alloc(birth, PROCESS_HEAP_HANDLE, 0, 28)
         .expect("private payload allocation");
     let payload = MessagePointerPayload::WindowPos(WindowPos {
         hwnd,
@@ -23333,7 +23338,7 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
     assert!(
         kernel
             .gwe
-            .insert_message_pointer_payload(payload_ptr, payload.clone())
+            .insert_message_pointer_payload(birth, payload_ptr, payload.clone())
     );
     memory.write_word(msg_ptr, hwnd);
     memory.write_word(msg_ptr + 4, WM_HANDLESHELLNOTIFYICON);
@@ -23355,17 +23360,18 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
         }
     ));
     assert_eq!(
-        kernel.gwe.message_pointer_payload(payload_ptr),
+        kernel.gwe.message_pointer_payload(birth, payload_ptr),
         Some(payload)
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, payload_ptr)
+            .heap_size(birth, PROCESS_HEAP_HANDLE, 0, payload_ptr)
             .is_some()
     );
 
     memory.write_word(msg_ptr + 4, WM_WINDOWPOSCHANGED);
+    // A matching pointer and message ID alone are not host provenance.
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -23379,11 +23385,28 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(payload_ptr).is_none());
+    assert_eq!(kernel.gwe.message_pointer_payload(birth, payload_ptr), Some(payload.clone()));
+    let delivered = Message::new(hwnd, WM_WINDOWPOSCHANGED, 0, payload_ptr, 0)
+        .with_typed_payload_owner(birth);
+    kernel.record_delivered_typed_payload_message(birth, thread_id, msg_ptr, &delivered);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.message_pointer_payload(birth, payload_ptr).is_none());
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, payload_ptr)
+            .heap_size(birth, PROCESS_HEAP_HANDLE, 0, payload_ptr)
             .is_none()
     );
 
@@ -23602,6 +23625,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 47;
     let hwnd = kernel.create_window_ex_w(thread_id, "SHN_SINK", "", None, 0, 0, 0);
@@ -23760,7 +23784,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
             .is_some()
     );
     assert!(matches!(
@@ -23779,7 +23803,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
             .is_none()
     );
 
@@ -23836,7 +23860,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
             .is_some()
     );
     assert!(matches!(
@@ -23855,7 +23879,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
             .is_none()
     );
 
@@ -23921,7 +23945,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, dismiss_nmshn_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, dismiss_nmshn_ptr)
             .is_none()
     );
     assert!(kernel.shell.notification(clsid, 301).is_some());
@@ -24697,6 +24721,7 @@ fn shnotification_i_posts_timeout_dismiss_and_removes_expired_record() -> Result
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 47;
     let hwnd = kernel.create_window_ex_w(thread_id, "SHN_TIMEOUT", "", None, 0, 0, 0);
@@ -24835,7 +24860,7 @@ fn shnotification_i_posts_timeout_dismiss_and_removes_expired_record() -> Result
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
             .is_none()
     );
 
@@ -24985,6 +25010,7 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
     let mut memory = TestGuestMemory::default();
     let root = unique_test_root("shell-filechange");
     let _ = fs::remove_dir_all(&root);
@@ -25094,7 +25120,7 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, mkdir_notify)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, mkdir_notify)
             .is_some()
     );
     assert!(matches!(
@@ -25113,7 +25139,7 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, mkdir_notify)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, mkdir_notify)
             .is_none()
     );
 
@@ -25248,7 +25274,7 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, rename_notify)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, rename_notify)
             .is_some()
     );
     assert!(matches!(
@@ -25267,7 +25293,7 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, rename_notify)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, rename_notify)
             .is_none()
     );
     assert_eq!(
@@ -27830,10 +27856,11 @@ fn clipboard_data_alloc_copies_known_local_handle_contents() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 53;
     let owner = kernel.create_window_ex_w(thread_id, "CLIP_ALLOC", "", None, 0, 0, 0);
-    let source = kernel.memory.local_alloc(0, 6).unwrap();
+    let source = kernel.memory.local_alloc(birth, 0, 6).unwrap();
     memory.write_bytes(source, b"abc\0xy");
 
     assert!(matches!(
@@ -27891,7 +27918,7 @@ fn clipboard_data_alloc_copies_known_local_handle_contents() -> Result<()> {
     };
     assert_ne!(copy, 0);
     assert_ne!(copy, source);
-    assert_eq!(kernel.memory.local_size(copy), Some(6));
+    assert_eq!(kernel.memory.local_size(birth, copy), Some(6));
     assert_eq!(memory.read_bytes(copy, 6), b"abc\0xy");
 
     memory.write_bytes(source, b"zzz\0xy");

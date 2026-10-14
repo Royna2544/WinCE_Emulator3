@@ -4441,6 +4441,7 @@ fn gwe_get_queue_status_and_peek_queue_status() {
             time_ms: 0,
             source: 0,
             mouse_pos_at_post: None,
+            typed_payload_owner: None,
         },
     );
 
@@ -7260,8 +7261,15 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
     let hwnd2 = gwe.create_window_ex_with_rect(1, "Btn", "W2", None, 0, WS_VISIBLE, 0, other_rect);
     assert!(!gwe.active_window_is_within(hwnd2));
 
+    use wince_emulation_v3::ce::object::HandleTable;
+    let mut births = HandleTable::default();
+    births.register_boot_process(1);
+    let owner_a = births.process_birth_key(1).expect("boot birth");
+    births.create_process(2);
+    let owner_b = births.process_birth_key(2).expect("child birth");
     // insert_message_pointer_payload: ptr=0 → false.
     assert!(!gwe.insert_message_pointer_payload(
+        owner_a,
         0,
         MessagePointerPayload::WindowPos(WindowPos {
             hwnd,
@@ -7283,14 +7291,37 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
         height: 40,
         flags: 0,
     });
-    assert!(gwe.insert_message_pointer_payload(0x1234, payload.clone()));
-    // message_pointer_payload returns Some for existing ptr.
-    assert_eq!(gwe.message_pointer_payload(0x1234), Some(payload.clone()));
-    // take_message_pointer_payload removes it.
-    assert_eq!(gwe.take_message_pointer_payload(0x1234), Some(payload));
-    // Gone after take.
-    assert!(gwe.message_pointer_payload(0x1234).is_none());
-    assert!(gwe.take_message_pointer_payload(0x1234).is_none());
+    assert!(gwe.insert_message_pointer_payload(owner_a, 0x1234, payload.clone()));
+    let duplicate_payload = MessagePointerPayload::WindowPos(WindowPos {
+        hwnd,
+        insert_after: HWND_TOP,
+        x: 99,
+        y: 10,
+        width: 80,
+        height: 40,
+        flags: 0,
+    });
+    assert!(!gwe.insert_message_pointer_payload(
+        owner_a,
+        0x1234,
+        duplicate_payload,
+    ));
+    let other_payload = MessagePointerPayload::WindowPos(WindowPos {
+        hwnd: hwnd2,
+        insert_after: HWND_TOP,
+        x: 25,
+        y: 30,
+        width: 40,
+        height: 20,
+        flags: 0,
+    });
+    assert!(gwe.insert_message_pointer_payload(owner_b, 0x1234, other_payload.clone()));
+    assert_eq!(gwe.message_pointer_payload(owner_a, 0x1234), Some(payload.clone()));
+    assert_eq!(gwe.message_pointer_payload(owner_b, 0x1234), Some(other_payload.clone()));
+    assert_eq!(gwe.take_message_pointer_payload(owner_a, 0x1234), Some(payload));
+    assert!(gwe.message_pointer_payload(owner_a, 0x1234).is_none());
+    assert_eq!(gwe.take_message_pointer_payload(owner_b, 0x1234), Some(other_payload));
+    assert!(gwe.take_message_pointer_payload(owner_b, 0x1234).is_none());
 
     // dialog_return_command / dialog_cancel_command / default_push_button / is_push_button.
     // Create a dialog with a default push button (BS_DEFPUSHBUTTON, class "button").

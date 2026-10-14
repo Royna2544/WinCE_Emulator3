@@ -52,7 +52,11 @@ pub fn string_from_clsid_raw<M: CoredllGuestMemory>(
     if memory.write_bytes(buffer_ptr, &wide).is_err()
         || memory.write_u32(out_ptr, buffer_ptr).is_err()
     {
-        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, buffer_ptr);
+        if let Some(owner) = kernel.current_process_birth_key() {
+            let _ = kernel
+                .memory
+                .heap_free(owner, PROCESS_HEAP_HANDLE, 0, buffer_ptr);
+        }
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -65,7 +69,9 @@ pub fn string_from_clsid_raw<M: CoredllGuestMemory>(
 
 pub fn co_task_mem_free_raw(kernel: &mut CeKernel, ptr: u32) {
     if ptr != 0 {
-        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+        if let Some(owner) = kernel.current_process_birth_key() {
+            let _ = kernel.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
+        }
     }
 }
 
@@ -334,13 +340,23 @@ mod tests {
             "{01234567-89ab-cdef-0123-456789abcdef}"
         );
         assert_eq!(
-            kernel.memory.heap_size(PROCESS_HEAP_HANDLE, 0, allocated),
+            kernel.memory.heap_size(
+                kernel.current_process_birth_key().unwrap(),
+                PROCESS_HEAP_HANDLE,
+                0,
+                allocated,
+            ),
             Some(78)
         );
 
         co_task_mem_free_raw(&mut kernel, allocated);
         assert_eq!(
-            kernel.memory.heap_size(PROCESS_HEAP_HANDLE, 0, allocated),
+            kernel.memory.heap_size(
+                kernel.current_process_birth_key().unwrap(),
+                PROCESS_HEAP_HANDLE,
+                0,
+                allocated,
+            ),
             None
         );
     }
