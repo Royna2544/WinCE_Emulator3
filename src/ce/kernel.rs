@@ -7588,7 +7588,9 @@ impl CeKernel {
             .record_wait_wake(SchedulerWakeReason::Timeout);
     }
 
-    #[cfg(test)]
+    /// Legacy test/compatibility entry retained for integration-test crates.
+    /// Production object waits use `prepare_task_wait`; opaque subscriptions
+    /// use `register_opaque_compatibility_waiter` instead.
     pub fn register_blocked_waiter(
         &mut self,
         thread_id: u32,

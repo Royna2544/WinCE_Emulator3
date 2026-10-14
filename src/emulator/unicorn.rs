@@ -131,7 +131,14 @@ struct NativeMixedJrStopProbe {
 #[derive(Debug, Clone)]
 pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
-    native_engine: ProcessNativeEngine<(u32, SavedCpuContext), KernelMemoryMappings>,
+    native_engine: ProcessNativeEngine<
+        (
+            u32,
+            Option<crate::ce::object::ThreadBirthKey>,
+            SavedCpuContext,
+        ),
+        KernelMemoryMappings,
+    >,
     memory: MemoryMap,
     entry: Option<u32>,
     entry_image_base: Option<u32>,
@@ -241,6 +248,10 @@ pub struct UnicornMips {
     /// Canonical thread birth that owns the saved runnable CPU context.
     #[cfg(feature = "unicorn")]
     saved_context_thread_birth: Option<crate::ce::object::ThreadBirthKey>,
+    /// Unexpected native stop contexts refused because their captured thread
+    /// birth could not be authenticated at the publication boundary.
+    #[cfg(feature = "unicorn")]
+    staging_provenance_rejections: u64,
     /// Birth that produced a saved worker exit stub. A TID (and its public
     /// alias) may be reused before the host consumes that stop.
     #[cfg(feature = "unicorn")]
@@ -355,13 +366,24 @@ fn select_staged_context_thread_birth(
     saved: &SavedCpuContext,
     executed_thread_id: u32,
     worker_exit_birth: Option<crate::ce::object::ThreadBirthKey>,
-    _captured_native_birth: Option<crate::ce::object::ThreadBirthKey>,
+    captured_native_thread: (u32, Option<crate::ce::object::ThreadBirthKey>),
+    rejection_count: &mut u64,
 ) -> Option<crate::ce::object::ThreadBirthKey> {
-    if saved.pc == THREAD_EXIT_STUB_ADDR {
-        worker_exit_birth
-    } else {
-        kernel.handles.thread_birth_key_by_id(executed_thread_id)
+    let selected = captured_native_thread.1.filter(|birth| {
+        captured_native_thread.0 == executed_thread_id
+            && birth.thread_id() == executed_thread_id
+            && worker_exit_birth.is_none_or(|exit_birth| exit_birth == *birth)
+            && match kernel.handles.thread_birth_key_by_id(executed_thread_id) {
+                Some(live_birth) => live_birth == *birth,
+                // The owner may already have retired at its exit stub. No
+                // replacement incarnation may receive these registers.
+                None => saved.pc == THREAD_EXIT_STUB_ADDR,
+            }
+    });
+    if selected.is_none() {
+        *rejection_count = (*rejection_count).saturating_add(1);
     }
+    selected
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1613,6 +1635,8 @@ impl UnicornMips {
             saved_context: None,
             #[cfg(feature = "unicorn")]
             saved_context_thread_birth: None,
+            #[cfg(feature = "unicorn")]
+            staging_provenance_rejections: 0,
             #[cfg(feature = "unicorn")]
             saved_worker_exit_birth: None,
         })
@@ -6763,6 +6787,10 @@ impl UnicornMips {
                 #[cfg(feature = "unicorn")]
                 saved_context_thread_birth: self.saved_context_thread_birth.take(),
                 #[cfg(feature = "unicorn")]
+                staging_provenance_rejections: std::mem::take(
+                    &mut self.staging_provenance_rejections,
+                ),
+                #[cfg(feature = "unicorn")]
                 saved_worker_exit_birth: self.saved_worker_exit_birth.take(),
             }),
             blocked_send_id,
@@ -7079,15 +7107,18 @@ impl UnicornMips {
                 )),
             };
         }
-        if self.saved_context.is_some()
-            && self.current_thread_id != self.initial_thread_id
-            && self.saved_context_thread_birth.is_some_and(|saved_birth| {
-                kernel
-                    .handles
-                    .thread_birth_key_by_id(self.current_thread_id)
-                    != Some(saved_birth)
+        let saved_context_has_current_birth = self.saved_context.as_ref().is_none_or(|saved| {
+            self.saved_context_thread_birth.is_some_and(|saved_birth| {
+                saved_birth.thread_id() == self.current_thread_id
+                    && (kernel.handles.thread_birth_key_by_id(self.current_thread_id)
+                        == Some(saved_birth)
+                        || (self.current_thread_id != self.initial_thread_id
+                            && saved.pc == THREAD_EXIT_STUB_ADDR
+                            && self.saved_worker_exit_birth == Some(saved_birth)
+                            && kernel.handles.thread_birth_key_by_id(self.current_thread_id).is_none()))
             })
-        {
+        });
+        if !saved_context_has_current_birth {
             self.private_slab_attempt_poisoned = true;
             self.saved_context = None;
             self.saved_context_thread_birth = None;
@@ -7591,7 +7622,11 @@ impl UnicornMips {
             self.saved_context.as_ref()
         } {
             native_context_restored = uc
-                .restore_if_exact(&(self.current_thread_id, saved.clone()))
+                .restore_if_exact(&(
+                    self.current_thread_id,
+                    slice_entry_thread_birth,
+                    saved.clone(),
+                ))
                 .map_err(|err| Error::Backend(format!("restore native task context: {err:?}")))?;
             if !native_context_restored {
                 restore_mips_context_checked(&mut uc, &saved.regs).map_err(|err| {
@@ -9333,12 +9368,10 @@ impl UnicornMips {
                     }
                 }
                 if address == THREAD_EXIT_STUB_ADDR {
-                    let active_thread_id = current_thread_id_hook.get().0;
+                    let (active_thread_id, active_thread_birth) = current_thread_id_hook.get();
                     let no_running_thread = running_guest_thread_hook.borrow().is_none();
                     if no_running_thread && active_thread_id != process_primary_thread_id {
-                        let expected_birth = (active_thread_id == slice_entry_thread_id)
-                            .then_some(slice_entry_thread_birth)
-                            .flatten();
+                        let expected_birth = active_thread_birth;
                         *worker_exit_birth_import_hook.borrow_mut() = expected_birth;
                         let live_birth = unsafe { &*kernel_ptr }
                             .handles
@@ -11852,8 +11885,9 @@ impl UnicornMips {
         // Preserve native-only registers and branch metadata only for the
         // authentic context produced by this attempt. Any subsequent scalar
         // repair, callback preparation or thread selection invalidates its key.
+        let native_stop_thread = current_thread_id.get();
         let native_capture_result = capture_saved_cpu_context_checked(&uc)
-            .and_then(|context| uc.capture((current_thread_id.get().0, context)));
+            .and_then(|context| uc.capture((native_stop_thread.0, native_stop_thread.1, context)));
         report.context_capture = match &native_capture_result {
             Ok(_) => AttemptObservation::Value(()),
             Err(err) => AttemptObservation::Error(format!("{err:?}")),
@@ -11862,7 +11896,7 @@ impl UnicornMips {
         // deferred child may change Kernel selection immediately afterward.
         report.end_process_id = Some(native_owner_pid);
         report.end_process_birth = report.start_process_birth;
-        report.end_thread_id = Some(current_thread_id.get().0);
+        report.end_thread_id = Some(native_stop_thread.0);
         report.raw_stop_pc = match uc.reg_read(RegisterMIPS::PC) {
             Ok(value) => match u32::try_from(value) {
                 Ok(pc) => AttemptObservation::Value(pc),
@@ -12197,7 +12231,8 @@ impl UnicornMips {
                 saved,
                 executed_thread_id,
                 staged_worker_exit_birth,
-                slice_entry_thread_birth,
+                native_stop_thread,
+                &mut self.staging_provenance_rejections,
             )
         });
         if !diagnostic_private {
@@ -12306,6 +12341,24 @@ impl UnicornMips {
                     "private native post-run tail"
                 )
             }};
+        }
+        if staged_saved_context.is_some() && staged_context_thread_birth.is_none() {
+            tracing::error!(
+                target: "ce.scheduler",
+                executed_thread_id,
+                native_stop_tid = native_stop_thread.0,
+                captured_birth = ?native_stop_thread.1,
+                live_birth = ?kernel.handles.thread_birth_key_by_id(executed_thread_id),
+                rejection_count = self.staging_provenance_rejections,
+                "rejecting native slice with missing or mismatched register provenance"
+            );
+            self.saved_context_thread_birth = None;
+            self.saved_worker_exit_birth = None;
+            reject_private_attempt!(
+                Error::Backend("native staged context has stale or unverified thread birth".to_owned()),
+                NativeSliceOutcome::BackendError,
+                "native staged context thread birth"
+            );
         }
         let decoded_kernel_exit = self
             .last_debug
@@ -13146,6 +13199,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             guest_thread_stack_slots: std::collections::BTreeMap::new(),
             saved_context: None,
             saved_context_thread_birth: None,
+            staging_provenance_rejections: 0,
             saved_worker_exit_birth: None,
             private_slab_attempt_poisoned: false,
             completed_active_process_exit: false,
@@ -19938,7 +19992,7 @@ fn try_resume_blocked_modal_message_box<D>(
     if save_active_context && active_thread_id != modal.thread_id {
         let mut current = SuspendedGuestThread {
             thread_id: active_thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+            thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
             thread_handle: running_thread
                 .borrow()
                 .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -20185,7 +20239,7 @@ fn try_resume_blocked_popup_menu_modal<D>(
             if save_active_context {
                 let mut current = SuspendedGuestThread {
                     thread_id: active_thread_id,
-                    thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+                    thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
                     thread_handle: running_thread
                         .borrow()
                         .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -20402,7 +20456,7 @@ fn try_resume_blocked_send_message_timeout<D>(
     if save_active_context {
         let mut current = SuspendedGuestThread {
             thread_id: active_thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+            thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
             thread_handle: running_thread
                 .borrow()
                 .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -20703,7 +20757,7 @@ fn try_resume_blocked_clipboard_data<D>(
     if save_active_context {
         let mut current = SuspendedGuestThread {
             thread_id: active_thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+            thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
             thread_handle: running_thread
                 .borrow()
                 .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -22954,7 +23008,7 @@ fn try_suspend_sleep<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    let suspended_thread_birth = kernel.handles.thread_birth_key_by_id(thread_id);
+    let suspended_thread_birth = current_thread_id.get().1.filter(|birth| birth.thread_id() == thread_id);
     let capture = |uc: &unicorn_engine::Unicorn<'_, D>, thread_handle| {
         let mut suspended = SuspendedGuestThread {
             thread_id,
@@ -23038,7 +23092,7 @@ fn try_yield_sleep<D>(
 
     let mut yielding = SuspendedGuestThread {
         thread_id,
-        thread_birth: kernel.handles.thread_birth_key_by_id(thread_id),
+        thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == thread_id),
         thread_handle: running_thread
             .borrow()
             .and_then(|(id, handle)| (id == thread_id).then_some(handle)),
@@ -24979,7 +25033,7 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     if save_active_context {
         let mut current = SuspendedGuestThread {
             thread_id: active_thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+            thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
             thread_handle: running_thread
                 .borrow()
                 .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -32087,7 +32141,7 @@ mod wait_scheduler_tests {
         );
         assert!(kernel.post_message_w(hwnd, crate::ce::gwe::WM_USER + 0x44, 0x45, 0x46));
 
-        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(worker_thread_id, None));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(worker_thread_id, Some(worker_birth)));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(vec![
             super::PendingGuestThreadReturn {
                 creator_thread_id,
@@ -32128,7 +32182,7 @@ mod wait_scheduler_tests {
             &running_thread,
         ));
 
-        assert_eq!(current_thread_id.get().0, creator_thread_id);
+        assert_eq!(current_thread_id.get(), (creator_thread_id, Some(creator_birth)));
         assert_eq!(*running_thread.borrow(), None);
         assert!(pending_returns.borrow().is_empty());
         assert_eq!(
@@ -32150,7 +32204,25 @@ mod wait_scheduler_tests {
         assert_eq!(suspended.pc, worker_pc);
         assert_eq!(suspended.regs.regs[2], 0xeeee_0001);
         assert_eq!(suspended.regs.regs[17], 0x7777_0007);
+        assert_eq!(suspended.thread_birth, Some(worker_birth));
         assert!(suspended_queue.borrow().is_empty());
+        let mut scheduler = super::UnicornMips::new().unwrap();
+        let creator_saved = super::SavedCpuContext {
+            pc: creator_return_pc,
+            regs: super::capture_mips_gprs(&uc),
+        };
+        assert_eq!(
+            super::select_staged_context_thread_birth(
+                &kernel,
+                &creator_saved,
+                creator_thread_id,
+                None,
+                current_thread_id.get(),
+                &mut scheduler.staging_provenance_rejections,
+            ),
+            Some(creator_birth),
+        );
+        assert_eq!(scheduler.staging_provenance_rejections, 0);
     }
 
     #[test]
@@ -32310,7 +32382,8 @@ mod wait_scheduler_tests {
         .unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x0040_1000).unwrap();
         uc.reg_write(RegisterMIPS::SP, 0x7fff_0000).unwrap();
-        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(1_u32, None));
+        let boot_birth = kernel.handles.thread_birth_key_by_id(1).expect("boot thread birth");
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(1_u32, Some(boot_birth)));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let stack_slots =
@@ -34485,10 +34558,12 @@ mod wait_scheduler_tests {
             &old_saved,
             thread_id,
             None,
-            Some(old_birth),
+            (thread_id, Some(old_birth)),
+            &mut scheduler.staging_provenance_rejections,
         );
 
-        assert_ne!(stamped, Some(new_birth), "A's registers were stamped as B");
+        assert_eq!(stamped, None, "A's registers must be rejected");
+        assert_eq!(scheduler.staging_provenance_rejections, 1);
         assert_eq!(scheduler.saved_context.as_ref(), Some(&new_saved));
         assert_eq!(scheduler.saved_context_thread_birth, Some(new_birth));
         assert_eq!(scheduler.guest_thread_stack_slots.get(&thread_id), Some(&9));
@@ -35102,14 +35177,20 @@ fn try_enter_create_thread_callout<D>(
     let parameter = args.get(3).copied().unwrap_or(0);
     let suspended = create_flags & 0x0000_0004 != 0;
     let thread_id_ptr = args.get(5).copied().unwrap_or(0);
-    let Some(creator_birth) = kernel.handles.thread_birth_key_by_id(creator_thread_id) else {
-        kernel.threads.set_last_error(
-            creator_thread_id,
-            crate::ce::thread::ERROR_INVALID_PARAMETER,
-        );
-        let _ = uc.reg_write(RegisterMIPS::V0, 0);
+    let (captured_creator_thread_id, Some(creator_birth)) = current_thread_id.get() else {
+        tracing::error!(target: "ce.scheduler", creator_thread_id, "CreateThread has no verified caller register birth");
+        let _ = uc.emu_stop();
         return true;
     };
+    if captured_creator_thread_id != creator_thread_id
+        || creator_birth.thread_id() != creator_thread_id
+        || kernel.handles.thread_birth_key_by_id(creator_thread_id) != Some(creator_birth)
+        || !kernel.handles.thread_execution_live_by_id(creator_thread_id)
+    {
+        tracing::error!(target: "ce.scheduler", creator_thread_id, captured_creator_thread_id, ?creator_birth, "CreateThread caller register birth is stale");
+        let _ = uc.emu_stop();
+        return true;
+    }
     if thread_id_ptr != 0
         && validate_native_guest_writable_u32(uc, sealed_host_write_guard, thread_id_ptr).is_err()
     {
@@ -35138,7 +35219,11 @@ fn try_enter_create_thread_callout<D>(
             return true;
         }
     };
-    let Some(worker_birth) = kernel.handles.thread_birth_key_by_id(worker_thread_id) else {
+    let Some(worker_birth) = kernel
+        .handles
+        .thread_birth_key_for_handle(thread_handle)
+        .filter(|birth| birth.thread_id() == worker_thread_id)
+    else {
         let _ = kernel.discard_unpublished_guest_thread(thread_handle, worker_thread_id);
         kernel.threads.set_last_error(
             creator_thread_id,
@@ -35185,7 +35270,7 @@ fn try_enter_create_thread_callout<D>(
         return_pc,
         creator_regs,
     });
-    current_thread_id.set_unverified(worker_thread_id);
+    current_thread_id.set_verified(worker_birth);
     let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
     let active_stack_pointer = read_mips_reg(uc, RegisterMIPS::SP);
@@ -35254,6 +35339,20 @@ fn try_enter_resumed_thread_callout<D>(
     }) {
         return false;
     }
+    let (captured_creator_thread_id, Some(creator_birth)) = current_thread_id.get() else {
+        tracing::error!(target: "ce.scheduler", creator_thread_id, "ResumeThread has no verified caller register birth");
+        let _ = uc.emu_stop();
+        return true;
+    };
+    if captured_creator_thread_id != creator_thread_id
+        || creator_birth.thread_id() != creator_thread_id
+        || kernel.handles.thread_birth_key_by_id(creator_thread_id) != Some(creator_birth)
+        || !kernel.handles.thread_execution_live_by_id(creator_thread_id)
+    {
+        tracing::error!(target: "ce.scheduler", creator_thread_id, captured_creator_thread_id, ?creator_birth, "ResumeThread caller register birth is stale");
+        let _ = uc.emu_stop();
+        return true;
+    }
     if result == 1
         && let Some(resumed) = self_suspended_threads.borrow_mut().remove(&thread_handle)
     {
@@ -35263,7 +35362,7 @@ fn try_enter_resumed_thread_callout<D>(
         }
         let mut creator = SuspendedGuestThread {
             thread_id: creator_thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(creator_thread_id),
+            thread_birth: Some(creator_birth),
             thread_handle: active_running_thread
                 .and_then(|(id, handle)| (id == creator_thread_id).then_some(handle)),
             regs: capture_mips_gprs(uc),
@@ -35281,10 +35380,19 @@ fn try_enter_resumed_thread_callout<D>(
     else {
         return false;
     };
+    let Some(worker_birth) = kernel
+        .handles
+        .thread_birth_key_for_handle(thread_handle)
+        .filter(|birth| birth.thread_id() == worker_thread_id)
+    else {
+        tracing::error!(target: "ce.scheduler", worker_thread_id, thread_handle, "ResumeThread worker has no canonical birth");
+        let _ = uc.emu_stop();
+        return true;
+    };
 
     let mut creator = SuspendedGuestThread {
         thread_id: creator_thread_id,
-        thread_birth: kernel.handles.thread_birth_key_by_id(creator_thread_id),
+        thread_birth: Some(creator_birth),
         thread_handle: active_running_thread
             .and_then(|(id, handle)| (id == creator_thread_id).then_some(handle)),
         regs: capture_mips_gprs(uc),
@@ -35294,7 +35402,7 @@ fn try_enter_resumed_thread_callout<D>(
     if !push_suspended_guest_thread(suspended_thread, Some(suspended_queue), creator) {
         return false;
     }
-    current_thread_id.set_unverified(worker_thread_id);
+    current_thread_id.set_verified(worker_birth);
     let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
 
@@ -35651,7 +35759,7 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
         if save_active_context {
             let mut current = SuspendedGuestThread {
                 thread_id: active_thread_id,
-                thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+                thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
                 thread_handle: running_thread
                     .borrow()
                     .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -35755,7 +35863,7 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
     if save_active_context {
         let mut current = SuspendedGuestThread {
             thread_id: active_thread_id,
-            thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+            thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
             thread_handle: running_thread
                 .borrow()
                 .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -35812,6 +35920,9 @@ fn suspended_guest_thread_has_live_birth(
         birth.thread_id() == suspended.thread_id
             && kernel.handles.thread_birth_key_by_id(suspended.thread_id) == Some(birth)
             && kernel.handles.thread_execution_live_by_id(suspended.thread_id)
+            && suspended.thread_handle.is_none_or(|handle| {
+                kernel.handles.thread_birth_key_for_handle(handle) == Some(birth)
+            })
     })
 }
 
@@ -35845,11 +35956,12 @@ fn activate_suspended_thread<D>(
         reject_stale_suspended_guest_thread(uc, kernel, suspended);
         return false;
     }
-    let active_thread_id = suspended
-        .thread_handle
-        .and_then(|handle| kernel.guest_thread_id(handle))
-        .unwrap_or(suspended.thread_id);
-    current_thread_id.set_unverified(active_thread_id);
+    let active_thread_id = suspended.thread_id;
+    let Some(active_birth) = suspended.thread_birth else {
+        reject_stale_suspended_guest_thread(uc, kernel, suspended);
+        return false;
+    };
+    current_thread_id.set_verified(active_birth);
     let _ = update_user_kdata_current_ids(uc, active_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = suspended
         .thread_handle
@@ -36011,7 +36123,7 @@ fn try_timeslice_to_suspended_thread<D>(
     }
     let active = SuspendedGuestThread {
         thread_id: active_thread_id,
-        thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+        thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
         thread_handle: running_thread
             .borrow()
             .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
@@ -36060,7 +36172,7 @@ fn try_timeslice_to_pending_guest_thread_creator<D>(
 
     let mut worker = SuspendedGuestThread {
         thread_id: active_thread_id,
-        thread_birth: kernel.handles.thread_birth_key_by_id(active_thread_id),
+        thread_birth: current_thread_id.get().1.filter(|birth| birth.thread_id() == active_thread_id),
         thread_handle: Some(callout.thread_handle),
         regs: capture_mips_gprs(uc),
         pc: active_pc,
@@ -69497,7 +69609,7 @@ mod unicorn_tests {
                     max_msg: message.msg,
                 };
                 let blocked = Rc::new(RefCell::new(Some(blocked_record.clone())));
-                let current = Rc::new(RefCell::new(1));
+                let current = Rc::new(super::NativeCurrentThread::new(1, None));
                 let running = Rc::new(RefCell::new(None));
                 let displaced = Rc::new(RefCell::new(Vec::new()));
                 let suspended = Rc::new(RefCell::new(None));
