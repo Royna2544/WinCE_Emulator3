@@ -29840,11 +29840,14 @@ fn virtual_protect_raw<M: CoredllGuestMemory>(
         return true;
     }
     if end.is_some_and(|end| {
-        kernel.memory.virtual_allocations_for(owner).any(|allocation| {
-            allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
-                && u64::from(address) < u64::from(allocation.base) + u64::from(allocation.size)
-                && u64::from(end) > u64::from(allocation.base)
-        })
+        kernel
+            .memory
+            .virtual_allocations_for(owner)
+            .any(|allocation| {
+                allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
+                    && u64::from(address) < u64::from(allocation.base) + u64::from(allocation.size)
+                    && u64::from(end) > u64::from(allocation.base)
+            })
     }) {
         // A pointer-mapped shared page needs a checked native mem_protect
         // transaction. Do not report legacy success without changing it.
@@ -30234,7 +30237,11 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    if mapping.views.iter().any(|view| view.process_birth.is_none()) {
+    if mapping
+        .views
+        .iter()
+        .any(|view| view.process_birth.is_none())
+    {
         // A legacy DIB view owns copy-backed bytes for this object. Mixing a
         // public pointer-mapped view into it would create dual authorities.
         kernel
@@ -30268,12 +30275,18 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
     let seed_size = match size.checked_add(0xfff) {
         Some(size) => (size & !0xfff) as usize,
         None => {
-            kernel.threads.set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
             return 0;
         }
     };
     let initial_bytes = if let Some(file_id) = file_id {
-        match kernel.read_file_at(file_id, offset_low as usize, seed_size.min(remaining as usize)) {
+        match kernel.read_file_at(
+            file_id,
+            offset_low as usize,
+            seed_size.min(remaining as usize),
+        ) {
             Ok(mut bytes) => {
                 bytes.resize(seed_size, 0);
                 bytes
@@ -30298,7 +30311,9 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
             None
         } else {
             let Some(aligned) = len.checked_add(0xfff).map(|size| size & !0xfff) else {
-                kernel.threads.set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
                 return 0;
             };
             match kernel.read_file_at(file_id, 0, aligned.min(mapping_size as usize)) {
@@ -30307,7 +30322,9 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
                     Some(bytes)
                 }
                 Err(_) => {
-                    kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
                     return 0;
                 }
             }
@@ -30321,7 +30338,10 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    if memory.native_shared_view_owner().is_some_and(|native| native != owner) {
+    if memory
+        .native_shared_view_owner()
+        .is_some_and(|native| native != owner)
+    {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -30377,7 +30397,9 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
     if !was_slab && !mapping.transition_to_slab() {
         let _ = kernel.memory.release_shared_view(owner, base);
         kernel.memory.forget_shared_mapping(mapping_handle);
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     // The Legacy Vec is now gone. All public view bytes live only in the
@@ -30451,18 +30473,24 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return None;
     };
-    if memory.native_shared_view_owner().is_some_and(|native| native != owner) {
+    if memory
+        .native_shared_view_owner()
+        .is_some_and(|native| native != owner)
+    {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return None;
     }
-    if let Some((handle, mapping, view)) = kernel.handles.file_mapping_view_for_birth(owner, base)
-    {
-        if !kernel.memory.virtual_allocation(owner, base).is_some_and(|allocation| {
-            allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
-                && allocation.source == VirtualAllocationSource::FileViewSlab
-        }) {
+    if let Some((handle, mapping, view)) = kernel.handles.file_mapping_view_for_birth(owner, base) {
+        if !kernel
+            .memory
+            .virtual_allocation(owner, base)
+            .is_some_and(|allocation| {
+                allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
+                    && allocation.source == VirtualAllocationSource::FileViewSlab
+            })
+        {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -30488,7 +30516,9 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
         } else {
             // A raw adapter has its own copied guest bytes. Commit the
             // changed prefix, then read back from the canonical page.
-            if !kernel.memory.shared_mapping_write(handle, view.offset, &bytes)
+            if !kernel
+                .memory
+                .shared_mapping_write(handle, view.offset, &bytes)
                 || !kernel
                     .memory
                     .shared_mapping_read(handle, view.offset, &mut bytes)
@@ -30498,14 +30528,8 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
                 return None;
             }
-            if !sync_shared_mapping_views_to_guest(
-                memory,
-                base,
-                owner,
-                view.offset,
-                &views,
-                &bytes,
-            ) {
+            if !sync_shared_mapping_views_to_guest(memory, base, owner, view.offset, &views, &bytes)
+            {
                 kernel
                     .threads
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -30539,7 +30563,9 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
     let file_id = mapping.file_id;
     let count = bytes_to_commit.unwrap_or(view.size).min(view.size);
     let Some(end) = (view.offset as usize).checked_add(count as usize) else {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return None;
     };
     let old_len = mapping.legacy_data().map_or(0, |data| data.len());
@@ -30547,7 +30573,9 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
     let extension = match legacy_mapping_extension_from_file(kernel, file_id, old_len, end) {
         Ok(extension) => extension,
         Err(_) => {
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
             return None;
         }
     };
@@ -30557,7 +30585,9 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
         let end = start + bytes.len();
         let views = mapping.views.clone();
         let Some(data) = mapping.legacy_data_mut() else {
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return None;
         };
         if end > data.len() {
@@ -30680,7 +30710,9 @@ fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
         let _ = kernel.write_file_at(file_id, view.offset as usize, &bytes);
     }
     let removed = if backing == Some(VirtualAllocationBacking::StableSharedViewSlab) {
-        kernel.handles.remove_file_mapping_view_for_birth(owner, base)
+        kernel
+            .handles
+            .remove_file_mapping_view_for_birth(owner, base)
     } else {
         kernel
             .handles
@@ -50691,7 +50723,11 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
                 return 0;
             }
-            (mapping.size, mapping.file_id, mapping.legacy_data().unwrap_or_default().to_vec())
+            (
+                mapping.size,
+                mapping.file_id,
+                mapping.legacy_data().unwrap_or_default().to_vec(),
+            )
         };
         let Some(section_end) = offset.checked_add(byte_count) else {
             kernel
@@ -50736,7 +50772,9 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
     };
     let section_extension = if let Some(bytes) = section_bytes.as_ref() {
         let Ok(mapping) = kernel.handles.file_mapping(section) else {
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
             return 0;
         };
         let old_len = mapping.legacy_data().map_or(0, |data| data.len());
@@ -50745,7 +50783,9 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
         match legacy_mapping_extension_from_file(kernel, file_id, old_len, end) {
             Ok(extension) => Some(extension),
             Err(_) => {
-                kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
                 return 0;
             }
         }
@@ -50780,12 +50820,16 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
         let end = start + bytes.len();
         let Ok(mapping) = kernel.handles.file_mapping_mut(section) else {
             let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
             return 0;
         };
         let Some(data) = mapping.legacy_data_mut() else {
             let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return 0;
         };
         if end > data.len() {
@@ -71476,7 +71520,12 @@ mod tests {
                 kernel.threads.get_last_error(child_thread),
                 ERROR_INVALID_PARAMETER
             );
-            assert!(kernel.handles.file_mapping_view_for_birth(parent, base).is_some());
+            assert!(
+                kernel
+                    .handles
+                    .file_mapping_view_for_birth(parent, base)
+                    .is_some()
+            );
             assert!(kernel.memory.virtual_allocation(parent, base).is_some());
             assert!(
                 kernel
@@ -71485,7 +71534,11 @@ mod tests {
                     .is_none()
             );
             let mut canonical = [0; 1];
-            assert!(kernel.memory.shared_mapping_read(mapping, 0, &mut canonical));
+            assert!(
+                kernel
+                    .memory
+                    .shared_mapping_read(mapping, 0, &mut canonical)
+            );
             assert_eq!(canonical, [0]);
         }
 
@@ -71504,7 +71557,11 @@ mod tests {
             }
         ));
         let mut canonical = [0; 1];
-        assert!(kernel.memory.shared_mapping_read(mapping, 0, &mut canonical));
+        assert!(
+            kernel
+                .memory
+                .shared_mapping_read(mapping, 0, &mut canonical)
+        );
         assert_eq!(canonical, [0xa5]);
         assert!(matches!(
             table.dispatch_raw_ordinal_with_memory(
@@ -71519,7 +71576,12 @@ mod tests {
                 ..
             }
         ));
-        assert!(kernel.handles.file_mapping_view_for_birth(parent, base).is_none());
+        assert!(
+            kernel
+                .handles
+                .file_mapping_view_for_birth(parent, base)
+                .is_none()
+        );
         assert!(kernel.memory.virtual_allocation(parent, base).is_none());
         Ok(())
     }

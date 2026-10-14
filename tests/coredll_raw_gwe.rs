@@ -164,8 +164,7 @@ use wince_emulation_v3::{
         thread::{
             ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_ACCESS, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
-            ERROR_NOT_SUPPORTED,
-            ERROR_RESOURCE_NAME_NOT_FOUND,
+            ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND,
         },
     },
     config::RuntimeConfig,
@@ -8872,7 +8871,9 @@ fn coredll_raw_create_dibsection_backs_bits_with_file_mapping_section() -> Resul
     ));
     let mapping_state = kernel.handles.file_mapping(mapping)?;
     assert_eq!(
-        &mapping_state.legacy_data().expect("DIB backing is still legacy")
+        &mapping_state
+            .legacy_data()
+            .expect("DIB backing is still legacy")
             [section_offset as usize..section_offset as usize + pixels.len()],
         &pixels
     );
@@ -9184,7 +9185,9 @@ fn coredll_raw_section_backed_dibsections_share_mapping_bytes() -> Result<()> {
     );
     let mapping_state = kernel.handles.file_mapping(mapping)?;
     assert_eq!(
-        &mapping_state.legacy_data().expect("DIB backing is still legacy")
+        &mapping_state
+            .legacy_data()
+            .expect("DIB backing is still legacy")
             [section_offset as usize..section_offset as usize + second_pixels.len()],
         &second_pixels
     );
@@ -9381,7 +9384,14 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
         &mut memory,
         thread_id,
         ORD_CREATE_FILE_MAPPING_W,
-        [INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, MAPPING_SIZE, mapping_name],
+        [
+            INVALID_HANDLE_VALUE,
+            0,
+            PAGE_READWRITE,
+            0,
+            MAPPING_SIZE,
+            mapping_name,
+        ],
     ) {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),
@@ -9463,7 +9473,9 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
     assert_eq!(memory.read_bytes(bits_b, dirty_pixels.len()), dirty_pixels);
     let mapping_state = kernel.handles.file_mapping(mapping)?;
     assert_eq!(
-        &mapping_state.legacy_data().expect("DIB backing is still legacy")
+        &mapping_state
+            .legacy_data()
+            .expect("DIB backing is still legacy")
             [section_offset as usize..section_offset as usize + dirty_pixels.len()],
         &dirty_pixels
     );
@@ -9502,7 +9514,10 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
             ..
         }
     ));
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_NOT_ENOUGH_MEMORY);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_ENOUGH_MEMORY
+    );
     assert!(!kernel.handles.file_mapping(mapping)?.is_slab());
     assert!(!kernel.memory.has_shared_mapping(mapping));
     assert_eq!(kernel.memory.private_commit_used_bytes(), original_used);
@@ -9511,7 +9526,9 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
             [section_offset as usize..section_offset as usize + dirty_pixels.len()],
         &dirty_pixels
     );
-    kernel.memory.configure_guest_physical_ram_bytes(original_ram);
+    kernel
+        .memory
+        .configure_guest_physical_ram_bytes(original_ram);
 
     // The first public view is disjoint from the old DIB bytes. Migration must
     // still carry the entire legacy mapping into charged canonical pages.
@@ -9548,7 +9565,10 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
         dirty_pixels
     );
     assert!(kernel.handles.file_mapping(mapping)?.is_slab());
-    assert_eq!(kernel.memory.private_commit_used_bytes(), original_used + 8192);
+    assert_eq!(
+        kernel.memory.private_commit_used_bytes(),
+        original_used + 8192
+    );
 
     // A new DIB view cannot reopen the old copy-backed path after migration.
     assert!(matches!(
@@ -9564,7 +9584,10 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
             ..
         }
     ));
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     // A distinct process opens the named object and sees the DIB-written bytes.
     let parent = kernel.current_process_state();
@@ -9577,7 +9600,14 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
         &mut child_memory,
         child.thread_id,
         ORD_CREATE_FILE_MAPPING_W,
-        [INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, MAPPING_SIZE, mapping_name],
+        [
+            INVALID_HANDLE_VALUE,
+            0,
+            PAGE_READWRITE,
+            0,
+            MAPPING_SIZE,
+            mapping_name,
+        ],
     ) {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),

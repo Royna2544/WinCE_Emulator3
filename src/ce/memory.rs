@@ -1663,7 +1663,11 @@ impl MemorySystem {
         }
         let missing = requested_pages
             .into_iter()
-            .filter(|page_offset| !self.stable_shared_pages.contains_key(&(mapping_handle, *page_offset)))
+            .filter(|page_offset| {
+                !self
+                    .stable_shared_pages
+                    .contains_key(&(mapping_handle, *page_offset))
+            })
             .collect::<Vec<_>>();
         if !self.private_page_budget.can_fit(missing.len()) {
             return None;
@@ -1676,11 +1680,13 @@ impl MemorySystem {
                 .filter(|bytes| (page_offset as usize) < bytes.len())
                 .map(|bytes| (bytes, page_offset as usize))
                 .or_else(|| {
-                (page_offset >= offset && page_offset < offset.saturating_add(mapped_size))
-                    .then_some((initial_bytes, (page_offset - offset) as usize))
-            });
+                    (page_offset >= offset && page_offset < offset.saturating_add(mapped_size))
+                        .then_some((initial_bytes, (page_offset - offset) as usize))
+                });
             let (seed, start) = source.unwrap_or((&[][..], 0));
-            let end = start.saturating_add(STABLE_PRIVATE_PAGE_SIZE).min(seed.len());
+            let end = start
+                .saturating_add(STABLE_PRIVATE_PAGE_SIZE)
+                .min(seed.len());
             let pin = StablePrivatePagePin {
                 identity: PrivatePageIdentity {
                     owner,
@@ -1695,7 +1701,9 @@ impl MemorySystem {
             }
             if let Some(legacy) = legacy_bytes {
                 let start = page_offset as usize;
-                let end = start.saturating_add(STABLE_PRIVATE_PAGE_SIZE).min(legacy.len());
+                let end = start
+                    .saturating_add(STABLE_PRIVATE_PAGE_SIZE)
+                    .min(legacy.len());
                 if start < end {
                     pin.write_bytes(0, &legacy[start..end]).ok()?;
                 }
@@ -1774,7 +1782,9 @@ impl MemorySystem {
     }
 
     pub fn has_shared_mapping(&self, handle: u32) -> bool {
-        self.stable_shared_pages.keys().any(|(mapped, _)| *mapped == handle)
+        self.stable_shared_pages
+            .keys()
+            .any(|(mapped, _)| *mapped == handle)
     }
 
     pub fn shared_mapping_write(&self, handle: u32, offset: u32, bytes: &[u8]) -> bool {
@@ -1805,8 +1815,8 @@ impl MemorySystem {
             {
                 return false;
             }
-            check = (check & !(STABLE_PRIVATE_PAGE_SIZE - 1))
-                .saturating_add(STABLE_PRIVATE_PAGE_SIZE);
+            check =
+                (check & !(STABLE_PRIVATE_PAGE_SIZE - 1)).saturating_add(STABLE_PRIVATE_PAGE_SIZE);
         }
         let mut copied = 0;
         while copied < bytes.len() {
@@ -1974,13 +1984,11 @@ impl MemorySystem {
         &self,
         owner: ProcessBirthKey,
     ) -> impl Iterator<Item = &VirtualAllocation> {
-        self.virtual_allocations
-            .values()
-            .filter(move |allocation| {
-                allocation.owner == owner
-                    || (allocation.backing == VirtualAllocationBacking::LegacySeed
-                        && !allocation.source.is_private())
-            })
+        self.virtual_allocations.values().filter(move |allocation| {
+            allocation.owner == owner
+                || (allocation.backing == VirtualAllocationBacking::LegacySeed
+                    && !allocation.source.is_private())
+        })
     }
 
     /// Query the current owner's slab at one address. A reservation can
@@ -2034,7 +2042,10 @@ impl MemorySystem {
                     .is_some_and(|end| address < end)
         })?;
         let region_base = align_down(address, STABLE_PRIVATE_PAGE_SIZE as u32);
-        let page_protect = allocation.private_committed_pages.get(&region_base).copied();
+        let page_protect = allocation
+            .private_committed_pages
+            .get(&region_base)
+            .copied();
         let allocation_end = allocation.base.checked_add(allocation.size)?;
         let mut region_end = region_base;
         while region_end < allocation_end
@@ -2134,7 +2145,9 @@ impl MemorySystem {
         };
         if allocation.backing != VirtualAllocationBacking::StableSharedViewSlab
             || allocation.incarnation != identity.allocation_incarnation
-            || !allocation.private_committed_pages.contains_key(&identity.page_base)
+            || !allocation
+                .private_committed_pages
+                .contains_key(&identity.page_base)
         {
             return false;
         }
