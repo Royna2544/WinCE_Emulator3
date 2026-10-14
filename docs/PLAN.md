@@ -150,9 +150,16 @@ close only their named gates, not Stage 2 or live acceptance.
   pins registered Thread/Process wait targets by exact birth before publishing
   a wait. Completion, timeout, cancellation and failed preparation release
   only acquired pins ([receipt](../evidence/stage3-pins-20261015/validation.receipt.md)).
-  Opaque non-task wait slots and duplicated native wait payloads remain
-  unpinned. CE caller
-  wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
+  The subsequent native prepared-wait slice makes target preparation fallible
+  before pending-callout/old-wait mutation, then publishes the prepared pins;
+  invalid/stale targets and pin exhaustion return `WAIT_FAILED` with a CE last
+  error, leaving the old state intact. Focused failure/retry controls and its
+  bounded [source gate](../evidence/stage3-waitprep-20261015/validation.receipt.md)
+  passed; runtime behavior is a separate acceptance step.
+  Opaque non-task subscriptions have an explicit unpinned compatibility path;
+  duplicated native wait payloads remain unpinned, while synchronous finite
+  inline timeout paths are outside the published-wait pin transaction. CE
+  caller wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
   aliasless Sleep-suspend, stale intra-slice TID continuation and generic
   parked-wait continuation remain open. These bounded source slices are not

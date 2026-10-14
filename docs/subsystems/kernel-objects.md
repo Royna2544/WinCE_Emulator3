@@ -37,6 +37,26 @@ These are retirement conditions, not a proposed immortal per-TID cache. The last
 
 O-K3 pin/retirement representation is a bounded **Stage 3 source gate**: an active or queued task persists with no public alias, and a terminal signaled target persists while an alias or registered task wait owns it. A registered wait completes through its pinned canonical reference after its public alias closes; re-resolving the raw handle at each poll is insufficient. Cancellation and partial preparation release only the references actually acquired, exactly once. The E-11 last-public-handle and wait-pin controls were expected red at the earlier alias-only checkpoint; they are now active and green under the O-K3 source gate. This is not full Stage 3 or live-app acceptance.
 
+The next native wait boundary is a prepare → mutate → publish transaction.
+`CeKernel::prepare_task_wait` resolves ordered object-wait slots and holds
+Thread/Process births in an unpublished guard. Failed preparation releases
+earlier pins, including duplicate slots, and sets the waiting thread's CE
+LastError (`ERROR_INVALID_HANDLE` for invalid/stale targets,
+`ERROR_NOT_ENOUGH_MEMORY` for pin exhaustion). The native
+`WaitForSingleObject`, `WaitForMultipleObjects`, and
+`MsgWaitForMultipleObjectsEx` callers return `WAIT_FAILED` without consuming
+their pending callout or replacing an old blocked wait; successful handoff
+publishes once. Production
+non-object subscriptions use `register_opaque_compatibility_waiter` instead:
+their message, socket, serial and other tokens are not interpreted as task
+handles or pinned merely because a numeric value coincides. The legacy
+`register_blocked_waiter` remains a test/compatibility entry and returns
+reserved wait ID zero on preparation failure, without publication. Focused
+controls cover rollback, failure and retry; the bounded
+[source gate](../../evidence/stage3-waitprep-20261015/validation.receipt.md)
+passed, but the live gate remains separate. Synchronous finite inline timeout paths do not publish a
+wait, and duplicated native wait payloads are not covered by these pins.
+
 Birth is transactional at the API publication boundary. Failed thread-ID/output initialization retires an unpublished creation candidate; ordinary CloseHandle on an established live thread is not that operation. Boot main registration must exist even when no public thread handle is created. Child primary ownership survives pending-launch drain; worker identity records authentic creation ownership.
 
 ## Wait and alias interfaces
