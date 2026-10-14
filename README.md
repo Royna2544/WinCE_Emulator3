@@ -19,7 +19,8 @@ remote-control HTTP/WebSocket surface.
   shared-view named A→B→A and same-mapping alias controls pass focused tests
   and both frozen-source broad suites. One sealed task/frame-qualified run
   outcome, image/heap backing, Stage 2 and the Stage 3 task migration remain
-  open.
+  open. E-42 now validates a pure immutable-image-page eligibility selector;
+  the runtime loader still uses its RWX/copy path.
   Persistent-owner architecture is deferred to Stage 8.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
@@ -98,6 +99,13 @@ remote-control HTTP/WebSocket surface.
   both final gates. This source work did not launch iNavi, measure a new boot
   time, or establish map readiness
   ([D-008 receipt](evidence/d008-shared-view-20261014/validation.receipt.md)).
+- E-42 selects whole R/RX image-page candidates by PE section characteristics
+  and borrows caller-supplied bytes without a helper copy. Expected-red and
+  focused no-feature/Unicorn controls passed; full no-feature passed
+  **1,302/0/13 ignored** across 17 blocks. The synthetic bytes were patched
+  manually, not by the actual loader. No sealed storage, native page mapping,
+  host-write guard, 56-MiB benchmark or app run is claimed
+  ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
 - An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
   and remained on the genuine splash, not the map. Guest `COM7:` reads
   transferred injected raw NMEA bytes, and tap down/up WNDPROC returns were

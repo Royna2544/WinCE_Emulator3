@@ -4,6 +4,26 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-42 Immutable Image-Page Eligibility Source Gate
+
+- A pure PE-loader selector now borrows complete 4-KiB candidate pages from
+  caller-supplied image bytes. Section characteristics, not names, determine
+  R/RX eligibility; headers, writable or execute-only sections, partial or
+  mixed pages, and patch-overlapping pages are excluded. Overflow and
+  out-of-image layouts fail closed. The synthetic test manually changed a
+  supplied `Vec` before selection; it does not execute actual relocation,
+  import or trampoline patching.
+- The expected-red missing-selector compile control preceded final focused
+  **5/0** no-feature and **5/0** debug Unicorn-feature runs. The full
+  no-feature suite passed **1,302/0/13 ignored** across 17 blocks on
+  `src/emulator/pe_loader.rs` SHA-256
+  `30791E94E6F47DD0A8B4B2DA0F1CA42253F4B07519B48CC12C2A083C0F68016A`
+  ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
+- This is a selector-only source gate. Runtime image mapping remains the old
+  RWX/copy path; sealed backing, typed native pins, write guards, clone and
+  readback isolation, a 56-MiB setup benchmark, iNavi timing and Stage 2
+  acceptance are still open. No app run or writable-mount access occurred.
+
 ## 2026-10-14 D-008 Public Shared-View Slab Source Gate
 
 - Public named `CreateFileMappingW`/`MapViewOfFile` views now use one canonical,

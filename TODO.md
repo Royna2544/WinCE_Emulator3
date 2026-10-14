@@ -7,13 +7,15 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Migrate immutable PE image pages after relocation and loader patching:
-   select only non-writable sections from PE characteristics, share pinned
-   pages across fresh owners with the section's read/execute permissions, and
-   prove identity, no-copy setup, write protection, and 200-slice pin churn.
-   Measure setup with a roughly 56-MB synthetic immutable image. Charge the
-   `PrivatePageBudget`, or explain the exception in the receipt; matched iNavi
-   timing requires a separately approved live run.
+0. Migrate the E-42 eligible PE pages after final loader patching. First build
+   segmented sealed-versus-mutable image storage with clone isolation; then
+   add generation-qualified native pins, fresh-owner mapping/reconciliation
+   and zero sealed-page readback. Guard every host image write, including
+   restore/rebinding paths, and fail closed on memory-mode snapshots. Prove
+   pointer identity, guest write protection, independent writable sections,
+   and 200-slice pin churn. Measure setup with a roughly 56-MiB synthetic
+   image, then decide and document `PrivatePageBudget` accounting. Matched
+   iNavi timing needs a separate live-run approval and fresh mount backups.
 1. Migrate writable image sections and heap spillover as separate per-birth
    ownership slices, each with its own focused controls and memory accounting.
 2. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26

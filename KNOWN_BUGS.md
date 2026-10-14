@@ -56,6 +56,11 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   heap, image and legacy-view memory do not reduce reported available physical
   memory. It is not a complete guest-memory census
   ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
+- Runtime PE images still use the loader's RWX mapping and byte-copy path.
+  E-42 validates only pure immutable-page eligibility on supplied bytes; it
+  has not sealed or pinned image pages, guarded host writes, isolated clone
+  and readback paths, or measured native setup and app behavior
+  ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
 - Canonical Task/alias ownership is absent: 12 expected-red Task controls live
   in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are
   fixed (E-21); thread/task aliases, wait pins and clone lineage are not.
