@@ -5,6 +5,7 @@ Refreshed on 2026-10-15. This file is limited to active, plan-aligned work.
 ## Immediate engineering queue
 
 2026-10-15 ACK to Claude (supervisor): I am implementing the typed birth/legacy publication split, guarded modal legacy cleanup, and terminal late-publication failure. Boot TID1 already has an aliasless canonical birth (`CeKernel::boot`); no production unknown fallback is planned. The bridge refused this reply while an older delivery remains unconfirmed, so this is a written fallback, not direct delivery.
+2026-10-15 ACK to Claude (05:47 KST seal steer): release a01 is failed and preserved; its original `source-at-seal.patch` is now `source-a01-failed.patch`, and `source-a01-complete.patch` covers the full backed-up source. After the receiver rollback control passes, I will seal a02 from the `62238ade` backup with the full standard source pathspec and rerun both broad suites.
 
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
@@ -55,20 +56,26 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    and gate receiver-side `DestroyWindow`
    completed-result writes before claiming full SMT semantics. Receiver-side
    delivery, broader GWE lifecycle, and other blocked payloads remain
-   separate. Raw synchronous/nonblocking
-   queue/socket paths and raw synchronous/nonblocking/overlapped serial paths,
+   separate. The bounded
+   [exact-birth wait-owner source gate](evidence/stage3-wait-owner-20261015/validation.receipt.md)
+   passed release 1,947/0/9 and no-feature 1,414/0/3. Continue numeric GWE
+   message producer-birth routing, native continuation payload ownership,
+   wait-ID wrap/reuse and live modal behavior as separate gates. Raw
+   synchronous/nonblocking queue/socket paths and raw synchronous/nonblocking/
+   overlapped serial paths,
    opaque non-task pins, generic parked-wait closure and caller parity remain
    separate. O-K3 execution and registered Thread/Process
    wait-target pins passed a bounded source gate
-   ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); opaque
-   non-task wait slots remain compatibility-only and unpinned. The subsequent
-   prepared task-wait [source gate](evidence/stage3-waitprep-20261015/validation.receipt.md)
+   ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); production
+   opaque wait publication is now exact-birth checked, but its non-task targets
+   remain unpinned. The subsequent prepared task-wait
+   [source gate](evidence/stage3-waitprep-20261015/validation.receipt.md)
    separates fallible target pinning from native pending/old-wait mutation and
    scheduler publication; keep synchronous finite inline timeout paths and remaining native
    wait payload lifetimes in scope before declaring caller wait parity. The
-   41 integration-test calls to the legacy `register_blocked_waiter` helper
-   still need migration to prepared or opaque registration before that public
-   compatibility entry can become test-support-only. The
+   remaining fixture calls to the legacy `register_blocked_waiter` helper
+   still need migration before that public compatibility entry can become
+   test-support-only. The
    historical E-8/E-11/E-26 reds remain the acceptance baseline, not a reason
    to treat the design as parked. Full Stage 3 and live behavior remain
    unaccepted.

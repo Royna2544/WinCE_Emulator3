@@ -70,12 +70,15 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     direct-kernel real-handle continuation fails closed, the root process has
     no owned child-launch handoff for real-handle requests, and the
     current-process pseudo-handle keeps a separate synchronous path.
-  - `TaskWaitStore` is keyed by numeric TID, and numeric message wake hints
-    are unsafe across TID reuse (next gate design in
-    `docs/subsystems/tasks-scheduler.md`).
+  - `TaskWaitStore` now separates exact births from explicit legacy-unknown
+    TIDs, but numeric GWE message wake hints remain unsafe across TID reuse;
+    same-TID GetMessage producer-birth routing is still open
+    ([source receipt](evidence/stage3-wait-owner-20261015/validation.receipt.md)).
   - Opaque non-task wait slots (queue, socket, serial tokens) and duplicated
-    native wait payloads are unpinned. Synchronous finite inline timeouts
-    publish no scheduler wait. Raw synchronous/nonblocking MsgWait,
+    native wait payloads are unpinned despite exact-birth publication. Wait-ID
+    wrap/reuse and live modal continuation behavior remain unproved.
+    Synchronous finite inline timeouts publish no scheduler wait. Raw
+    synchronous/nonblocking MsgWait,
     queue/socket and serial (including overlapped) paths have no birth guard.
   - The guest return-stub hook has no end-to-end control, and pending-return
     KData PID follows mutable process selection, not the captured lease.

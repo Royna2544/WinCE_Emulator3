@@ -12,6 +12,15 @@ first. Totals are passed/failed/ignored for release
 HEAD and patch, raw logs and EXE/PDB hashes. The per-slice text before this
 condense is at `git show d4263dde:PROGRESS.md`.
 
+- Exact-birth wait ownership
+  ([receipt](evidence/stage3-wait-owner-20261015/validation.receipt.md)):
+  one `TaskWaitStore` now separates exact births from explicit legacy-unknown
+  TIDs; production opaque/prepared wait publication verifies live birth and
+  treats unexpected late failure as terminal backend error. Exact exit and
+  dialog-HWND cleanup preserve a replacement task's waits. The a01 release
+  attempt failed and remains preserved; a02 passed release 1,947/0/9 and
+  no-feature 1,414/0/3 across 18 result blocks each. This is a source gate,
+  not live-app acceptance.
 - Occupied native SendMessageTimeout slot
   ([receipt](evidence/stage3-smt-occupied-20261015/validation.receipt.md)):
   an eligible second sender now stops with a backend error before raw
@@ -83,7 +92,9 @@ condense is at `git show d4263dde:PROGRESS.md`.
   expiry read as ready, receiver-side `DestroyWindow` result writes, an
   end-to-end return-stub control, KData PID from mutable process selection,
   raw queue/socket/serial/MsgWait paths, aliasless Sleep-suspend, opaque
-  non-task pins, caller wait parity and root-process real-handle completion
+  non-task pins, numeric GWE message wake hints, native continuation payloads,
+  wait-ID wrap/reuse and live modal behavior, caller wait parity and
+  root-process real-handle completion
   (`TODO.md`, `KNOWN_BUGS.md`).
 
 ## 2026-10-14 Stage 2 source gates E-30 to E-44 and O-M2
