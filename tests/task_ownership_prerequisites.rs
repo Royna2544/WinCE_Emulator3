@@ -1,6 +1,6 @@
 //! D-007 historical Stage 3 E-8 task-ownership controls.
 //! These call real Kernel lifecycle consumers, not a test-only state model.
-//! Alias-sharing controls are active; creation/primary identity reds stay ignored.
+//! Alias-sharing and creation-owner controls are active; primary identity reds stay ignored.
 
 use wince_emulation_v3::{
     Result,
@@ -118,37 +118,34 @@ fn task_ownership_duplicate_close_source_keeps_thread_alive() -> Result<()> {
 }
 
 #[test]
-#[ignore = "expected red: worker creation owner and Toolhelp still use selected PID"]
 fn task_ownership_pid_is_creation_owner_not_selected_process() -> Result<()> {
     let mut kernel = kernel()?;
     assert_eq!(kernel.current_process_id(), 1);
-    let (_, parent_worker) = kernel.create_guest_thread(0x1000, 0, false);
     let launch = kernel.queue_process_launch(None, None);
     assert_ne!(launch.process_id, 1);
+    // Select the child while boot TID1 creates a parent-owned worker.
     kernel.set_current_process_id(launch.process_id);
-    let (_, child_worker) = kernel.create_guest_thread(0x2000, 0, false);
+    let (_, parent_worker) = kernel.try_create_guest_thread_for_creator(1, 0x1000, 0, false)?;
+    // Select the parent while the child's primary TID creates its worker.
+    kernel.set_current_process_id(1);
+    let (_, child_worker) =
+        kernel.try_create_guest_thread_for_creator(launch.thread_id, 0x2000, 0, false)?;
     // Production consumes the launch queue before child execution.
     let queued = kernel.take_pending_process_launches();
     assert_eq!(queued.len(), 1);
-    let snapshots = kernel.toolhelp_thread_snapshots(launch.thread_id);
-    let owner = |tid| {
-        snapshots
-            .iter()
-            .find(|thread| thread.thread_id == tid)
-            .map(|thread| thread.owner_process_id)
-    };
-    assert_eq!(owner(parent_worker), Some(1));
-    assert_eq!(owner(launch.thread_id), Some(launch.process_id));
-    assert_eq!(owner(child_worker), Some(launch.process_id));
-    kernel.set_current_process_id(1);
-    let snapshots = kernel.toolhelp_thread_snapshots(1);
-    assert_eq!(
-        snapshots
-            .iter()
-            .find(|thread| thread.thread_id == child_worker)
-            .map(|thread| thread.owner_process_id),
-        Some(launch.process_id),
-    );
+    for (selected_pid, current_tid) in [(1, 1), (launch.process_id, launch.thread_id)] {
+        kernel.set_current_process_id(selected_pid);
+        let snapshots = kernel.toolhelp_thread_snapshots(current_tid);
+        let owner = |tid| {
+            snapshots
+                .iter()
+                .find(|thread| thread.thread_id == tid)
+                .map(|thread| thread.owner_process_id)
+        };
+        assert_eq!(owner(parent_worker), Some(1));
+        assert_eq!(owner(launch.thread_id), Some(launch.process_id));
+        assert_eq!(owner(child_worker), Some(launch.process_id));
+    }
     Ok(())
 }
 

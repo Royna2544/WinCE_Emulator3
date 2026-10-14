@@ -288,6 +288,9 @@ impl ThreadHandleObject {
 struct ThreadRecord {
     object: ThreadObject,
     incarnation: u64,
+    /// Frozen at birth; a mutable process selector or public alias cannot
+    /// redefine which process created this thread.
+    creation_owner: Option<ProcessBirthKey>,
     aliases: BTreeSet<u32>,
     execution_live: bool,
 }
@@ -765,6 +768,80 @@ impl HandleTable {
         parameter: u32,
         suspended: bool,
     ) -> Result<u32> {
+        // Direct HandleTable fixtures predate process births. Production
+        // creation uses try_create_thread_in_birth instead.
+        self.try_create_thread_with_owner(thread_id, start_address, parameter, suspended, None)
+    }
+
+    pub fn try_create_thread_in_birth(
+        &mut self,
+        owner: ProcessBirthKey,
+        thread_id: u32,
+        start_address: u32,
+        parameter: u32,
+        suspended: bool,
+    ) -> Result<u32> {
+        if !self.process_birth_can_create_threads(owner) {
+            return Err(Error::InvalidArgument(format!(
+                "thread TID {thread_id} has no live creation-owner birth"
+            )));
+        }
+        self.try_create_thread_with_owner(
+            thread_id,
+            start_address,
+            parameter,
+            suspended,
+            Some(owner),
+        )
+    }
+
+    fn try_create_thread_with_owner(
+        &mut self,
+        thread_id: u32,
+        start_address: u32,
+        parameter: u32,
+        suspended: bool,
+        creation_owner: Option<ProcessBirthKey>,
+    ) -> Result<u32> {
+        let (incarnation, next_incarnation) = self.stage_thread_birth(
+            thread_id,
+            start_address,
+            parameter,
+            suspended,
+            creation_owner,
+        )?;
+        let handle = self.try_insert(KernelObject::Thread(ThreadHandleObject {
+            thread_id,
+            incarnation,
+        }));
+        if handle.is_err() {
+            self.threads.remove(&thread_id);
+        } else {
+            self.next_thread_incarnation = next_incarnation;
+        }
+        handle
+    }
+
+    /// Retain the boot TID without inventing a guest-visible thread handle.
+    pub fn register_boot_thread(&mut self, thread_id: u32, owner: ProcessBirthKey) -> Result<()> {
+        if !self.process_birth_can_create_threads(owner) {
+            return Err(Error::InvalidArgument(format!(
+                "boot thread TID {thread_id} has no live owner birth"
+            )));
+        }
+        let (_, next_incarnation) = self.stage_thread_birth(thread_id, 0, 0, false, Some(owner))?;
+        self.next_thread_incarnation = next_incarnation;
+        Ok(())
+    }
+
+    fn stage_thread_birth(
+        &mut self,
+        thread_id: u32,
+        start_address: u32,
+        parameter: u32,
+        suspended: bool,
+        creation_owner: Option<ProcessBirthKey>,
+    ) -> Result<(u64, u64)> {
         if self.threads.contains_key(&thread_id) {
             return Err(Error::InvalidArgument(format!(
                 "thread TID {thread_id} already has a live birth"
@@ -788,20 +865,12 @@ impl HandleTable {
                     suspend_count: u32::from(suspended),
                 },
                 incarnation,
+                creation_owner,
                 aliases: BTreeSet::new(),
                 execution_live: true,
             },
         );
-        let handle = self.try_insert(KernelObject::Thread(ThreadHandleObject {
-            thread_id,
-            incarnation,
-        }));
-        if handle.is_err() {
-            self.threads.remove(&thread_id);
-        } else {
-            self.next_thread_incarnation = next_incarnation;
-        }
-        handle
+        Ok((incarnation, next_incarnation))
     }
 
     /// Undo a birth whose only alias has not yet been returned to the guest.
@@ -945,6 +1014,12 @@ impl HandleTable {
         self.process_birth_key(key.process_id) == Some(key)
     }
 
+    pub fn process_birth_can_create_threads(&self, key: ProcessBirthKey) -> bool {
+        self.processes.get(&key.process_id).is_some_and(|process| {
+            process.incarnation == key.incarnation && process.execution_live && !process.signaled
+        })
+    }
+
     fn process_for_alias(&self, alias: &ProcessHandleObject) -> Option<&ProcessObject> {
         self.processes
             .get(&alias.process_id)
@@ -1021,6 +1096,21 @@ impl HandleTable {
             thread_id,
             incarnation: record.incarnation,
         })
+    }
+
+    pub fn thread_creation_owner_by_id(&self, thread_id: u32) -> Option<ProcessBirthKey> {
+        self.threads.get(&thread_id)?.creation_owner
+    }
+
+    pub fn live_thread_creation_owner_by_id(&self, thread_id: u32) -> Option<ProcessBirthKey> {
+        let record = self.threads.get(&thread_id)?;
+        (record.execution_live && !record.object.signaled)
+            .then_some(record.creation_owner)
+            .flatten()
+    }
+
+    pub fn thread_creation_owner_for_handle(&self, handle: u32) -> Option<ProcessBirthKey> {
+        self.thread_for_handle(handle)?.creation_owner
     }
 
     pub fn contains_thread_birth(&self, key: ThreadBirthKey) -> bool {

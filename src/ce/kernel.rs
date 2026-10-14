@@ -1282,6 +1282,14 @@ impl CeKernel {
             api_sets: BTreeMap::new(),
         };
         kernel.handles.register_boot_process(1);
+        let boot_birth = kernel
+            .handles
+            .process_birth_key(1)
+            .expect("boot process birth");
+        kernel
+            .handles
+            .register_boot_thread(1, boot_birth)
+            .expect("boot thread birth");
         kernel.publish_configured_mount_device_interfaces(true);
         kernel
     }
@@ -2925,13 +2933,27 @@ impl CeKernel {
     }
 
     pub fn toolhelp_thread_snapshots(&self, current_thread_id: u32) -> Vec<ToolhelpThreadSnapshot> {
+        let current_owner = self
+            .handles
+            .thread_creation_owner_by_id(current_thread_id)
+            .map(ProcessBirthKey::process_id)
+            // Older host-only Toolhelp fixtures supply a synthetic caller TID
+            // without a canonical birth. Preserve that fixture boundary; a
+            // registered thread never falls back to the mutable selector.
+            .or_else(|| {
+                self.handles
+                    .thread_birth_key_by_id(current_thread_id)
+                    .is_none()
+                    .then_some(self.current_process_id)
+            })
+            .unwrap_or(0);
         let mut snapshots = vec![ToolhelpThreadSnapshot {
             thread_id: current_thread_id,
-            owner_process_id: self.current_process_id,
+            owner_process_id: current_owner,
             base_priority: self.thread_priority_by_id(current_thread_id),
             current_priority: self.thread_priority_by_id(current_thread_id),
             flags: 0,
-            current_process_id: self.current_process_id,
+            current_process_id: current_owner,
         }];
         let mut thread_ids = vec![current_thread_id];
         for thread in self.handles.thread_snapshots() {
@@ -2949,11 +2971,10 @@ impl CeKernel {
         thread: &ThreadObject,
     ) -> ToolhelpThreadSnapshot {
         let owner_process_id = self
-            .pending_process_launches
-            .iter()
-            .find(|launch| launch.thread_id == thread.thread_id)
-            .map(|launch| launch.process_id)
-            .unwrap_or(self.current_process_id);
+            .handles
+            .thread_creation_owner_by_id(thread.thread_id)
+            .map(ProcessBirthKey::process_id)
+            .unwrap_or(0);
         let flags = if thread.suspend_count != 0 {
             6
         } else if thread.signaled {
@@ -3052,7 +3073,14 @@ impl CeKernel {
             .expect("process PID exhausted before launch publication");
         let thread_id = self.threads.allocate_guest_thread_id();
         let process_handle = self.handles.create_process(process_id);
-        let thread_handle = self.handles.create_thread(thread_id, 0, 0, false);
+        let child_birth = self
+            .handles
+            .process_birth_key_for_handle(process_handle)
+            .expect("new child process birth");
+        let thread_handle = self
+            .handles
+            .try_create_thread_in_birth(child_birth, thread_id, 0, 0, false)
+            .expect("child primary thread birth allocation failed");
         let launch = PendingProcessLaunch {
             application,
             command_line,
@@ -6552,10 +6580,46 @@ impl CeKernel {
         parameter: u32,
         suspended: bool,
     ) -> Result<(u32, u32)> {
+        // Compatibility path for host-created test workers. Guest CreateThread
+        // passes the creator TID to the checked path below.
+        let owner = self.current_process_birth_key().ok_or_else(|| {
+            Error::InvalidArgument("selected process has no live birth".to_owned())
+        })?;
         let thread_id = self.threads.allocate_guest_thread_id();
-        let handle =
-            self.handles
-                .try_create_thread(thread_id, start_address, parameter, suspended)?;
+        let handle = self.handles.try_create_thread_in_birth(
+            owner,
+            thread_id,
+            start_address,
+            parameter,
+            suspended,
+        )?;
+        Ok((handle, thread_id))
+    }
+
+    pub fn try_create_guest_thread_for_creator(
+        &mut self,
+        creator_thread_id: u32,
+        start_address: u32,
+        parameter: u32,
+        suspended: bool,
+    ) -> Result<(u32, u32)> {
+        let owner = self
+            .handles
+            .live_thread_creation_owner_by_id(creator_thread_id)
+            .filter(|owner| self.handles.process_birth_can_create_threads(*owner))
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "creator TID {creator_thread_id} has no live process birth"
+                ))
+            })?;
+        let thread_id = self.threads.allocate_guest_thread_id();
+        let handle = self.handles.try_create_thread_in_birth(
+            owner,
+            thread_id,
+            start_address,
+            parameter,
+            suspended,
+        )?;
         Ok((handle, thread_id))
     }
 
@@ -6597,6 +6661,19 @@ impl CeKernel {
             return Some(current_thread_id);
         }
         self.handles.thread_id(handle)
+    }
+
+    pub fn guest_thread_creation_owner_for_handle(
+        &self,
+        handle: u32,
+        current_thread_id: u32,
+    ) -> Option<u32> {
+        let birth = if Self::is_current_thread_pseudo_handle(handle) {
+            self.handles.thread_creation_owner_by_id(current_thread_id)
+        } else {
+            self.handles.thread_creation_owner_for_handle(handle)
+        }?;
+        Some(birth.process_id())
     }
 
     pub fn thread_quantum_for_handle(&self, handle: u32, current_thread_id: u32) -> Option<u32> {

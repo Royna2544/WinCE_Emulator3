@@ -2587,14 +2587,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_GET_PROCESS_ID_OF_THREAD => {
             // GetProcessIdOfThread(hThread) — return process ID owning the thread.
-            // Single-process: always return current process ID for any valid thread handle.
             let handle = raw_arg(args, 0);
-            let is_valid = kernel
-                .guest_thread_id_for_handle(handle, thread_id)
-                .is_some();
-            if is_valid {
+            if let Some(owner_pid) =
+                kernel.guest_thread_creation_owner_for_handle(handle, thread_id)
+            {
                 kernel.threads.set_last_error(thread_id, 0);
-                Some(CoredllValue::U32(kernel.current_process_id()))
+                Some(CoredllValue::U32(owner_pid))
             } else {
                 kernel
                     .threads
@@ -31373,22 +31371,26 @@ fn create_thread_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    let (handle, created_thread_id) =
-        match kernel.try_create_guest_thread(start_address, parameter, suspended) {
-            Ok(created) => created,
-            Err(Error::OutOfStructures(_)) => {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_OUT_OF_STRUCTURES);
-                return 0;
-            }
-            Err(_) => {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                return 0;
-            }
-        };
+    let (handle, created_thread_id) = match kernel.try_create_guest_thread_for_creator(
+        thread_id,
+        start_address,
+        parameter,
+        suspended,
+    ) {
+        Ok(created) => created,
+        Err(Error::OutOfStructures(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_OUT_OF_STRUCTURES);
+            return 0;
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+    };
     if !write_optional_count(kernel, memory, thread_id, thread_id_ptr, created_thread_id) {
         let discarded = kernel.discard_unpublished_guest_thread(handle, created_thread_id);
         debug_assert!(

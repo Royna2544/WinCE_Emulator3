@@ -1,5 +1,5 @@
 // D-007 historical Stage 3 E-8 task-identity API controls.
-// OpenThread aliasing is active; authentic creation-owner lookup remains red.
+// OpenThread aliasing and authentic creation-owner lookup are active controls.
 
 use wince_emulation_v3::{
     Result,
@@ -266,26 +266,54 @@ fn duplicate_thread_rejects_invalid_source_process_without_alias_publication() -
 }
 
 #[test]
-#[ignore = "expected red: raw GetProcessIdOfThread lacks immutable creation owner"]
 fn get_process_id_of_thread_reports_immutable_creation_owner() -> Result<()> {
     let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let parent_pid = kernel.current_process_id();
     let child = kernel.queue_process_launch(Some("\\Test\\child.exe".to_owned()), None);
-    let _drained = kernel.take_pending_process_launches();
-    assert_ne!(child.process_id, kernel.current_process_id());
+    assert_ne!(child.process_id, parent_pid);
+    let child_alias = kernel
+        .open_thread_handle(child.thread_id)
+        .expect("child primary must have an independent public alias");
+    assert_ne!(child_alias, child.thread_handle);
+    assert!(kernel.close_handle(child.thread_handle)?);
+    assert_eq!(kernel.guest_thread_id(child.thread_handle), None);
+    assert_eq!(kernel.guest_thread_id(child_alias), Some(child.thread_id));
+    let drained = kernel.take_pending_process_launches();
+    assert_eq!(drained.len(), 1);
+
+    // The mutable selector is deliberately opposite each worker's real
+    // creator. Neither it nor the later raw caller may redefine ownership.
+    kernel.set_current_process_id(child.process_id);
+    let (parent_worker, parent_worker_tid) =
+        kernel.try_create_guest_thread_for_creator(1, 0x1000, 0, false)?;
+    kernel.set_current_process_id(parent_pid);
+    let (child_worker, child_worker_tid) =
+        kernel.try_create_guest_thread_for_creator(child.thread_id, 0x2000, 0, false)?;
+    assert_ne!(parent_worker_tid, child_worker_tid);
+
     let mut memory = TestGuestMemory::default();
-    let owner = match CoredllExportTable::default().dispatch_raw_ordinal_with_memory(
-        &mut kernel,
-        &mut memory,
-        1,
-        ORD_GET_PROCESS_ID_OF_THREAD,
-        [child.thread_handle],
-    ) {
-        CoredllDispatch::Returned {
-            value: CoredllValue::U32(pid),
-            ..
-        } => pid,
-        result => panic!("GetProcessIdOfThread returned {result:?}"),
-    };
-    assert_eq!(owner, child.process_id);
+    let table = CoredllExportTable::default();
+    for (selected_pid, caller_tid, handle, expected_owner) in [
+        (parent_pid, 1, child_alias, child.process_id),
+        (parent_pid, 1, child_worker, child.process_id),
+        (child.process_id, child.thread_id, parent_worker, parent_pid),
+    ] {
+        kernel.set_current_process_id(selected_pid);
+        let owner = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            caller_tid,
+            ORD_GET_PROCESS_ID_OF_THREAD,
+            [handle],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(pid),
+                ..
+            } => pid,
+            result => panic!("GetProcessIdOfThread returned {result:?}"),
+        };
+        assert_eq!(owner, expected_owner, "handle {handle:#x} owner changed");
+        assert_eq!(kernel.threads.get_last_error(caller_tid), 0);
+    }
     Ok(())
 }
