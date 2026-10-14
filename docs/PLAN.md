@@ -71,9 +71,11 @@ public two-process VM is then extended, not recreated, in Stage 3.
 
 ### Parallel lanes (never gate a stage)
 
-- Native arena lane: continue diagnostic-only work on the translation arena and
-  commit-tail handler (ledger E-3 to E-6). No production native source or cache
-  setting changes until Stage 8's design gate.
+- Native arena lane: E-33's one vendored Windows commit-tail arithmetic repair
+  is the [D-009](DECISIONS.md) safety exception after a pristine-red native
+  control. Stop further arena investigation here. No arena-size, lifetime or
+  other production native changes precede Stage 8's design gate; E-33 is not
+  Stage 8 or app acceptance.
 - App evidence lane: bounded, read-only investigation of what iNavi waits on and
   what the helper-scheduling bimodality depends on. See
   [app-evidence-lane.md](app-evidence-lane.md).

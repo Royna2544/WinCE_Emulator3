@@ -23,8 +23,10 @@ native TranslationBlock initialization; the cause is not established.
 A source-confirmed candidate mechanism is the 1 GiB per-engine translation
 arena that hook churn does not release (ledger E-3). Isolated Stage 0 controls
 (E-4 to E-6) measured hook-associated retention and a commit-tail defect
-candidate in the pinned native allocator. They are diagnostic: they do not
-explain the 650 crash, validate a cache budget or accept any stage.
+candidate in the pinned native allocator. E-33 repaired that one Windows
+handler arithmetic defect under [D-009](DECISIONS.md), with a red-to-green
+native control. This does not explain the 650/E-32 crashes, validate a cache
+budget or accept any stage.
 
 Per [DECISIONS D-003](DECISIONS.md), the Task, object, outcome and clock work
 runs on the fresh-engine-per-slice target lifetime after the Stage 2 O-P4 gate;
