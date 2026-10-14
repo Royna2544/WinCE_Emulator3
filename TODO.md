@@ -36,10 +36,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    polling, wait publication and paired wake/timeout completion. The bounded
    [parked SendMessage gate](evidence/stage3-send-birth-20261015/validation.receipt.md)
    seals its tested Git HEAD and binary patch and covers cross-process native
-   send publication and paired result consumption. Next gate the separate
-   `BlockedSendMessageTimeout` path and cancel A-origin queued sends only after
-   exact-birth standalone `ExitThread` validation; receiver-side delivery and
-   other blocked payloads remain separate. Raw synchronous/nonblocking
+   send publication and paired result consumption. The bounded
+   [kernel sender-exit gate](evidence/stage3-send-exit-20261015/validation.receipt.md)
+   cleans queued sends and detaches active sends after exact live-birth exit.
+   Next birth-gate the numeric-TID native `ExitThread` callout and guest
+   return-stub paths; separately gate `BlockedSendMessageTimeout`, receiver-side
+   delivery and broader GWE lifecycle. Other blocked payloads remain separate.
+   Raw synchronous/nonblocking
    queue/socket paths, raw synchronous/nonblocking/overlapped serial paths,
    opaque non-task pins, generic parked-wait closure and caller parity remain
    separate. O-K3 execution and registered Thread/Process

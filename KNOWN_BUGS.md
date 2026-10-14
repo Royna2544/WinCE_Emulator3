@@ -110,9 +110,13 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   unpinned. The bounded
   [parked SendMessage source gate](evidence/stage3-send-birth-20261015/validation.receipt.md)
   birth-verifies native cross-process send publication and paired active/parked
-  result completion; it does not cover ordinary `BlockedSendMessageTimeout`,
-  receiver-side delivery, or A-origin GWE sends left queued after standalone
-  `ExitThread`. Boot-main
+  result completion. The bounded
+  [kernel sender-exit source gate](evidence/stage3-send-exit-20261015/validation.receipt.md)
+  removes queued sends and detaches active sends for an exact verified exiting
+  birth; numeric-TID native `ExitThread` callout and guest return-stub paths
+  still need captured-birth checks. Ordinary `BlockedSendMessageTimeout`,
+  receiver-side delivery and broader GWE send lifecycle remain outside these
+  gates. Boot-main
   enumeration, aliasless Sleep-suspend, unpinned-worker lineage (currently
   fails closed), other parked-wait continuation, raw
   synchronous/nonblocking queue/socket and synchronous/nonblocking/overlapped

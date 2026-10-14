@@ -4,6 +4,25 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 kernel sender-exit cleanup source slice
+
+- On the first successful exit of an exact live `ThreadBirthKey`, `CeKernel`
+  removes that birth's blocked waits and queued GWE sends; active sends detach
+  their sender so the receiver can finish, while other senders' queued work
+  stays intact. The public handle wrapper dispatches through the handle's
+  exact birth. The bounded
+  [receipt](evidence/stage3-send-exit-20261015/validation.receipt.md) seals
+  HEAD `264ac5ce504c91fc8763225a222c1e71c99dc45b` plus the exact
+  [source patch](evidence/stage3-send-exit-20261015/source-at-seal.patch)
+  (SHA-256 `95C04DD4F4117A73D7F34AEBC7F18CF8497EEB6797348AF4E491A29288FEE546`).
+  Full [release a01](evidence/stage3-send-exit-20261015/release-a01.raw.log)
+  passed 1,920/0/9 ignored; full
+  [no-feature a01](evidence/stage3-send-exit-20261015/nofeature-a01.raw.log)
+  passed 1,399/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
+  receipt. Native `ExitThread` callout and guest return-stub paths still use
+  numeric TIDs; `BlockedSendMessageTimeout`, receiver-side delivery, broader
+  GWE lifecycle, full Stage 3 and live-app behavior remain unaccepted.
+
 ## 2026-10-15 Stage 3 parked SendMessage birth source slice
 
 - Native cross-process `BlockedWaitKind::SendMessage` now verifies captured
@@ -19,9 +38,9 @@ references for historical reconstruction.
   passed 1,916/0/9 ignored and full
   [no-feature attempt a02](evidence/stage3-send-birth-20261015/nofeature-a02.raw.log)
   passed 1,395/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
-  receipt. Ordinary `BlockedSendMessageTimeout`, receiver-side delivery, and
-  the GWE queued-send lifecycle after standalone `ExitThread` remain open;
-  this is neither full Stage 3 nor live-app acceptance.
+  receipt. Ordinary `BlockedSendMessageTimeout` and receiver-side delivery
+  remain open; the later bounded kernel sender-exit slice above covers one
+  queued-send cleanup boundary, not full Stage 3 or live-app acceptance.
 
 ## 2026-10-15 Stage 3 parked serial birth source slice
 
