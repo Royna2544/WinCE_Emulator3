@@ -241,6 +241,12 @@ native mapping, fault repair, public view allocation and lifetime still lack
 an authoritative `AddressSpace` identity. A filter on one sync helper is not
 a complete O-M1 fix.
 
+Public `MapViewOfFile` still uses the global `virtual_alloc_legacy_seed`
+cursor/copy-backed `FileViewLegacy` (`src/ce/coredll.rs:30179-30291`); E-16
+inserts views directly, not public same-VA proof. `DuplicateHandle` clones
+mappings by value; use named `CreateFileMappingW` reopen in A and B
+(`src/ce/object.rs:654-681`) with one pinned page and in-slice alias store/load.
+
 The owner key must be the anchor's birth-qualified `ProcessIdentity`, not the
 currently selected PID. At the E-20 baseline, `CeKernel` held a bare selected
 PID and pending launches while each public process handle copied its mutable
