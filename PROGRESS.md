@@ -12,6 +12,17 @@ first. Totals are passed/failed/ignored for release
 HEAD and patch, raw logs and EXE/PDB hashes. The per-slice text before this
 condense is at `git show d4263dde:PROGRESS.md`.
 
+- Thread-directed GWE post/quit birth ownership
+  ([receipt](evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md)):
+  `PostThreadMessageW`, `PostMessageW(hwnd=0)` and self `PostQuitMessage`
+  now require a live exact birth before publication. Their posted FIFO entries,
+  quit/status/timestamps, Get/Peek, wait wake/readiness and exact exit respect
+  that birth; native stale callers and opportunistic window callouts cannot
+  steal windowless posts. The pre-fix A→B control exposed inherited
+  `QS_POSTMESSAGE` (`0x00080008`); the first unsealed full release attempt
+  exposed two legacy fixture expectations and is preserved. The sealed a01
+  source passed release 1,952/0/9 and no-feature 1,417/0/3 across 18 result
+  blocks each. Other GWE producers and live acceptance remain open.
 - Exact-birth wait ownership
   ([receipt](evidence/stage3-wait-owner-20261015/validation.receipt.md)):
   one `TaskWaitStore` now separates exact births from explicit legacy-unknown
@@ -92,7 +103,7 @@ condense is at `git show d4263dde:PROGRESS.md`.
   expiry read as ready, receiver-side `DestroyWindow` result writes, an
   end-to-end return-stub control, KData PID from mutable process selection,
   raw queue/socket/serial/MsgWait paths, aliasless Sleep-suspend, opaque
-  non-task pins, numeric GWE message wake hints, native continuation payloads,
+  non-task pins, remaining numeric GWE producer-birth routing, native continuation payloads,
   wait-ID wrap/reuse and live modal behavior, caller wait parity and
   root-process real-handle completion
   (`TODO.md`, `KNOWN_BUGS.md`).

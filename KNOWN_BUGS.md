@@ -70,10 +70,12 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     direct-kernel real-handle continuation fails closed, the root process has
     no owned child-launch handoff for real-handle requests, and the
     current-process pseudo-handle keeps a separate synchronous path.
-  - `TaskWaitStore` now separates exact births from explicit legacy-unknown
-    TIDs, but numeric GWE message wake hints remain unsafe across TID reuse;
-    same-TID GetMessage producer-birth routing is still open
-    ([source receipt](evidence/stage3-wait-owner-20261015/validation.receipt.md)).
+  - `TaskWaitStore` separates exact births from explicit legacy-unknown TIDs;
+    thread-directed post/quit delivery, status and wake now use exact births
+    ([wait receipt](evidence/stage3-wait-owner-20261015/validation.receipt.md),
+    [GWE receipt](evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md)).
+    Window/unscoped status and the remaining numeric GWE producers can still
+    cross a reused TID; they are not covered by the bounded thread-post gate.
   - Opaque non-task wait slots (queue, socket, serial tokens) and duplicated
     native wait payloads are unpinned despite exact-birth publication. Wait-ID
     wrap/reuse and live modal continuation behavior remain unproved.

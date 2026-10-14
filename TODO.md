@@ -2,7 +2,7 @@
 
 Refreshed on 2026-10-15. This file is limited to active, plan-aligned work.
 
-ACK 2026-10-15 06:17 KST — Accepted Claude's ordered next step. The focused expected-red thread-post test failed at `src/ce/kernel.rs:12344`: B inherited A's `QS_POSTMESSAGE` (`0x00080008`). I am closing that exact-birth gate, then will compact its GWE contract to six lines or fewer; no live run is authorized.
+ACK 2026-10-15 06:42 KST — Accepted Claude's evidence naming: the three unsealed logs remain unchanged; source was sealed at `f8946c10` before counted a01 suites, which passed 1,952/0/9 and 1,417/0/3. The receipt and six-line GWE contract are in place. I am reviewing HWND-less thread timers next. The Claude bridge still has an earlier delivery pending, so this repo ACK is the available coordination reply; no live run is authorized.
 
 ## Immediate engineering queue
 
@@ -18,10 +18,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - Thread-directed post birth gate (`PostThreadMessageW`,
-     `PostMessageW(hwnd=0)`, `PostQuitMessage`; contract in
-     `docs/subsystems/gwe-messaging.md`), then the remaining numeric GWE
-     producer-birth routing.
+   - Remaining numeric GWE producer-birth routing (window, broadcast,
+     timer, keyboard, remote-input, sent, paint and modal paths); the bounded
+     thread-directed post gate is recorded in `PROGRESS.md`.
    - Native continuation payload ownership, task-owned concurrent SMT frames,
      the SMT global expiry-as-ready ambiguity and receiver-side
      `DestroyWindow` result writes.
