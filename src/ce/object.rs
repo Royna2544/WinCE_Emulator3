@@ -1235,6 +1235,35 @@ impl HandleTable {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_wait_target_pin_count_for_test(
+        &mut self,
+        pin: TaskWaitPin,
+        count: u32,
+    ) -> bool {
+        match pin {
+            TaskWaitPin::Thread(key) => {
+                let Some(record) = self.threads.get_mut(&key.thread_id) else {
+                    return false;
+                };
+                if record.incarnation != key.incarnation {
+                    return false;
+                }
+                record.wait_refs = count;
+            }
+            TaskWaitPin::Process(key) => {
+                let Some(process) = self.processes.get_mut(&key.process_id) else {
+                    return false;
+                };
+                if process.incarnation != key.incarnation {
+                    return false;
+                }
+                process.wait_refs = count;
+            }
+        }
+        true
+    }
+
     /// Snapshot every execution-owned thread for this exact process birth,
     /// including workers whose final public alias was closed.
     pub fn live_thread_births_for_owner(&self, owner: ProcessBirthKey) -> Vec<ThreadBirthKey> {

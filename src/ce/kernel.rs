@@ -43,8 +43,8 @@ use crate::{
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
-            ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_OUT_OF_STRUCTURES, ERROR_SUCCESS,
-            ThreadSystem,
+            ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED,
+            ERROR_OUT_OF_STRUCTURES, ERROR_SUCCESS, ThreadSystem,
         },
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -413,6 +413,84 @@ pub struct CeKernel {
     display_perf_unhandled: u32,
     window_backing_stores: BTreeMap<u32, FramebufferBackingStore>,
     api_sets: BTreeMap<u32, u32>,
+}
+
+/// Failure to prepare an ordered object wait before it becomes visible to the
+/// scheduler. No wait record is published and any earlier task pins unwind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitPrepError {
+    InvalidHandle { index: usize, handle: u32 },
+    StaleTarget { index: usize, pin: TaskWaitPin },
+    PinExhausted { index: usize, pin: TaskWaitPin },
+}
+
+impl WaitPrepError {
+    pub fn last_error(self) -> u32 {
+        match self {
+            Self::InvalidHandle { .. } | Self::StaleTarget { .. } => ERROR_INVALID_HANDLE,
+            Self::PinExhausted { .. } => ERROR_NOT_ENOUGH_MEMORY,
+        }
+    }
+}
+
+/// A wait whose ordered target references are locked but whose scheduler
+/// record has not yet been published. Dropping it releases every acquired
+/// reference, including duplicate slots, in reverse acquisition order.
+pub struct PreparedTaskWait<'a> {
+    kernel: &'a mut CeKernel,
+    thread_id: u32,
+    owner_birth: Option<ThreadBirthKey>,
+    thread_handle: u32,
+    wait_handles: Vec<u32>,
+    wait_keys: Vec<WaitObjectKey>,
+    pinned_targets: Vec<Option<TaskWaitPin>>,
+    kind: SchedulerBlockedWaitKind,
+    wait_started_ms: u32,
+    timeout_ms: u32,
+    published: bool,
+}
+
+impl PreparedTaskWait<'_> {
+    /// Allows the caller to finish its existing native handoff while the
+    /// unpublished wait keeps its exact target births pinned.
+    pub fn kernel_mut(&mut self) -> &mut CeKernel {
+        self.kernel
+    }
+
+    /// Transfers the prepared pins into the scheduler record exactly once.
+    /// Aligned slots have already been built by preparation, so scheduler
+    /// registration has no recoverable validation failure at this boundary.
+    pub fn publish(mut self) -> u64 {
+        let wait_id = self
+            .kernel
+            .scheduler
+            .register_blocked_wait_with_keys_and_pins(
+                self.thread_id,
+                self.owner_birth,
+                self.thread_handle,
+                std::mem::take(&mut self.wait_handles),
+                std::mem::take(&mut self.wait_keys),
+                std::mem::take(&mut self.pinned_targets),
+                self.kind,
+                self.wait_started_ms,
+                self.timeout_ms,
+            );
+        self.published = true;
+        wait_id
+    }
+}
+
+impl Drop for PreparedTaskWait<'_> {
+    fn drop(&mut self) {
+        if !self.published {
+            for pin in self.pinned_targets.iter().flatten().rev() {
+                let released = self.kernel.handles.release_wait_target(*pin);
+                if !std::thread::panicking() {
+                    assert!(released, "prepared task wait lost an acquired pin");
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -7522,7 +7600,7 @@ impl CeKernel {
         // Compatibility subscriptions may use opaque non-object tokens (for
         // example Winsock sockets) even with the historical Kernel kind.
         // Native object-wait imports validate their handles before this call.
-        self.prepare_blocked_waiter(
+        self.prepare_wait_with_policy(
             thread_id,
             thread_handle,
             wait_handles,
@@ -7532,6 +7610,38 @@ impl CeKernel {
             false,
         )
         .expect("registered task wait target preparation failed")
+        .publish()
+    }
+
+    /// Publishes a compatibility subscription whose slots are opaque tokens,
+    /// not CE waitable objects. It neither validates nor pins task targets;
+    /// native object waits must use `prepare_task_wait` instead.
+    pub fn register_opaque_compatibility_waiter(
+        &mut self,
+        thread_id: u32,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> u64 {
+        let wait_keys = wait_handles
+            .iter()
+            .copied()
+            .map(WaitObjectKey::Handle)
+            .collect();
+        let pinned_targets = vec![None; wait_handles.len()];
+        self.scheduler.register_blocked_wait_with_keys_and_pins(
+            thread_id,
+            self.handles.thread_birth_key_by_id(thread_id),
+            thread_handle,
+            wait_handles,
+            wait_keys,
+            pinned_targets,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        )
     }
 
     /// Prepares every ordered task reference before publishing the wait.
@@ -7546,7 +7656,32 @@ impl CeKernel {
         wait_started_ms: u32,
         timeout_ms: u32,
     ) -> Option<u64> {
-        self.prepare_blocked_waiter(
+        self.prepare_task_wait(
+            thread_id,
+            thread_handle,
+            wait_handles,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        )
+        .ok()
+        .map(PreparedTaskWait::publish)
+    }
+
+    /// Resolves and pins every ordered CE object-wait slot. The returned
+    /// guard owns those references until it is published or dropped. A
+    /// preparation error sets the waiting thread's CE LastError before the
+    /// borrow-bearing result returns to the native caller.
+    pub fn prepare_task_wait(
+        &mut self,
+        thread_id: u32,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> std::result::Result<PreparedTaskWait<'_>, WaitPrepError> {
+        self.prepare_wait_with_policy(
             thread_id,
             thread_handle,
             wait_handles,
@@ -7557,7 +7692,7 @@ impl CeKernel {
         )
     }
 
-    fn prepare_blocked_waiter(
+    fn prepare_wait_with_policy(
         &mut self,
         thread_id: u32,
         thread_handle: u32,
@@ -7566,11 +7701,26 @@ impl CeKernel {
         wait_started_ms: u32,
         timeout_ms: u32,
         validate_raw_object_slots: bool,
-    ) -> Option<u64> {
-        let mut wait_keys = Vec::with_capacity(wait_handles.len());
-        let mut pinned_targets = Vec::with_capacity(wait_handles.len());
-        for &handle in &wait_handles {
-            let key = self.wait_object_key_for_handle(handle, thread_id);
+    ) -> std::result::Result<PreparedTaskWait<'_>, WaitPrepError> {
+        let owner_birth = self.handles.thread_birth_key_by_id(thread_id);
+        let mut prepared = PreparedTaskWait {
+            kernel: self,
+            thread_id,
+            owner_birth,
+            thread_handle,
+            wait_keys: Vec::with_capacity(wait_handles.len()),
+            pinned_targets: Vec::with_capacity(wait_handles.len()),
+            wait_handles,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+            published: false,
+        };
+        for index in 0..prepared.wait_handles.len() {
+            let handle = prepared.wait_handles[index];
+            let key = prepared
+                .kernel
+                .wait_object_key_for_handle(handle, thread_id);
             // Pseudo handles retain their existing selector-based semantics;
             // only real public Thread/Process aliases acquire birth pins.
             let pin = if Self::is_current_thread_pseudo_handle(handle)
@@ -7584,40 +7734,34 @@ impl CeKernel {
                     WaitObjectKey::Handle(_) => None,
                 }
             };
-            let prepared = if let Some(pin) = pin {
-                self.handles.try_pin_wait_target(pin)
-            } else if validate_raw_object_slots
-                && matches!(
-                    kind,
-                    SchedulerBlockedWaitKind::Kernel | SchedulerBlockedWaitKind::MsgWait { .. }
-                )
-            {
-                // Socket, serial and other compatibility subscriptions may
-                // carry non-object tokens. Kernel object waits cannot.
-                self.is_wait_ready(handle, thread_id).is_some()
-            } else {
-                true
-            };
-            if !prepared {
-                for pin in pinned_targets.into_iter().flatten().rev() {
-                    assert!(self.handles.release_wait_target(pin));
+            if let Some(pin) = pin {
+                if !prepared.kernel.handles.try_pin_wait_target(pin) {
+                    let error =
+                        if prepared.kernel.handles.wait_target_pin_count(pin) == Some(u32::MAX) {
+                            WaitPrepError::PinExhausted { index, pin }
+                        } else {
+                            WaitPrepError::StaleTarget { index, pin }
+                        };
+                    prepared
+                        .kernel
+                        .threads
+                        .set_last_error(thread_id, error.last_error());
+                    return Err(error);
                 }
-                return None;
+            } else if validate_raw_object_slots
+                && prepared.kernel.is_wait_ready(handle, thread_id).is_none()
+            {
+                let error = WaitPrepError::InvalidHandle { index, handle };
+                prepared
+                    .kernel
+                    .threads
+                    .set_last_error(thread_id, error.last_error());
+                return Err(error);
             }
-            wait_keys.push(key);
-            pinned_targets.push(pin);
+            prepared.wait_keys.push(key);
+            prepared.pinned_targets.push(pin);
         }
-        Some(self.scheduler.register_blocked_wait_with_keys_and_pins(
-            thread_id,
-            self.handles.thread_birth_key_by_id(thread_id),
-            thread_handle,
-            wait_handles,
-            wait_keys,
-            pinned_targets,
-            kind,
-            wait_started_ms,
-            timeout_ms,
-        ))
+        Ok(prepared)
     }
 
     pub fn remove_blocked_waiter(&mut self, wait_id: u64) -> Option<SchedulerBlockedWait> {
@@ -11349,6 +11493,180 @@ mod tests {
     }
 
     #[test]
+    fn unpublished_prepared_task_wait_releases_every_pin_on_drop() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle, _) = kernel.create_guest_thread(0x401000, 0, false);
+        let pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(handle)
+                .expect("live thread birth"),
+        );
+        let waiters_before = kernel.scheduler.waiter_count();
+
+        let mut prepared = kernel
+            .prepare_task_wait(
+                77,
+                0,
+                vec![handle, handle],
+                SchedulerBlockedWaitKind::Kernel,
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("both slots should pin the same live birth");
+        assert_eq!(
+            prepared.kernel_mut().handles.wait_target_pin_count(pin),
+            Some(2)
+        );
+        assert_eq!(
+            prepared.kernel_mut().scheduler.waiter_count(),
+            waiters_before
+        );
+        drop(prepared);
+        assert_eq!(kernel.handles.wait_target_pin_count(pin), Some(0));
+        assert_eq!(kernel.scheduler.waiter_count(), waiters_before);
+
+        let wait_id = kernel
+            .prepare_task_wait(
+                77,
+                0,
+                vec![handle, handle],
+                SchedulerBlockedWaitKind::Kernel,
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("valid duplicate task slots")
+            .publish();
+        assert_eq!(kernel.handles.wait_target_pin_count(pin), Some(2));
+        assert_eq!(kernel.scheduler.waiter_count(), waiters_before + 1);
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        assert_eq!(kernel.handles.wait_target_pin_count(pin), Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn prepared_task_wait_retains_closed_completed_birth_before_publication() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(handle)
+                .expect("live thread birth"),
+        );
+        let mut prepared = kernel
+            .prepare_task_wait(
+                77,
+                0,
+                vec![handle],
+                SchedulerBlockedWaitKind::Kernel,
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("valid target");
+        assert!(prepared.kernel_mut().close_handle(handle)?);
+        assert!(
+            prepared
+                .kernel_mut()
+                .mark_guest_thread_exited_by_id(thread_id, 0x5678)
+        );
+        assert_eq!(
+            prepared.kernel_mut().handles.wait_target_pin_count(pin),
+            Some(1)
+        );
+        let wait_id = prepared.publish();
+
+        assert_eq!(kernel.is_wait_ready(handle, 77), None);
+        assert_eq!(
+            kernel.wait_for_registered_wait_without_scheduler_record(wait_id, 77),
+            WAIT_OBJECT_0
+        );
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        assert_eq!(kernel.handles.wait_target_pin_count(pin), None);
+        Ok(())
+    }
+
+    #[test]
+    fn prepared_task_wait_errors_roll_back_prior_pins_without_publication() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (first, _) = kernel.create_guest_thread(0x401000, 0, false);
+        let (second, _) = kernel.create_guest_thread(0x402000, 0, false);
+        let first_pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(first)
+                .expect("first thread birth"),
+        );
+        let second_pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(second)
+                .expect("second thread birth"),
+        );
+        let waiters_before = kernel.scheduler.waiter_count();
+
+        let invalid = match kernel.prepare_task_wait(
+            77,
+            0,
+            vec![first, 0xdead_beef],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        ) {
+            Ok(_) => panic!("invalid second slot must not prepare"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            invalid,
+            WaitPrepError::InvalidHandle {
+                index: 1,
+                handle: 0xdead_beef,
+            }
+        );
+        assert_eq!(invalid.last_error(), ERROR_INVALID_HANDLE);
+        assert_eq!(kernel.threads.get_last_error(77), ERROR_INVALID_HANDLE);
+        assert_eq!(kernel.handles.wait_target_pin_count(first_pin), Some(0));
+        assert_eq!(kernel.scheduler.waiter_count(), waiters_before);
+
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(second_pin, u32::MAX)
+        );
+        let exhausted = match kernel.prepare_task_wait(
+            77,
+            0,
+            vec![first, second],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        ) {
+            Ok(_) => panic!("second target's pin counter must not wrap"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            exhausted,
+            WaitPrepError::PinExhausted {
+                index: 1,
+                pin: second_pin,
+            }
+        );
+        assert_eq!(exhausted.last_error(), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(kernel.threads.get_last_error(77), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(kernel.handles.wait_target_pin_count(first_pin), Some(0));
+        assert_eq!(
+            kernel.handles.wait_target_pin_count(second_pin),
+            Some(u32::MAX)
+        );
+        assert_eq!(kernel.scheduler.waiter_count(), waiters_before);
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(second_pin, 0)
+        );
+    }
+
+    #[test]
     fn registered_wait_uses_closed_task_birth_and_keeps_raw_event_acquisition() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let event = kernel.create_event_w(None, false, false);
@@ -11477,7 +11795,7 @@ mod tests {
     fn synthetic_winsock_subscription_keeps_opaque_legacy_kernel_slot() {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let socket = 0xcc00_0011;
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             77,
             0,
             vec![socket],
