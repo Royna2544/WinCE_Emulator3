@@ -4,6 +4,21 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 parked queue/socket birth source slice
+
+- Native parked MessageQueueIo and WinsockRead paths now verify the birth owning
+  captured MIPS registers before wait publication or host socket
+  connect/readiness work. The finite queue inline timeout rechecks birth before
+  timer delivery and raw replay. A stale exact scheduler/native pair is
+  quarantined before queue/socket wake consumption or register restoration;
+  ordinary resume stamps the verified birth. Five new stale-birth controls and
+  the focused 120/0 scheduler suite passed. The bounded
+  [source gate](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
+  passed 1,901/0/9 ignored release and 1,395/0/3 ignored no-feature tests,
+  Unicorn-only/no-trace/all-target checks, and preserves the matching EXE/PDB
+  pair. Raw synchronous/nonblocking queue/socket paths, opaque non-task pins,
+  serial/SendMessage, full Stage 3 and live-app behavior remain unaccepted.
+
 ## 2026-10-15 Stage 3 parked MsgWait birth source slice
 
 - Native parked `MsgWaitForMultipleObjectsEx` now verifies the birth owning

@@ -100,11 +100,14 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   resume provenance. The later bounded
   [parked MsgWait source gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
   rejects stale native frames before timer pumping or message-edge consumption;
-  synchronous raw MsgWait paths remain outside that gate. Boot-main
+  synchronous raw MsgWait paths remain outside that gate. The bounded
+  [parked queue/socket source gate](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
+  birth-verifies native MessageQueueIo/WinsockRead publication and paired
+  resume, but does not pin opaque queue/socket targets. Boot-main
   enumeration, aliasless Sleep-suspend, unpinned-worker lineage (currently
-  fails closed), serial/Winsock/message-queue I/O/SendMessage and other
-  parked-wait continuation, clone relineage, complete GMS reclamation and
-  live-app behavior remain open. None of these
+  fails closed), serial/SendMessage and other parked-wait continuation, raw
+  synchronous/nonblocking queue/socket paths, clone relineage, complete GMS
+  reclamation and live-app behavior remain open. None of these
   bounded source gates is full Stage 3 acceptance.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
