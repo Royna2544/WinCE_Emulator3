@@ -5,7 +5,7 @@ use std::{
     ffi::c_void,
     fmt,
     ptr::NonNull,
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 use crate::ce::object::ProcessBirthKey;
@@ -59,6 +59,12 @@ pub struct MemorySystem {
     // reuse even if its token is dropped after a native mapping side effect.
     pending_private_holes: BTreeMap<(ProcessBirthKey, u32), u32>,
     stable_private_pages: BTreeMap<PrivatePageIdentity, Rc<StablePrivatePage>>,
+    // A weak conflict fence for still-detached fixed-page proposals. It is
+    // not a second byte owner: only page pins carry bytes and budget. A new
+    // proposal for an occupied offset fails instead of aliasing that offset
+    // or inventing a second host block before either token is published.
+    pending_fixed_blocks:
+        RefCell<BTreeMap<(ProcessBirthKey, u32, u64, u32), Weak<HostPrivateBlock>>>,
     // Public file views alias pages by mapping object and file offset, not by
     // guest VA. A page is charged once even when several views pin it.
     stable_shared_pages: BTreeMap<(u32, u32), Rc<StablePrivatePage>>,
@@ -869,6 +875,7 @@ impl Clone for MemorySystem {
                     )
                 })
                 .collect(),
+            pending_fixed_blocks: RefCell::new(BTreeMap::new()),
             stable_shared_pages: self
                 .stable_shared_pages
                 .iter()
@@ -916,6 +923,7 @@ impl Default for MemorySystem {
             virtual_allocations: BTreeMap::new(),
             pending_private_holes: BTreeMap::new(),
             stable_private_pages: BTreeMap::new(),
+            pending_fixed_blocks: RefCell::new(BTreeMap::new()),
             stable_shared_pages: BTreeMap::new(),
             shared_view_bindings: BTreeMap::new(),
             private_page_budget: Rc::new(PrivatePageBudget::new(
@@ -1425,9 +1433,26 @@ impl MemorySystem {
                             PrivatePageStorage::HostBlock { block, .. } => Some(Rc::clone(block)),
                             PrivatePageStorage::Independent => None,
                         });
+                let key = (
+                    identity.owner,
+                    identity.allocation_base,
+                    identity.allocation_incarnation,
+                    block_base,
+                );
                 let block = match existing {
                     Some(block) => block,
-                    None => HostPrivateBlock::reserve()?,
+                    None => {
+                        let mut pending = self.pending_fixed_blocks.borrow_mut();
+                        pending.retain(|_, block| block.strong_count() != 0);
+                        match pending.get(&key).and_then(Weak::upgrade) {
+                            Some(block) => block,
+                            None => {
+                                let block = HostPrivateBlock::reserve()?;
+                                pending.insert(key, Rc::downgrade(&block));
+                                block
+                            }
+                        }
+                    }
                 };
                 local_blocks.insert(block_base, Rc::clone(&block));
                 block
@@ -5273,6 +5298,46 @@ mod tests {
         drop((first, third, clone_first, clone_third));
         assert_eq!(source.private_commit_used_bytes(), 0);
         assert_eq!(clone.private_commit_used_bytes(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fixed_block_first_cold_page_competing_proposals_have_one_pending_slot() {
+        const STACK_BASE: u32 = 0x7100_0000;
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        memory
+            .reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ThreadStack,
+                STACK_BASE,
+                0x10_0000,
+                4,
+            )
+            .unwrap();
+        let first = memory
+            .prepare_fixed_private_page(owner, STACK_BASE)
+            .unwrap();
+        assert!(first.new_page_pins()[0].is_host_block_backed());
+        assert!(
+            memory
+                .prepare_fixed_private_page(owner, STACK_BASE)
+                .is_none(),
+            "a second detached token may not allocate competing bytes for the same cold page"
+        );
+        assert_eq!(memory.private_commit_used_bytes(), 0x1000);
+        assert!(memory.private_page_pin(owner, STACK_BASE).is_none());
+        drop(first);
+        assert_eq!(memory.private_commit_used_bytes(), 0);
+        let replacement = memory
+            .prepare_fixed_private_page(owner, STACK_BASE)
+            .unwrap();
+        assert!(replacement.new_page_pins()[0].is_host_block_backed());
+        assert_eq!(
+            memory.commit_prepared_private_vm(replacement),
+            Some(STACK_BASE)
+        );
+        assert_eq!(memory.private_commit_used_bytes(), 0x1000);
     }
 
     #[test]
