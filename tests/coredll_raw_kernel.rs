@@ -7440,39 +7440,55 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_ne!(thread_snapshot, INVALID_TOOLHELP_SNAPSHOT);
     assert_eq!(
         read_guest_le_u32(&memory, thread_snapshot + 4),
-        THSNAP_SIZE + PROCESSENTRY32_SIZE * 2 + THREADENTRY32_SIZE * 2
+        THSNAP_SIZE + PROCESSENTRY32_SIZE * 2 + THREADENTRY32_SIZE * 3
     );
-    assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 16), 2);
-    assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 24), 2);
+    assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 16), 3);
+    assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 24), 3);
     assert_eq!(
         read_guest_le_u32(&memory, thread_snapshot + 28),
         TH32CS_SNAPTHREAD
     );
     let first_thread_entry = thread_snapshot + THSNAP_SIZE + PROCESSENTRY32_SIZE * 2;
     let second_thread_entry = first_thread_entry + THREADENTRY32_SIZE;
+    let third_thread_entry = second_thread_entry + THREADENTRY32_SIZE;
+    let thread_entries = [first_thread_entry, second_thread_entry, third_thread_entry];
     let thread_ids = [
         read_guest_le_u32(&memory, first_thread_entry + 8),
         read_guest_le_u32(&memory, second_thread_entry + 8),
+        read_guest_le_u32(&memory, third_thread_entry + 8),
     ];
     assert!(thread_ids.contains(&thread_id));
+    assert!(
+        thread_ids.contains(&2),
+        "the live reservation thread remains visible after its final alias closes"
+    );
     assert!(thread_ids.contains(&launch.thread_id));
-    let current_thread_entry = if read_guest_le_u32(&memory, first_thread_entry + 8) == thread_id {
-        first_thread_entry
-    } else {
-        second_thread_entry
-    };
-    let launch_thread_entry =
-        if read_guest_le_u32(&memory, first_thread_entry + 8) == launch.thread_id {
-            first_thread_entry
-        } else {
-            second_thread_entry
-        };
-    for entry in [current_thread_entry, launch_thread_entry] {
+    let current_thread_entry = *thread_entries
+        .iter()
+        .find(|entry| read_guest_le_u32(&memory, **entry + 8) == thread_id)
+        .unwrap();
+    let reservation_thread_entry = *thread_entries
+        .iter()
+        .find(|entry| read_guest_le_u32(&memory, **entry + 8) == 2)
+        .unwrap();
+    let launch_thread_entry = *thread_entries
+        .iter()
+        .find(|entry| read_guest_le_u32(&memory, **entry + 8) == launch.thread_id)
+        .unwrap();
+    for entry in [
+        current_thread_entry,
+        reservation_thread_entry,
+        launch_thread_entry,
+    ] {
         assert_eq!(read_guest_le_u32(&memory, entry), THREADENTRY32_SIZE);
         assert_eq!(read_guest_le_u32(&memory, entry + 4), 1);
     }
     assert_eq!(
         read_guest_le_u32(&memory, current_thread_entry + 12),
+        kernel.current_process_id()
+    );
+    assert_eq!(
+        read_guest_le_u32(&memory, reservation_thread_entry + 12),
         kernel.current_process_id()
     );
     assert_eq!(

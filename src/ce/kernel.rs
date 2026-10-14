@@ -26,7 +26,7 @@ use crate::{
             ApiHandleObject, ApiSetObject, CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject,
             FileChangeNotificationObject, FileChangeRecord, FileObject, FindFileObject,
             HandleTable, KernelObject, MAX_SUSPEND_COUNT, MAX_WIN32_PRIORITY_LEVELS,
-            MessageQueueHandleObject, ProcessBirthKey, ThreadBirthKey, ThreadObject,
+            MessageQueueHandleObject, ProcessBirthKey, TaskWaitPin, ThreadBirthKey, ThreadObject,
             ThreadResumeResult, ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
             ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
@@ -3231,10 +3231,8 @@ impl CeKernel {
             } else {
                 0
             };
-            // A dead task cannot continue its own wait. Remove its numeric
-            // compatibility frame before the canonical thread retires; waiters
-            // in other tasks still observe the thread's exit signal below.
-            self.remove_blocked_waiters_for_thread(thread.thread_id());
+            // Canonical thread completion below cancels only this exact
+            // birth's registered waits before dispatching its exit wake.
             if !self.mark_guest_thread_exited_by_birth(thread, thread_exit_code) {
                 return false;
             }
@@ -6713,9 +6711,19 @@ impl CeKernel {
     }
 
     fn mark_guest_thread_exited_by_birth(&mut self, key: ThreadBirthKey, exit_code: u32) -> bool {
+        if !self.handles.contains_thread_birth(key) {
+            return false;
+        }
         let was_live = self.handles.thread_execution_live_by_id(key.thread_id());
         let success = self.handles.mark_thread_exited_by_birth(key, exit_code);
         if success && was_live {
+            // A completed owner cannot resume its frame. Cancel through the
+            // Kernel removal path so every acquired target pin is released;
+            // birth matching must precede numeric TID reuse.
+            let wait_ids = self.scheduler.waiter_ids_for_birth(key);
+            for wait_id in wait_ids {
+                let _ = self.remove_blocked_waiter(wait_id);
+            }
             self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
         }
         success
@@ -7511,19 +7519,105 @@ impl CeKernel {
         wait_started_ms: u32,
         timeout_ms: u32,
     ) -> u64 {
-        let wait_keys = wait_handles
-            .iter()
-            .map(|handle| self.wait_object_key_for_handle(*handle, thread_id))
-            .collect();
-        self.scheduler.register_blocked_wait_with_keys(
+        // Compatibility subscriptions may use opaque non-object tokens (for
+        // example Winsock sockets) even with the historical Kernel kind.
+        // Native object-wait imports validate their handles before this call.
+        self.prepare_blocked_waiter(
             thread_id,
             thread_handle,
             wait_handles,
-            wait_keys,
             kind,
             wait_started_ms,
             timeout_ms,
+            false,
         )
+        .expect("registered task wait target preparation failed")
+    }
+
+    /// Prepares every ordered task reference before publishing the wait.
+    /// Invalid object-wait slots, stale births and pin exhaustion leave no
+    /// scheduler record and release only pins acquired in this attempt.
+    pub fn try_register_blocked_waiter(
+        &mut self,
+        thread_id: u32,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> Option<u64> {
+        self.prepare_blocked_waiter(
+            thread_id,
+            thread_handle,
+            wait_handles,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+            true,
+        )
+    }
+
+    fn prepare_blocked_waiter(
+        &mut self,
+        thread_id: u32,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+        validate_raw_object_slots: bool,
+    ) -> Option<u64> {
+        let mut wait_keys = Vec::with_capacity(wait_handles.len());
+        let mut pinned_targets = Vec::with_capacity(wait_handles.len());
+        for &handle in &wait_handles {
+            let key = self.wait_object_key_for_handle(handle, thread_id);
+            // Pseudo handles retain their existing selector-based semantics;
+            // only real public Thread/Process aliases acquire birth pins.
+            let pin = if Self::is_current_thread_pseudo_handle(handle)
+                || Self::is_current_process_pseudo_handle(handle)
+            {
+                None
+            } else {
+                match key {
+                    WaitObjectKey::Thread(birth) => Some(TaskWaitPin::Thread(birth)),
+                    WaitObjectKey::Process(birth) => Some(TaskWaitPin::Process(birth)),
+                    WaitObjectKey::Handle(_) => None,
+                }
+            };
+            let prepared = if let Some(pin) = pin {
+                self.handles.try_pin_wait_target(pin)
+            } else if validate_raw_object_slots
+                && matches!(
+                    kind,
+                    SchedulerBlockedWaitKind::Kernel | SchedulerBlockedWaitKind::MsgWait { .. }
+                )
+            {
+                // Socket, serial and other compatibility subscriptions may
+                // carry non-object tokens. Kernel object waits cannot.
+                self.is_wait_ready(handle, thread_id).is_some()
+            } else {
+                true
+            };
+            if !prepared {
+                for pin in pinned_targets.into_iter().flatten().rev() {
+                    assert!(self.handles.release_wait_target(pin));
+                }
+                return None;
+            }
+            wait_keys.push(key);
+            pinned_targets.push(pin);
+        }
+        Some(self.scheduler.register_blocked_wait_with_keys_and_pins(
+            thread_id,
+            self.handles.thread_birth_key_by_id(thread_id),
+            thread_handle,
+            wait_handles,
+            wait_keys,
+            pinned_targets,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        ))
     }
 
     pub fn remove_blocked_waiter(&mut self, wait_id: u64) -> Option<SchedulerBlockedWait> {
@@ -7546,6 +7640,11 @@ impl CeKernel {
         self.pulsed_wait_handles.remove(&wait_id);
         self.comm_event_mask_changed_waits.remove(&wait_id);
         let removed = self.scheduler.remove_blocked_wait(wait_id);
+        if let Some(wait) = &removed {
+            for pin in wait.pinned_targets.iter().flatten() {
+                assert!(self.handles.release_wait_target(*pin));
+            }
+        }
         self.record_wait_event_trace("RemoveBlockedWaiter", None, Some(removed.is_some()), detail);
         removed
     }
@@ -7807,6 +7906,80 @@ impl CeKernel {
             WaitMultipleResult::Failed => {
                 self.threads
                     .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+                WAIT_FAILED
+            }
+        }
+    }
+
+    fn registered_wait_slot_ready(
+        &self,
+        handle: u32,
+        pin: Option<TaskWaitPin>,
+        thread_id: u32,
+    ) -> Option<bool> {
+        match pin {
+            Some(pin) => self.handles.wait_target_signaled(pin),
+            None => self.is_wait_ready(handle, thread_id),
+        }
+    }
+
+    /// Readiness for an already-published wait uses its pinned task births,
+    /// not public aliases which may have closed since registration.
+    pub fn registered_wait_has_ready_handle(&self, wait_id: u64) -> bool {
+        let Some(wait) = self.scheduler.blocked_wait(wait_id) else {
+            return false;
+        };
+        wait.wait_handles
+            .iter()
+            .zip(&wait.pinned_targets)
+            .any(|(&handle, &pin)| {
+                self.registered_wait_slot_ready(handle, pin, wait.thread_id) == Some(true)
+            })
+    }
+
+    /// Acquires the first ready slot of a registered WaitAny frame. Canonical
+    /// Thread/Process targets have no consumable signal; raw compatibility
+    /// objects still go through their existing acquisition path.
+    pub fn wait_for_registered_wait_without_scheduler_record(
+        &mut self,
+        wait_id: u64,
+        thread_id: u32,
+    ) -> u32 {
+        let Some(wait) = self.scheduler.blocked_wait(wait_id) else {
+            self.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return WAIT_FAILED;
+        };
+        if wait.thread_id != thread_id {
+            self.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return WAIT_FAILED;
+        }
+        if wait.wait_handles.is_empty() || wait.wait_handles.len() > MAXIMUM_WAIT_OBJECTS {
+            self.threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return WAIT_FAILED;
+        }
+        let handles = wait.wait_handles.clone();
+        let pins = wait.pinned_targets.clone();
+        let Some(ready) = handles
+            .iter()
+            .zip(&pins)
+            .map(|(&handle, &pin)| self.registered_wait_slot_ready(handle, pin, thread_id))
+            .collect::<Option<Vec<_>>>()
+        else {
+            self.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return WAIT_FAILED;
+        };
+        let Some(index) = ready.iter().position(|is_ready| *is_ready) else {
+            return WAIT_TIMEOUT;
+        };
+        if pins[index].is_some() {
+            return WAIT_OBJECT_0 + index as u32;
+        }
+        match self.wait_for_single_object_core(handles[index], 0, thread_id) {
+            WaitResult::Object0 => WAIT_OBJECT_0 + index as u32,
+            WaitResult::Timeout => WAIT_TIMEOUT,
+            WaitResult::Failed => {
+                self.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
                 WAIT_FAILED
             }
         }
@@ -11129,6 +11302,194 @@ mod tests {
             },
             guest_physical_ram_bytes: crate::config::DEFAULT_GUEST_PHYSICAL_RAM_BYTES,
         }
+    }
+
+    #[test]
+    fn registered_wait_pin_preparation_rolls_back_and_releases_duplicate_slots() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle, _) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth = kernel
+            .handles
+            .thread_birth_key_for_handle(handle)
+            .expect("live thread birth");
+        let pin = TaskWaitPin::Thread(birth);
+        let waiters_before = kernel.scheduler.waiter_count();
+
+        assert_eq!(
+            kernel.try_register_blocked_waiter(
+                77,
+                0,
+                vec![handle, 0xdead_beef],
+                SchedulerBlockedWaitKind::Kernel,
+                0,
+                crate::ce::timer::INFINITE,
+            ),
+            None
+        );
+        assert_eq!(kernel.handles.wait_target_pin_count(pin), Some(0));
+        assert_eq!(kernel.scheduler.waiter_count(), waiters_before);
+
+        let wait_id = kernel.register_blocked_waiter(
+            77,
+            0,
+            vec![handle, handle],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(kernel.handles.wait_target_pin_count(pin), Some(2));
+        assert_eq!(
+            kernel.blocked_waiter(wait_id).unwrap().pinned_targets.len(),
+            2
+        );
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        assert_eq!(kernel.handles.wait_target_pin_count(pin), Some(0));
+        assert!(kernel.remove_blocked_waiter(wait_id).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn registered_wait_uses_closed_task_birth_and_keeps_raw_event_acquisition() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let event = kernel.create_event_w(None, false, false);
+        let (source, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let alias = kernel.duplicate_handle(source, kernel.current_process_id(), false)?;
+        let birth = kernel
+            .handles
+            .thread_birth_key_for_handle(alias)
+            .expect("wait target birth");
+        let wait_id = kernel.register_blocked_waiter(
+            77,
+            0,
+            vec![event, alias],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(
+            kernel.blocked_waiter(wait_id).unwrap().pinned_targets,
+            vec![None, Some(TaskWaitPin::Thread(birth))]
+        );
+        assert!(kernel.close_handle(alias)?);
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x5678));
+        assert!(kernel.close_handle(source)?);
+        assert_eq!(kernel.is_wait_ready(alias, 77), None);
+        assert!(kernel.registered_wait_has_ready_handle(wait_id));
+        assert_eq!(
+            kernel.wait_for_registered_wait_without_scheduler_record(wait_id, 77),
+            WAIT_OBJECT_0 + 1
+        );
+        assert!(kernel.set_event(event));
+        assert_eq!(
+            kernel.wait_for_registered_wait_without_scheduler_record(wait_id, 77),
+            WAIT_OBJECT_0
+        );
+        assert_eq!(kernel.is_wait_ready(event, 77), Some(false));
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        assert!(
+            kernel
+                .handles
+                .wait_target_pin_count(TaskWaitPin::Thread(birth))
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exiting_waiter_owner_cancels_its_wait_and_releases_target_pin() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (owner_handle, owner_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let (target_handle, target_tid) = kernel.create_guest_thread(0x402000, 0, false);
+        let target_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(target_handle)
+            .expect("target birth");
+        let target_pin = TaskWaitPin::Thread(target_birth);
+        let wait_id = kernel.register_blocked_waiter(
+            owner_tid,
+            owner_handle,
+            vec![target_handle],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(1));
+        assert_eq!(
+            kernel.blocked_waiter(wait_id).unwrap().owner_birth,
+            kernel.handles.thread_birth_key_for_handle(owner_handle)
+        );
+
+        assert!(kernel.mark_guest_thread_exited(owner_handle, 0x71));
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(0));
+        assert!(kernel.handles.thread_execution_live_by_id(target_tid));
+        assert_eq!(kernel.remove_blocked_waiters_for_thread(owner_tid), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_waiter_birth_cannot_cancel_reused_tid_wait() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (old_owner, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_owner)
+            .expect("old owner birth");
+        assert!(kernel.mark_guest_thread_exited(old_owner, 0));
+        assert!(kernel.close_handle(old_owner)?);
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+
+        let new_owner = kernel.handles.create_thread(thread_id, 0x403000, 0, false);
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_owner)
+            .expect("new owner birth");
+        assert_ne!(old_birth, new_birth);
+        let (target_handle, _) = kernel.create_guest_thread(0x402000, 0, false);
+        let target_pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(target_handle)
+                .expect("target birth"),
+        );
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            new_owner,
+            vec![target_handle],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(
+            kernel.blocked_waiter(wait_id).unwrap().owner_birth,
+            Some(new_birth)
+        );
+        assert!(!kernel.mark_guest_thread_exited_by_birth(old_birth, 0x99));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(1));
+        assert!(kernel.mark_guest_thread_exited_by_birth(new_birth, 0x77));
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic_winsock_subscription_keeps_opaque_legacy_kernel_slot() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let socket = 0xcc00_0011;
+        let wait_id = kernel.register_blocked_waiter(
+            77,
+            0,
+            vec![socket],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(
+            kernel.blocked_waiter(wait_id).unwrap().pinned_targets,
+            vec![None]
+        );
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
     }
 
     #[test]

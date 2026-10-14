@@ -299,6 +299,8 @@ struct ThreadRecord {
     creation_owner: Option<ProcessBirthKey>,
     aliases: BTreeSet<u32>,
     execution_live: bool,
+    /// Registered wait frames retain this exact birth after public aliases close.
+    wait_refs: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -312,6 +314,7 @@ pub struct ProcessObject {
     incarnation: u64,
     execution_live: bool,
     aliases: BTreeSet<u32>,
+    wait_refs: u32,
 }
 
 /// An immutable identity issued by the canonical process-birth directory.
@@ -330,6 +333,14 @@ impl ProcessBirthKey {
     pub fn incarnation(self) -> u64 {
         self.incarnation
     }
+}
+
+/// An exact canonical task birth retained by a registered wait frame.
+/// Public aliases are only used to acquire this pin, never to poll it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskWaitPin {
+    Thread(ThreadBirthKey),
+    Process(ProcessBirthKey),
 }
 
 /// A public handle names a birth; mutable process state lives only in HandleTable.
@@ -876,6 +887,7 @@ impl HandleTable {
                 creation_owner,
                 aliases: BTreeSet::new(),
                 execution_live: true,
+                wait_refs: 0,
             },
         );
         Ok((incarnation, next_incarnation))
@@ -959,6 +971,7 @@ impl HandleTable {
                 incarnation,
                 execution_live: true,
                 aliases: BTreeSet::new(),
+                wait_refs: 0,
             },
         );
         incarnation
@@ -979,8 +992,9 @@ impl HandleTable {
     pub fn open_process(&mut self, process_id: u32) -> Option<u32> {
         let process = self.processes.get(&process_id)?;
         // A termination request alone does not complete execution. An exited
-        // process remains reopenable only while some public alias pins it.
-        if process.signaled && process.aliases.is_empty() {
+        // process remains reopenable only while a public alias or registered
+        // wait still references its canonical birth (CE6 NKOpenProcess).
+        if process.signaled && process.aliases.is_empty() && process.wait_refs == 0 {
             return None;
         }
         let incarnation = process.incarnation;
@@ -994,7 +1008,9 @@ impl HandleTable {
     pub fn process_snapshots(&self) -> Vec<ProcessObject> {
         self.processes
             .values()
-            .filter(|process| !process.signaled || !process.aliases.is_empty())
+            .filter(|process| {
+                process.execution_live || !process.aliases.is_empty() || process.wait_refs != 0
+            })
             .cloned()
             .collect()
     }
@@ -1048,11 +1064,9 @@ impl HandleTable {
     }
 
     fn retire_process_if_unreferenced(&mut self, process_id: u32) {
-        if self
-            .processes
-            .get(&process_id)
-            .is_some_and(|process| !process.execution_live && process.aliases.is_empty())
-        {
+        if self.processes.get(&process_id).is_some_and(|process| {
+            !process.execution_live && process.aliases.is_empty() && process.wait_refs == 0
+        }) {
             self.processes.remove(&process_id);
         }
     }
@@ -1084,11 +1098,9 @@ impl HandleTable {
     }
 
     fn retire_thread_if_unreferenced(&mut self, thread_id: u32) {
-        if self
-            .threads
-            .get(&thread_id)
-            .is_some_and(|record| !record.execution_live && record.aliases.is_empty())
-        {
+        if self.threads.get(&thread_id).is_some_and(|record| {
+            !record.execution_live && record.aliases.is_empty() && record.wait_refs == 0
+        }) {
             self.threads.remove(&thread_id);
         }
     }
@@ -1129,6 +1141,98 @@ impl HandleTable {
 
     pub fn contains_thread_birth(&self, key: ThreadBirthKey) -> bool {
         self.thread_birth_key_by_id(key.thread_id) == Some(key)
+    }
+
+    /// Acquire one lifetime reference for a validated, exact-birth wait target.
+    /// Failure is transactional: no reference is published on stale identity
+    /// or counter exhaustion.
+    pub fn try_pin_wait_target(&mut self, pin: TaskWaitPin) -> bool {
+        match pin {
+            TaskWaitPin::Thread(key) => {
+                let Some(record) = self.threads.get_mut(&key.thread_id) else {
+                    return false;
+                };
+                if record.incarnation != key.incarnation {
+                    return false;
+                }
+                let Some(next) = record.wait_refs.checked_add(1) else {
+                    return false;
+                };
+                record.wait_refs = next;
+            }
+            TaskWaitPin::Process(key) => {
+                let Some(process) = self.processes.get_mut(&key.process_id) else {
+                    return false;
+                };
+                if process.incarnation != key.incarnation {
+                    return false;
+                }
+                let Some(next) = process.wait_refs.checked_add(1) else {
+                    return false;
+                };
+                process.wait_refs = next;
+            }
+        }
+        true
+    }
+
+    /// Release exactly one previously acquired reference. A stale or repeated
+    /// release cannot decrement another birth, and the last reference retires
+    /// an execution-complete, aliasless target.
+    pub fn release_wait_target(&mut self, pin: TaskWaitPin) -> bool {
+        match pin {
+            TaskWaitPin::Thread(key) => {
+                let Some(record) = self.threads.get_mut(&key.thread_id) else {
+                    return false;
+                };
+                if record.incarnation != key.incarnation || record.wait_refs == 0 {
+                    return false;
+                }
+                record.wait_refs -= 1;
+                self.retire_thread_if_unreferenced(key.thread_id);
+            }
+            TaskWaitPin::Process(key) => {
+                let Some(process) = self.processes.get_mut(&key.process_id) else {
+                    return false;
+                };
+                if process.incarnation != key.incarnation || process.wait_refs == 0 {
+                    return false;
+                }
+                process.wait_refs -= 1;
+                self.retire_process_if_unreferenced(key.process_id);
+            }
+        }
+        true
+    }
+
+    pub fn wait_target_signaled(&self, pin: TaskWaitPin) -> Option<bool> {
+        match pin {
+            TaskWaitPin::Thread(key) => self
+                .threads
+                .get(&key.thread_id)
+                .filter(|record| record.incarnation == key.incarnation)
+                .map(|record| record.object.signaled),
+            TaskWaitPin::Process(key) => self
+                .processes
+                .get(&key.process_id)
+                .filter(|process| process.incarnation == key.incarnation)
+                .map(|process| process.signaled),
+        }
+    }
+
+    pub fn wait_target_pin_count(&self, pin: TaskWaitPin) -> Option<u32> {
+        match pin {
+            TaskWaitPin::Thread(key) => self
+                .threads
+                .get(&key.thread_id)
+                .filter(|record| record.incarnation == key.incarnation)
+                .map(|record| record.wait_refs),
+            TaskWaitPin::Process(key) => self
+                .processes
+                .get(&key.process_id)
+                .filter(|process| process.incarnation == key.incarnation)
+                .map(|process| process.wait_refs),
+        }
     }
 
     /// Snapshot every execution-owned thread for this exact process birth,
@@ -1211,11 +1315,13 @@ impl HandleTable {
     }
 
     pub fn thread_snapshots(&self) -> Vec<ThreadObject> {
-        // Preserve the existing public-snapshot boundary until execution and
-        // wait pins are migrated. A live record with no alias is internal only.
+        // A live task or pinned completed target remains canonical even if
+        // every guest-visible alias has closed.
         self.threads
             .values()
-            .filter(|record| !record.aliases.is_empty())
+            .filter(|record| {
+                record.execution_live || !record.aliases.is_empty() || record.wait_refs != 0
+            })
             .map(|record| record.object.clone())
             .collect()
     }
@@ -1811,6 +1917,126 @@ pub fn ce_thread_priority_to_win32(priority: i32) -> Option<u32> {
 #[cfg(test)]
 mod alias_tests {
     use super::*;
+
+    #[test]
+    fn live_thread_and_duplicate_wait_pins_outlive_public_alias() {
+        let mut table = HandleTable::default();
+        let handle = table.create_thread(7, 0x1000, 0, false);
+        let birth = table.thread_birth_key_for_handle(handle).unwrap();
+        let pin = TaskWaitPin::Thread(birth);
+        assert_eq!(table.wait_target_pin_count(pin), Some(0));
+        assert!(table.try_pin_wait_target(pin));
+        assert!(table.try_pin_wait_target(pin));
+        assert_eq!(table.wait_target_pin_count(pin), Some(2));
+        table.close(handle).unwrap();
+        assert!(table.get(handle).is_err(), "closed alias must stay invalid");
+        assert!(
+            table.contains_thread_birth(birth),
+            "execution owns the task"
+        );
+        assert!(
+            table
+                .thread_snapshots()
+                .iter()
+                .any(|thread| thread.thread_id == 7 && !thread.signaled)
+        );
+
+        assert!(table.mark_thread_exited_by_birth(birth, 0x71));
+        assert_eq!(table.wait_target_signaled(pin), Some(true));
+        assert!(table.release_wait_target(pin));
+        assert_eq!(table.wait_target_pin_count(pin), Some(1));
+        assert!(table.contains_thread_birth(birth));
+        assert!(table.release_wait_target(pin));
+        assert!(!table.contains_thread_birth(birth));
+        assert_eq!(table.wait_target_pin_count(pin), None);
+        assert!(
+            !table.release_wait_target(pin),
+            "release only acquired pins"
+        );
+    }
+
+    #[test]
+    fn process_wait_pin_keeps_exited_birth_reopenable_after_alias_close() {
+        let mut table = HandleTable::default();
+        let handle = table.create_process(9);
+        let birth = table.process_birth_key_for_handle(handle).unwrap();
+        let pin = TaskWaitPin::Process(birth);
+        assert!(table.try_pin_wait_target(pin));
+        assert!(table.try_pin_wait_target(pin));
+        table.close(handle).unwrap();
+        assert!(table.get(handle).is_err());
+        assert!(table.contains_process_birth(birth));
+        assert_eq!(table.wait_target_signaled(pin), Some(false));
+
+        table
+            .finish_process_execution_by_birth(birth, 0x91)
+            .unwrap();
+        assert_eq!(table.wait_target_signaled(pin), Some(true));
+        assert!(
+            table
+                .process_snapshots()
+                .iter()
+                .any(|process| process.process_id == 9 && process.signaled)
+        );
+        let reopened = table
+            .open_process(9)
+            .expect("CE6 can reopen an exited but wait-referenced process");
+        assert_eq!(table.process_birth_key_for_handle(reopened), Some(birth));
+        table.close(reopened).unwrap();
+        assert!(table.release_wait_target(pin));
+        assert_eq!(table.wait_target_pin_count(pin), Some(1));
+        assert!(table.release_wait_target(pin));
+        assert!(!table.contains_process_birth(birth));
+        assert!(!table.release_wait_target(pin));
+    }
+
+    #[test]
+    fn stale_wait_pin_cannot_rebind_reused_tid_or_pid() {
+        let mut table = HandleTable::default();
+        let old_thread = table.create_thread(7, 0x1000, 0, false);
+        let old_thread_pin =
+            TaskWaitPin::Thread(table.thread_birth_key_for_handle(old_thread).unwrap());
+        assert!(table.mark_thread_exited(old_thread, 0));
+        table.close(old_thread).unwrap();
+        let new_thread = table.create_thread(7, 0x2000, 0, false);
+        let new_thread_pin =
+            TaskWaitPin::Thread(table.thread_birth_key_for_handle(new_thread).unwrap());
+        assert_ne!(old_thread_pin, new_thread_pin);
+        assert!(!table.try_pin_wait_target(old_thread_pin));
+        assert!(!table.release_wait_target(old_thread_pin));
+        assert_eq!(table.wait_target_signaled(old_thread_pin), None);
+        assert_eq!(table.wait_target_pin_count(new_thread_pin), Some(0));
+
+        let old_process = table.create_process(9);
+        let old_process_pin =
+            TaskWaitPin::Process(table.process_birth_key_for_handle(old_process).unwrap());
+        table.mark_process_exited(old_process, 0);
+        table.close(old_process).unwrap();
+        let new_process = table.create_process(9);
+        let new_process_pin =
+            TaskWaitPin::Process(table.process_birth_key_for_handle(new_process).unwrap());
+        assert_ne!(old_process_pin, new_process_pin);
+        assert!(!table.try_pin_wait_target(old_process_pin));
+        assert!(!table.release_wait_target(old_process_pin));
+        assert_eq!(table.wait_target_signaled(old_process_pin), None);
+        assert_eq!(table.wait_target_pin_count(new_process_pin), Some(0));
+    }
+
+    #[test]
+    fn exhausted_wait_reference_count_publishes_no_additional_pin() {
+        let mut table = HandleTable::default();
+        let handle = table.create_thread(7, 0x1000, 0, false);
+        let pin = TaskWaitPin::Thread(table.thread_birth_key_for_handle(handle).unwrap());
+        table.threads.get_mut(&7).unwrap().wait_refs = u32::MAX;
+        assert!(!table.try_pin_wait_target(pin));
+        assert_eq!(table.wait_target_pin_count(pin), Some(u32::MAX));
+
+        let process = table.create_process(9);
+        let pin = TaskWaitPin::Process(table.process_birth_key_for_handle(process).unwrap());
+        table.processes.get_mut(&9).unwrap().wait_refs = u32::MAX;
+        assert!(!table.try_pin_wait_target(pin));
+        assert_eq!(table.wait_target_pin_count(pin), Some(u32::MAX));
+    }
 
     #[test]
     fn creation_owner_is_frozen_across_aliases_and_exit() {
