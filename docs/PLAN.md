@@ -155,15 +155,22 @@ close only their named gates, not Stage 2 or live acceptance.
   invalid/stale targets and pin exhaustion return `WAIT_FAILED` with a CE last
   error, leaving the old state intact. Focused failure/retry controls and its
   bounded [source gate](../evidence/stage3-waitprep-20261015/validation.receipt.md)
-  passed; runtime behavior is a separate acceptance step.
+  passed; runtime behavior is a separate acceptance step. The later bounded
+  stale-TID/native-stamp [source gate](../evidence/stage3-stale-tid-20261015/validation.receipt.md)
+  carries exact thread birth with pending returns and suspended contexts,
+  verifies the current `(TID, birth)` at native slice-end staging, and
+  birth-verifies the GetMessage compatibility bridge before resuming. Stale
+  same-TID A→B reuse fails closed without restoring A's state into B.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE
   caller wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
-  aliasless Sleep-suspend, stale intra-slice TID continuation and generic
-  parked-wait continuation remain open. These bounded source slices are not
-  full Stage 3 or live-app acceptance.
+  aliasless Sleep-suspend and generic parked-wait continuation remain open.
+  Sleep/object blocked-wait resume still restores registers and then marks the
+  current-thread provenance tracker unverified, so a following native slice
+  may reject; other blocked-wait families have not been migrated by this gate.
+  These bounded source slices are not full Stage 3 or live-app acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full

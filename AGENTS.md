@@ -153,8 +153,11 @@ checked creation ownership, exact-birth child completion, a bounded
 `TerminateProcess` execution-stop handshake, and O-K3 execution/registered
 Thread/Process wait pins
 ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)). Opaque
-non-task wait slots remain unpinned; aliasless Sleep-suspend and stale
-intra-slice TID continuation remain open. These slices do not complete the
+non-task wait slots remain unpinned. The bounded
+[stale-TID/native-stamp gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
+birth-verifies pending returns, suspended contexts, native slice-end staging,
+and the GetMessage bridge; aliasless Sleep-suspend and generic parked-wait
+provenance remain open. These slices do not complete the
 machine-owned Task/continuation/scheduler core, Stage 3, or live-app
 acceptance. See `PROGRESS.md` and `docs/PLAN.md` for current gates.
 
