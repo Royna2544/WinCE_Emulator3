@@ -34,9 +34,9 @@ per-task SMT frames remain required. Controls: `occupied_send_message_timeout_sl
 `PostThreadMessageW`, `PostMessageW(hwnd=0)` and self `PostQuitMessage` capture a live `ThreadBirthKey`; stale births reject queue, quit, status, timestamp, trace and wake publication.
 One per-TID FIFO keeps each post's exact-birth, fixture-only legacy-unknown or unscoped compatibility owner; sent → posted → quit → paint priority and HWND/message filtering remain.
 Get/Peek, status/new-input, timestamp, wait wake/readiness and exact exit use birth-eligible state; A retirement preserves B and unscoped work, while window-originated status remains compatibility state.
-Unknown-target return/LastError parity, window/broadcast/HWND-owned-timer/keyboard/remote/sent/paint/modal producer births and full GWES/live iNavi acceptance remain open. [Thread-post receipt](../../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md): release 1,952/0/9; no-feature 1,417/0/3. [HWND-less timer receipt](../../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md): release 1,960/0/9; no-feature 1,424/0/3.
+Unknown-target return/LastError parity, other window/broadcast/HWND-owned-timer/keyboard/remote/sent/paint/modal producer births and full GWES/live iNavi acceptance remain open. [Thread-post receipt](../../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md): release 1,952/0/9; no-feature 1,417/0/3. [HWND-less timer receipt](../../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md): release 1,960/0/9; no-feature 1,424/0/3.
 
-### W-B1 window-owner birth (reviewed; not source-tested)
+### W-B1 window-owner birth (W-B1a source-tested; W-B1b open)
 
 One immutable Window owner is exact `(ThreadBirthKey, creation ProcessBirthKey)`, explicit legacy-unknown, or system desktop; numeric TID/PID are creation-only projections, never a second owner authority.
 W-B1a preflights the captured native caller birth for `CreateWindowExW`, `CreateDialogIndirectParamW`, and `DialogBoxIndirectParamW` before any GWES/LastError effect; absent birth is a fixture-only compatibility path.
@@ -45,7 +45,7 @@ Typed-payload recipient and native CreateWindow callback ownership use the froze
 Exact A exit retires A's Birth-owned posts and makes later explicit posts ineligible; it must not recursively destroy a B-owned descendant or sweep by numeric TID.
 W-B1b later validates remote touch/key target birth before focus or input mutation, explicitly drops stale input without rerouting, and adds owner-filtered host teardown.
 Broadcast, HWND timers, hotkeys, sent/paint/modal producers, full GWES, and live iNavi acceptance remain open.
-Expected-red controls: `checked_window_hwnd_post_does_not_cross_reused_tid_birth`; `stale_native_create_window_ex_w_birth`; `stale_native_create_dialog_indirect_param_w_birth`; `stale_native_dialog_box_indirect_param_w_birth`.
+Pre-fix expected-red controls covered explicit HWND post, native ordinals 246/688/690, and an in-slice MIPS self-termination followed by stale creation. The [W-B1a receipt](../../evidence/stage3-window-owner-birth-20261015/validation.receipt.md) seals the corrected source and records the initial failed broad attempt, focused fixes, release 1,967/0/9, no-feature 1,427/0/3, and two passing alternate-feature checks. This is a bounded source gate, not full Stage 3 or live-app acceptance.
 
 ## Failure and lifetime rules
 

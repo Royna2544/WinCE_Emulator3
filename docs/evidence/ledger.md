@@ -1550,6 +1550,29 @@ Stage 3 and a freshly approved bounded live run remain separate. No O-M2
 iNavi launch, host RSS, busy-slice MIPS, map readiness or speed gain is
 established.
 
+## W-B1a Window-owner birth source gate (2026-10-15, executed)
+
+Five pre-fix expected-red attempts exposed stale explicit HWND post and native
+creation through ordinals 246/688/690; the fifth ran MIPS `TerminateThread`
+then `CreateWindowExW` in the same slice. The W-B1a implementation freezes one
+Window owner, checks native caller birth before creation effects, and uses the
+stored owner for explicit HWND FIFO/wake, typed recipient/payload retirement
+and the CreateWindow callback process. The first broad release a15 stopped at
+975/2/6 because two stale typed-payload fixtures failed; a third adjacent
+fixture was corrected too, without restoring a numeric-PID fallback. Focused
+a16–a18 then passed.
+
+The corrected source is base `0e686c9c` plus
+`sealed-code-source-a19.patch` (SHA-256
+`02429B95862509D26FEBA3C1E62976D164FE9F7EEF6DE975D0FC197646E608DD`);
+post-test file hashes matched. Full release a19 passed **1,967/0/9** and
+no-feature a20 **1,427/0/3**, each across 18 result blocks; Unicorn-only and
+Unicorn/desktop no-trace checks a21–a22 passed. The
+[receipt](../../evidence/stage3-window-owner-birth-20261015/validation.receipt.md)
+holds all raw logs, exact commands, attempt hashes and limits. Broadcast,
+HWND timers, hotkeys, sent/paint/modal paths, remote input, host teardown,
+full Stage 3 and live iNavi acceptance remain open.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

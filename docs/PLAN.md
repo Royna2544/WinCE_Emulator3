@@ -223,7 +223,13 @@ close only their named gates, not Stage 2 or live acceptance.
   passed release 1,952/0/9 and no-feature 1,417/0/3. The separate HWND-less thread-timer
   [source gate](../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md)
   passed release 1,960/0/9 and no-feature 1,424/0/3 while preserving the
-  HWND-owned/legacy path. Remaining numeric GWE producers, native continuation
+  HWND-owned/legacy path. The bounded W-B1a window-owner
+  [source gate](../evidence/stage3-window-owner-birth-20261015/validation.receipt.md)
+  freezes creation ownership, preflights native ordinals 246/688/690, and
+  birth-gates explicit HWND post and typed-payload retirement. Five pre-fix
+  reds and the failed first broad attempt remain preserved; corrected release
+  passed 1,967/0/9 and no-feature 1,427/0/3. W-B1b remote input/host teardown,
+  broadcast, HWND timers, hotkeys, sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates
   ([tasks-scheduler](subsystems/tasks-scheduler.md)). Opaque non-task targets
   remain unpinned, while synchronous finite inline timeout paths are outside
