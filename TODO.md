@@ -13,8 +13,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Close the GMS follow-up as its own source-bound gate: the focused public
    API test passed 4/0/0 before the test-only setter cleanup; validate the
    final source in the coordinated full release/no-feature pass.
-2. Finish the remaining D-008 families: shared file views on slabs, then
-   image/heap blobs. Keep native-setup measurements with each source gate.
+2. Finish D-008 shared file views on slabs through named `CreateFileMappingW`
+   reopen; one public A/B same-VA plus in-slice alias control lands with its
+   fix, then image/heap blobs. Measure native setup with each source gate.
 3. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
