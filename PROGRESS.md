@@ -206,17 +206,8 @@ E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
   reverified and removed by exact paths; nested target directories remain intact.
   The root-only `/evidence/` ignore rule keeps large local artifacts ignored
   while `docs/evidence/ledger.md` is Git-visible.
-- After separate explicit approval, five inventoried old source/build copies
-  were retired by exact path; the listed auxiliary Git worktree's branch was
-  preserved. The selected unique source ZIP, exact fresh-HEAD red-test patch
-  and selected EXE/PDB evidence were verified again after retirement under
-  D: `evidence/`. Unselected compiler outputs can be rebuilt where source was
-  retained, but are not recoverable from those archives. No other mirror,
-  D: source/target/evidence or user SD data was removed by that operation.
-- Phase 1 persistent-owner build 650 (64-file source freeze FCD9663B, native
-  37B7724C) passed 1,618 tests but host-crashed at 129.1 s with 1.66 GiB RSS.
-  Splash was observed by +4.800 s; caller `0x5237` restoration was valid
-  (ledger E-2).
+- Persistent-owner build 650 host-crashed at 129.1 s with 1.66 GiB RSS after
+  showing the splash by +4.800 s (ledger E-2).
 - The 1 GiB per-engine translation arena keeps its commitment through hook
   churn (E-3, E-4).
 - Small pre-init arenas crashed from a commit-tail arithmetic defect (E-5,
@@ -224,45 +215,24 @@ E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
 - The full-backend mapping/context control passed. The stop/error controls
   started red and are green since O-P1 (E-7, E-10).
 - The Task/alias controls are the Stage 3 baseline (E-8, E-11, E-26).
-- A bounded Stage 3 child-exit/worker-sweep source slice now passes the D:
-  no-feature suite (1,375 passed, 5 ignored) and release
-  unicorn/trace/desktop suite (1,851 passed, 11 ignored), plus the no-trace
-  desktop check. Real process waits signal only after exact-birth verified
-  completion; stale worker contexts fail closed, and completed child CPUs do
-  not replay entry. That historical slice did not include TerminateProcess
-  execution-stop, full Stage 3, a performance measurement or live-app acceptance
-  ([source receipt](evidence/stage3-sweep-20261014/validation.receipt.md)).
-- Scoped cleanup archived/hash-verified and removed only two obsolete
-  standalone test executable/PDB pairs and one duplicate cache-entry trace.
-  Five files total9,522,161 logical bytes; recovery ZIP2,794,447bytes plus
-  receipt are in chat `validation/archives/cleanup-20261013-small-intermediates.*`.
-  Sources, active caches, unique evidence, synced references and SD data were
-  untouched. This is recoverable cleanup, not physical-disk reclaim measurement.
-- The diagnostic-only baseline4E0A/types89F9 passes1,596 tests, one eVC4
-  fixture ignored, release/three feature/fmt/diff checks. Configured positive
-  count and voluntary stops report actual expiry0; a genuine deadline reports1.
-  DD2A886E...AD6A22 executable/symbols are preserved as
-  `native_outcome_baseline_1013.{exe,pdb}`, not installed or live-run. Installed
-  BED2 was restored after the failed scheduler ownership trial above.
-
-- HeapReAlloc/LocalReAlloc/CRT realloc now map, copy the retained prefix and
-  zero only the grown tail before committing allocation metadata. IME resize
-  bypasses use the same boundary. Failure retains the old allocation; partly
-  written destinations remain unused monotonic holes, not silently reused.
-  Raw mapping/read/copy/zero failures and actual MIPS fresh-engine spillover
-  reads pass. Checked initial allocation is now validated below; heap reuse
-  and page reclamation remain separate unfinished work.
-- The normal A3BA00D6...B3F5A6 bundle passes 1,536 tests, one eVC4 fixture
-  ignored, release build and three feature checks. Its actual 330 s GPS/tap
-  run ends at 330.239 s, exit 0/no watchdog/empty stderr. Sampled peak RSS is
-  566.0 MiB/private 568.0 MiB: essentially the preceding 562.3/573.2 MiB,
-  not a new late-memory improvement. First splash is observed by +4.631 s
-  (2 s polling; not full boot). 206 location responses and retained positive
-  COM7 ReadFile payloads prove input consumption. Tap delivery is FIFO but
-  takes 1.578 s; both handlers return in about 22 ms. All observed frames and
-  the terminal PPM are splash, not map. Four SD probe markers remain absent.
-  Artifacts: `target/bringup_1013_heap_drive_*`; detailed report is in the
-  chat workspace `validation/bringup-1013-heap-drive-evidence.md`.
+- Stage 3 child-exit/worker sweep: real process waits signal only after
+  exact-birth verified completion; stale worker contexts fail closed;
+  completed child CPUs do not replay entry
+  ([receipt](evidence/stage3-sweep-20261014/validation.receipt.md)).
+- O-P1 count witness (diagnostic baseline 4E0A): positive-count and voluntary
+  stops report expiry 0, a genuine deadline reports 1. Its EXE/PDB are kept as
+  `native_outcome_baseline_1013.{exe,pdb}`.
+- HeapReAlloc/LocalReAlloc/CRT realloc map, copy the retained prefix and zero
+  only the grown tail before committing allocation metadata; IME resize uses
+  the same boundary. Failure keeps the old allocation, and partly written
+  destinations stay unused monotonic holes. Heap reuse and page reclamation
+  remain open.
+- Bundle A3BA00D6 330 s GPS/tap run: exit 0 at 330.239 s, peak RSS 566.0 MiB
+  (no late-memory improvement), first splash by +4.631 s, 206 location
+  responses and positive COM7 ReadFile payloads consumed. Taps arrive FIFO but
+  take 1.578 s, and handlers return in about 22 ms. Every frame was the
+  splash. The report is in the chat workspace
+  `validation/bringup-1013-heap-drive-evidence.md`.
 - That run executes 1,037,557,247 guest instructions across 3,406 slices;
   weighted busy-slice MIPS is 12.846 versus preceding 12.314. Guest work and
   late phase rates are comparable; no controlled speed improvement is claimed.
