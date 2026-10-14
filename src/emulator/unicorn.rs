@@ -396,6 +396,22 @@ fn native_gwe_queue_import_requires_verified_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn native_queue_or_thread_timer_import_requires_verified_birth(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    first_arg: u32,
+) -> bool {
+    native_gwe_queue_import_requires_verified_birth(module_kind, ordinal)
+        || (module_kind == crate::emulator::imports::ImportModuleKind::Coredll
+            && first_arg == 0
+            && matches!(
+                ordinal,
+                Some(crate::ce::coredll_ordinals::ORD_SET_TIMER)
+                    | Some(crate::ce::coredll_ordinals::ORD_KILL_TIMER)
+            ))
+}
+
+#[cfg(feature = "unicorn")]
 fn stop_native_opaque_wait_error<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     current_thread: &NativeCurrentThread,
@@ -10635,21 +10651,27 @@ impl UnicornMips {
                     );
                 }
                 let active_thread_id = current_thread_id_hook.get().0;
-                // A native register context belongs to the task incarnation
-                // that supplied it. GWE queue APIs must never reinterpret an
-                // escaped A context as B merely because B reused the TID.
-                if trap.as_ref().is_some_and(|trap| {
-                    native_gwe_queue_import_requires_verified_birth(trap.module_kind, trap.ordinal)
-                }) && verified_native_register_birth(
+                let caller_birth = verified_native_register_birth(
                     unsafe { &*kernel_ptr },
                     &current_thread_id_hook,
                     active_thread_id,
-                )
-                .is_none()
+                );
+                // A native register context belongs to the task incarnation
+                // that supplied it. GWE queue APIs must never reinterpret an
+                // escaped A context as B merely because B reused the TID.
+                // HWND-less timer calls also target that exact caller birth;
+                // window timers retain their existing HWND-owned path.
+                if trap.as_ref().is_some_and(|trap| {
+                    native_queue_or_thread_timer_import_requires_verified_birth(
+                        trap.module_kind,
+                        trap.ordinal,
+                        args.first().copied().unwrap_or(0),
+                    )
+                }) && caller_birth.is_none()
                 {
                     *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
                         format!(
-                            "native GWE import has stale or unverified thread birth for TID {active_thread_id}"
+                            "native GWE or thread-timer import has stale or unverified thread birth for TID {active_thread_id}"
                         ),
                     ));
                     let _ = uc.emu_stop();
@@ -11522,6 +11544,7 @@ impl UnicornMips {
                     Some(unsafe { &mut *framebuffer_ptr }),
                     crate::ce::coredll::CoredllRawContext {
                         thread_id: active_thread_id,
+                        caller_birth,
                         caller_pc: Some(caller_pc),
                         raw_caller_pc: Some(raw_caller_pc),
                         trap_pc: Some(address),
@@ -80496,6 +80519,73 @@ mod unicorn_tests {
                 .gwe
                 .has_message_filtered_for_birth(new_birth, None, 0, 0)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn native_thread_timer_import_requires_exact_birth_only_without_hwnd() -> crate::Result<()> {
+        use crate::ce::coredll_ordinals::{ORD_KILL_TIMER, ORD_SET_TIMER};
+        use crate::emulator::imports::ImportModuleKind;
+
+        for ordinal in [ORD_SET_TIMER, ORD_KILL_TIMER] {
+            assert!(
+                super::native_queue_or_thread_timer_import_requires_verified_birth(
+                    ImportModuleKind::Coredll,
+                    Some(ordinal),
+                    0,
+                )
+            );
+            assert!(
+                !super::native_queue_or_thread_timer_import_requires_verified_birth(
+                    ImportModuleKind::Coredll,
+                    Some(ordinal),
+                    0x1234,
+                )
+            );
+            assert!(
+                !super::native_queue_or_thread_timer_import_requires_verified_birth(
+                    ImportModuleKind::Fsdmgr,
+                    Some(ordinal),
+                    0,
+                )
+            );
+        }
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let process_birth = kernel.current_process_birth_key().expect("boot birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_handle)
+            .expect("A birth");
+        let native_caller = super::NativeCurrentThread::new(thread_id, Some(old_birth));
+        assert!(kernel.mark_guest_thread_exited_by_birth(old_birth, 0));
+        assert!(kernel.close_handle(old_handle)?);
+        let new_handle = kernel.handles.try_create_thread_in_birth(
+            process_birth,
+            thread_id,
+            0x0040_4000,
+            0,
+            false,
+        )?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_handle)
+            .expect("B birth");
+        assert_ne!(old_birth, new_birth);
+        assert!(
+            super::verified_native_register_birth(&kernel, &native_caller, thread_id).is_none()
+        );
+        assert_eq!(
+            kernel.set_timer_for_birth(old_birth, Some(0x19fe), 1, None),
+            0
+        );
+        assert_eq!(
+            kernel.set_timer_for_birth(new_birth, Some(0x19fe), 1, None),
+            0x19fe
+        );
+        assert!(!kernel.kill_timer_for_birth(old_birth, 0x19fe));
+        assert!(kernel.kill_timer_for_birth(new_birth, 0x19fe));
         Ok(())
     }
 
