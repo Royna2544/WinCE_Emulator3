@@ -3778,8 +3778,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             }
             let lo = memory.read_u32(src).unwrap_or(0);
             let hi = memory.read_u32(src + 4).unwrap_or(0);
-            let _ = memory.write_u32(dst, lo);
-            let _ = memory.write_u32(dst + 4, hi);
+            if !prepare_host_output_span(kernel, memory, thread_id, dst, 8)
+                || !write_guest_u32(kernel, memory, thread_id, dst, lo)
+                || !write_guest_u32(kernel, memory, thread_id, dst.wrapping_add(4), hi)
+            {
+                return Some(CoredllValue::Bool(false));
+            }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
@@ -3796,8 +3800,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             }
             let lo = memory.read_u32(src).unwrap_or(0);
             let hi = memory.read_u32(src + 4).unwrap_or(0);
-            let _ = memory.write_u32(dst, lo);
-            let _ = memory.write_u32(dst + 4, hi);
+            if !prepare_host_output_span(kernel, memory, thread_id, dst, 8)
+                || !write_guest_u32(kernel, memory, thread_id, dst, lo)
+                || !write_guest_u32(kernel, memory, thread_id, dst.wrapping_add(4), hi)
+            {
+                return Some(CoredllValue::Bool(false));
+            }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
@@ -22621,6 +22629,9 @@ fn write_current_system_time<M: CoredllGuestMemory>(
         return;
     }
     let fields = system_time_fields_from_ticks(current_filetime_ticks(kernel));
+    if !prepare_host_output_span(kernel, memory, thread_id, system_time_ptr, 16) {
+        return;
+    }
     let ok = write_guest_u16(kernel, memory, thread_id, system_time_ptr, fields.year)
         && write_guest_u16(
             kernel,
@@ -24369,6 +24380,9 @@ fn system_time_to_file_time_raw<M: CoredllGuestMemory>(
     let ticks = (seconds as u64)
         .saturating_mul(FILETIME_TICKS_PER_SECOND)
         .saturating_add(u64::from(milliseconds).saturating_mul(FILETIME_TICKS_PER_MILLISECOND));
+    if !prepare_host_output_span(kernel, memory, thread_id, file_time_ptr, 8) {
+        return false;
+    }
     if !write_guest_u32(kernel, memory, thread_id, file_time_ptr, ticks as u32)
         || !write_guest_u32(
             kernel,
@@ -24405,6 +24419,9 @@ fn file_time_to_system_time_raw<M: CoredllGuestMemory>(
         return false;
     };
     let fields = system_time_fields_from_ticks((u64::from(high) << 32) | u64::from(low));
+    if !prepare_host_output_span(kernel, memory, thread_id, system_time_ptr, 16) {
+        return false;
+    }
     let ok = write_guest_u16(kernel, memory, thread_id, system_time_ptr, fields.year)
         && write_guest_u16(
             kernel,
@@ -25065,6 +25082,25 @@ fn write_win32_find_data_w<M: CoredllGuestMemory>(
     addr: u32,
     find_data: &FindData,
 ) -> bool {
+    let name_units = find_data
+        .file_name
+        .encode_utf16()
+        .take(WIN32_FIND_DATAW_FILE_NAME_CHARS.saturating_sub(1))
+        .count();
+    let Some(total_bytes) = name_units
+        .checked_add(1)
+        .and_then(|units| units.checked_mul(2))
+        .and_then(|bytes| u32::try_from(bytes).ok())
+        .and_then(|bytes| WIN32_FIND_DATAW_FILE_NAME.checked_add(bytes))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !prepare_host_output_span(kernel, memory, thread_id, addr, total_bytes) {
+        return false;
+    }
     let file_size_high = (find_data.file_size >> 32) as u32;
     let file_size_low = find_data.file_size as u32;
     let dwords = [
@@ -25101,6 +25137,9 @@ fn write_win32_file_attribute_data_w<M: CoredllGuestMemory>(
     addr: u32,
     find_data: &FindData,
 ) -> bool {
+    if !prepare_host_output_span(kernel, memory, thread_id, addr, 36) {
+        return false;
+    }
     let file_size_high = (find_data.file_size >> 32) as u32;
     let file_size_low = find_data.file_size as u32;
     let dwords = [
@@ -25150,6 +25189,19 @@ fn get_module_file_name_w_raw<M: CoredllGuestMemory>(
     };
     let units = path.encode_utf16().collect::<Vec<_>>();
     let copied = units.len().min(max_chars.saturating_sub(1) as usize);
+    let Some(output_bytes) = copied
+        .checked_add(1)
+        .and_then(|units| units.checked_mul(2))
+        .and_then(|bytes| u32::try_from(bytes).ok())
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if !prepare_host_output_span(kernel, memory, thread_id, buffer, output_bytes) {
+        return 0;
+    }
     for (index, unit) in units.iter().copied().take(copied).enumerate() {
         if !write_guest_u16(
             kernel,
@@ -32902,6 +32954,20 @@ fn write_wide_result<M: CoredllGuestMemory>(
         .encode_utf16()
         .take(capacity_chars.saturating_sub(1))
         .collect();
+    let Some(output_bytes) = units
+        .len()
+        .checked_add(1)
+        .and_then(|units| units.checked_mul(2))
+        .and_then(|bytes| u32::try_from(bytes).ok())
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if !prepare_host_output_span(kernel, memory, thread_id, buffer, output_bytes) {
+        return 0;
+    }
     for (index, unit) in units.iter().copied().enumerate() {
         if !write_guest_u16(
             kernel,
@@ -33305,6 +33371,23 @@ fn write_guest_wide_fixed<M: CoredllGuestMemory>(
     text: &str,
     capacity_chars: usize,
 ) -> bool {
+    let len = text
+        .encode_utf16()
+        .take(capacity_chars.saturating_sub(1))
+        .count();
+    let Some(byte_len) = len
+        .checked_add(1)
+        .and_then(|units| units.checked_mul(2))
+        .and_then(|bytes| u32::try_from(bytes).ok())
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !prepare_host_output_span(kernel, memory, thread_id, addr, byte_len) {
+        return false;
+    }
     let mut units = text.encode_utf16().take(capacity_chars.saturating_sub(1));
     for (index, unit) in units.by_ref().enumerate() {
         if !write_guest_u16(
@@ -33317,10 +33400,6 @@ fn write_guest_wide_fixed<M: CoredllGuestMemory>(
             return false;
         }
     }
-    let len = text
-        .encode_utf16()
-        .take(capacity_chars.saturating_sub(1))
-        .count();
     write_guest_u16(
         kernel,
         memory,
@@ -44748,10 +44827,18 @@ fn strsafe_write_bytes<M: CoredllGuestMemory>(
         return false;
     }
     let copy = src.len().min((cap_bytes - 1) as usize);
-    let mut output = Vec::with_capacity(copy + 1);
-    output.extend_from_slice(&src[..copy]);
-    output.push(0);
-    write_guest_bytes(kernel, memory, thread_id, dst, &output) && copy == src.len()
+    if memory
+        .prepare_host_write(kernel, dst, (copy + 1) as u32)
+        .and_then(|()| memory.write_bytes(dst, &src[..copy]))
+        .and_then(|()| memory.write_u8(dst.wrapping_add(copy as u32), 0))
+        .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    copy == src.len()
 }
 
 fn strsafe_copy_w_raw<M: CoredllGuestMemory>(
@@ -63538,6 +63625,21 @@ fn write_guest_wide_z<M: CoredllGuestMemory>(
     ptr: u32,
     text: &str,
 ) -> bool {
+    let Some(output_bytes) = text
+        .encode_utf16()
+        .count()
+        .checked_add(1)
+        .and_then(|units| units.checked_mul(2))
+        .and_then(|bytes| u32::try_from(bytes).ok())
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !prepare_host_output_span(kernel, memory, thread_id, ptr, output_bytes) {
+        return false;
+    }
     for (index, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
         if !write_guest_u16(
             kernel,
@@ -67888,6 +67990,23 @@ fn read_guest_narrow_preview<M: CoredllGuestMemory>(
     Some(preview)
 }
 
+fn prepare_host_output_span<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    len: u32,
+) -> bool {
+    if memory.prepare_host_write(kernel, addr, len).is_ok() {
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
+}
+
 pub(crate) fn write_guest_bytes<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -68135,7 +68254,8 @@ fn write_guest_point<M: CoredllGuestMemory>(
     addr: u32,
     point: Point,
 ) -> bool {
-    write_guest_i32(kernel, memory, thread_id, addr, point.x)
+    prepare_host_output_span(kernel, memory, thread_id, addr, 8)
+        && write_guest_i32(kernel, memory, thread_id, addr, point.x)
         && write_guest_i32(kernel, memory, thread_id, addr.wrapping_add(4), point.y)
 }
 
@@ -68160,7 +68280,8 @@ fn write_guest_rect<M: CoredllGuestMemory>(
     addr: u32,
     rect: Rect,
 ) -> bool {
-    write_guest_i32(kernel, memory, thread_id, addr, rect.left)
+    prepare_host_output_span(kernel, memory, thread_id, addr, 16)
+        && write_guest_i32(kernel, memory, thread_id, addr, rect.left)
         && write_guest_i32(kernel, memory, thread_id, addr.wrapping_add(4), rect.top)
         && write_guest_i32(kernel, memory, thread_id, addr.wrapping_add(8), rect.right)
         && write_guest_i32(
@@ -70572,6 +70693,7 @@ mod tests {
         native_actions_attempted: usize,
         terminal_failures: usize,
         committed_generations: Vec<u64>,
+        prepared_host_writes: Vec<(u32, u32)>,
         poisoned: bool,
     }
 
@@ -70602,6 +70724,16 @@ mod tests {
 
         fn ensure_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
             self.guest.ensure_mapped(addr, len)
+        }
+
+        fn prepare_host_write(
+            &mut self,
+            _kernel: &mut CeKernel,
+            addr: u32,
+            len: u32,
+        ) -> Result<()> {
+            self.prepared_host_writes.push((addr, len));
+            Ok(())
         }
 
         fn validate_writable_u32(&self, addr: u32) -> Result<()> {
@@ -70874,6 +71006,56 @@ mod tests {
         assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
         assert_eq!(kernel.memory.allocations().count(), 0);
         assert_eq!(memory.native_actions_attempted, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn common_host_output_paths_prepare_full_write_spans() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let mut memory = FailingPrivateVmMemory::default();
+        for (base, size) in [
+            (0x0002_0000, 4),
+            (0x0002_1000, 4),
+            (0x0002_2000, 4),
+            (0x0002_3000, 4),
+            (0x0002_4000, 8),
+        ] {
+            memory.guest.map_bytes(base, size);
+        }
+        memory.guest.write_bytes(0x0002_3000, &[1, 2, 3, 4])?;
+
+        assert!(write_guest_bytes(
+            &mut kernel,
+            &mut memory,
+            1,
+            0x0002_0000,
+            &[9, 8, 7],
+        ));
+        assert!(strsafe_write_bytes(
+            &mut kernel,
+            &mut memory,
+            1,
+            0x0002_1000,
+            b"abc",
+            4,
+        ));
+        assert_eq!(
+            crate::ce::crt::memcpy_raw(&mut kernel, &mut memory, 1, 0x0002_2000, 0x0002_3000, 4,),
+            0x0002_2000
+        );
+        assert_eq!(
+            crate::ce::crt::memset_raw(&mut kernel, &mut memory, 1, 0x0002_4000, 0xaa, 8),
+            0x0002_4000
+        );
+        assert_eq!(
+            memory.prepared_host_writes,
+            vec![
+                (0x0002_0000, 3),
+                (0x0002_1000, 4),
+                (0x0002_2000, 4),
+                (0x0002_4000, 8),
+            ]
+        );
         Ok(())
     }
 
