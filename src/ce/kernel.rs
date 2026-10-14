@@ -451,6 +451,11 @@ pub struct PreparedTaskWait<'a> {
 }
 
 impl PreparedTaskWait<'_> {
+    /// Canonical birth captured before this wait can be published.
+    pub(crate) fn owner_birth(&self) -> Option<ThreadBirthKey> {
+        self.owner_birth
+    }
+
     /// Allows the caller to finish its existing native handoff while the
     /// unpublished wait keeps its exact target births pinned.
     pub fn kernel_mut(&mut self) -> &mut CeKernel {
