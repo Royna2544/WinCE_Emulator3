@@ -14298,6 +14298,243 @@ mod tests {
         Ok(())
     }
 
+    fn stale_window_remote_input_fixture() -> Result<(CeKernel, u32, ThreadBirthKey, u32, u32)> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle_a, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth_a = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_a)
+            .expect("A thread birth");
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_a,
+                "REMOTE_BIRTH_A",
+                "A",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 800, 480),
+            )
+            .expect("A checked window");
+        assert!(kernel.mark_guest_thread_exited_by_birth(birth_a, 0));
+        assert!(kernel.close_handle(handle_a)?);
+
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = kernel
+            .handles
+            .process_birth_key(launch_b.process_id)
+            .expect("B process birth");
+        let handle_b = kernel
+            .handles
+            .try_create_thread_in_birth(process_b, thread_id, 0x402000, 0, false)?;
+        let birth_b = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_b)
+            .expect("B thread birth");
+        assert_ne!(birth_a, birth_b);
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_b,
+                "REMOTE_BIRTH_B",
+                "B",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 800, 480),
+            )
+            .expect("B checked window");
+        assert!(kernel.gwe.is_window(hwnd_a));
+        assert_eq!(kernel.recipient_birth_for_window(hwnd_a), None);
+        assert!(kernel.gwe.is_window(hwnd_b));
+        assert_eq!(kernel.recipient_birth_for_window(hwnd_b), Some(process_b));
+        kernel.gwe.set_focus(Some(hwnd_b));
+        kernel.gwe.set_active_window(Some(hwnd_b));
+        kernel.gwe.set_keyboard_target(thread_id, Some(hwnd_b));
+        kernel.remote.set_framebuffer_size(800, 480);
+        Ok((kernel, handle_b, birth_b, hwnd_a, hwnd_b))
+    }
+
+    #[test]
+    fn stale_birth_window_remote_touch_does_not_reach_reused_tid() -> Result<()> {
+        use crate::ce::gwe::{QS_MOUSEBUTTON, QS_POSTMESSAGE};
+
+        let (mut kernel, handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
+        let thread_id = birth_b.thread_id();
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            handle_b,
+            vec![],
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        assert_ne!(wait_id, 0);
+        let status_flags = QS_MOUSEBUTTON | QS_POSTMESSAGE;
+        let status_before = kernel
+            .gwe
+            .peek_queue_status_for_birth(birth_b, status_flags);
+        let ready_before = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
+        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
+        let signals_before = kernel.scheduler_stats().message_input_signal_count;
+        let focus_before = kernel.gwe.get_focus();
+        let active_before = kernel.gwe.get_active_window();
+        let keyboard_before = kernel.gwe.get_keyboard_target(thread_id);
+        let mouse_pos_before = kernel.gwe.get_message_pos(thread_id);
+        let trace_before = kernel.recent_message_ops().len();
+
+        kernel.remote.enqueue_touch("down", 13, 27).unwrap();
+        let posted = kernel.drain_remote_input_to_gwe(thread_id, hwnd_a);
+        let target_or_post_traces: Vec<_> = kernel.recent_message_ops()[trace_before..]
+            .iter()
+            .filter(|trace| {
+                trace.op == "remote_touch_target"
+                    || (trace.op == "post_message"
+                        && matches!(trace.msg, Some(WM_LBUTTONDOWN | WM_LBUTTONUP)))
+            })
+            .cloned()
+            .collect();
+
+        assert_eq!(
+            posted, 0,
+            "stale A input must be dropped, not rerouted to B"
+        );
+        assert_eq!(kernel.gwe.get_focus(), focus_before);
+        assert_eq!(kernel.gwe.get_active_window(), active_before);
+        assert_eq!(kernel.gwe.get_keyboard_target(thread_id), keyboard_before);
+        assert_eq!(kernel.gwe.get_message_pos(thread_id), mouse_pos_before);
+        assert_eq!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(birth_b, status_flags),
+            status_before
+        );
+        assert_eq!(
+            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
+            ready_before
+        );
+        assert_eq!(
+            kernel.scheduler_stats().message_input_wake_candidate_count,
+            wakes_before
+        );
+        assert_eq!(
+            kernel.scheduler_stats().message_input_signal_count,
+            signals_before
+        );
+        assert!(
+            target_or_post_traces.is_empty(),
+            "{target_or_post_traces:?}"
+        );
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_a),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONUP,
+        ));
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONUP,
+        ));
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn stale_birth_window_remote_key_does_not_reach_reused_tid() -> Result<()> {
+        use crate::ce::gwe::{QS_KEY, QS_POSTMESSAGE, WM_KEYDOWN};
+
+        let (mut kernel, handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
+        let thread_id = birth_b.thread_id();
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            handle_b,
+            vec![],
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        assert_ne!(wait_id, 0);
+        let status_flags = QS_KEY | QS_POSTMESSAGE;
+        let status_before = kernel
+            .gwe
+            .peek_queue_status_for_birth(birth_b, status_flags);
+        let ready_before = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
+        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
+        let signals_before = kernel.scheduler_stats().message_input_signal_count;
+        let focus_before = kernel.gwe.get_focus();
+        let active_before = kernel.gwe.get_active_window();
+        let keyboard_before = kernel.gwe.get_keyboard_target(thread_id);
+        let mouse_pos_before = kernel.gwe.get_message_pos(thread_id);
+        let trace_before = kernel.recent_message_ops().len();
+
+        kernel.remote.enqueue_key("down", 0x0d).unwrap();
+        let posted = kernel.drain_remote_input_to_gwe(thread_id, hwnd_a);
+        let target_or_post_traces: Vec<_> = kernel.recent_message_ops()[trace_before..]
+            .iter()
+            .filter(|trace| {
+                trace.op == "remote_key_target"
+                    || (trace.op == "post_message" && trace.msg == Some(WM_KEYDOWN))
+            })
+            .cloned()
+            .collect();
+
+        assert_eq!(posted, 0, "stale A key must be dropped, not rerouted to B");
+        assert_eq!(kernel.gwe.get_focus(), focus_before);
+        assert_eq!(kernel.gwe.get_active_window(), active_before);
+        assert_eq!(kernel.gwe.get_keyboard_target(thread_id), keyboard_before);
+        assert_eq!(kernel.gwe.get_message_pos(thread_id), mouse_pos_before);
+        assert_eq!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(birth_b, status_flags),
+            status_before
+        );
+        assert_eq!(
+            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
+            ready_before
+        );
+        assert_eq!(
+            kernel.scheduler_stats().message_input_wake_candidate_count,
+            wakes_before
+        );
+        assert_eq!(
+            kernel.scheduler_stats().message_input_signal_count,
+            signals_before
+        );
+        assert!(
+            target_or_post_traces.is_empty(),
+            "{target_or_post_traces:?}"
+        );
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_a),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+        ));
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+        ));
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        Ok(())
+    }
+
     #[test]
     fn remote_input_blocked_thread_target_overrides_stale_active_window() -> Result<()> {
         let config = RuntimeConfig::load_default()?;
