@@ -14468,10 +14468,13 @@ fn sync_file_mapping_views_from_unicorn<D>(
                 view.base
             ))
         })?;
-        if end > mapping.data.len() {
-            mapping.data.resize(end, 0);
+        let data = mapping.legacy_data_mut().ok_or_else(|| {
+            Error::Backend("legacy file-view readback reached slab authority".to_owned())
+        })?;
+        if end > data.len() {
+            data.resize(end, 0);
         }
-        mapping.data[offset..end].copy_from_slice(&bytes);
+        data[offset..end].copy_from_slice(&bytes);
     }
     // Refresh every view's lazy-map seed bytes from the canonical mapping data
     // so any process that maps (or re-maps) a view page next sees the latest
@@ -14479,13 +14482,14 @@ fn sync_file_mapping_views_from_unicorn<D>(
     let seeds: Vec<(u32, Vec<u8>)> = kernel
         .handles
         .file_mappings()
-        .flat_map(|mapping| {
+        .filter_map(|mapping| mapping.legacy_data().map(|data| (mapping, data)))
+        .flat_map(|(mapping, data)| {
             mapping.views.iter().filter(|view| view.process_birth.is_none()).map(|view| {
-                let start = (view.offset as usize).min(mapping.data.len());
+                let start = (view.offset as usize).min(data.len());
                 let end = start
                     .saturating_add(view.size as usize)
-                    .min(mapping.data.len());
-                (view.base, mapping.data[start..end].to_vec())
+                    .min(data.len());
+                (view.base, data[start..end].to_vec())
             })
         })
         .collect();
@@ -14524,17 +14528,20 @@ fn sync_file_mapping_views_to_unicorn<D>(
             if view.process_id != owner_pid || view.process_birth.is_some() {
                 continue;
             }
+            let data = mapping.legacy_data().ok_or_else(|| {
+                Error::Backend("legacy file-view seed reached slab authority".to_owned())
+            })?;
             let start = view.offset as usize;
             let end = start
                 .saturating_add(view.size as usize)
-                .min(mapping.data.len());
+                .min(data.len());
             if start >= end {
                 continue;
             }
             // A view page may not be mapped in this process yet. Seed only
             // native pages, and require the untouched gaps to retain their
             // canonical lazy bytes for a later page fault.
-            let bytes = &mapping.data[start..end];
+            let bytes = &data[start..end];
             let view_start = u64::from(view.base);
             let view_end = view_start
                 .checked_add(bytes.len() as u64)
@@ -56378,7 +56385,7 @@ mod unicorn_tests {
             .expect("actual slice-end handoff parked the writer");
         assert_eq!(phase1_counter(&outgoing.cpu), 0x3006);
         assert_eq!(
-            &kernel.handles.file_mapping(mapping_handle)?.data[..4],
+            &kernel.handles.file_mapping(mapping_handle)?.legacy_data().unwrap()[..4],
             &0x3006u32.to_le_bytes(),
             "outgoing native view bytes must reach canonical mapping backing before PID rotation"
         );
@@ -56521,7 +56528,7 @@ mod unicorn_tests {
         );
         assert_eq!(phase1_counter(&active), 0x3006);
         assert_eq!(
-            &kernel.handles.file_mapping(mapping_handle)?.data[..4],
+            &kernel.handles.file_mapping(mapping_handle)?.legacy_data().unwrap()[..4],
             &0x3006u32.to_le_bytes(),
             "outgoing native view readback must precede checked finish"
         );
@@ -56643,7 +56650,7 @@ mod unicorn_tests {
             (child_mapping, launch.process_id, CHILD_BYTES),
         ] {
             let mapping = kernel.handles.file_mapping_mut(handle)?;
-            mapping.data[..4].copy_from_slice(&initial.to_le_bytes());
+            mapping.legacy_data_mut().unwrap()[..4].copy_from_slice(&initial.to_le_bytes());
             mapping.views.push(crate::ce::object::FileMappingView {
                 base: PHASE1_COUNTER_ADDRESS,
                 size: 4,
@@ -56712,12 +56719,12 @@ mod unicorn_tests {
             .regs
             .regs[9];
         let parent_data_after_parent = u32::from_le_bytes(
-            kernel.handles.file_mapping(parent_mapping)?.data[..4]
+            kernel.handles.file_mapping(parent_mapping)?.legacy_data().unwrap()[..4]
                 .try_into()
                 .unwrap(),
         );
         let child_data_after_parent = u32::from_le_bytes(
-            kernel.handles.file_mapping(child_mapping)?.data[..4]
+            kernel.handles.file_mapping(child_mapping)?.legacy_data().unwrap()[..4]
                 .try_into()
                 .unwrap(),
         );
@@ -56749,12 +56756,12 @@ mod unicorn_tests {
             .regs
             .regs[9];
         let parent_data_after_child = u32::from_le_bytes(
-            kernel.handles.file_mapping(parent_mapping)?.data[..4]
+            kernel.handles.file_mapping(parent_mapping)?.legacy_data().unwrap()[..4]
                 .try_into()
                 .unwrap(),
         );
         let child_data_after_child = u32::from_le_bytes(
-            kernel.handles.file_mapping(child_mapping)?.data[..4]
+            kernel.handles.file_mapping(child_mapping)?.legacy_data().unwrap()[..4]
                 .try_into()
                 .unwrap(),
         );
@@ -56811,12 +56818,12 @@ mod unicorn_tests {
             "the resumed parent must read its own bytes from a new native owner"
         );
         assert_eq!(
-            &kernel.handles.file_mapping(parent_mapping)?.data[..4],
+            &kernel.handles.file_mapping(parent_mapping)?.legacy_data().unwrap()[..4],
             &(PARENT_BYTES + 2).to_le_bytes(),
             "A's second guest store must reach only A's canonical mapping"
         );
         assert_eq!(
-            &kernel.handles.file_mapping(child_mapping)?.data[..4],
+            &kernel.handles.file_mapping(child_mapping)?.legacy_data().unwrap()[..4],
             &(CHILD_BYTES + 1).to_le_bytes(),
             "A's resumed native readback must not overwrite B's mapping"
         );
@@ -56835,7 +56842,7 @@ mod unicorn_tests {
             .create_file_mapping(Some("closed-view".to_owned()), 4, 4, None);
         for (handle, process_id, initial) in [(other, 1, 0x1122_3344u32), (closed, 2, 0)] {
             let mapping = kernel.handles.file_mapping_mut(handle)?;
-            mapping.data[..4].copy_from_slice(&initial.to_le_bytes());
+            mapping.legacy_data_mut().unwrap()[..4].copy_from_slice(&initial.to_le_bytes());
             mapping.views.push(crate::ce::object::FileMappingView {
                 base: BASE,
                 size: 4,
@@ -56856,7 +56863,7 @@ mod unicorn_tests {
 
         super::sync_file_mapping_views_from_unicorn(&mut uc, &mut kernel, 2)?;
         assert_eq!(
-            &kernel.handles.file_mapping(other)?.data[..4],
+            &kernel.handles.file_mapping(other)?.legacy_data().unwrap()[..4],
             &0x1122_3344u32.to_le_bytes()
         );
         let crate::ce::object::KernelObject::FileMapping(mapping) = kernel.handles.get(closed)?
@@ -56864,7 +56871,7 @@ mod unicorn_tests {
             panic!("closed live-view object changed type");
         };
         assert!(mapping.closed);
-        assert_eq!(&mapping.data[..4], &0xaabb_ccddu32.to_le_bytes());
+        assert_eq!(&mapping.legacy_data().unwrap()[..4], &0xaabb_ccddu32.to_le_bytes());
         Ok(())
     }
 
@@ -56895,7 +56902,7 @@ mod unicorn_tests {
             .handles
             .create_file_mapping(None, SIZE as u32, 4, None);
         let mapping = kernel.handles.file_mapping_mut(handle)?;
-        mapping.data.copy_from_slice(&canonical);
+        mapping.legacy_data_mut().unwrap().copy_from_slice(&canonical);
         mapping.views.push(crate::ce::object::FileMappingView {
             base,
             size: SIZE as u32,
@@ -56908,7 +56915,7 @@ mod unicorn_tests {
         // A fresh owner may finish a slice without touching this view at all.
         // Its canonical seed must survive rather than causing READ_UNMAPPED.
         super::sync_file_mapping_views_from_unicorn(&mut uc, &mut kernel, owner.process_id())?;
-        assert_eq!(kernel.handles.file_mapping(handle)?.data, canonical);
+        assert_eq!(kernel.handles.file_mapping(handle)?.legacy_data().unwrap(), canonical);
         assert_eq!(
             kernel
                 .memory
@@ -56928,7 +56935,7 @@ mod unicorn_tests {
         super::sync_file_mapping_views_from_unicorn(&mut uc, &mut kernel, owner.process_id())?;
         let mut expected = canonical;
         expected[..4].copy_from_slice(&0xaabb_ccddu32.to_le_bytes());
-        assert_eq!(kernel.handles.file_mapping(handle)?.data, expected);
+        assert_eq!(kernel.handles.file_mapping(handle)?.legacy_data().unwrap(), expected);
         assert_eq!(
             kernel
                 .memory
@@ -56968,7 +56975,7 @@ mod unicorn_tests {
             .handles
             .create_file_mapping(None, SIZE as u32, 4, None);
         let mapping = kernel.handles.file_mapping_mut(handle)?;
-        mapping.data.copy_from_slice(&canonical);
+        mapping.legacy_data_mut().unwrap().copy_from_slice(&canonical);
         mapping.views.push(crate::ce::object::FileMappingView {
             base,
             size: SIZE as u32,
@@ -56994,7 +57001,7 @@ mod unicorn_tests {
         uc.mem_read(u64::from(base), &mut actual).unwrap();
         assert_eq!(actual, canonical[..4]);
         assert!(uc.mem_read(u64::from(base) + 0x1000, &mut [0; 4]).is_err());
-        assert_eq!(kernel.handles.file_mapping(handle)?.data, canonical);
+        assert_eq!(kernel.handles.file_mapping(handle)?.legacy_data().unwrap(), canonical);
         Ok(())
     }
 
@@ -57021,7 +57028,7 @@ mod unicorn_tests {
         let mut actual = [0; 4];
         uc.mem_read(u64::from(base), &mut actual).unwrap();
         assert_eq!(actual, 0xaabb_ccddu32.to_le_bytes());
-        assert_eq!(kernel.handles.file_mapping(handle)?.data, canonical);
+        assert_eq!(kernel.handles.file_mapping(handle)?.legacy_data().unwrap(), canonical);
         Ok(())
     }
 
@@ -57081,8 +57088,6 @@ mod unicorn_tests {
         let mut kernel = phase1_kernel("fresh-public-view.exe")?;
         let birth = kernel.current_process_birth_key().expect("boot birth");
         let mapping_handle = kernel.handles.create_file_mapping(None, 0x1000, 0x04, None);
-        kernel.handles.file_mapping_mut(mapping_handle)?.data[..4]
-            .copy_from_slice(&INITIAL.to_le_bytes());
 
         let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
         let mut bytes = tiny_mips_spinner_pe();
@@ -57149,6 +57154,11 @@ mod unicorn_tests {
             view_base
         );
         assert!(cpu.native_engine_identity_for_test().is_none());
+        assert!(kernel.memory.shared_mapping_write(
+            mapping_handle,
+            0,
+            &INITIAL.to_le_bytes()
+        ));
 
         let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
@@ -57173,10 +57183,9 @@ mod unicorn_tests {
             .expect("untouched-view continuation");
         assert_eq!(saved.pc, entry + 0x14);
         assert_eq!(saved.regs.regs[8], 7);
-        assert_eq!(
-            &kernel.handles.file_mapping(mapping_handle)?.data[..4],
-            &INITIAL.to_le_bytes()
-        );
+        let mut canonical = [0; 4];
+        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut canonical));
+        assert_eq!(canonical, INITIAL.to_le_bytes());
         assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
     }
@@ -57188,10 +57197,6 @@ mod unicorn_tests {
         let mut kernel = phase1_kernel("fresh-view-first-import.exe")?;
         let birth = kernel.current_process_birth_key().expect("boot birth");
         let mapping_handle = kernel.handles.create_file_mapping(None, 0x2000, 0x04, None);
-        kernel.handles.file_mapping_mut(mapping_handle)?.data[..4]
-            .copy_from_slice(&0x1122_3344u32.to_le_bytes());
-        kernel.handles.file_mapping_mut(mapping_handle)?.data[0x1000..0x1004]
-            .copy_from_slice(&SECOND_PAGE.to_le_bytes());
 
         let view_trap = crate::emulator::imports::IMPORT_TRAP_BASE;
         let tick_trap = view_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
@@ -57276,6 +57281,11 @@ mod unicorn_tests {
             view_base
         );
         assert!(cpu.native_engine_identity_for_test().is_none());
+        assert!(kernel.memory.shared_mapping_write(
+            mapping_handle,
+            0x1000,
+            &SECOND_PAGE.to_le_bytes()
+        ));
 
         let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
@@ -57308,9 +57318,11 @@ mod unicorn_tests {
             saved.regs.regs[10], WRITTEN,
             "guest read after GetTickCount"
         );
-        let mapping = kernel.handles.file_mapping(mapping_handle)?;
-        assert_eq!(&mapping.data[..4], &WRITTEN.to_le_bytes());
-        assert_eq!(&mapping.data[0x1000..0x1004], &SECOND_PAGE.to_le_bytes());
+        let mut canonical = [0; 4];
+        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut canonical));
+        assert_eq!(canonical, WRITTEN.to_le_bytes());
+        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0x1000, &mut canonical));
+        assert_eq!(canonical, SECOND_PAGE.to_le_bytes());
         assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
     }
@@ -57358,10 +57370,6 @@ mod unicorn_tests {
         kernel.set_process_module_host_path(parent_path.clone());
         let birth = kernel.current_process_birth_key().expect("boot birth");
         let mapping_handle = kernel.handles.create_file_mapping(None, 0x2000, 0x04, None);
-        kernel.handles.file_mapping_mut(mapping_handle)?.data[..4]
-            .copy_from_slice(&0x1122_3344u32.to_le_bytes());
-        kernel.handles.file_mapping_mut(mapping_handle)?.data[0x1000..0x1004]
-            .copy_from_slice(&SECOND_PAGE.to_le_bytes());
         let image = crate::pe::PeImage::inspect(&parent_path)?;
         let mut cpu = super::UnicornMips::new()?;
         cpu.load_pe_image(&image)?;
@@ -57428,6 +57436,11 @@ mod unicorn_tests {
         let view_base = cpu.saved_context.as_ref().expect("import result").regs.regs[2];
         assert_ne!(view_base, 0, "public MapViewOfFile returned a view");
         assert!(cpu.native_engine_identity_for_test().is_none());
+        assert!(kernel.memory.shared_mapping_write(
+            mapping_handle,
+            0x1000,
+            &SECOND_PAGE.to_le_bytes()
+        ));
         // CreateProcessW's a0 differs from MapViewOfFile's a0, while v0 still
         // carries the view base for the first guest instruction in slice two.
         cpu.saved_context.as_mut().expect("saved parent").regs.regs[4] = application_ptr;
@@ -57454,9 +57467,11 @@ mod unicorn_tests {
             cpu.parked_child_process_count() > 0
                 || kernel.current_process_id() != birth.process_id()
         );
-        let mapping = kernel.handles.file_mapping(mapping_handle)?;
-        assert_eq!(&mapping.data[..4], &WRITTEN.to_le_bytes());
-        assert_eq!(&mapping.data[0x1000..0x1004], &SECOND_PAGE.to_le_bytes());
+        let mut canonical = [0; 4];
+        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut canonical));
+        assert_eq!(canonical, WRITTEN.to_le_bytes());
+        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0x1000, &mut canonical));
+        assert_eq!(canonical, SECOND_PAGE.to_le_bytes());
         assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
     }
@@ -57516,7 +57531,7 @@ mod unicorn_tests {
             .expect("seed canonical private bytes");
         let handle = kernel.handles.create_file_mapping(None, 4, 4, None);
         let mapping = kernel.handles.file_mapping_mut(handle)?;
-        mapping.data[..4].copy_from_slice(&[5, 6, 7, 8]);
+        mapping.legacy_data_mut().unwrap()[..4].copy_from_slice(&[5, 6, 7, 8]);
         mapping.views.push(crate::ce::object::FileMappingView {
             base: base + 2,
             size: 4,
@@ -57541,7 +57556,7 @@ mod unicorn_tests {
         uc.mem_read(u64::from(base), &mut native).unwrap();
         assert_eq!(native, [9, 10, 11, 12]);
         assert_eq!(
-            &kernel.handles.file_mapping(handle)?.data[..4],
+            &kernel.handles.file_mapping(handle)?.legacy_data().unwrap()[..4],
             &[5, 6, 7, 8]
         );
         let mut canonical = [0; 4];
@@ -57568,7 +57583,7 @@ mod unicorn_tests {
                 .unwrap_err();
         assert!(format!("{from_err:?}").contains("overlaps private slab reservation"));
         assert_eq!(
-            &kernel.handles.file_mapping(handle)?.data[..4],
+            &kernel.handles.file_mapping(handle)?.legacy_data().unwrap()[..4],
             &[5, 6, 7, 8]
         );
         kernel
