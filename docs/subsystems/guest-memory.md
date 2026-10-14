@@ -91,12 +91,44 @@ regression (726/1/3 ignored); after its narrow birth-precondition fix, the
 corrected source passed full release **1,664/0/4 ignored**, no-feature
 **1,258/0/2 ignored**, a no-trace Unicorn+desktop release check and final
 format check ([separate broad receipt](../../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
-Real native two-process A→B→A same-VA bytes, shared-view coherence and full
-machine checkpoint relineage remain open. E-25 by itself established no
+At E-25, real native two-process A→B→A same-VA bytes, shared-view coherence
+and full machine checkpoint relineage remained open. E-25 by itself established no
 O-M1/O-P4, Stage 2 or live-app acceptance; E-35 later closed the bounded
 public private-family gate, and O-P4 later passed its pinned-source fresh-owner
 teardown code/test gate
 ([receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
+
+### D008 public shared-view candidate (2026-10-14, focused controls)
+
+E-39 separately passed real native public-private and injected-file-view
+A→B→A same-VA bytes. D008 now routes public `MapViewOfFile` through
+birth-qualified view allocations and mapping-offset keyed stable shared
+pages. A named `CreateFileMappingW` reopen in A/B maps the same canonical
+page at the same guest VA across fresh native owners; A→B→A stores/loads and
+an unflushed in-slice alias store/load passed the focused real-MIPS control.
+This manually selects the queued child state, not guest `CreateProcessW` or
+Scheduler handoff. The frozen-source broad release/no-feature gates remain
+pending; no D008 iNavi run, footprint or speed result exists.
+
+`FileMappingObject` now has mutually exclusive `MappingBacking::Legacy` and
+`Slab` variants. The first public view preflights and migrates the **entire**
+legacy byte length into canonical 4-KiB pages, including bytes outside a
+small or disjoint first view, and then drops the Vec. Every new page charges
+the same physical-page budget as private slabs; insufficient budget returns
+`ERROR_NOT_ENOUGH_MEMORY` without retiring Legacy or publishing VM metadata.
+Live legacy DIB and public views cannot coexist; a later DIB request after
+migration fails. File-backed pages are loaded lazily from the file, with a
+whole-page file underlay beneath preexisting DIB bytes when migrating. The
+focused DIB migration, disjoint-first-view, named child reopen, file-tail
+seed/flush and low-budget controls pass.
+
+The raw test adapter still owns copied guest bytes, unlike the native pointer
+aliases. A raw Flush/Unmap commits the requested range into the canonical
+page before writing overlapping aliases of the same process birth. If an
+alias write fails, the API fails but canonical and earlier guest bytes may
+already have changed; there is no atomic rollback. Image/heap and older
+legacy-view backing, full machine checkpoint relineage, other native failure
+edges and live map readiness remain separate gates.
 
 ## Target authority and permitted interfaces
 
@@ -182,20 +214,20 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
   local `evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`).
   E-18 remained red on that legacy source; E-25's test-only opt-in made the
   diagnostic shape green, not public ordinary private pages. E-35 later
-  validated public COREDLL private `VirtualAlloc` on stable backing, while
-  real native two-process same-VA byte isolation remains a separate control.
+  validated public COREDLL private `VirtualAlloc` on stable backing; E-39 later
+  executed the real native two-process same-VA byte controls.
   The selected host-backing design below removes private copy-in/readback
   rather than adding another copy-back path.
 - Historical read-only E-18 source audit: `MemorySystem` allocations/lazy seeds were
   global and base-keyed, mixing private `VirtualAlloc` and file-view backing;
-  the native page ledger is VA-only. A copy-back interim would need captured
+  the native page ledger was VA-only. A copy-back interim would need captured
   owner, backing kind and allocation incarnation, exact mapped-page reads
   before owner finish/rotation, and staged failure handling. Mapping any page can
-  currently reseed the entire `initial_bytes` range, risking overwrite of a
-  guest-written page; free/reallocation at the same VA can retain old native
-  bytes. `self.saved_context` is published before byte synchronization, so
-  context/byte commit ordering must become transactional. These are source-
-  audit hazards and design requirements, not executed fixes or new failures.
+  at that point reseed the entire `initial_bytes` range, risking overwrite
+  of a guest-written page; free/reallocation at the same VA could retain old
+  native bytes. `self.saved_context` was published before byte synchronization,
+  so context/byte commit ordering needed a transaction. These were historical
+  source-audit hazards and design requirements, not claims about the D008 path.
 - The historical E-14 two-PID, two-native-slice red showed foreign-view
   seeding and base-only readback at one injected guest VA. The narrow E-16
   source captures the native attempt's process owner for view seeding and
@@ -208,10 +240,11 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
   checks and 1,239 no-feature tests (0 failed, 1 ignored). Exact frozen
   source/log identities are in local
   `evidence/stage2-o-m1-same-va-20261013/owner-qualified-native-view.receipt.md`
-  ([ledger E-16](../evidence/ledger.md)). This proves injected native-view
-  ownership only: public same-VA `MapViewOfFile`, global lazy page namespace,
-  native lazy fault repair, private `VirtualAlloc` persistence across fresh
-  owner closure, and app readiness remain open. The immediate CreateProcess
+  ([ledger E-16](../evidence/ledger.md)). At that E-16 checkpoint this proved
+  injected native-view ownership only; public same-VA `MapViewOfFile`, global
+  lazy-page scoping, native lazy fault repair, private `VirtualAlloc` persistence
+  across fresh-owner closure, and app readiness were open. E35/E39/D008
+  addressed only their separately measured subsets. The immediate CreateProcess
   sync-error latch is source-reviewed but lacks injected-failure execution.
 
 - The crash site is TranslationBlock initialization, not FlatView/subpage
@@ -228,76 +261,51 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
 - The isolated Stage 0 controls did not exercise production mapping
   reconciliation, subpage paths or the application workload.
 
-## O-M1 same-VA file-view design gate (still open)
+## O-M1 same-VA file-view design gate (partly executed)
 
-At the pre-E35 baseline the kernel had one virtual-address cursor and a
-base-keyed allocation map. E35 moved the public private-VM family to
-owner-qualified slab backing, but it did not establish public two-process
-same-VA `MapViewOfFile`. `FileMappingView` records a PID but not a durable view
-identity; handle-table lookup, flush and unmap use
-base alone (`src/ce/object.rs:175-194,690-744`). E-16 captures the selected
-process owner and exact live view for native seed/readback only; broader
-native mapping, fault repair, public view allocation and lifetime still lack
-an authoritative `AddressSpace` identity. A filter on one sync helper is not
-a complete O-M1 fix.
+At the pre-E35 baseline, public `MapViewOfFile` used a global cursor and a
+copy-backed `FileViewLegacy`. E-16 proved native seed/readback for injected
+views, E35 moved public private VM to owner-qualified pages, and E-39 proved
+native public-private and injected-view A→B→A same-VA bytes. D008 now gives
+public file views a per-birth VA cursor, exact `(birth, base)` view binding,
+and one canonical page per `(mapping object, file offset)`. Fresh native
+owners pointer-map those pages; the focused named-reopen A→B→A and same-slice
+alias tests pass. This is a connected public view change, not a completed
+AddressSpace, Task or machine-checkpoint migration.
 
-Public `MapViewOfFile` still uses the global `virtual_alloc_legacy_seed`
-cursor/copy-backed `FileViewLegacy` (`src/ce/coredll.rs:30179-30291`); E-16
-inserts views directly, not public same-VA proof. `DuplicateHandle` clones
-mappings by value; use named `CreateFileMappingW` reopen in A and B
-(`src/ce/object.rs:654-681`) with one pinned page and in-slice alias store/load.
+The public fixture uses named `CreateFileMappingW` reopen because the current
+`DuplicateHandle` mapping path clones an object by value. It manually selects
+a queued child, so it does not validate guest `CreateProcessW`/scheduler
+handoff. The view record now carries `ProcessBirthKey`, but not a distinct
+checked view incarnation; stale/reused view references and machine-lineage
+clone behavior retain separate acceptance. `VirtualQueryEx` export/remote-
+owner behavior and PID exhaustion also remain outside this focused gate.
 
-The owner key must be the anchor's birth-qualified `ProcessIdentity`, not the
-currently selected PID. At the E-20 baseline, `CeKernel` held a bare selected
-PID and pending launches while each public process handle copied its mutable
-`ProcessObject`. E-21 introduced one HandleTable-owned birth record for boot
-PID1 and each child, independent of public alias lifetime, with a checked
-incarnation and shared public-handle state. The next step is to capture that
-identity at native-attempt start and bind VM owners to it. `next_process_id`
-now uses checked arithmetic but still panics instead of returning a
-guest-visible exhaustion failure; `set_current_process_id` still changes a
-bare PID. Neither is a complete backing-owner contract. Stage 3 extends this
-same directory for Task/object authority; checkpoint clone must establish a
-new machine lineage and deep-copy private backing.
-
-Staged implementation boundary, with the E-14 real-backend expected-red
-collision control now turned green for injected native-resident views under
-E-16: make virtual cursors, allocations, lazy seeds,
-queries and native page ledgers owner-scoped without changing current heap
-callers; resolve views by
-owner plus exact mapping/view identity, including closed handles with live
-views (native readback covered by E-16); then pass the captured owner through
-native map/reclaim/fault beyond the view sync now covered. Update
-`VirtualQueryEx` to resolve its requested process or fail explicitly,
-and propagate ambiguous/stale-view and unexpected native sync errors. An
-unmapped lazy page may defer its write only when its owner-qualified canonical
-seed is retained; it must not be reported as a successful write to native RAM.
-
-Acceptance requires public two-process `MapViewOfFile` calls for distinct files
-to obtain the same VA and survive native A-to-B-to-A read/write slices without
-cross-file byte changes, including lazy fault repair and outgoing readback.
-Separate controls must prove same-mapping alias visibility, flush and unmap
-while a mapping handle is closed but its view remains live, owner-specific
-`VirtualQueryEx`, and a foreign view not overwriting private RAM at the same VA.
-A fresh-owner two-slice guest-written private `VirtualAlloc` round-trip was an
-executed expected-red gate on the historical E-18/E-19 sources. E-25 passed
-the changed internal slab-opt-in shape; E35 subsequently validated the public
-private family on stable backing. Neither establishes shared-view coherence
-or native A→B→A isolation.
+Preserve the E-14/E-16 injected-view and E-39 private controls while proving
+public **distinct** mappings at one VA cannot cross-contaminate, native lazy
+fault repair and outgoing readback remain checked, closed-handle live views
+retain their canonical page, and a foreign public view never overwrites
+private RAM at the same VA. A raw adapter's copied aliases are a separate
+boundary: failed propagation may leave canonical and prior guest-byte
+effects, which must be reported rather than rolled back by assertion. These
+requirements, full clone relineage and image/heap migration keep O-M1 and
+Stage 2 open after the focused D008 result.
 
 ## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
-**Design selected; E35 validates the public private family, and O-P4 validates
-the pinned-source fresh-owner code/test gate; shared views and Stage 2
-acceptance remain open.** Per anchor A4, each
+**Design selected; E35 validates the public private family, O-P4 validates
+the pinned-source fresh-owner code/test gate, E-39 validates native private/
+injected-view A→B→A bytes, and D008 public shared views have focused passes
+only. Stage 2 acceptance remains open.** Per anchor A4, each
 migrated page has one writable byte authority: stable host backing mapped into
 the selected native engine with `mem_map_ptr`. An `AddressSpace` owns private
 slabs and its view records; a canonical VM/file-mapping object owns shared
 slabs referenced by all corresponding views, including closed-handle live
 views. Ordinary private pages do not use per-slice `initial_bytes` copy-in or
-copy-back after migration. Unmigrated file views and image/heap blobs retain
-their existing checked copy boundary until each family moves in a connected
-change; do not silently mix both authorities for one backing.
+copy-back after migration. Public views now use stable shared pages; legacy
+DIB/injected views and image/heap blobs retain explicit copy boundaries until
+their own connected migration. Do not silently mix both authorities for one
+backing.
 
 This choice is supported, not proved in production, by the explicitly selected
 ignored `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner`
@@ -372,9 +380,11 @@ that use and its failures before matching CE behavior in the emulator.
   Allocate fixed, page-multiple host segments only for committed pages; group
   contiguous pages of the same segment/protection where native mapping allows.
   A one-page commit must not allocate a full reservation by default. A segment
-  never moves or resizes. `FileMappingObject.data` is currently a resizable
-  `Vec<u8>` and cannot be passed directly to `mem_map_ptr` in the later view
-  migration.
+  never moves or resizes. The old `FileMappingObject.data: Vec<u8>` could not
+  serve as native pointer backing. D008 replaces that dual-authority risk
+  with `MappingBacking::{Legacy(Vec<u8>), Slab}`: after complete byte migration
+  and preflight, the Legacy Vec is dropped and later legacy writes fail closed.
+  A live legacy DIB view blocks that transition.
 - Quarantine pointer mapping and host-byte access in one module. Native guest
   writes and Rust mutable references may not alias during `emu_start`; the
   execution lease fences ordinary host access, with only a bounded hook lease
@@ -443,8 +453,10 @@ ordering and broad release/feature suites passed on frozen source
 ([O-P4 receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
 The receipt's failure seam is before publication, not evidence of a failing
 vendored-C `uc_close`. Public private backing is separately covered by E35.
-No live iNavi run, host-footprint comparison, native A→B→A isolation,
-shared-view coherence or full Stage 2 acceptance follows from this gate.
+O-P4 alone established no live iNavi result, host-footprint comparison,
+native A→B→A isolation, shared-view coherence or full Stage 2 acceptance;
+later E-38/E-39 and focused D008 controls address those questions separately
+and do not retroactively broaden the O-P4 gate.
 
 ### Connected migration and executable gates
 
@@ -452,8 +464,9 @@ The optional E-25 internal slab milestone, E35 public private-family gate and
 O-P4 source-bound fresh-default code/test gate are executed, not still-proposed
 steps ([E35 receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md),
 [O-P4 receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
-They do not authorize shared-view, native two-process byte or live acceptance.
-The remaining connected gates are:
+E-39 adds real native public-private/injected-view two-process bytes; focused
+D008 controls add public same-mapping shared-page coherence. D008 broad suites
+and a D008 live-app run remain unexecuted. The remaining connected gates are:
 
 1. Complete the Stage 2/3 identity boundary around the E-21 process-birth
    directory: selected-state, full machine checkpoint relineage and
@@ -463,17 +476,19 @@ The remaining connected gates are:
    views, Toolhelp snapshots, shared allocation and Ex export/targeting gaps.
    A clone must reject source-machine keys and keep its own private bytes;
    cloned shared aliases must agree with each other, not the original.
-2. Extend E35's passing private-family controls to real native two-process
-   A→B→A same-VA byte isolation, stale identity and second-page failure cases.
+2. Retain E-39's passing real native two-process A→B→A same-VA byte isolation
+   and extend it to stale identity and second-page failure cases.
    Preserve public reserve/commit/decommit/protect/query, fresh-owner store,
    independent private-clone, pin-budget and 64-cycle checked-unmap controls;
    no later change may reintroduce a second writable authority. E-16 native
    view regressions must remain green.
-3. Migrate shared file views with stable mapping backing and exact view
-   identities. Exercise public two-process same-VA distinct files, same-file
-   aliases, closed-handle live views, flush/unmap, lazy faults and foreign
-   private/view collision. Then migrate image/heap blobs without leaving a
-   second writable copy for any migrated family.
+3. Finish D008's public shared-view gate with frozen-source broad suites and
+   public two-process same-VA **distinct** mappings, closed-handle live views,
+   checked lazy faults, raw-adapter partial-effect controls and foreign
+   private/view collision. The focused same-file named-reopen, same-slice alias,
+   DIB transition and low-budget controls must stay green. Then migrate
+   image/heap blobs without leaving a second writable copy for any migrated
+   family.
 4. Treat O-P4's fresh-default code/test result as complete only for its
    pinned-source boundary; persistent reuse stays an explicit Stage 8 opt-in.
    A bounded read/write iNavi run requires **fresh human approval** and fresh
