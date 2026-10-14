@@ -57,8 +57,7 @@ pub struct MemorySystem {
     // reuse even if its token is dropped after a native mapping side effect.
     pending_private_holes: BTreeMap<(ProcessBirthKey, u32), u32>,
     stable_private_pages: BTreeMap<PrivatePageIdentity, Rc<StablePrivatePage>>,
-    private_commit_limit_bytes: u64,
-    pending_private_commit_bytes: Rc<Cell<u64>>,
+    private_page_budget: Rc<PrivatePageBudget>,
     // A native pin can outlive a released VM record. Keep the checkpoint
     // unsupported flag set for this MemorySystem lineage even after release.
     stable_private_slabs_seen: bool,
@@ -211,12 +210,38 @@ pub enum PrivatePageAccessError {
     NativeExecutionActive,
 }
 
+#[derive(Debug)]
+struct PrivatePageBudget {
+    limit_bytes: Cell<u64>,
+    // Includes detached proposals and pages retained by native/quarantine
+    // pins even after canonical VM metadata has been released.
+    used_bytes: Cell<u64>,
+}
+
+impl PrivatePageBudget {
+    fn new(limit_bytes: u64) -> Self {
+        Self {
+            limit_bytes: Cell::new(limit_bytes),
+            used_bytes: Cell::new(0),
+        }
+    }
+
+    fn can_fit(&self, new_pages: usize) -> bool {
+        u64::try_from(new_pages)
+            .ok()
+            .and_then(|count| count.checked_mul(STABLE_PRIVATE_PAGE_SIZE as u64))
+            .and_then(|bytes| self.used_bytes.get().checked_add(bytes))
+            .is_some_and(|total| total <= self.limit_bytes.get())
+    }
+}
+
 /// The only owner of private page bytes. The page itself is allocated with a
 /// checked, 4-KiB-aligned request; the small Rc wrapper never moves it. Raw
 /// native and bounded host access are fenced by `native_execution_active`.
 struct StablePrivatePage {
     bytes: NonNull<u8>,
     native_execution_active: Cell<bool>,
+    budget: Rc<PrivatePageBudget>,
 }
 
 impl fmt::Debug for StablePrivatePage {
@@ -231,19 +256,33 @@ impl fmt::Debug for StablePrivatePage {
 }
 
 impl StablePrivatePage {
-    fn zeroed() -> Option<Self> {
+    fn zeroed(budget: &Rc<PrivatePageBudget>) -> Option<Self> {
         let layout =
             Layout::from_size_align(STABLE_PRIVATE_PAGE_SIZE, STABLE_PRIVATE_PAGE_SIZE).ok()?;
+        let charged = budget
+            .used_bytes
+            .get()
+            .checked_add(STABLE_PRIVATE_PAGE_SIZE as u64)?;
+        if charged > budget.limit_bytes.get() {
+            return None;
+        }
+        budget.used_bytes.set(charged);
         // SAFETY: layout is nonzero and power-of-two aligned. A null result
         // is an ordinary allocation failure, never a published guest page.
-        let bytes = NonNull::new(unsafe { alloc_zeroed(layout) })?;
+        let Some(bytes) = NonNull::new(unsafe { alloc_zeroed(layout) }) else {
+            budget
+                .used_bytes
+                .set(charged - STABLE_PRIVATE_PAGE_SIZE as u64);
+            return None;
+        };
         Some(Self {
             bytes,
             native_execution_active: Cell::new(false),
+            budget: Rc::clone(budget),
         })
     }
 
-    fn deep_copy(&self) -> Self {
+    fn deep_copy(&self, budget: &Rc<PrivatePageBudget>) -> Self {
         // MemorySystem::Clone cannot return Result. Refuse to copy while the
         // native engine might be writing; a supported checkpoint operation
         // remains separately gated until machine-wide relineage exists.
@@ -251,7 +290,8 @@ impl StablePrivatePage {
             !self.native_execution_active.get(),
             "cannot clone stable private bytes during native execution"
         );
-        let copy = Self::zeroed().expect("cannot clone private page after host allocation failure");
+        let copy =
+            Self::zeroed(budget).expect("cannot clone private page after host allocation failure");
         // SAFETY: the guard above excludes native execution, all host byte
         // methods finish before returning, and Rc keeps the page alive.
         unsafe {
@@ -272,6 +312,13 @@ impl Drop for StablePrivatePage {
         // SAFETY: `bytes` came from `alloc_zeroed(layout)` exactly once and
         // all raw users must retain a strong pin through checked native unmap.
         unsafe { dealloc(self.bytes.as_ptr(), layout) };
+        self.budget.used_bytes.set(
+            self.budget
+                .used_bytes
+                .get()
+                .checked_sub(STABLE_PRIVATE_PAGE_SIZE as u64)
+                .expect("private page budget underflow"),
+        );
     }
 }
 
@@ -401,30 +448,15 @@ pub struct VirtualAllocation {
 #[must_use = "prepared private VM must be committed or abandoned"]
 pub struct PreparedPrivateVm {
     instance: Rc<()>,
-    pending_charge: PrivatePendingBudgetCharge,
+    // Some(None) means a null-base proposal created this owner's cursor;
+    // Some(Some(cursor)) remembers its prior value for safe pre-native abort.
+    previous_owner_cursor: Option<Option<u32>>,
     owner: ProcessBirthKey,
     result_ptr: u32,
     proposed_allocation: VirtualAllocation,
     original_allocation: Option<VirtualAllocation>,
     expected_virtual_generation: u64,
     new_page_pins: Vec<StablePrivatePagePin>,
-}
-
-#[derive(Debug)]
-struct PrivatePendingBudgetCharge {
-    pending_bytes: Rc<Cell<u64>>,
-    bytes: u64,
-}
-
-impl Drop for PrivatePendingBudgetCharge {
-    fn drop(&mut self) {
-        let current = self.pending_bytes.get();
-        self.pending_bytes.set(
-            current
-                .checked_sub(self.bytes)
-                .expect("private VM pending budget underflow"),
-        );
-    }
 }
 
 /// A native side effect to validate before publishing a private VM change.
@@ -531,6 +563,9 @@ impl PreparedPrivateVm {
 
 impl Clone for MemorySystem {
     fn clone(&self) -> Self {
+        let private_page_budget = Rc::new(PrivatePageBudget::new(
+            self.private_page_budget.limit_bytes.get(),
+        ));
         Self {
             instance: Rc::new(()),
             process_heap: self.process_heap,
@@ -544,14 +579,15 @@ impl Clone for MemorySystem {
             heaps: self.heaps.clone(),
             allocations: self.allocations.clone(),
             virtual_allocations: self.virtual_allocations.clone(),
-            pending_private_holes: self.pending_private_holes.clone(),
+            // Detached tokens cannot cross this new lineage, and their
+            // possible native side effects remain in the source owner only.
+            pending_private_holes: BTreeMap::new(),
             stable_private_pages: self
                 .stable_private_pages
                 .iter()
-                .map(|(identity, page)| (*identity, Rc::new(page.deep_copy())))
+                .map(|(identity, page)| (*identity, Rc::new(page.deep_copy(&private_page_budget))))
                 .collect(),
-            private_commit_limit_bytes: self.private_commit_limit_bytes,
-            pending_private_commit_bytes: Rc::new(Cell::new(0)),
+            private_page_budget,
             stable_private_slabs_seen: self.stable_private_slabs_seen,
         }
     }
@@ -585,8 +621,7 @@ impl Default for MemorySystem {
             virtual_allocations: BTreeMap::new(),
             pending_private_holes: BTreeMap::new(),
             stable_private_pages: BTreeMap::new(),
-            private_commit_limit_bytes: DEFAULT_GUEST_PHYSICAL_RAM_BYTES,
-            pending_private_commit_bytes: Rc::new(Cell::new(0)),
+            private_page_budget: Rc::new(PrivatePageBudget::new(DEFAULT_GUEST_PHYSICAL_RAM_BYTES)),
             stable_private_slabs_seen: false,
         }
     }
@@ -909,9 +944,10 @@ impl MemorySystem {
         }
 
         if allocation_type == MEM_COMMIT {
-            if address == 0 || address & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0 {
+            if address == 0 {
                 return None;
             }
+            let page_start = align_down(address, STABLE_PRIVATE_PAGE_SIZE as u32);
             let end = address.checked_add(size)?;
             let page_end = align_up(end, STABLE_PRIVATE_PAGE_SIZE as u32)?;
             let original = self
@@ -919,7 +955,7 @@ impl MemorySystem {
                 .find(|allocation| {
                     allocation.backing == VirtualAllocationBacking::StablePrivateSlab
                         && allocation.source.is_private()
-                        && address >= allocation.base
+                        && page_start >= allocation.base
                         && allocation
                             .base
                             .checked_add(allocation.size)
@@ -927,7 +963,7 @@ impl MemorySystem {
                 })?
                 .clone();
             let mut proposed = original.clone();
-            let mut page = address;
+            let mut page = page_start;
             let mut new_count = 0usize;
             while page < page_end {
                 if !proposed.private_committed_pages.contains_key(&page) {
@@ -935,10 +971,12 @@ impl MemorySystem {
                 }
                 page = page.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?;
             }
-            let pending_charge = self.reserve_private_commit_budget(new_count)?;
+            if !self.private_page_budget.can_fit(new_count) {
+                return None;
+            }
             let mut new_page_pins = Vec::new();
             new_page_pins.try_reserve_exact(new_count).ok()?;
-            let mut page = address;
+            let mut page = page_start;
             while page < page_end {
                 if let Some(existing_protect) = proposed.private_committed_pages.get(&page) {
                     // A second commit does not silently change protection.
@@ -954,7 +992,7 @@ impl MemorySystem {
                             allocation_incarnation: proposed.incarnation,
                             page_base: page,
                         },
-                        page: Rc::new(StablePrivatePage::zeroed()?),
+                        page: Rc::new(StablePrivatePage::zeroed(&self.private_page_budget)?),
                     });
                 }
                 page = page.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?;
@@ -962,9 +1000,9 @@ impl MemorySystem {
             proposed.allocation_type |= MEM_COMMIT;
             return Some(PreparedPrivateVm {
                 instance: Rc::clone(&self.instance),
-                pending_charge,
+                previous_owner_cursor: None,
                 owner,
-                result_ptr: address,
+                result_ptr: page_start,
                 proposed_allocation: proposed,
                 original_allocation: Some(original),
                 expected_virtual_generation: self.virtual_generation,
@@ -977,12 +1015,21 @@ impl MemorySystem {
         }
         let incarnation = self.next_virtual_incarnation;
         let next_incarnation = incarnation.checked_add(1)?;
-        let reservation_size = if address == 0 {
-            align_up(size, VIRTUAL_ALIGN)?
+        // CE6 VMAlloc counts pages from the caller's page-aligned address,
+        // while DoVMReserve rounds a specified reservation base down to 64
+        // KiB and DoVMAlloc commits from that returned base (vm.c:2433-2459,
+        // 676-690, 883-889). Do not return an uncommitted rounded base.
+        let committed_len = if address == 0 {
+            align_up(size, STABLE_PRIVATE_PAGE_SIZE as u32)?
         } else {
-            let end = address.checked_add(size)?;
-            align_up(end, VIRTUAL_ALIGN)?.checked_sub(align_down(address, VIRTUAL_ALIGN))?
+            let request_end = address.checked_add(size)?;
+            let requested_page_base = align_down(address, STABLE_PRIVATE_PAGE_SIZE as u32);
+            align_up(
+                request_end.checked_sub(requested_page_base)?,
+                STABLE_PRIVATE_PAGE_SIZE as u32,
+            )?
         };
+        let reservation_size = align_up(committed_len, VIRTUAL_ALIGN)?;
         let base = if address == 0 {
             let mut candidate = self
                 .next_virtual_ptr_by_owner
@@ -1005,15 +1052,8 @@ impl MemorySystem {
         let mut committed_pages = BTreeMap::new();
         let mut new_page_pins = Vec::new();
         let (commit_start, commit_end) = if allocation_type & MEM_COMMIT != 0 {
-            let start = if address == 0 {
-                base
-            } else {
-                align_down(address, STABLE_PRIVATE_PAGE_SIZE as u32)
-            };
-            let end = align_up(
-                (if address == 0 { base } else { address }).checked_add(size)?,
-                STABLE_PRIVATE_PAGE_SIZE as u32,
-            )?;
+            let start = base;
+            let end = base.checked_add(committed_len)?;
             if end > reservation_end {
                 return None;
             }
@@ -1025,7 +1065,9 @@ impl MemorySystem {
             commit_end.checked_sub(commit_start)? / STABLE_PRIVATE_PAGE_SIZE as u32,
         )
         .ok()?;
-        let pending_charge = self.reserve_private_commit_budget(new_count)?;
+        if !self.private_page_budget.can_fit(new_count) {
+            return None;
+        }
         new_page_pins.try_reserve_exact(new_count).ok()?;
         if allocation_type & MEM_COMMIT != 0 {
             let mut page = commit_start;
@@ -1038,7 +1080,7 @@ impl MemorySystem {
                         allocation_incarnation: incarnation,
                         page_base: page,
                     },
-                    page: Rc::new(StablePrivatePage::zeroed()?),
+                    page: Rc::new(StablePrivatePage::zeroed(&self.private_page_budget)?),
                 });
                 page = page.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?;
             }
@@ -1056,7 +1098,9 @@ impl MemorySystem {
             private_committed_pages: committed_pages,
         };
         // The hole is installed only after every fallible preparation step.
-        // Clone copies the hole but never the detached token or its page pins.
+        // Clone carries neither this pending hole nor the detached token.
+        let previous_owner_cursor =
+            (address == 0).then(|| self.next_virtual_ptr_by_owner.get(&owner).copied());
         self.pending_private_holes
             .insert((owner, base), reservation_size);
         self.next_virtual_incarnation = next_incarnation;
@@ -1066,7 +1110,7 @@ impl MemorySystem {
         }
         Some(PreparedPrivateVm {
             instance: Rc::clone(&self.instance),
-            pending_charge,
+            previous_owner_cursor,
             owner,
             result_ptr: base,
             proposed_allocation,
@@ -1082,7 +1126,7 @@ impl MemorySystem {
     pub fn commit_prepared_private_vm(&mut self, prepared: PreparedPrivateVm) -> Option<u32> {
         let PreparedPrivateVm {
             instance,
-            pending_charge: _pending_charge,
+            previous_owner_cursor: _,
             owner,
             result_ptr,
             proposed_allocation,
@@ -1152,6 +1196,57 @@ impl MemorySystem {
         self.stable_private_slabs_seen = true;
         self.bump_virtual_generation();
         Some(result_ptr)
+    }
+
+    /// Cancel a proposal that is proven never to have been offered to native
+    /// mapping or protection. An ambiguous FFI attempt must *not* call this:
+    /// dropping its token retains the owner-qualified VA hole and the native
+    /// lease must quarantine any mapped pin until checked unmap/close.
+    pub fn abort_prepared_private_vm(&mut self, prepared: PreparedPrivateVm) -> bool {
+        let PreparedPrivateVm {
+            instance,
+            previous_owner_cursor,
+            owner,
+            proposed_allocation,
+            original_allocation,
+            expected_virtual_generation,
+            new_page_pins: _,
+            result_ptr: _,
+        } = prepared;
+        if !Rc::ptr_eq(&self.instance, &instance)
+            || self.virtual_generation != expected_virtual_generation
+            || proposed_allocation.owner != owner
+            || proposed_allocation.backing != VirtualAllocationBacking::StablePrivateSlab
+        {
+            return false;
+        }
+        let key = (owner, proposed_allocation.base);
+        if let Some(original) = original_allocation {
+            return previous_owner_cursor.is_none()
+                && self.virtual_allocations.get(&key) == Some(&original);
+        }
+        if self.pending_private_holes.get(&key) != Some(&proposed_allocation.size)
+            || self.virtual_allocations.contains_key(&key)
+        {
+            return false;
+        }
+        self.pending_private_holes.remove(&key);
+        if let Some(previous_cursor) = previous_owner_cursor
+            && proposed_allocation
+                .base
+                .checked_add(proposed_allocation.size)
+                == self.next_virtual_ptr_by_owner.get(&owner).copied()
+        {
+            match previous_cursor {
+                Some(cursor) => {
+                    self.next_virtual_ptr_by_owner.insert(owner, cursor);
+                }
+                None => {
+                    self.next_virtual_ptr_by_owner.remove(&owner);
+                }
+            }
+        }
+        true
     }
 
     /// Prepare release or decommit of a slab-backed private reservation.
@@ -1475,7 +1570,7 @@ impl MemorySystem {
                         allocation_incarnation: incarnation,
                         page_base,
                     },
-                    Rc::new(StablePrivatePage::zeroed()?),
+                    Rc::new(StablePrivatePage::zeroed(&self.private_page_budget)?),
                 ));
                 page_base = page_base.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?;
             }
@@ -1820,11 +1915,15 @@ impl MemorySystem {
     /// Set the single guest-physical-RAM budget used for private committed
     /// pages. Boot config applies this before guest allocations are possible.
     pub fn set_private_commit_limit_bytes(&mut self, bytes: u64) {
-        self.private_commit_limit_bytes = bytes;
+        self.private_page_budget.limit_bytes.set(bytes);
     }
 
     pub fn private_commit_limit_bytes(&self) -> u64 {
-        self.private_commit_limit_bytes
+        self.private_page_budget.limit_bytes.get()
+    }
+
+    pub fn private_commit_used_bytes(&self) -> u64 {
+        self.private_page_budget.used_bytes.get()
     }
 
     pub fn contains_allocated_range(&self, owner: ProcessBirthKey, ptr: u32, size: u32) -> bool {
@@ -1955,27 +2054,6 @@ impl MemorySystem {
             || self.allocations.values().any(|allocation| {
                 ranges_overlap(base, size, allocation.ptr, allocation.actual_size)
             })
-    }
-
-    fn reserve_private_commit_budget(
-        &self,
-        new_pages: usize,
-    ) -> Option<PrivatePendingBudgetCharge> {
-        let page_size = STABLE_PRIVATE_PAGE_SIZE as u64;
-        let committed_bytes = u64::try_from(self.stable_private_pages.len())
-            .ok()?
-            .checked_mul(page_size)?;
-        let added_bytes = u64::try_from(new_pages).ok()?.checked_mul(page_size)?;
-        let pending = self.pending_private_commit_bytes.get();
-        let next_pending = pending.checked_add(added_bytes)?;
-        if committed_bytes.checked_add(next_pending)? > self.private_commit_limit_bytes {
-            return None;
-        }
-        self.pending_private_commit_bytes.set(next_pending);
-        Some(PrivatePendingBudgetCharge {
-            pending_bytes: Rc::clone(&self.pending_private_commit_bytes),
-            bytes: added_bytes,
-        })
     }
 
     fn bump_heap_generation(&mut self) {
@@ -2543,6 +2621,114 @@ mod tests {
     }
 
     #[test]
+    fn explicit_private_reserve_commit_returns_a_committed_rounded_base() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let token = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0x5800_1000,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        let base = 0x5800_0000;
+        assert_eq!(token.result_ptr(), base);
+        assert_eq!(token.allocation().size, VIRTUAL_ALIGN);
+        assert_eq!(token.new_page_pins().len(), 1);
+        assert_eq!(token.new_page_pins()[0].identity().page_base(), base);
+        assert_eq!(memory.commit_prepared_private_vm(token), Some(base));
+        assert!(memory.private_page_pin(owner, base).is_some());
+        assert!(memory.private_page_pin(owner, base + 0x1000).is_none());
+
+        let commit = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                base + 0x1001,
+                1,
+                MEM_COMMIT,
+                2,
+            )
+            .unwrap();
+        assert_eq!(commit.result_ptr(), base + 0x1000);
+        assert_eq!(
+            memory.commit_prepared_private_vm(commit),
+            Some(base + 0x1000)
+        );
+        assert_eq!(
+            memory
+                .private_vm_query(owner, base + 0x1000)
+                .unwrap()
+                .page_protect,
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn proven_pre_native_abort_reclaims_hole_and_cursor_but_not_incarnation() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let token = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        let base = token.base();
+        let incarnation = token.allocation().incarnation;
+        assert!(memory.pending_private_holes.contains_key(&(owner, base)));
+        assert!(memory.next_virtual_ptr_by_owner.contains_key(&owner));
+        assert!(memory.abort_prepared_private_vm(token));
+        assert!(!memory.pending_private_holes.contains_key(&(owner, base)));
+        assert!(!memory.next_virtual_ptr_by_owner.contains_key(&owner));
+        assert_eq!(memory.private_commit_used_bytes(), 0);
+        let retry = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        assert_eq!(retry.base(), base);
+        assert!(retry.allocation().incarnation > incarnation);
+        assert!(memory.abort_prepared_private_vm(retry));
+
+        let fixed = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0x5900_0000,
+                0x1000,
+                MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+        assert!(memory.abort_prepared_private_vm(fixed));
+        assert!(
+            memory
+                .prepare_private_vm(
+                    owner,
+                    VirtualAllocationSource::Private,
+                    0x5900_0000,
+                    0x1000,
+                    MEM_RESERVE,
+                    4,
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
     fn prepared_private_abandonment_keeps_owner_hole_but_foreign_private_may_use_va() {
         let mut handles = HandleTable::default();
         handles.register_boot_process(1);
@@ -2577,7 +2763,7 @@ mod tests {
                 )
                 .is_none()
         );
-        assert!(clone.pending_private_holes.contains_key(&(parent, base)));
+        assert!(!clone.pending_private_holes.contains_key(&(parent, base)));
         let child_proposal = memory
             .prepare_private_vm(
                 child,
@@ -2838,7 +3024,144 @@ mod tests {
             .unwrap();
         assert_eq!(second.new_page_pins().len(), 1);
         drop(second);
-        assert_eq!(memory.pending_private_commit_bytes.get(), 0);
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+    }
+
+    #[test]
+    fn released_but_retained_private_pin_remains_charged_until_final_drop() {
+        let mut memory = MemorySystem::default();
+        memory.set_private_commit_limit_bytes(STABLE_PRIVATE_PAGE_SIZE as u64);
+        let owner = boot_owner();
+        let base = 0x5a00_0000;
+        let first = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        memory.commit_prepared_private_vm(first).unwrap();
+        let retained_pin = memory.private_page_pin(owner, base).unwrap();
+        let release = memory
+            .prepare_private_vm_free(owner, base, 0, MEM_RELEASE)
+            .unwrap();
+        assert_eq!(
+            memory.commit_prepared_private_vm_change(release),
+            Some(PrivateVmChangeResult::Free)
+        );
+        assert!(memory.virtual_allocation(owner, base).is_none());
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert!(
+            memory
+                .prepare_private_vm(
+                    owner,
+                    VirtualAllocationSource::Private,
+                    base,
+                    0x1000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    4,
+                )
+                .is_none()
+        );
+        drop(retained_pin);
+        assert_eq!(memory.private_commit_used_bytes(), 0);
+        assert!(
+            memory
+                .prepare_private_vm(
+                    owner,
+                    VirtualAllocationSource::Private,
+                    base,
+                    0x1000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    4,
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn sixty_four_private_release_cycles_reclaim_checked_page_budget() {
+        let mut memory = MemorySystem::default();
+        memory.set_private_commit_limit_bytes(STABLE_PRIVATE_PAGE_SIZE as u64);
+        let owner = boot_owner();
+        let base = 0x5b00_0000;
+        for cycle in 0..64u8 {
+            let prepared = memory
+                .prepare_private_vm(
+                    owner,
+                    VirtualAllocationSource::Private,
+                    base,
+                    0x1000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    4,
+                )
+                .unwrap();
+            memory.commit_prepared_private_vm(prepared).unwrap();
+            memory
+                .private_page_pin(owner, base)
+                .unwrap()
+                .write_bytes(0, &[cycle])
+                .unwrap();
+            assert_eq!(
+                memory.private_commit_used_bytes(),
+                STABLE_PRIVATE_PAGE_SIZE as u64
+            );
+            let release = memory
+                .prepare_private_vm_free(owner, base, 0, MEM_RELEASE)
+                .unwrap();
+            memory.commit_prepared_private_vm_change(release).unwrap();
+            assert_eq!(memory.private_commit_used_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn cloned_memory_has_independent_private_page_bytes_and_budget() {
+        let mut source = MemorySystem::default();
+        let owner = boot_owner();
+        let prepared = source
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0x5c00_0000,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        let base = prepared.base();
+        source.commit_prepared_private_vm(prepared).unwrap();
+        let source_pin = source.private_page_pin(owner, base).unwrap();
+        source_pin.write_bytes(0, &[0x45]).unwrap();
+        let clone = source.clone();
+        let clone_pin = clone.private_page_pin(owner, base).unwrap();
+        assert_ne!(source_pin.native_ptr(), clone_pin.native_ptr());
+        assert!(source.contains_private_page_pin(&source_pin));
+        assert!(clone.contains_private_page_pin(&clone_pin));
+        assert!(!source.contains_private_page_pin(&clone_pin));
+        assert!(!clone.contains_private_page_pin(&source_pin));
+        clone_pin.write_bytes(0, &[0x99]).unwrap();
+        let mut byte = [0];
+        source_pin.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x45]);
+        clone_pin.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x99]);
+        assert_eq!(
+            source.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert_eq!(
+            clone.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
     }
 
     #[test]
