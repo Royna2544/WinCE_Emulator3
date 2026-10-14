@@ -4,6 +4,16 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 
 ## Immediate Engineering Queue
 
+- E-32's bounded iNavi run crashed in host Unicorn TCG code emission at
+  input-ready ~+134.8 s, before the tap; it does not support a splash-cause
+  inference. The dump/EXE/PDB and fresh original-mount ZIPs are preserved
+  ([receipt](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
+  First run a subprocess-isolated small-arena Windows native control against
+  the vendored handler's known un-clipped 4-MiB commit-tail request (E-5/E-6);
+  only then apply and validate a minimal bounded-tail repair. Do not conflate
+  an isolated handler fix with attribution of this app crash, default-cache
+  footprint acceptance, or a second writable-mount run.
+
 - Begin the user-authorized scheduler-core rewrite within the staged
   plan-first/common-anchor gates. Read reviewed
   `docs/ARCHITECTURE.md`, `docs/PLAN.md` and the relevant subsystem page;

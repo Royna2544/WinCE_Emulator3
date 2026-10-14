@@ -4,6 +4,25 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-32 Bounded iNavi Run and Native TCG Crash
+
+- On the source-matched E-31 build, the one newly approved original-mount
+  read/write run ended early with host `0xC0000005` at 135.282 s; it did not
+  reach the +153 s tap or map. The settled image remained genuine iNavi
+  splash. With `ce.slice_profile=debug`, 121 native slices completed after
+  input-ready +120 s through +130.896 s across outgoing PIDs 1/67/68, so
+  complete post-120 native idleness is disproved for this run. The final
+  ~3.9-s no-completion gap remains unlocalized. Sixteen raw-NMEA posts were
+  accepted and the retained ring shows 11 positive guest COM7 reads/2,784 B.
+  Peak sampled RSS was 1,655,271,424 B, below the 2-GiB guard. The matching
+  dump/PDB identify a host Unicorn TCG code-emission write crossing a page;
+  arena bounds/VEH return are absent, so the known Windows commit-tail defect
+  is plausible but not yet attributed. Three fresh adjacent ZIPs passed
+  source-entry SHA checks; mounted file-content hashes stayed unchanged.
+  [E-32 receipt](evidence/e22-live-20261014T002535Z/analysis.receipt.md)
+  retains exact hashes, symbols, input/frame/memory and limits. No second app
+  run is authorized by that one-run approval.
+
 ## 2026-10-14 E-31 O-P1 JR-Repair Red Baseline
 
 - The first native-deadline JR-thunk repair predicate was extracted with

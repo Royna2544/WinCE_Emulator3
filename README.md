@@ -72,6 +72,14 @@ remote-control HTTP/WebSocket surface.
   Its sampled working-set and private peaks were 1,527.3/1,540.8 MiB. The
   read/write mounts were backed up as adjacent ZIPs before that run
   ([E-29 analysis](evidence/e22-live-20261013T211230Z/analysis.receipt.md)).
+- A later E-31-source diagnostic did **not** complete its 330 s cap: the host
+  crashed in Unicorn TCG code emission at 135.282 s, before the tap. It still
+  displayed the real splash; 121 native slices completed after input-ready
+  +120 s, and positive guest COM7 reads were retained. Its peak sampled RSS
+  was 1,578.6 MiB. The exact EXE/PDB/dump, fresh adjacent mount ZIPs, and
+  limits are retained; the Windows handler's known commit-tail defect is not
+  yet proven to have caused this crash
+  ([E-32 analysis](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
 - Historical comparison, not current acceptance: the persistent-owner 650
   build passed 1,618 tests before a normal app run crashed at 129.108 s with
   `0xC0000005` and about 1.62 GiB RSS. The installed BED2 fallback's later

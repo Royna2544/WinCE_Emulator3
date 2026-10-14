@@ -4,13 +4,26 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
 
 ## Open Issues
 
+- The E-32 source-matched, read/write bounded iNavi run exited with host
+  `0xC0000005` after 135.282 s, before its planned tap. The matching
+  minidump/PDB locate a 4-byte write crossing a host page boundary in
+  Unicorn's `tcg_out32`/`tcg_out_movi` during `uc_emu_start`; there is no
+  terminal PPM, guest CPU exception, or evidence of map readiness. The dump
+  omits code-arena bounds and VEH return, so the known un-clipped Windows
+  commit-tail size bug cannot yet be assigned as this crash's cause.
+  Retained 121 post-120 completed slices disprove total native idleness, not
+  the reason for the later no-completion gap or persistent splash
+  ([E-32 receipt](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
 - The first persistent-engine 650 live trial host-crashed at 129.1081087 s with
   `0xC0000005`, no watchdog/empty stderr; peak RSS/private were
   1,662.59 / 1,663.40 MiB. GUID-matched 650 symbols/disassembly place fault
   RVA `0x85e757` at native `tb_gen_code_mipsel` / TranslationBlock jump-reset
   initialization. Earlier `subpage_init` labeling used an adjacent BED2 PDB
   and was wrong.
-  No surviving dump or final native Result/profile establishes root cause.
+  A matching ~1-MiB minidump was later recovered from the exact Windows
+  CrashDumps folder and hash-preserved beside the 650 EXE/PDB under
+  `evidence/legacy-target-release-20261013`; no final native Result/profile
+  or causal diagnosis follows from that recovery alone.
   Terminal PPM/full traces are absent. Failed650/PDB and evidence are preserved;
   BED2 is a hash-preserved measured fallback, not the current `target/release`
   EXE. Current source still builds experimental ownership; do not treat it as
