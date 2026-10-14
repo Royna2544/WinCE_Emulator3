@@ -4449,6 +4449,51 @@ impl Gwe {
         self.sent_messages.get(&id)
     }
 
+    /// Retire one abandoned sender transaction without touching another send
+    /// that happens to use the same numeric thread ID. An active receiver may
+    /// finish its callback, but it can no longer reply to the abandoned sender.
+    pub fn abandon_sent_message_from_sender(
+        &mut self,
+        id: u64,
+        sender_thread_id: u32,
+        sender_process_id: u32,
+        receiver_thread_id: u32,
+        result_ptr: Option<u32>,
+        timeout_ms: Option<u32>,
+        send_timeout_flags: u32,
+    ) -> bool {
+        let Some(sent) = self.sent_messages.get(&id) else {
+            return false;
+        };
+        if sent.sender_thread_id != Some(sender_thread_id)
+            || sent.sender_process_id != Some(sender_process_id)
+            || sent.receiver_thread_id != receiver_thread_id
+            || sent.result_ptr != result_ptr
+            || sent.timeout_ms != timeout_ms
+            || sent.send_timeout_flags != send_timeout_flags
+        {
+            return false;
+        }
+        let active = self
+            .active_sent_stack_by_thread
+            .values()
+            .any(|stack| stack.contains(&id));
+        if active {
+            if let Some(sent) = self.sent_messages.get_mut(&id) {
+                sent.flags |= SMF_SENDER_TERMINATED;
+                sent.sender_thread_id = None;
+                sent.sender_process_id = None;
+                sent.result_ptr = None;
+            }
+        } else {
+            self.sent_messages.remove(&id);
+        }
+        for queue in self.sent_queues.values_mut() {
+            queue.retain(|queued_id| *queued_id != id);
+        }
+        true
+    }
+
     pub fn sent_message_result_ready(&self, id: u64) -> bool {
         self.sent_messages
             .get(&id)
