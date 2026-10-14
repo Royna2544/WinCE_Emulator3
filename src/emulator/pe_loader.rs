@@ -187,7 +187,9 @@ pub(crate) const SYS_HANDLE_CURRENT_PROCESS: usize = 2;
 
 pub(crate) const GUEST_STACK_MIN_RESERVE: u32 = 0x0040_0000;
 pub(crate) const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
-pub(crate) const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
+// Reserve the full birth-local heap VA window. Canonical page backing is
+// committed only as allocations cross pages; the reservation costs no guest RAM.
+pub(crate) const GUEST_HEAP_ARENA_SIZE: u32 = 0x1000_0000;
 #[cfg(feature = "unicorn")]
 pub(crate) const EXTERNAL_TRAMPOLINE_BASE: u32 = 0x7000_0000;
 

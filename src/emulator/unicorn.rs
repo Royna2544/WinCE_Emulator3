@@ -498,6 +498,7 @@ enum CreateWindowPhase {
 
 #[derive(Debug, Clone)]
 struct CreateWindowReturn {
+    owner: crate::ce::object::ProcessBirthKey,
     phase: CreateWindowPhase,
     return_pc: u32,
     hwnd: u32,
@@ -657,6 +658,7 @@ struct PendingEnumDisplayMonitorsReturn {
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingDpaEnumReturn {
+    owner: crate::ce::object::ProcessBirthKey,
     return_pc: u32,
     return_sp: u32,
     caller_regs: MipsGuestContext,
@@ -670,6 +672,7 @@ struct PendingDpaEnumReturn {
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingComNotificationReturn {
+    owner: crate::ce::object::ProcessBirthKey,
     return_pc: u32,
     return_sp: u32,
     caller_regs: MipsGuestContext,
@@ -680,6 +683,7 @@ struct PendingComNotificationReturn {
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingDsaEnumReturn {
+    owner: crate::ce::object::ProcessBirthKey,
     return_pc: u32,
     return_sp: u32,
     caller_regs: MipsGuestContext,
@@ -1936,8 +1940,18 @@ impl UnicornMips {
         else {
             return Ok(());
         };
+        let owner = message.typed_payload_owner.ok_or_else(|| {
+            Error::Backend("typed queued payload has no immutable owner".to_owned())
+        })?;
+        if kernel.current_process_birth_key() != Some(owner)
+            || kernel.handles.process_birth_key(owner.process_id()) != Some(owner)
+        {
+            return Err(Error::Backend(
+                "typed queued payload owner differs from active birth".to_owned(),
+            ));
+        }
         let mut fixed_ranges = Vec::new();
-        if let Some(owner) = kernel.current_process_birth_key() {
+        {
             fixed_ranges =
                 reserve_fixed_system_slabs(&self.memory, &self.mapped_blobs, kernel, Some(owner))?;
             if let Some((base, size)) = kernel.memory.fixed_heap_reservation(owner) {
@@ -1957,7 +1971,7 @@ impl UnicornMips {
                         ));
                     }
                     if kernel.handles.process_birth_key(owner.process_id()) != Some(owner)
-                        || end > u64::from(kernel.memory.heap_high_water_mark())
+                        || end > u64::from(kernel.memory.heap_high_water_mark(owner))
                     {
                         return Err(Error::Backend(
                             "queued message payload has stale heap owner or high-water".to_owned(),
@@ -1974,7 +1988,7 @@ impl UnicornMips {
                     }
                     let prepared = kernel
                         .memory
-                        .prepare_fixed_heap_growth(owner, kernel.memory.heap_high_water_mark())
+                        .prepare_fixed_heap_growth(owner, kernel.memory.heap_high_water_mark(owner))
                         .ok_or_else(|| {
                             Error::Backend("queued fixed heap growth exceeds guest RAM".to_owned())
                         })?;
@@ -2034,12 +2048,9 @@ impl UnicornMips {
                 "queued payload overlaps a fixed slab outside the canonical heap path".to_owned(),
             ));
         }
-        write_persisted_message_payload(
-            &self.memory,
-            &mut self.mapped_blobs,
-            message.lparam,
-            &bytes,
-        )
+        Err(Error::Backend(
+            "typed queued payload has no canonical owner-qualified heap page".to_owned(),
+        ))
     }
 
     #[cfg(feature = "unicorn")]
@@ -14970,7 +14981,7 @@ fn map_kernel_memory_allocations_for_owner<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &CeKernel,
     mapped: &mut KernelMemoryMappings,
-    mapped_blobs: &mut Vec<MappedBlob>,
+    _mapped_blobs: &mut Vec<MappedBlob>,
     owner: Option<crate::ce::object::ProcessBirthKey>,
     native_pins: Option<&NativeMappingPins>,
     active_guards: Option<&ActivePrivatePageGuards>,
@@ -14980,10 +14991,9 @@ fn map_kernel_memory_allocations_for_owner<D>(
             "private slab mapping requires a captured process birth".to_owned(),
         ));
     }
-    if mapped.heap_generation != kernel.memory.heap_generation() {
-        map_heap_spillover(uc, kernel, mapped, mapped_blobs)?;
-        mapped.heap_generation = kernel.memory.heap_generation();
-    }
+    // All owner-qualified heap pages are canonical fixed private slabs. The
+    // old copied spillover frontier must never run after heap metadata changes.
+    mapped.heap_generation = kernel.memory.heap_generation();
 
     if mapped.virtual_generation != kernel.memory.virtual_generation() {
         reclaim_stale_virtual_memory_pages(uc, kernel, mapped, owner)?;
@@ -15055,42 +15065,6 @@ fn map_kernel_memory_allocations_for_owner<D>(
     }
 
     Ok(())
-}
-
-#[cfg(feature = "unicorn")]
-fn map_heap_spillover<D>(
-    uc: &mut unicorn_engine::Unicorn<'_, D>,
-    kernel: &CeKernel,
-    mapped: &mut KernelMemoryMappings,
-    mapped_blobs: &mut Vec<MappedBlob>,
-) -> Result<()> {
-    let reserved = heap_spillover_reserved_ranges(kernel, mapped.system_slab_owner);
-    map_heap_spillover_through(
-        uc,
-        mapped,
-        mapped_blobs,
-        kernel.memory.heap_high_water_mark(),
-        &reserved,
-    )
-}
-
-#[cfg(feature = "unicorn")]
-fn heap_spillover_reserved_ranges(
-    kernel: &CeKernel,
-    owner: Option<crate::ce::object::ProcessBirthKey>,
-) -> Vec<(u32, u32)> {
-    match owner {
-        Some(owner) => kernel
-            .memory
-            .virtual_allocations_visible_to(owner)
-            .map(|allocation| (allocation.base, allocation.size))
-            .collect(),
-        None => kernel
-            .memory
-            .virtual_allocations()
-            .map(|allocation| (allocation.base, allocation.size))
-            .collect(),
-    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -18082,6 +18056,10 @@ fn try_dispatch_com_notification_callout<D>(
     let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
     let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
     let call_method = normalize_ce_process_slot_callback(uc, method_ptr);
+    let Some(owner) = kernel.current_process_birth_key() else {
+        restore_callback(kernel, cb);
+        return false;
+    };
 
     // Map typed arguments to MIPS registers.
     // A0 = this (callback_ptr); A1,A2,A3 = first three explicit args; stack at call_sp+0x10 = 4th.
@@ -18169,7 +18147,7 @@ fn try_dispatch_com_notification_callout<D>(
     if !ok {
         if let Some(ptr) = heap_ptr_to_free {
             let process_heap = kernel.memory.get_process_heap();
-            kernel.memory.heap_free(process_heap, 0, ptr);
+            kernel.memory.heap_free(owner, process_heap, 0, ptr);
         }
         restore_callback(kernel, cb);
         return false;
@@ -18178,6 +18156,7 @@ fn try_dispatch_com_notification_callout<D>(
     pending_com_returns
         .borrow_mut()
         .push(PendingComNotificationReturn {
+            owner,
             return_pc: import_pc,
             return_sp,
             caller_regs,
@@ -33794,7 +33773,7 @@ fn prepare_native_message_pointer_payload<D>(
                         "native message payload crosses fixed heap arena".to_owned(),
                     ));
                 }
-                if u64::from(end) > u64::from(kernel.memory.heap_high_water_mark()) {
+                if u64::from(end) > u64::from(kernel.memory.heap_high_water_mark(owner)) {
                     return Err(Error::Backend(
                         "native message payload exceeds committed heap high-water".to_owned(),
                     ));
@@ -33811,7 +33790,7 @@ fn prepare_native_message_pointer_payload<D>(
                 }
                 let prepared = kernel
                     .memory
-                    .prepare_fixed_heap_growth(owner, kernel.memory.heap_high_water_mark())
+                    .prepare_fixed_heap_growth(owner, kernel.memory.heap_high_water_mark(owner))
                     .ok_or_else(|| {
                         Error::Backend("native fixed heap growth exceeds guest RAM".to_owned())
                     })?;
@@ -35116,6 +35095,7 @@ mod guest_thread_stack_tests {
                 .heap_alloc(PROCESS_HEAP_HANDLE, 0, CREATESTRUCTW_SIZE)
                 .unwrap();
             let pending = Rc::new(RefCell::new(vec![CreateWindowReturn {
+                owner: kernel.current_process_birth_key().unwrap(),
                 phase: CreateWindowPhase::NcCreate,
                 return_pc: 0x22000,
                 hwnd,
@@ -47960,7 +47940,9 @@ fn handle_com_notification_return_stub<D>(
 
     if let Some(ptr) = state.heap_ptr_to_free {
         let process_heap = kernel.memory.get_process_heap();
-        kernel.memory.heap_free(process_heap, 0, ptr);
+        if kernel.current_process_birth_key() == Some(state.owner) {
+            kernel.memory.heap_free(state.owner, process_heap, 0, ptr);
+        }
     }
 
     // restore_mips_gprs restores all GPRs including RA (= caller's GetMessageW return address).
@@ -48001,6 +47983,10 @@ fn try_enter_dpa_enum_callout<D>(
     let callback = args.get(1).copied().unwrap_or(0);
     let pdata = args.get(2).copied().unwrap_or(0);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let Some(owner) = kernel.current_process_birth_key() else {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    };
 
     if hdpa == 0 {
         let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
@@ -48083,6 +48069,7 @@ fn try_enter_dpa_enum_callout<D>(
     }
 
     pending_returns.borrow_mut().push(PendingDpaEnumReturn {
+        owner,
         return_pc,
         return_sp,
         caller_regs,
@@ -48135,11 +48122,11 @@ fn handle_dpa_enum_return_stub<D>(
             } else {
                 0
             };
-            if hheap != 0 {
+            if hheap != 0 && kernel.current_process_birth_key() == Some(state.owner) {
                 if pp != 0 {
-                    kernel.memory.heap_free(hheap, 0, pp);
+                    kernel.memory.heap_free(state.owner, hheap, 0, pp);
                 }
-                kernel.memory.heap_free(hheap, 0, state.hdpa);
+                kernel.memory.heap_free(state.owner, hheap, 0, state.hdpa);
             }
         }
         restore_mips_gprs(uc, &state.caller_regs);
@@ -48201,6 +48188,10 @@ fn try_enter_dsa_enum_callout<D>(
     let callback = args.get(1).copied().unwrap_or(0);
     let pdata = args.get(2).copied().unwrap_or(0);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let Some(owner) = kernel.current_process_birth_key() else {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    };
 
     if hdsa == 0 {
         let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
@@ -48276,6 +48267,7 @@ fn try_enter_dsa_enum_callout<D>(
     }
 
     pending_returns.borrow_mut().push(PendingDsaEnumReturn {
+        owner,
         return_pc,
         return_sp,
         caller_regs,
@@ -48327,11 +48319,11 @@ fn handle_dsa_enum_return_stub<D>(
             } else {
                 0
             };
-            if hheap != 0 {
+            if hheap != 0 && kernel.current_process_birth_key() == Some(state.owner) {
                 if dsa_pdata != 0 {
-                    kernel.memory.heap_free(hheap, 0, dsa_pdata);
+                    kernel.memory.heap_free(state.owner, hheap, 0, dsa_pdata);
                 }
-                kernel.memory.heap_free(hheap, 0, state.hdsa);
+                kernel.memory.heap_free(state.owner, hheap, 0, state.hdsa);
             }
         }
         restore_mips_gprs(uc, &state.caller_regs);
@@ -49091,6 +49083,12 @@ fn try_enter_create_window_create_callout<D>(
     let Some(window) = kernel.gwe.window(hwnd) else {
         return false;
     };
+    let Some(owner) = kernel.handles.process_birth_key(window.process_id) else {
+        return false;
+    };
+    if kernel.current_process_birth_key() != Some(owner) {
+        return false;
+    }
     let wndproc = window.wndproc;
     if !is_guest_wndproc(wndproc) {
         return false;
@@ -49142,6 +49140,7 @@ fn try_enter_create_window_create_callout<D>(
     );
 
     let callout = CreateWindowReturn {
+        owner,
         phase: CreateWindowPhase::NcCreate,
         return_pc,
         hwnd,
@@ -49157,7 +49156,7 @@ fn try_enter_create_window_create_callout<D>(
     } else {
         let _ = kernel
             .memory
-            .heap_free(crate::ce::memory::PROCESS_HEAP_HANDLE, 0, create_struct);
+            .heap_free(owner, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, create_struct);
         restore_mips_gprs(uc, &caller_regs);
         let _ = kernel.destroy_window_with_reason(hwnd, "CreateWindowExW callout setup failed");
         kernel
@@ -49231,11 +49230,14 @@ fn handle_create_window_return_stub<D>(
             );
             if result == 0 {
                 // WM_NCCREATE returned FALSE: abort window creation.
-                let _ = kernel.memory.heap_free(
-                    crate::ce::memory::PROCESS_HEAP_HANDLE,
-                    0,
-                    callout.lparam,
-                );
+                if kernel.current_process_birth_key() == Some(callout.owner) {
+                    let _ = kernel.memory.heap_free(
+                        callout.owner,
+                        crate::ce::memory::PROCESS_HEAP_HANDLE,
+                        0,
+                        callout.lparam,
+                    );
+                }
                 let _ = kernel
                     .destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_NCCREATE failed");
                 return_create_window_result(uc, callout.return_pc, 0)
@@ -49261,11 +49263,14 @@ fn handle_create_window_return_stub<D>(
                     pending_returns.borrow_mut().push(next);
                     Ok(())
                 } else {
-                    let _ = kernel.memory.heap_free(
-                        crate::ce::memory::PROCESS_HEAP_HANDLE,
-                        0,
-                        next.lparam,
-                    );
+                    if kernel.current_process_birth_key() == Some(next.owner) {
+                        let _ = kernel.memory.heap_free(
+                            next.owner,
+                            crate::ce::memory::PROCESS_HEAP_HANDLE,
+                            0,
+                            next.lparam,
+                        );
+                    }
                     let _ = kernel.destroy_window_with_reason(
                         next.hwnd,
                         "CreateWindowExW WM_CREATE setup failed",
@@ -49297,10 +49302,14 @@ fn handle_create_window_return_stub<D>(
             );
             // The tracked CREATESTRUCT is scratch shared by the two creation
             // phases only. User lpCreateParams and other buffers are not owned.
-            let _ =
-                kernel
-                    .memory
-                    .heap_free(crate::ce::memory::PROCESS_HEAP_HANDLE, 0, callout.lparam);
+            if kernel.current_process_birth_key() == Some(callout.owner) {
+                let _ = kernel.memory.heap_free(
+                    callout.owner,
+                    crate::ce::memory::PROCESS_HEAP_HANDLE,
+                    0,
+                    callout.lparam,
+                );
+            }
             if result == u32::MAX {
                 let _ = kernel
                     .destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_CREATE failed");
@@ -52355,45 +52364,6 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
 }
 
 #[cfg(feature = "unicorn")]
-impl<D> UnicornGuestMemory<'_, '_, D> {
-    fn ensure_heap_spillover_with_kernel(
-        &mut self,
-        kernel: &CeKernel,
-        addr: u32,
-        len: u32,
-    ) -> Result<()> {
-        let Some(heap_mapping) = self.heap_mapping.as_mut() else {
-            return self.ensure_heap_mapped(addr, len);
-        };
-        let high_water = addr
-            .checked_add(len)
-            .ok_or_else(|| Error::InvalidArgument("heap spillover range overflow".to_owned()))?;
-        let owner = heap_mapping.mapped.borrow().system_slab_owner;
-        if owner.is_some_and(|owner| {
-            kernel.current_process_birth_key() != Some(owner)
-                || kernel.handles.process_birth_key(owner.process_id()) != Some(owner)
-        }) {
-            return Err(Error::Backend(
-                "heap spillover owner differs from selected process birth".to_owned(),
-            ));
-        }
-        let reserved = heap_spillover_reserved_ranges(kernel, owner);
-        // SAFETY: `with_heap_mapping` requires the engine-owned vector to
-        // outlive this sequential adapter call.
-        let blobs = unsafe { &mut *heap_mapping.mapped_blobs };
-        validate_heap_destination(self.uc, Some(blobs), addr, len, true)?;
-        map_heap_spillover_through(
-            self.uc,
-            &mut heap_mapping.mapped.borrow_mut(),
-            blobs,
-            high_water,
-            &reserved,
-        )?;
-        validate_heap_destination(self.uc, Some(blobs), addr, len, false)
-    }
-}
-
-#[cfg(feature = "unicorn")]
 impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     fn native_shared_view_owner(&self) -> Option<crate::ce::object::ProcessBirthKey> {
         self.private_vm_mapping.map(|mapping| mapping.owner)
@@ -52619,19 +52589,13 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             .checked_add(len)
             .ok_or_else(|| Error::InvalidArgument("heap mapping range overflow".to_owned()))?;
         let Some(mapping) = self.private_vm_mapping else {
-            if kernel
-                .current_process_birth_key()
-                .and_then(|owner| kernel.memory.fixed_heap_reservation(owner))
-                .is_some_and(|(base, size)| {
-                    u64::from(addr) < u64::from(base) + u64::from(size)
-                        && u64::from(base) < u64::from(end)
-                })
-            {
+            if kernel.current_process_birth_key().is_some() {
                 return Err(Error::Backend(
-                    "fixed heap allocation has no native private page context".to_owned(),
+                    "owner-qualified heap allocation has no native private page context".to_owned(),
                 ));
             }
-            return self.ensure_heap_spillover_with_kernel(kernel, addr, len);
+            // Birthless fixture adapters are not a process heap authority.
+            return self.ensure_heap_mapped(addr, len);
         };
         if kernel.handles.process_birth_key(mapping.owner.process_id()) != Some(mapping.owner)
             || kernel.current_process_birth_key() != Some(mapping.owner)
@@ -52640,28 +52604,23 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                 "fixed heap mapping owner differs from selected process birth".to_owned(),
             ));
         }
-        let Some((heap_base, heap_size)) = kernel.memory.fixed_heap_reservation(mapping.owner)
-        else {
-            return self.ensure_heap_spillover_with_kernel(kernel, addr, len);
-        };
+        let (heap_base, heap_size) = kernel
+            .memory
+            .fixed_heap_reservation(mapping.owner)
+            .ok_or_else(|| Error::Backend("selected birth has no fixed heap reservation".to_owned()))?;
         let heap_end = u64::from(heap_base) + u64::from(heap_size);
-        if u64::from(addr) >= heap_end || u64::from(end) <= u64::from(heap_base) {
-            return self.ensure_heap_spillover_with_kernel(kernel, addr, len);
-        }
-        if addr < heap_base {
+        if addr < heap_base || u64::from(end) > heap_end {
             return Err(Error::InvalidArgument(
-                "heap mapping begins before fixed arena reservation".to_owned(),
+                "heap mapping crosses selected birth's fixed reservation".to_owned(),
             ));
         }
-        let fixed_end = u64::from(end).min(heap_end) as u32;
-        let fixed_len = fixed_end - addr;
         self.sealed_host_write_guard
             .check_write(u64::from(addr), len as usize)?;
         // Complete preflight before any native map. Growth has already been
         // published by the allocator's checked private-VM transaction; host
         // access must never manufacture an uncommitted heap page.
         let first_page = addr & !0xfff;
-        let last_page = (fixed_end - 1) & !0xfff;
+        let last_page = (end - 1) & !0xfff;
         let mut pins = Vec::new();
         let mut page = first_page;
         loop {
@@ -52702,12 +52661,9 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         }
         self.validate_private_host_access(
             addr,
-            fixed_len as usize,
+            len as usize,
             unicorn_engine::Prot::WRITE.0 as u32,
         )?;
-        if u64::from(end) > heap_end {
-            self.ensure_heap_spillover_with_kernel(kernel, heap_end as u32, end - heap_end as u32)?;
-        }
         Ok(())
     }
 
@@ -53109,37 +53065,19 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                 "fixed heap requires owner-qualified canonical page pins".to_owned(),
             ));
         }
-        if self
-            .heap_mapping
-            .is_some_and(|mapping| mapping.mapped.borrow().system_slab_owner.is_some())
-        {
+        if self.heap_mapping.is_some() {
             return Err(Error::Backend(
-                "owner-qualified heap spillover requires kernel reservation preflight".to_owned(),
+                "kernel-less heap mapping cannot publish process heap pages".to_owned(),
             ));
         }
-        let Some(heap_mapping) = self.heap_mapping.as_mut() else {
+        {
             // Legacy memory-only adapters are used by non-allocating blocked
             // I/O and standalone fixtures; immediate runtime allocators carry
             // the engine's persistent mapping context.
             validate_heap_destination(self.uc, None, addr, len, true)?;
             self.ensure_mapped(addr, len)?;
-            return validate_heap_destination(self.uc, None, addr, len, false);
-        };
-        let high_water = addr
-            .checked_add(len)
-            .ok_or_else(|| Error::InvalidArgument("heap mapping range overflow".to_owned()))?;
-        // SAFETY: `with_heap_mapping` requires this engine-owned vector to
-        // outlive the adapter, and import dispatch accesses it sequentially.
-        let mapped_blobs = unsafe { &mut *heap_mapping.mapped_blobs };
-        validate_heap_destination(self.uc, Some(mapped_blobs), addr, len, true)?;
-        map_heap_spillover_through(
-            self.uc,
-            &mut heap_mapping.mapped.borrow_mut(),
-            mapped_blobs,
-            high_water,
-            &[],
-        )?;
-        validate_heap_destination(self.uc, Some(mapped_blobs), addr, len, false)
+            validate_heap_destination(self.uc, None, addr, len, false)
+        }
     }
 
     fn fill_bytes(&mut self, addr: u32, value: u8, len: u32) -> Result<()> {
@@ -56831,6 +56769,7 @@ mod unicorn_tests {
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
         let lparam = 0x3000_0100;
         let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            owner: kernel.current_process_birth_key().unwrap(),
             phase: super::CreateWindowPhase::Create,
             return_pc,
             hwnd,
@@ -56857,6 +56796,7 @@ mod unicorn_tests {
         let failed = kernel.create_window_ex_w(thread_id, "CREATE_FAIL", "", None, 0, 0, 0);
         kernel.gwe.set_window_long(failed, GWL_WNDPROC, wndproc);
         let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            owner: kernel.current_process_birth_key().unwrap(),
             phase: super::CreateWindowPhase::Create,
             return_pc,
             hwnd: failed,
@@ -56888,6 +56828,7 @@ mod unicorn_tests {
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
         let lparam = 0x3000_0100;
         let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            owner: kernel.current_process_birth_key().unwrap(),
             phase: super::CreateWindowPhase::NcCreate,
             return_pc,
             hwnd,
@@ -56925,6 +56866,7 @@ mod unicorn_tests {
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
         let lparam = 0x3000_0100;
         let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            owner: kernel.current_process_birth_key().unwrap(),
             phase: super::CreateWindowPhase::NcCreate,
             return_pc,
             hwnd,
@@ -58622,7 +58564,7 @@ mod unicorn_tests {
 
     // The fixed heap is only writable after HeapAlloc commits its high-water
     // pages. These scheduler fixtures need independent, test-only scratch RAM.
-    const PHASE1_COUNTER_ADDRESS: u32 = 0x3800_0000;
+    const PHASE1_COUNTER_ADDRESS: u32 = 0x4800_0000;
 
     fn phase1_counter_cpu(seed: u16, name: &str) -> crate::Result<super::UnicornMips> {
         phase1_counter_cpu_with_backing(seed, name, true)
