@@ -47,6 +47,9 @@ pub struct MemorySystem {
     heaps: BTreeMap<u32, Heap>,
     allocations: BTreeMap<u32, MemoryAllocation>,
     virtual_allocations: BTreeMap<(ProcessBirthKey, u32), VirtualAllocation>,
+    // A prepared private reservation is not guest-visible. Keep its VA out of
+    // reuse even if its token is dropped after a native mapping side effect.
+    pending_private_holes: BTreeMap<(ProcessBirthKey, u32), u32>,
     stable_private_pages: BTreeMap<PrivatePageIdentity, Rc<StablePrivatePage>>,
     // A native pin can outlive a released VM record. Keep the checkpoint
     // unsupported flag set for this MemorySystem lineage even after release.
@@ -365,6 +368,56 @@ pub struct VirtualAllocation {
     pub incarnation: u64,
     pub source: VirtualAllocationSource,
     pub backing: VirtualAllocationBacking,
+    /// Exact committed 4-KiB private pages and their individual protection.
+    /// Empty for a reserve-only slab or any unmigrated LegacySeed allocation.
+    pub private_committed_pages: BTreeMap<u32, u32>,
+}
+
+/// A detached private VM proposal. A native owner may map `new_page_pins`
+/// before `MemorySystem` publishes this reservation or commit. Dropping the
+/// token leaves a new reservation's monotonic VA hole unavailable for reuse.
+#[derive(Debug)]
+#[must_use = "prepared private VM must be committed or abandoned"]
+pub struct PreparedPrivateVm {
+    owner: ProcessBirthKey,
+    result_ptr: u32,
+    proposed_allocation: VirtualAllocation,
+    original_allocation: Option<VirtualAllocation>,
+    expected_virtual_generation: u64,
+    new_page_pins: Vec<StablePrivatePagePin>,
+}
+
+impl PreparedPrivateVm {
+    pub fn owner(&self) -> ProcessBirthKey {
+        self.owner
+    }
+
+    pub fn base(&self) -> u32 {
+        self.proposed_allocation.base
+    }
+
+    pub fn result_ptr(&self) -> u32 {
+        self.result_ptr
+    }
+
+    pub fn allocation(&self) -> &VirtualAllocation {
+        &self.proposed_allocation
+    }
+
+    pub fn new_page_pins(&self) -> &[StablePrivatePagePin] {
+        &self.new_page_pins
+    }
+
+    pub fn protection_for_page(&self, page: u32) -> Option<u32> {
+        self.proposed_allocation
+            .private_committed_pages
+            .get(&page)
+            .copied()
+    }
+
+    pub fn creates_reservation(&self) -> bool {
+        self.original_allocation.is_none()
+    }
 }
 
 impl Clone for MemorySystem {
@@ -381,6 +434,7 @@ impl Clone for MemorySystem {
             heaps: self.heaps.clone(),
             allocations: self.allocations.clone(),
             virtual_allocations: self.virtual_allocations.clone(),
+            pending_private_holes: self.pending_private_holes.clone(),
             stable_private_pages: self
                 .stable_private_pages
                 .iter()
@@ -416,6 +470,7 @@ impl Default for MemorySystem {
             heaps,
             allocations: BTreeMap::new(),
             virtual_allocations: BTreeMap::new(),
+            pending_private_holes: BTreeMap::new(),
             stable_private_pages: BTreeMap::new(),
             stable_private_slabs_seen: false,
         }
@@ -716,6 +771,250 @@ impl MemorySystem {
         ptr == 0 || (ptr >= POINTER_FLOOR && self.allocations.contains_key(&ptr))
     }
 
+    /// Prepare one private reservation or a commit within an existing private
+    /// reservation. No allocation or page becomes visible until the caller has
+    /// checked any required native mapping and calls `commit_prepared_private_vm`.
+    /// A failed new reservation consumes an owner-qualified VA hole and an
+    /// allocation incarnation, because native FFI may have partially mapped it.
+    pub fn prepare_private_vm(
+        &mut self,
+        owner: ProcessBirthKey,
+        source: VirtualAllocationSource,
+        address: u32,
+        size: u32,
+        allocation_type: u32,
+        protect: u32,
+    ) -> Option<PreparedPrivateVm> {
+        if !source.is_private()
+            || size == 0
+            || allocation_type & !(MEM_COMMIT | MEM_RESERVE) != 0
+            || !matches!(
+                protect & 0xff,
+                0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80
+            )
+            || protect & !0xff != 0
+        {
+            return None;
+        }
+
+        if allocation_type == MEM_COMMIT {
+            if address == 0 || address & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0 {
+                return None;
+            }
+            let end = address.checked_add(size)?;
+            let page_end = align_up(end, STABLE_PRIVATE_PAGE_SIZE as u32)?;
+            let original = self
+                .virtual_allocations_for(owner)
+                .find(|allocation| {
+                    allocation.backing == VirtualAllocationBacking::StablePrivateSlab
+                        && allocation.source == source
+                        && address >= allocation.base
+                        && allocation
+                            .base
+                            .checked_add(allocation.size)
+                            .is_some_and(|reservation_end| page_end <= reservation_end)
+                })?
+                .clone();
+            let mut proposed = original.clone();
+            let mut new_page_pins = Vec::new();
+            let mut page = address;
+            while page < page_end {
+                if let Some(existing_protect) = proposed.private_committed_pages.get(&page) {
+                    // A second commit does not silently change protection.
+                    if *existing_protect != protect {
+                        return None;
+                    }
+                } else {
+                    proposed.private_committed_pages.insert(page, protect);
+                    new_page_pins.push(StablePrivatePagePin {
+                        identity: PrivatePageIdentity {
+                            owner,
+                            allocation_base: proposed.base,
+                            allocation_incarnation: proposed.incarnation,
+                            page_base: page,
+                        },
+                        page: Rc::new(StablePrivatePage::zeroed()),
+                    });
+                }
+                page = page.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?;
+            }
+            proposed.allocation_type |= MEM_COMMIT;
+            return Some(PreparedPrivateVm {
+                owner,
+                result_ptr: address,
+                proposed_allocation: proposed,
+                original_allocation: Some(original),
+                expected_virtual_generation: self.virtual_generation,
+                new_page_pins,
+            });
+        }
+
+        if allocation_type != MEM_RESERVE && allocation_type != (MEM_RESERVE | MEM_COMMIT) {
+            return None;
+        }
+        let incarnation = self.next_virtual_incarnation;
+        let next_incarnation = incarnation.checked_add(1)?;
+        let reservation_size = if address == 0 {
+            align_up(size, VIRTUAL_ALIGN)?
+        } else {
+            let end = address.checked_add(size)?;
+            align_up(end, VIRTUAL_ALIGN)?.checked_sub(align_down(address, VIRTUAL_ALIGN))?
+        };
+        let base = if address == 0 {
+            let mut candidate = self
+                .next_virtual_ptr_by_owner
+                .get(&owner)
+                .copied()
+                .unwrap_or(VIRTUAL_PTR_BASE)
+                .max(VIRTUAL_PTR_BASE);
+            while self.private_vm_overlaps(owner, candidate, reservation_size) {
+                candidate = candidate.checked_add(VIRTUAL_ALIGN)?;
+            }
+            candidate
+        } else {
+            let candidate = align_down(address, VIRTUAL_ALIGN);
+            if self.private_vm_overlaps(owner, candidate, reservation_size) {
+                return None;
+            }
+            candidate
+        };
+        let reservation_end = base.checked_add(reservation_size)?;
+        let mut committed_pages = BTreeMap::new();
+        let mut new_page_pins = Vec::new();
+        if allocation_type & MEM_COMMIT != 0 {
+            let commit_start = if address == 0 {
+                base
+            } else {
+                align_down(address, STABLE_PRIVATE_PAGE_SIZE as u32)
+            };
+            let commit_end = align_up(
+                (if address == 0 { base } else { address }).checked_add(size)?,
+                STABLE_PRIVATE_PAGE_SIZE as u32,
+            )?;
+            if commit_end > reservation_end {
+                return None;
+            }
+            let mut page = commit_start;
+            while page < commit_end {
+                committed_pages.insert(page, protect);
+                new_page_pins.push(StablePrivatePagePin {
+                    identity: PrivatePageIdentity {
+                        owner,
+                        allocation_base: base,
+                        allocation_incarnation: incarnation,
+                        page_base: page,
+                    },
+                    page: Rc::new(StablePrivatePage::zeroed()),
+                });
+                page = page.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?;
+            }
+        }
+        let proposed_allocation = VirtualAllocation {
+            base,
+            size: reservation_size,
+            allocation_type,
+            protect,
+            initial_bytes: Vec::new(),
+            owner,
+            incarnation,
+            source,
+            backing: VirtualAllocationBacking::StablePrivateSlab,
+            private_committed_pages: committed_pages,
+        };
+        // The hole is installed only after every fallible preparation step.
+        // Clone copies the hole but never the detached token or its page pins.
+        self.pending_private_holes
+            .insert((owner, base), reservation_size);
+        self.next_virtual_incarnation = next_incarnation;
+        if address == 0 {
+            self.next_virtual_ptr_by_owner
+                .insert(owner, reservation_end);
+        }
+        Some(PreparedPrivateVm {
+            owner,
+            result_ptr: base,
+            proposed_allocation,
+            original_allocation: None,
+            expected_virtual_generation: self.virtual_generation,
+            new_page_pins,
+        })
+    }
+
+    /// Publish a fully prepared private VM change. The native caller must
+    /// already have checked every required map/protection operation; this
+    /// method never calls the engine or accepts a stale metadata generation.
+    pub fn commit_prepared_private_vm(&mut self, prepared: PreparedPrivateVm) -> Option<u32> {
+        let PreparedPrivateVm {
+            owner,
+            result_ptr,
+            proposed_allocation,
+            original_allocation,
+            expected_virtual_generation,
+            new_page_pins,
+        } = prepared;
+        if self.virtual_generation != expected_virtual_generation
+            || proposed_allocation.owner != owner
+            || proposed_allocation.backing != VirtualAllocationBacking::StablePrivateSlab
+            || !proposed_allocation.source.is_private()
+        {
+            return None;
+        }
+        let key = (owner, proposed_allocation.base);
+        match original_allocation.as_ref() {
+            Some(original) => {
+                if self.virtual_allocations.get(&key) != Some(original)
+                    || self.pending_private_holes.contains_key(&key)
+                    || proposed_allocation.incarnation != original.incarnation
+                    || proposed_allocation.size != original.size
+                    || proposed_allocation.source != original.source
+                {
+                    return None;
+                }
+            }
+            None => {
+                if self.pending_private_holes.get(&key) != Some(&proposed_allocation.size)
+                    || self.virtual_allocations.contains_key(&key)
+                {
+                    return None;
+                }
+            }
+        }
+        let expected_new_pages = proposed_allocation
+            .private_committed_pages
+            .keys()
+            .filter(|page| {
+                original_allocation
+                    .as_ref()
+                    .is_none_or(|original| !original.private_committed_pages.contains_key(page))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        if expected_new_pages.len() != new_page_pins.len() {
+            return None;
+        }
+        for (page, pin) in expected_new_pages.iter().zip(&new_page_pins) {
+            let identity = pin.identity;
+            if identity.owner != owner
+                || identity.allocation_base != proposed_allocation.base
+                || identity.allocation_incarnation != proposed_allocation.incarnation
+                || identity.page_base != *page
+                || self.stable_private_pages.contains_key(&identity)
+            {
+                return None;
+            }
+        }
+        for pin in new_page_pins {
+            self.stable_private_pages.insert(pin.identity, pin.page);
+        }
+        self.virtual_allocations.insert(key, proposed_allocation);
+        if original_allocation.is_none() {
+            self.pending_private_holes.remove(&key);
+        }
+        self.stable_private_slabs_seen = true;
+        self.bump_virtual_generation();
+        Some(result_ptr)
+    }
+
     pub fn virtual_alloc(
         &mut self,
         owner: ProcessBirthKey,
@@ -811,11 +1110,13 @@ impl MemorySystem {
         // for the requested committed 4-KiB pages. Build all page records
         // before publishing the allocation or advancing a cursor.
         let mut new_private_pages = Vec::new();
+        let mut committed_private_pages = BTreeMap::new();
         if backing == VirtualAllocationBacking::StablePrivateSlab {
             let committed_size = align_up(requested_size, STABLE_PRIVATE_PAGE_SIZE as u32)?;
             let end = base.checked_add(committed_size)?;
             let mut page_base = base;
             while page_base < end {
+                committed_private_pages.insert(page_base, protect);
                 new_private_pages.push((
                     PrivatePageIdentity {
                         owner,
@@ -845,6 +1146,7 @@ impl MemorySystem {
                 incarnation,
                 source,
                 backing,
+                private_committed_pages: committed_private_pages,
             },
         );
         if backing == VirtualAllocationBacking::StablePrivateSlab {
@@ -1194,11 +1496,32 @@ impl MemorySystem {
     }
 
     fn virtual_overlaps(&self, base: u32, size: u32) -> bool {
-        let end = base.saturating_add(size);
+        self.virtual_allocations
+            .values()
+            .any(|allocation| ranges_overlap(base, size, allocation.base, allocation.size))
+            || self
+                .pending_private_holes
+                .iter()
+                .any(|((_, other_base), other_size)| {
+                    ranges_overlap(base, size, *other_base, *other_size)
+                })
+    }
+
+    fn private_vm_overlaps(&self, owner: ProcessBirthKey, base: u32, size: u32) -> bool {
+        // A legacy nonprivate producer may still seed/copy by guest VA alone,
+        // so it remains a global collision until that family is migrated.
         self.virtual_allocations.values().any(|allocation| {
-            let other_end = allocation.base.saturating_add(allocation.size);
-            base < other_end && end > allocation.base
-        })
+            (allocation.owner == owner || !allocation.source.is_private())
+                && ranges_overlap(base, size, allocation.base, allocation.size)
+        }) || self
+            .pending_private_holes
+            .iter()
+            .any(|((other_owner, other_base), other_size)| {
+                *other_owner == owner && ranges_overlap(base, size, *other_base, *other_size)
+            })
+            || self.allocations.values().any(|allocation| {
+                ranges_overlap(base, size, allocation.ptr, allocation.actual_size)
+            })
     }
 
     fn bump_heap_generation(&mut self) {
@@ -1221,6 +1544,14 @@ fn sanitize_size(size: u32) -> Option<u32> {
 fn align_up(value: u32, alignment: u32) -> Option<u32> {
     let mask = alignment.checked_sub(1)?;
     value.checked_add(mask).map(|value| value & !mask)
+}
+
+fn ranges_overlap(base: u32, size: u32, other_base: u32, other_size: u32) -> bool {
+    let start = u64::from(base);
+    let end = start + u64::from(size);
+    let other_start = u64::from(other_base);
+    let other_end = other_start + u64::from(other_size);
+    start < other_end && other_start < end
 }
 
 fn align_down(value: u32, alignment: u32) -> u32 {
@@ -1653,6 +1984,183 @@ mod tests {
                 .unwrap()
                 .initial_bytes,
             [1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn prepared_private_reserve_then_commit_publishes_only_exact_pages() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let generation = memory.virtual_generation();
+        let reserve = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0,
+                0x3000,
+                MEM_RESERVE,
+                4,
+            )
+            .expect("reserve proposal");
+        let base = reserve.base();
+        assert_eq!(reserve.result_ptr(), base);
+        assert!(reserve.creates_reservation());
+        assert_eq!(reserve.allocation().size, VIRTUAL_ALIGN);
+        assert!(reserve.new_page_pins().is_empty());
+        assert!(reserve.allocation().private_committed_pages.is_empty());
+        assert_eq!(memory.virtual_generation(), generation);
+        assert!(memory.virtual_allocation(owner, base).is_none());
+        assert!(!memory.has_stable_private_slabs());
+        assert_eq!(memory.commit_prepared_private_vm(reserve), Some(base));
+        assert!(memory.has_stable_private_slabs());
+        assert!(memory.private_page_pin(owner, base).is_none());
+
+        let commit = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                base + 0x1000,
+                0x2000,
+                MEM_COMMIT,
+                4,
+            )
+            .expect("commit within reservation");
+        assert!(!commit.creates_reservation());
+        assert_eq!(commit.result_ptr(), base + 0x1000);
+        assert_eq!(commit.new_page_pins().len(), 2);
+        assert_eq!(commit.protection_for_page(base + 0x1000), Some(4));
+        assert_eq!(commit.protection_for_page(base), None);
+        assert!(memory.private_page_pin(owner, base + 0x1000).is_none());
+        assert_eq!(
+            memory.commit_prepared_private_vm(commit),
+            Some(base + 0x1000)
+        );
+        let allocation = memory.virtual_allocation(owner, base).unwrap();
+        assert_eq!(allocation.private_committed_pages.len(), 2);
+        assert_eq!(
+            allocation.private_committed_pages.get(&(base + 0x2000)),
+            Some(&4)
+        );
+        assert!(memory.private_page_pin(owner, base).is_none());
+        let pin = memory.private_page_pin(owner, base + 0x1000).unwrap();
+        let mut bytes = [0xff; 4];
+        pin.read_bytes(0, &mut bytes).unwrap();
+        assert_eq!(bytes, [0; 4]);
+    }
+
+    #[test]
+    fn prepared_private_abandonment_keeps_owner_hole_but_foreign_private_may_use_va() {
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        let parent = handles.process_birth_key(1).unwrap();
+        handles.create_process(2);
+        let child = handles.process_birth_key(2).unwrap();
+        let mut memory = MemorySystem::default();
+        let base = 0x5200_0000;
+        let abandoned = memory
+            .prepare_private_vm(
+                parent,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        assert_eq!(abandoned.base(), base);
+        assert!(memory.virtual_allocation(parent, base).is_none());
+        let clone = memory.clone();
+        drop(abandoned);
+        assert!(
+            memory
+                .prepare_private_vm(
+                    parent,
+                    VirtualAllocationSource::Private,
+                    base,
+                    0x1000,
+                    MEM_RESERVE,
+                    4
+                )
+                .is_none()
+        );
+        assert!(clone.pending_private_holes.contains_key(&(parent, base)));
+        let child_proposal = memory
+            .prepare_private_vm(
+                child,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .expect("a foreign private address space may use the same VA");
+        assert_eq!(
+            memory.commit_prepared_private_vm(child_proposal),
+            Some(base)
+        );
+        assert!(memory.virtual_allocation(parent, base).is_none());
+        assert!(memory.private_page_pin(child, base).is_some());
+        assert!(memory.private_page_pin(parent, base).is_none());
+        // Unmigrated legacy allocations still retain their global fence.
+        assert!(
+            memory
+                .virtual_alloc(
+                    parent,
+                    VirtualAllocationSource::FileViewLegacy,
+                    base,
+                    0x1000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    4,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn prepared_private_commit_rejects_stale_metadata_without_page_publication() {
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        let reserve = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0x5400_0000,
+                0x1000,
+                MEM_RESERVE,
+                4,
+            )
+            .unwrap();
+        let base = reserve.base();
+        assert_eq!(memory.commit_prepared_private_vm(reserve), Some(base));
+        let stale_commit = memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        assert_eq!(stale_commit.new_page_pins().len(), 1);
+        memory
+            .virtual_alloc(
+                owner,
+                VirtualAllocationSource::Private,
+                0x5500_0000,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        assert!(memory.commit_prepared_private_vm(stale_commit).is_none());
+        assert!(memory.private_page_pin(owner, base).is_none());
+        assert!(
+            memory
+                .virtual_allocation(owner, base)
+                .unwrap()
+                .private_committed_pages
+                .is_empty()
         );
     }
 
