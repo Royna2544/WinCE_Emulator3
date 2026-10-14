@@ -4,6 +4,20 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 CE WaitAny raw-error source slice
+
+- The raw `WaitForMultipleObjects` wrapper now preserves the kernel's
+  `WAIT_FAILED` last-error classification instead of overwriting it with
+  `ERROR_INVALID_HANDLE`. Its public invalid-parameter forms were already
+  prechecked, so that overwrite was latent for currently reachable calls.
+  A CE6-source-backed raw control covers `fWaitAll`, bad pointers, invalid and
+  closed handles, zero-timeout polling, and ordered WaitAny selection. The
+  bounded source gate passed no-feature 1,391/0/3 ignored and release
+  Unicorn/trace/desktop 1,875/0/9 ignored; the desktop no-trace check passed
+  ([receipt](evidence/stage3-wait-20261015/validation.receipt.md)). This does
+  not establish native or CE caller wait/timeout parity, Stage 3 completion,
+  or live-app acceptance.
+
 ## 2026-10-15 Stage 3 O-K3 execution and wait pins source slice
 
 - Canonical Thread/Process task records now retain execution-live state after
