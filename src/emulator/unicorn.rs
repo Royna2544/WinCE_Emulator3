@@ -56898,7 +56898,10 @@ mod unicorn_tests {
             },
         );
         setup.result?;
-        assert_eq!(setup.report.final_outcome(), super::NativeSliceOutcome::RequestedPcStop);
+        assert_eq!(
+            setup.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
         assert_eq!(active.saved_context_pc(), Some(jump_pc));
         assert_eq!(
             active.last_debug_snapshot().expect("setup snapshot").t9,
@@ -56914,8 +56917,14 @@ mod unicorn_tests {
             "setup must not dispatch the import"
         );
 
-        let launch = kernel.queue_process_launch(Some("\\Test\\e34-visible-peer.exe".to_owned()), None);
-        assert!(kernel.take_pending_process_launches().iter().any(|queued| queued.process_id == launch.process_id));
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\e34-visible-peer.exe".to_owned()), None);
+        assert!(
+            kernel
+                .take_pending_process_launches()
+                .iter()
+                .any(|queued| queued.process_id == launch.process_id)
+        );
         let peer_state = crate::ce::kernel::CurrentProcessState {
             process_id: launch.process_id,
             exit_code: crate::ce::kernel::STILL_ACTIVE,
@@ -56942,20 +56951,22 @@ mod unicorn_tests {
             pc: peer.entry.expect("peer entry"),
             regs: peer_regs,
         });
-        active.parked_child_processes.push_back(super::ParkedProcess {
-            application: launch.application.clone(),
-            process_handle: Some(launch.process_handle),
-            thread_handle: Some(launch.thread_handle),
-            process_state: peer_state,
-            thread_id: launch.thread_id,
-            cpu: Box::new(peer),
-            blocked_send_id: None,
-            module_base: 0x0040_0000,
-            module_path: "\\Test\\e34-visible-peer.exe".to_owned(),
-            module_host_path: std::path::PathBuf::from("e34-visible-peer.exe"),
-            command_line: String::new(),
-            current_directory: None,
-        });
+        active
+            .parked_child_processes
+            .push_back(super::ParkedProcess {
+                application: launch.application.clone(),
+                process_handle: Some(launch.process_handle),
+                thread_handle: Some(launch.thread_handle),
+                process_state: peer_state,
+                thread_id: launch.thread_id,
+                cpu: Box::new(peer),
+                blocked_send_id: None,
+                module_base: 0x0040_0000,
+                module_path: "\\Test\\e34-visible-peer.exe".to_owned(),
+                module_host_path: std::path::PathBuf::from("e34-visible-peer.exe"),
+                command_line: String::new(),
+                current_directory: None,
+            });
         assert!(active.active_should_yield_to_visible_parked_process(&kernel));
         let probe = Rc::new(std::cell::Cell::new(NativeMixedJrStopProbe {
             jr_pc,
@@ -56996,10 +57007,16 @@ mod unicorn_tests {
             &AttemptObservation::Value(true),
             "Unicorn's own timer must expire during this native attempt"
         );
-        assert_eq!(report.hook_stop_reason(), Some(NativeHookStopReason::VisibleParkedPeerYield));
+        assert_eq!(
+            report.hook_stop_reason(),
+            Some(NativeHookStopReason::VisibleParkedPeerYield)
+        );
         assert_eq!(report.requested_pc_stop(), None);
         assert_eq!(report.raw_stop_pc(), &AttemptObservation::Value(jr_pc));
-        assert_eq!(report.final_outcome(), super::NativeSliceOutcome::NativeDeadline);
+        assert_eq!(
+            report.final_outcome(),
+            super::NativeSliceOutcome::NativeDeadline
+        );
         assert_eq!(kernel.current_process_id(), launch.process_id);
         let outgoing = active
             .parked_child_processes
@@ -57007,22 +57024,38 @@ mod unicorn_tests {
             .find(|process| process.process_state.process_id == parent_state.process_id)
             .expect("outgoing parent is parked after real native handoff");
         let snapshot = outgoing.cpu.last_debug_snapshot().expect("parent snapshot");
-        let saved_pc = outgoing.cpu.saved_context_pc().expect("parent continuation");
-        let native = outgoing.cpu.native_engine.lease().expect("parent native owner");
+        let saved_pc = outgoing
+            .cpu
+            .saved_context_pc()
+            .expect("parent continuation");
+        let native = outgoing
+            .cpu
+            .native_engine
+            .lease()
+            .expect("parent native owner");
         let native_pc = native.reg_read(RegisterMIPS::PC).expect("native PC") as u32;
         native.finish().expect("finish parent inspection lease");
         eprintln!(
             "E34 mixed JR: raw={:?} saved=0x{saved_pc:08x} native=0x{native_pc:08x} snapshot=0x{:08x} marker={} outcome={:?}",
-            report.raw_stop_pc(), snapshot.pc, snapshot.host_wall_clock_stop.is_some(), report.final_outcome()
+            report.raw_stop_pc(),
+            snapshot.pc,
+            snapshot.host_wall_clock_stop.is_some(),
+            report.final_outcome()
         );
         assert!(
             snapshot.host_wall_clock_stop.is_none(),
             "a checked typed peer yield cannot acquire the deadline-only debug marker"
         );
-        assert_eq!(saved_pc, jr_pc, "the checked JR continuation must not be rewritten");
+        assert_eq!(
+            saved_pc, jr_pc,
+            "the checked JR continuation must not be rewritten"
+        );
         assert_eq!(native_pc, jr_pc);
         assert_eq!(snapshot.pc, jr_pc);
-        assert!(snapshot.import_counts.is_empty(), "the import must not dispatch before resume");
+        assert!(
+            snapshot.import_counts.is_empty(),
+            "the import must not dispatch before resume"
+        );
 
         // The slice-end handoff selected the peer; explicitly return to the
         // parked parent before testing the saved raw JR continuation.
@@ -57040,7 +57073,10 @@ mod unicorn_tests {
             },
         );
         resumed.result?;
-        assert_eq!(resumed.report.start_process_id(), Some(parent_state.process_id));
+        assert_eq!(
+            resumed.report.start_process_id(),
+            Some(parent_state.process_id)
+        );
         let resumed_parent = if kernel.current_process_id() == parent_state.process_id {
             &active
         } else {
@@ -57057,7 +57093,9 @@ mod unicorn_tests {
                 .expect("resumed parent snapshot")
                 .import_counts
                 .iter()
-                .any(|count| count.ordinal == Some(crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT) && count.count == 1),
+                .any(|count| count.ordinal
+                    == Some(crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT)
+                    && count.count == 1),
             "resuming the protected JR must dispatch exactly one real GetTickCount import"
         );
         Ok(())
