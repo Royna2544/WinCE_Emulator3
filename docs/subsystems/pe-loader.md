@@ -28,9 +28,10 @@ writes. `eligible_immutable_image_pages` chooses only complete pages inside
 one readable, non-writable section; headers, mixed/partial pages and IAT thunk
 pages stay copy-backed. Trampoline stub tails beyond `SizeOfImage` are not
 eligible. Adjacent eligible pages with the same R or RX guest protection
-become one sealed run. This slice covers the main EXE only: preloaded and
-runtime DLLs, trap pages, mutable image pages, heap and stack remain
-copy-backed. The fallback image runs remain RWX, so this change does not
+become one sealed run. This E-43 slice covers the main EXE only: preloaded and
+runtime DLLs, trap pages and mutable image pages remain copy-backed; at E-43
+the initial heap and stack were copy-backed too, before E-44's separate fixed-
+slab source gate. The fallback image runs remain RWX, so this change does not
 assert a complete PE protection model.
 
 `SealedImageBytes` and `BlobBytes` in
@@ -98,6 +99,16 @@ write/readback, with 33.246 ms fresh and 37.971 ms reused setup. It is one
 debug synthetic pre-heap/stack-slab baseline, without a same-source RWX
 control or any app-speed inference.
 
+E-44's fixed initial heap/stack slabs leave the sealed main-image policy
+unchanged. The post-slab synthetic RX release and debug controls both pass
+1/0 with **77,824 B** owned blob capacity, fresh blob writes and fresh/reused
+readback, versus **21,049,344 B** in the pre-slab debug control: an exact
+**20,971,520-B (20-MiB)** logical blob-byte reduction. The post-slab debug
+fresh/reused setup samples are 16.740/25.249 ms versus prior 33.246/37.971
+ms; single samples and fixed-slab reservation outside the timed setup section
+do not establish a speed or host-RSS gain
+([E-44 receipt](../../evidence/heap-stack-20261014/validation.receipt.md)).
+
 A read-only production-loader pass over the actual iNavi EXE and seven DLLs
 now seals **1,379 of 2,168** total image pages, all **1,379 of 1,379**
 non-writable-section candidates: **5,648,384 B (5.386719 MiB)**
@@ -110,7 +121,7 @@ coverage. The probe constructed only an owner-side
 memory/blob plan; it did not create a native CPU, execute guest instructions,
 or launch iNavi.
 
-The same load-only probe accounts for one initial owner's **26 mapped blobs,
+The E-43 load-only probe accounted for one initial owner's **26 mapped blobs,
 36,679,680 B (34.980469 MiB)**. That includes the 16-MiB `ram:ce-heap-arena`
 and 4-MiB `ram:guest-stack` backing, seven preloaded DLL images and their
 trampolines, the main image runs, and small trap/KData blobs. The main image
@@ -123,7 +134,8 @@ setup-time, or frame-rate improvement is claimed from this load-only result.
 
 ROM/XIP physical-budget treatment and `GlobalMemoryStatus` accounting are
 undecided. A guest protection fault is still a native error, not a CE access
-violation. Dynamic DLLs, writable image/heap pages, CE exception translation,
+violation. Dynamic DLLs, writable image and heap-spillover pages, CE exception
+translation,
 the exhaustive direct native-write inventory and matched iNavi boot/frame
 timing remain open; another writable-mount iNavi run requires fresh approval
 and adjacent backups.

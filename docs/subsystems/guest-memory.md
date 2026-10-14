@@ -143,9 +143,9 @@ documents default `SEC_COMMIT` for the whole section. At D-008, the next
 Stage 2 backing slice was immutable PE image pages, not a demand-zero file
 view; E-43 later source-gated the final-byte sealed main-image family.
 
-### E-44 fixed initial heap/stack slab integration (gate pending)
+### E-44 fixed initial heap/stack slab source gate
 
-The in-progress source reserves the initial 16-MiB `ProcessHeapArena` and
+The source reserves the initial 16-MiB `ProcessHeapArena` and
 4-MiB `ThreadStack` as owner-qualified fixed ranges in `virtual_allocations`.
 The production native mapper no longer creates `ram:ce-heap-arena` and
 `ram:guest-stack` blobs. Heap pages commit at allocation; stack pages commit
@@ -154,11 +154,14 @@ owner/unmap lifetime, so logical decommit alone cannot release their budget.
 Queued payload delivery uses the prepared heap path and rejects other fixed-
 slab overlap instead of writing an unrelated persisted blob.
 
-This is an implementation inventory, not a frozen-source gate or live app
-result. Integrated clone/ownership, native host-write, readback, accounting
-and broad-suite checks are pending. The audited startup exact-output families
-(registry, time, geometry, find-data and module/path) route through guarded
-hooks with whole-span preflight. Unconverted direct-import outputs can still
+On the formatted six-file source snapshot, the serial release
+`unicorn,trace,win32-desktop` all-target suite passed **1,785/0/17 ignored**
+across 17 result blocks, paired debug no-feature passed **1,321/0/13
+ignored** across 17, and the debug no-trace Unicorn/desktop check passed.
+This is a **source-bound** gate, not live app acceptance. The audited startup
+exact-output families (registry, time, geometry, find-data and module/path)
+route through guarded hooks with whole-span preflight. Unconverted direct-
+import outputs can still
 fail closed on a cold, untouched stack page; the shared sparse `ThreadStack`
 has no per-thread/slot low-water state. Only if an approved live run reaches
 that bypass should a per-thread/slot 128-KiB committed low-water be considered,
@@ -168,16 +171,19 @@ authority before Stage 3. Heap spillover remains copy-backed; writable image
 sections and DLLs are separate later ownership slices. No E-44 iNavi, host
 RSS, speed or map-readiness result exists.
 
-Two bounded controls now pass without closing that gate. A release synthetic
+Additional bounded controls passed under that source gate. A release synthetic
 56-MiB sealed-RX setup profile passed 1/1 with 77,824 B owned blob capacity,
 fresh blob writes and fresh/reused readback, compared with 21,049,344 B for
 those fields in the E-43 pre-slab debug control: 20,971,520 B (20 MiB) fewer
 logical blob bytes. Slab reservation lies outside the timed setup section;
-single samples in different build modes cannot support a speed or RSS claim.
+cross-mode single samples cannot support a speed or RSS claim.
 An exact-path blocked serial/NMEA control passed 1/1 after writing two
 untouched stack pages and surviving a fresh native owner. It does not
-independently prove stale different-birth rejection. The frozen-source full
-gates are still pending ([provisional receipt](../../evidence/heap-stack-20261014/validation.receipt.md)).
+independently prove stale different-birth rejection. A same-mode post-slab
+debug profile also passed 1/1 with the same 77,824-B fields; its fresh/reused
+setup samples were 16.740/25.249 ms versus old debug 33.246/37.971 ms, but
+one sample each and out-of-timer slab reservation prohibit a speed claim
+([E-44 receipt](../../evidence/heap-stack-20261014/validation.receipt.md)).
 
 ## Target authority and permitted interfaces
 
@@ -337,10 +343,10 @@ fault repair and outgoing readback remain checked, closed-handle live views
 retain their canonical page, and a foreign public view never overwrites
 private RAM at the same VA. A raw adapter's copied aliases are a separate
 boundary: failed propagation may leave canonical and prior guest-byte
-  effects, which must be reported rather than rolled back by assertion. These
-  requirements, full clone relineage, E-44 initial heap/stack validation and
-  remaining writable image, DLL and spillover migration keep O-M1 and Stage 2
-  open after the D008 source gate.
+effects, which must be reported rather than rolled back by assertion. These
+requirements, full clone relineage, and remaining writable image, DLL and
+spillover migration keep O-M1 and Stage 2 open after the D008 and E-44
+source gates.
 
 ## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
@@ -353,11 +359,11 @@ the selected native engine with `mem_map_ptr`. An `AddressSpace` owns private
 slabs and its view records; a canonical VM/file-mapping object owns shared
 slabs referenced by all corresponding views, including closed-handle live
 views. Ordinary private pages do not use per-slice `initial_bytes` copy-in or
-  copy-back after migration. Public views now use stable shared pages. At this
-  O-M1 decision, legacy DIB/injected views and image/heap blobs retained copy
-  boundaries; E-43 later sealed the final-byte main-image R/RX family, and
-  E-44 initial heap/stack slabs are under validation. Do not silently mix both
-  authorities for one backing.
+copy-back after migration. Public views now use stable shared pages. At this
+O-M1 decision, legacy DIB/injected views and image/heap blobs retained copy
+boundaries; E-43 later sealed the final-byte main-image R/RX family, and
+E-44 later source-gated initial heap/stack slabs. Do not silently mix both
+authorities for one backing.
 
 This choice is supported, not proved in production, by the explicitly selected
 ignored `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner`
@@ -541,8 +547,8 @@ A D008 live-app run has not occurred. The remaining connected gates are:
    checked lazy faults, raw-adapter partial-effect controls and foreign
    private/view collision. The focused same-file named-reopen, same-slice alias,
    DIB transition and low-budget controls must stay green. E-43 sealed the
-   final-byte main-image R/RX family; E-44 initial heap/stack slabs are under
-   validation. Migrate the remaining copy-backed spillover, writable image
+   final-byte main-image R/RX family; E-44 source-gated the initial heap/stack
+   slabs. Migrate the remaining copy-backed spillover, writable image
    and DLL families without leaving a second writable copy for any migrated
    family. Resolve O-M2 heap ownership before Stage 3.
 4. Treat O-P4's fresh-default code/test result as complete only for its

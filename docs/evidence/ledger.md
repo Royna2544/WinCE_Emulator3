@@ -1474,6 +1474,43 @@ and limits. No new iNavi launch, app speed/footprint result, map readiness,
 `PrivatePageBudget` decision, or full Stage 2 acceptance is claimed; the E-38
 single-run approval is spent.
 
+## E-44 Fixed initial heap/stack slab source gate (2026-10-14, executed)
+
+The initial 16-MiB heap arena and 4-MiB guest stack now reserve owner-qualified
+fixed ranges in `virtual_allocations`, with heap commit at allocation and
+stack commit on native fault rather than 20 MiB of initial `ram:` owner blobs.
+Native pins retain committed pages through checked owner/unmap closure;
+queued payloads use checked heap delivery and reject unrelated fixed-slab
+overlap. Audited registry, time, geometry, find-data and module/path startup
+outputs have guarded whole-span preflight. Unconverted direct-import outputs
+can still fail closed on an untouched stack page.
+
+On the formatted six-file source snapshot (`memory.rs` SHA-256
+`9907CE18…CEF2A7`, `kernel.rs` `B48C703A…948A09`, `coredll.rs`
+`72870167…49A2E4`, `crt.rs` `E625FDAF…A20073`, `pe_loader.rs`
+`ED5D78E2…0F6284`, `unicorn.rs` `D883EEB2…20B084`), serial release
+`unicorn,trace,win32-desktop` all targets passed **1,785/0/17 ignored** across
+17 blocks (16 nonempty); paired debug no-feature passed **1,321/0/13 ignored**
+across 17 (14 nonempty). The debug Unicorn/desktop no-trace check passed.
+The first release attempt stopped at **803/28/4**: 24 fixture assumptions
+(21 old heap-base scratch/view, two stack blob seeds, one budget) and four
+wait fixtures missing birth context. Focused 24/0 and 4/0 exact reruns passed;
+production guards were not weakened. A later COREDLL test-only formatting
+change required the final paired broad reruns. The [E-44 receipt](../../evidence/heap-stack-20261014/validation.receipt.md)
+pins full source/log hashes and diagnostic lineage.
+
+An exact blocked serial/NMEA path test passed 1/0 across two untouched stack
+pages and a fresh owner, but did not independently test stale different-birth
+rejection. Synthetic 56-MiB sealed-RX post-slab release and debug controls
+each passed 1/0; owned blob capacity, fresh writes and fresh/reused readback
+were **77,824 B** versus the E-43 pre-slab debug **21,049,344 B**, an exact
+**20,971,520-B (20-MiB)** logical reduction. Same-mode debug fresh/reused
+setup samples were 16.740/25.249 ms versus prior 33.246/37.971 ms, but one
+sample each and slab reservation outside the timer preclude a speed claim.
+No E-44 live iNavi run, writable-mount write, host RSS, map readiness or
+full Stage 2 acceptance follows. O-M2 global heap metadata, spillover,
+writable image/DLL backing and pin-budget lifetime remain separate work.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
