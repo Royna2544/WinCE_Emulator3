@@ -54,14 +54,18 @@ same rotation policy. E-29 was a pre-fix, splash-only bounded app run.
 
 - [unicorn.rs](../../src/emulator/unicorn.rs) combines CPU execution, hooks, imports,
   callback frames, blocked/suspended records, process parking, snapshots and handoff.
-- [native_engine.rs](../../src/emulator/native_engine.rs) is the quarantined persistent
-  engine experiment; [cpu_mips.rs](../../src/emulator/cpu_mips.rs) supplies MIPS helpers.
+- [native_engine.rs](../../src/emulator/native_engine.rs) now selects a fresh
+  owner per slice by default; persistent reuse is an explicit Stage 8 opt-in.
+  [cpu_mips.rs](../../src/emulator/cpu_mips.rs) supplies MIPS helpers.
 - [types.rs](../../src/emulator/types.rs), [stub.rs](../../src/emulator/stub.rs) and
   [main.rs](../../src/main.rs) expose snapshots, feature fallback and orchestration.
 - The BED2 live baseline builds a fresh native engine per slice. Experimental
   build 650 retains a process-owned engine with a run-scoped `from_handle` hook
   lease and ledger; its normal live run failed at 129.108 s ([ledger E-2](../evidence/ledger.md))
   and it is deferred to Stage 8 ([D-003](../DECISIONS.md)). It is not a safe baseline.
+  O-P4's later fresh-default source passed its code/test gate
+  ([receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md));
+  it has no bounded application result yet.
 - Phase 0 hot path (ledger E-9): the scheduler block hook polls only at amortized
   service points, hookless trampoline mode is the default, and `ce.slice_profile`
   logs guest instructions and MIPS per slice. Slice length is still bounded by the
@@ -100,21 +104,28 @@ same rotation policy. E-29 was a pre-fix, splash-only bounded app run.
 - Cloned checkpoints have independent native mutable owners and RAM. Only immutable
   CPU snapshot payloads may be shared; never shallow-clone the binding's native `Rc`.
 - Run-local callbacks may borrow kernel/framebuffer/blob data only through a bounded
-  lease. Track every hook; delete before freeing captures, parking reuse or return.
-- Native deletion failure poisons/closes the owner. An incomplete mapping ledger or
-  early failure cannot become reusable state through a destructor's implicit success.
+  lease. On the fresh path, close the owning native engine before releasing the
+  nonowning wrapper, callback boxes or backing pins; do not delete individual
+  hooks first. A persistent reusable owner has a separate hook-removal boundary.
+- An incomplete mapping ledger or early failure cannot become reusable state
+  through a destructor's implicit success. The fresh close proof is tied to
+  the pinned vendored C source, not a generic checked-close API; if that source
+  or linkage changes, re-audit before accepting the lifetime.
 
-For O-P4's proposed fresh-default policy, a successful slice may retain only
-validated transferable CPU state after hook removal and owner close. The
-engine-specific blank Context and native mapping ledger must be discarded; a
-fresh engine starts with `reused == false` and newly derived mappings. The
-current native-owner clone control restores a Context while its source owner
-is still alive, so cross-engine restore **after source-owner closure** remains
-an unexecuted Stage 2 gate. Preserve full FPU/HI/LO/branch state or fail the
-attempt; GPR-only fallback does not establish continuation correctness. The
-read-only [O-P4 source audit](../evidence/ledger.md#chat-project-validation-notes-not-in-this-repository)
-lists the exact paths and bounded controls. Persistent reuse remains Stage 8
-opt-in, never a prerequisite for Stages 2–6.
+O-P4 now gives each default lease a fresh owning engine (`reused == false`)
+and newly derived maps. After successful CPU capture and native/map checks,
+the owning wrapper closes while the nonowning run wrapper, callback boxes and
+pointer pins remain live; only then are callbacks and pins released. The
+engine-specific blank Context and native map ledger are discarded. Only the
+exact-key CPU-only snapshot carries to the next owner. The pinned vendored
+Unicorn 2.1.5 `uc_close` source has only successful exits; this source-specific
+teardown proof does **not** create a general checked-close API. The formerly
+ignored closed-owner Context/store test and 200-slice pin control are green
+on frozen source, including FPU/HI/LO and instruction-boundary continuation
+([O-P4 receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
+Persistent reuse remains an explicit `WINCE_EMU_PERSISTENT_NATIVE_ENGINE=1`
+Stage 8 opt-in, never a prerequisite for Stages 2–6. Broader native branch,
+cross-task/frame and live-app behavior retain their own gates.
 
 E25 made the separate, test-only E-18 slab/fresh-owner private-byte control
 green on the corrected source
@@ -122,8 +133,9 @@ green on the corrected source
 At that checkpoint public `VirtualAlloc` still used `LegacySeed`. E35 later
 validated public private slabs and the fresh-native-owner ordinal
 ([E35 receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)).
-Neither gate exercises the closed-owner exact-key Context transfer above or
-establishes checked native `uc_close`/hook teardown, so O-P4 remains open.
+Neither earlier gate exercised closed-owner exact-key Context transfer; O-P4
+subsequently did so under the pinned-source teardown proof above. No native
+A→B→A same-VA or shared-view acceptance follows.
 
 ## Dependencies and prohibitions
 
@@ -322,10 +334,10 @@ its separate frozen source):
   6. Give the other `emu_stop` sites (about 115 non-test calls: import
      traps, probes, PC stops) reasons over time, and count `UnknownNormalStop`
      in `ce.slice_profile` so its rate is visible.
-- Still open for O-P4: the in-repo red
+- O-P4 later turned the formerly ignored
   `native_context_survives_closed_owner_and_resumes_at_instruction_boundary`
-  (`native_engine.rs`, `#[ignore]`) turns green only when the fresh lifetime
-  is the default.
+  control into a default passing test with no test-only owner disposal; see
+  the [source-bound receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md).
 - **E-12 repaired-PC scalar fallback: focused fix, Stage 2 gate still open.**
   The pre-repair native context key used the PC/GPRs captured immediately after
   `emu_start`, while a post-run trampoline/import PC repair changed the scalar
@@ -389,11 +401,15 @@ its separate frozen source):
   not whole-run history. A host AV may precede the final profile publication entirely.
 - Account separately for native arena commitment, guest RAM/blob bytes and RSS/private
   memory. No cache or performance gain follows merely from same-handle reuse.
-- Stage 2 (fresh-engine lifetime): checked full native context capture/restore
-  after source-owner closure, fresh ledger reset and native byte round-trip,
-  exact stop/error classification, both branch outcomes, native fault paths,
-  all feature profiles and bounded live validation. These fresh-lifetime gates
-  are open; the persistent-owner controls do not close them.
+- Stage 2 (fresh-engine lifetime): O-P4 now passes source-bound closed-owner
+  Context, fresh ledger/pin reset, typed-stop and broad feature gates. E35
+  separately passes the public private-page family. Native two-process
+  A→B→A byte isolation, shared-view coherence, full Task/frame-qualified
+  continuation and failure gates, and bounded live validation remain open;
+  neither O-P4 nor the persistent-owner controls close Stage 2.
+- A future approved live run must report host memory peak, busy-slice MIPS
+  and fixed per-slice setup cost, phase-matched against BED2 E-1 and the
+  persistent E-22/E-27/E-29 runs; no footprint or speed claim exists yet.
 - Stage 4: migrate each complete enter/block/resume/return/exit family to real
   Task-owned contexts, with no wake/frame consumption before fallible transfer
   preflight. Genuine in-slice FPU wait→resume→exit remains staged and unexecuted.

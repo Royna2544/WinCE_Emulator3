@@ -18,6 +18,10 @@ architecture is implemented.
 - Decision [D-003](DECISIONS.md): Stages 3-6 run on the fresh-engine-per-slice
   lifetime. Persistent engines move to Stage 8, a later swap behind the CPU
   interface, so the native-arena investigation no longer gates the scheduler.
+- O-P4 now makes that fresh lifetime the source-bound default. Its frozen
+  release/no-feature suites, native closed-owner Context and 200-slice pin
+  controls passed ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
+  This is a code/test gate, not a bounded iNavi run or Stage 2 acceptance.
 - Phase 0 hot-path hygiene is done (E-9): amortized scheduler block hook,
   hookless trampoline default, per-slice guest-MIPS logging. It changed no
   scheduling policy; the 1M-instruction slice count is still the round-robin tick.
@@ -44,7 +48,7 @@ and the durable status files.
 | --- | --- | --- | --- |
 | 0 Recovery/evidence | Crash ledger, preserved 650/BED2, scoped cleanup manifest | Diagnostic-only probes/fixtures; no architecture policy change | Exact crash symbol/source recorded in the ledger; clean fallback intact |
 | 1 Common boundaries | Anchor + subsystem ownership/interface/error pages, dependency review | Named interfaces only when they replace actual consumers | No duplicate state authority; no unresolved identity/time semantics hidden in defaults |
-| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | Connected process-alias/private-page authority and checked native mapping/failure boundary first, then exact shared-view families and fresh-default owner policy | E-7 stop/error and the E-18 test-only slab/fresh-owner controls remain green; public same-VA private/view, stale-key clone, free/reuse, protect/decommit, failure and closed-owner Context controls pass; native errors hard-fail |
+| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | E35 private backing and O-P4 fresh-default owner landed; connect remaining cross-process/shared-view families and identity/failure boundaries | Keep E-7/E-18, E35 public private and O-P4 closed-owner Context/pin controls green; prove native A→B→A bytes, public shared views, full clone relineage and bounded live behavior before Stage 2 acceptance |
 | 3 Task/object authority | Extend the Stage 2 canonical process-birth directory with Task/object execution/alias/wait pins | Migrate task, alias and lifecycle consumers to that same authority; do not re-mint boot/child identities | Ledger E-8 reds turn green; alias coherence, durable PID/primary identity, close/exit/wait lifetime, independent checkpoint clones |
 | 4 Continuation ownership | Raw-native vs synthesized frames; nested callback/wait state | One complete continuation family, removing old duplicate authority | Native wait→callback→resume/exit, FPU/HI/LO/branch correctness, cancellation and debugger exactness |
 | 5 Outcomes and scheduler | Explicit count/yield/deadline/error, ready indexes, CE6 priorities/quantum | Replace false timeout inference and policy heuristics together | Native errors hard-fail, equal-priority RR, higher-priority preemption, blocked/suspended eligibility; no starvation |
@@ -67,26 +71,31 @@ source under a test-only opt-in
 E35 subsequently validated the public private `VirtualAlloc` family with
 owner-qualified backing and negative checkpoint guards
 ([receipt](../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)).
-This does not move the Stage 2 finish line or enable O-P4 fresh default.
+O-P4 then made a fresh native owner the default and passed its pinned-source
+close/pin/context code and test gate
+([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
+The pinned vendored C `uc_close` proof is not a general checked-close API.
 Unmigrated shared-view outgoing bytes, real native cross-process same-VA
-isolation, checked engine close and full machine checkpoint relineage retain
-their separate gates. Stage 3 extends, rather than recreates, the process
-birth authority.
+isolation, full machine checkpoint relineage, and live footprint/map readiness
+retain separate gates; Stage 2 is not complete. Stage 3 extends, rather than
+recreates, the process-birth authority.
 
 ### Parallel lanes (never gate a stage)
 
 - Native arena lane: E-33's one vendored Windows commit-tail arithmetic repair
   is the [D-009](DECISIONS.md) safety exception after a pristine-red native
-  control. Stop further arena investigation here. No arena-size, lifetime or
-  other production native changes precede Stage 8's design gate; E-33 is not
-  Stage 8 or app acceptance.
+  control. Stop further arena investigation here. No arena-size or
+  persistent-owner/cache production changes precede Stage 8's design gate. O-P4's
+  fresh-default Stage 2 migration is a separate executed gate, not Stage 8 or
+  app acceptance.
 - App evidence lane: bounded, read-only investigation of what iNavi waits on and
   what the helper-scheduling bimodality depends on. See
   [app-evidence-lane.md](app-evidence-lane.md).
 
-## Current controls, not yet acceptance
+## Current controls, not yet full-stage acceptance
 
-Executed controls are recorded in the ledger; none of them is a stage pass.
+Executed controls are recorded in the ledger and source-bound receipts; they
+close only their named gates, not Stage 2 or live acceptance.
 
 - Task/handle ownership: 13 controls, 1 pass, 12 expected failures (E-8,
   E-11), the red baseline for Stage 3. The added last-public-handle,
@@ -113,9 +122,14 @@ Executed controls are recorded in the ledger; none of them is a stage pass.
 - Native owner/arena: six Stage 0 owner controls, the pre-init budget
   differential and the commit-tail repair controls (E-4 to E-6) are isolated and
   diagnostic; they feed Stage 8 only.
-- Full-backend mapping/context: one synthetic page/owner control passed twice
-  (E-7); it is not Kernel `VirtualAlloc`, FlatView, cross-task context or an
-  application gate.
+- Fresh native owner (O-P4): the default now closes after each slice while
+  `WINCE_EMU_PERSISTENT_NATIVE_ENGINE=1` preserves the Stage 8 experiment.
+  Closed-owner exact-key FPU/HI/LO/MIPS continuation, a 200-slice pointer-map
+  and pin churn, finish-failure, typed stops and broad feature suites passed
+  on frozen source ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
+  The source-specific vendored `uc_close` proof does not establish a generic
+  checked-close API, cross-task context, shared-view coherence, native
+  A→B→A isolation or application readiness.
 
 ## Integration discipline
 
@@ -137,6 +151,12 @@ Executed controls are recorded in the ledger; none of them is a stage pass.
 - Observe before launch with explicit capture clocks; keep terminal coverage
   after approval/setup gaps. Root owns app/input/watchdog; analysis lanes read
   saved evidence. Stop only exact owned helpers after the target ends.
+- No writable-mount live run is authorized by O-P4's green suite. Obtain fresh
+  human approval and fresh adjacent ZIP backups of the original SD,
+  ResidentFlash and emulator-root mounts before one bounded run. Compare its
+  host memory peak, busy-slice MIPS and fixed per-slice setup cost with the
+  phase-matched BED2 E-1 and persistent E-22/E-27/E-29 evidence; do not infer
+  a win from a single splash or different boot phase.
 - Report completed attempts, actual native outcomes, guest instructions/busy
   MIPS, input consumption and epoch-labelled frames. Compare several matched
   phases; no single milestone or truncated crash run proves a speed gain.

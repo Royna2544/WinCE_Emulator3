@@ -1,10 +1,12 @@
-# O-P4 fresh-default native-owner gate (2026-10-14; design, unrun)
+# O-P4 fresh-default native-owner gate (2026-10-14; executed)
 
-This is a source-bound Stage 2 gate, not an executed result or permission for a
-live iNavi run. It follows [D-003](../DECISIONS.md) and the common
+The frozen-source O-P4 gate passed; it is not full Stage 2 acceptance or
+permission for a live iNavi run. The exact commands, hashes and limits are in
+the [validation receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md).
+It follows [D-003](../DECISIONS.md) and the common
 [CPU/VM anchor](../ARCHITECTURE.md): VM owns guest bytes; a native engine only
-maps them for one checked run lease. Fresh-per-slice becomes the default after
-the connected public private-page gate E-35 is frozen and validated. Persistent
+maps them for one checked run lease. Fresh-per-slice is now the default after
+the validated public private-page gate E-35. Persistent
 process-owned engines remain an explicit Stage 8 experiment, not a fallback
 on fresh failure. The same policy must survive CPU clone and park/unpark.
 `WINCE_EMU_PERSISTENT_NATIVE_ENGINE=1` is the explicit experimental runtime
@@ -20,7 +22,9 @@ could link an unrelated installed Unicorn >= 2, and `dynamic_linkage` could
 load an unaudited same-named DLL at runtime, voiding the close proof even
 with exact crate versions. That system-library branch is removed and the
 optional dynamic feature is rejected at build time. The registry Rust wrapper
-remains pinned by the root manifest and lockfile. Source checks:
+  remains pinned by the root manifest and lockfile. The compiled vendor build
+  script was directly invoked with the dynamic-link feature set and rejected it
+  as intended; this was not a separate full Cargo dynamic-feature build. Source checks:
 
 - `vendor/unicorn-engine-sys/uc.c:497-574` has two `uc_close` exits. An
   uninitialized handle is freed and returns `UC_ERR_OK`; an initialized handle
@@ -55,21 +59,20 @@ gains an error path or the proof fails, stop this gate: a consuming
 checked-close API and owned callback-referent quarantine would need a
 separate design. The broader
 [guest-memory O-P4 plan](../subsystems/guest-memory.md) describes that general
-case and must be reconciled with this narrower source-bound exception when
-implementation lands.
+case; the current implementation uses this narrower source-bound exception.
 
 ## Owner, hook, mapping and snapshot transitions
 
-Current state: `ProcessNativeEngine` stores an owning hook-free `Unicorn` in a
-slot; each lease creates a separate nonowning `from_handle` wrapper, registers
-run-local hooks there, and carries the mapping ledger and `NativeMappingPins`
-(`src/emulator/native_engine.rs:163-390`). `finish` presently returns the owner
-and metadata to the slot. `abort_close` and slot drop quarantine pointer pins
-because ordinary wrapper drop has not been treated as proven closure
-(`native_engine.rs:115-161,558-619`). A CPU-only exact-key `Context` may be
-transferred; the engine-specific blank context and map ledger may not.
+`ProcessNativeEngine` now creates an owning hook-free `Unicorn` for each fresh
+lease; a separate nonowning `from_handle` wrapper registers run-local hooks and
+carries the mapping ledger and `NativeMappingPins`
+(`src/emulator/native_engine.rs:163-390`). Fresh `finish`, abort and unfinished
+lease drop close the owner before dropping callback boxes or pins. Only a
+CPU-only exact-key `Context` may transfer; the engine-specific blank context,
+native map ledger and pins do not. The old reusable-owner branch remains only
+behind the explicit persistent experimental opt-in.
 
-Proposed fresh-default transition:
+Implemented fresh-default transition:
 
 1. `lease()` creates a new owning engine on every attempt. Reuse is false;
    derive native maps from the selected process's current VM owner and live
@@ -92,16 +95,16 @@ Proposed fresh-default transition:
    successful continuation. A page whose `mem_unmap` fails remains pinned
    and charged until the enclosing native owner has actually closed.
 
-This ordering must be explicit in `NativeEngineLease::close` and `Drop`, not
+This ordering is explicit in `NativeEngineLease::close` and `Drop`, not
 inferred from Rust field-drop order. No raw handle or owning-wrapper clone may
 escape the lease. Keep the existing persistent-owner path behind an explicit
 opt-in for Stage 8; it may continue to require hook deletion before reuse,
 but its experimental safety is not established by this fresh-only gate.
 
-## Executable gates and evidence recipe
+## Executed controls and evidence
 
-After E-35's final source and tests are frozen, implement only this policy
-switch and the corresponding tests in the sole D: checkout:
+After E-35's final source and tests were frozen, this policy switch and its
+controls were implemented in the sole D: checkout. The gate criteria were:
 
 1. Turn the ignored E-7
    `native_context_survives_closed_owner_and_resumes_at_instruction_boundary`
@@ -129,8 +132,15 @@ switch and the corresponding tests in the sole D: checkout:
    exit codes and source/executable hashes outside `target/`; run formatting
    and diff checks. Only frozen-source green evidence can close O-P4.
 
-Write the executed result into the ledger, then trim stale TODO/known-bug
-claims; do not call a designed gate accepted. A bounded live iNavi run with
-the original RW mounts requires **fresh user approval and fresh adjacent ZIP
-backups**. Earlier single-run approvals were consumed. Do not infer a memory,
-speed, map-readiness or Stage 3 acceptance claim from these tests.
+The formerly ignored closed-owner control, 200-slice pin/map control, focused
+failure and private-byte controls passed. On frozen source, full release
+passed **1,730/0/14 ignored**, no-feature **1,292/0/13 ignored**; both no-trace
+checks and the release build exited 0. The receipt retains raw logs, exact
+source hashes and matching preserved EXE/PDB; [ledger E-36](ledger.md) records
+the result. A bounded live iNavi run with the original RW mounts requires
+**fresh human approval and fresh adjacent ZIP backups** of SD,
+ResidentFlash and emulator-root; earlier single-run approvals were consumed.
+That run must compare sampled host memory, busy-slice MIPS, fixed per-slice
+setup cost and guest/map progress with BED2 and persistent-owner runs. Do not
+infer memory, speed, map-readiness, Stage 3 or full Stage 2 acceptance from
+these source tests.

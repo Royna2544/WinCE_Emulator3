@@ -10,7 +10,8 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 - [pe_loader.rs](../../src/emulator/pe_loader.rs) creates mapped blobs. Native mapping,
   spillover, shared-view synchronization and byte adapters live in
   [unicorn.rs](../../src/emulator/unicorn.rs); [native_engine.rs](../../src/emulator/native_engine.rs)
-  is the quarantined owner/ledger experiment, not a replacement memory authority.
+  now uses a fresh native owner per slice by default and retains persistent
+  reuse only as a Stage 8 opt-in; it is not a replacement memory authority.
 - Checked guest-backed raw/native initial/reallocation paths establish bytes before
   publication; metadata-only helpers still exist. Logical zero reserves one physical byte.
 - Failed prepared candidates leave monotonic holes. Existing heap free does not prove
@@ -90,10 +91,12 @@ regression (726/1/3 ignored); after its narrow birth-precondition fix, the
 corrected source passed full release **1,664/0/4 ignored**, no-feature
 **1,258/0/2 ignored**, a no-trace Unicorn+desktop release check and final
 format check ([separate broad receipt](../../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
-Real native two-process A→B→A same-VA bytes, shared-view coherence, full
-machine checkpoint relineage, checked close/hook teardown and fresh-default
-remain open. E-25 by itself established no O-M1/O-P4, Stage 2 or live-app
-acceptance; E-35 closes only the later bounded public private-family gate.
+Real native two-process A→B→A same-VA bytes, shared-view coherence and full
+machine checkpoint relineage remain open. E-25 by itself established no
+O-M1/O-P4, Stage 2 or live-app acceptance; E-35 later closed the bounded
+public private-family gate, and O-P4 later passed its pinned-source fresh-owner
+teardown code/test gate
+([receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
 
 ## Target authority and permitted interfaces
 
@@ -127,13 +130,13 @@ acceptance; E-35 closes only the later bounded public private-family gate.
   discards that ledger, while a persistent lease may retain it only for the
   same owner. Process rotation cannot attach it to incoming RAM or treat it
   as canonical VM state.
-- On the proposed fresh-engine path, `KernelMemoryMappings` is rederived per
+- On the now-default fresh-engine path, `KernelMemoryMappings` is rederived per
   owner rather than carried across native-owner closure: old `virtual_pages`
   would otherwise request unmapping pages absent from the new engine. The
-  current copy-based families need checked byte synchronization before closing
+  remaining copy-based families need checked byte synchronization before closing
   the outgoing owner or rotating. Migrated private committed pages instead
-  retain one AddressSpace-owned backing, pinned through native mapping; a
-  fresh engine remaps that same backing without private-page readback.
+  retain one owner-qualified backing, pinned through native mapping; a fresh
+  engine remaps that same backing without private-page readback.
 - Reconcile exact current native map extents, removed pages, protections and runtime-added
   pages. Do not remap an existing region or retain a freed virtual page by omission.
 - Preserve canonical shared-view ordering and host edits to parked blob bytes. Same blob
@@ -225,12 +228,13 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
 - The isolated Stage 0 controls did not exercise production mapping
   reconciliation, subpage paths or the application workload.
 
-## O-M1 same-VA file-view design gate (proposed)
+## O-M1 same-VA file-view design gate (still open)
 
-The current kernel has one `MemorySystem` virtual-address cursor and a base-keyed
-allocation map (`src/ce/memory.rs:28-38,457-503`), so public `MapViewOfFile`
-cannot yet allocate the same VA in two processes. `FileMappingView` records a
-PID but not a durable view identity; handle-table lookup, flush and unmap use
+At the pre-E35 baseline the kernel had one virtual-address cursor and a
+base-keyed allocation map. E35 moved the public private-VM family to
+owner-qualified slab backing, but it did not establish public two-process
+same-VA `MapViewOfFile`. `FileMappingView` records a PID but not a durable view
+identity; handle-table lookup, flush and unmap use
 base alone (`src/ce/object.rs:175-194,690-744`). E-16 captures the selected
 process owner and exact live view for native seed/readback only; broader
 native mapping, fault repair, public view allocation and lifetime still lack
@@ -270,15 +274,16 @@ Separate controls must prove same-mapping alias visibility, flush and unmap
 while a mapping handle is closed but its view remains live, owner-specific
 `VirtualQueryEx`, and a foreign view not overwriting private RAM at the same VA.
 A fresh-owner two-slice guest-written private `VirtualAlloc` round-trip was an
-executed expected-red gate on the historical E-18/E-19 sources. E-25 passes
-the changed internal slab-opt-in shape; the public call still needs authoritative
-byte backing, which the E-16 view controls alone cannot establish.
+executed expected-red gate on the historical E-18/E-19 sources. E-25 passed
+the changed internal slab-opt-in shape; E35 subsequently validated the public
+private family on stable backing. Neither establishes shared-view coherence
+or native A→B→A isolation.
 
 ## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
-**Design selected; the internal E-25 diagnostic and bounded suites are green
-on corrected source, while public implementation and Stage 2 acceptance
-remain open.** Per anchor A4, each
+**Design selected; E35 validates the public private family, and O-P4 validates
+the pinned-source fresh-owner code/test gate; shared views and Stage 2
+acceptance remain open.** Per anchor A4, each
 migrated page has one writable byte authority: stable host backing mapped into
 the selected native engine with `mem_map_ptr`. An `AddressSpace` owns private
 slabs and its view records; a canonical VM/file-mapping object owns shared
@@ -345,10 +350,11 @@ that use and its failures before matching CE behavior in the emulator.
   backing pin. Acquire a non-moving pin before `mem_map_ptr`, install the
   in-slice ledger entry before guest entry, and keep a local pin after map
   success until checked unmap or owner close even if metadata commit fails.
-  Every early return takes a checked close path before its final pin drops;
-  Drop is only a fail-safe and cannot publish success. If closure cannot be
-  established, retain/quarantine the pin and latch a terminal backend error
-  instead of freeing host memory. Host
+  Every fresh early return closes its owner before final pins drop under the
+  pinned vendored 2.1.5 source proof; Drop is only a fail-safe and cannot
+  publish success. If a future source/linkage change makes closure uncertain,
+  retain/quarantine the pin and latch a terminal backend error instead of
+  freeing host memory. Host
   bytes need audited interior mutability and access guards; no live Rust byte
   slice or mutable reference may cross `emu_start`. A VA-only `virtual_pages`
   set or a source `Vec` pointer is not evidence of identity. Only the VM may
@@ -375,9 +381,10 @@ that use and its failures before matching CE behavior in the emulator.
   fail the attempt and close its owner before release; never publish a
   half-unmapped state. Fresh `finish()` discards the engine-specific blank
   Context and ledger after checked CPU capture, while preserving only a
-  proven transferable CPU snapshot. The existing manual-close fixture passes
-  intermediate Context checks but still fails its final default-policy
-  assertion; it is not O-P4 acceptance.
+  proven transferable CPU snapshot. O-P4's ordinary closed-owner Context
+  control and 200-slice mapped-pin churn passed on frozen source
+  ([receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md));
+  this is not shared-view or live-app acceptance.
 - Prepare and validate backing and metadata before pointer publication;
   validate a native map before active-guest access, or on the inactive owner's
   first native lease. If a pre-run map fails, abandon the candidate without
@@ -395,100 +402,79 @@ that use and its failures before matching CE behavior in the emulator.
   mutable slab is shared with the original. Image/heap and file-view copy
   paths remain explicit until their separate migration.
 - At slice completion, stage the CPU snapshot and all outgoing bytes from any
-  unmigrated copy-based family, check every sync and owner-close result, and
-  publish a successful continuation/VM state only after all checks pass. A
+  unmigrated copy-based family, check every sync and the source-bound owner
+  teardown preconditions, and publish a successful continuation/VM state only
+  after all checks pass. A
   failed sync poisons/closes that owner and forbids replay from an earlier
   `saved_context`; already-executed guest writes are not promised rollback or
   another full-RAM staging image.
 
-### O-P4 checked native close boundary (plan only; all tests unrun)
+### O-P4 source-bound fresh native owner (code/test gate passed)
 
-This refines the checked-close target above; it does not claim that the current
-diagnostic `NativeEngineLease::abort_close()` proves native closure. In
-`unicorn-engine` 2.1.5, `Unicorn::new` owns a private `Rc` inner object whose
-`Drop` discards the `uc_close` result. `get_handle()` does not transfer that
-ownership: calling raw `uc_close` on it and then allowing ordinary `Drop` would
-double-close. `Unicorn::from_handle` is nonowning, but its wrapper is clonable;
-the current lease's `Deref` surface also permits a wrapper alias to escape.
-Therefore the public/O-P4 path needs either a patched consuming checked-close
-API in the wrapper, or one unique, non-`Clone` raw `uc_engine` owner (opened
-with `uc_open`) with only scoped, nonescaping `from_handle` views. Proving no
-wrapper clone or raw-handle alias survives the close is part of that boundary,
-not an assumption. The E-25 internal diagnostic keeps pins conservatively
-quarantined when a discarded wrapper owner cannot prove native closure
-([design](../evidence/e25-private-slab-design.md)); that is not O-P4 acceptance.
+The earlier general checked-close plan was deliberately narrowed after
+auditing the exact statically linked vendored Unicorn 2.1.5 C source. Its
+`uc_close` has only `UC_ERR_OK` exits; the high-level Rust wrapper still
+discards the return from `uc_close`, so this is **not** a generic checked-close
+API. The root manifest pins the wrapper to `=2.1.5`; the vendored sys crate
+always builds the in-repo C and rejects `dynamic_linkage`. Any source, wrapper
+or linkage change requires re-auditing the close/hook proof before relying on
+it ([vendor patch notes](../../vendor/unicorn-engine-sys/PATCHES.md)).
 
-For a fresh close-only slice, finish CPU capture and byte sync, stop native
-execution, then call `uc_close` exactly once while the nonowning wrapper, hook
-callback `Box`es, backing pins, and their referents are still alive. Do not
-delete hooks first: the upstream `remove_hook` drops a callback `Box` before
-checking `uc_hook_del`, so failed deletion could leave native user data
-dangling. On verified `UC_ERR_OK`, retire the wrapper and callbacks before
-releasing backing pins, then publish success. On an error or uncertain close
-side effect, disarm the raw owner against retry/double-close, poison the lease,
-retain or quarantine the wrapper, callbacks, referents and pins to host-process
-exit, and forbid native reentry or successful continuation. If those referent
-lifetimes cannot be guaranteed, the raw-owner route is blocked. A future
-persistent-owner/reusable-hook path separately needs checked hook deletion that
-keeps each callback alive until native deletion succeeds.
+For a successful default fresh slice, the lease captures the exact-key
+CPU-only Context and checks mapping/byte synchronization before publication.
+On finish, abort or unfinished Drop, it closes the **owning** wrapper while
+the nonowning run wrapper, hook callback boxes and backing pins still live;
+only then does it release callbacks
+and pins. It does not call individual `remove_hook` first because the Rust
+wrapper drops the callback box before the C hook-deletion call. The engine's
+blank Context and map ledger never carry to the next fresh lease. A separate
+explicit `WINCE_EMU_PERSISTENT_NATIVE_ENGINE=1` path preserves the Stage 8
+experiment; reusable-hook teardown is not accepted by this fresh-only proof.
 
-Before enabling public backing or O-P4, executable controls must inject close
-failure both before and after a possible native side effect and prove one close
-attempt, no double-close, no alias escape, no premature callback/pin drop and
-no success publication. Cover setup abort, failed unmap, hook-deletion failure
-for any reusable owner, a guest-written slab read by a fresh owner, and
-repeated successful closes without retained pins. The current vendored
-`uc_close` normally returns `UC_ERR_OK`, so an explicit failure-injection seam
-is required; none of these gates has been run.
+The formerly ignored closed-owner Context/store control, 200 fresh MIPS slices
+with pointer-backed pages and checked unmap/owner closure, finish-failure pin
+ordering and broad release/feature suites passed on frozen source
+([O-P4 receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
+The receipt's failure seam is before publication, not evidence of a failing
+vendored-C `uc_close`. Public private backing is separately covered by E35.
+No live iNavi run, host-footprint comparison, native A→B→A isolation,
+shared-view coherence or full Stage 2 acceptance follows from this gate.
 
 ### Connected migration and executable gates
 
-An optional narrow first slab slice may make internal single-address-space
-E-18 green before public per-process VM is complete. It must carry checked VM
-owner/allocation incarnations, exact native pins and error paths, remove the
-private reseed path it replaces, and reject checkpoint clone of slab-backed
-state explicitly until machine-level relineage exists. This is a diagnostic
-milestone only: it cannot enable public same-VA/Ex semantics, fresh-default
-ownership or Stage 2 acceptance. A clean unsupported error is safer than a
-derived clone sharing mutable slab bytes.
+The optional E-25 internal slab milestone, E35 public private-family gate and
+O-P4 source-bound fresh-default code/test gate are executed, not still-proposed
+steps ([E35 receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md),
+[O-P4 receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
+They do not authorize shared-view, native two-process byte or live acceptance.
+The remaining connected gates are:
 
-1. Confirm the dumped target's allocation/API sequence against the local CE6
-   source distinction above. E-21 introduced the HandleTable-owned public
-   process-birth/alias directory; complete selected-state, lineage and
-   guest-visible exhaustion handling, then move private allocation
-   callers, owner-scoped cursors, incarnation and queries together; no unused
-   parallel registry or implicit PID-1 fallback. Inventory locale and file
-   views, Toolhelp snapshots, shared allocation and every public
-   VirtualAlloc/Free/Protect/Query and Ex caller before defaulting to Private.
-   Targeted Ex operations must resolve their process or fail closed; reserve-
-   only then commit, partial decommit/recommit and host/native permissions need
-   executable controls. One owner-scoped region/overlap directory must cover
-   private, image, heap, shared-view and native regions; an explicit VA that
-   overlaps another family fails before pointer publication, never silently
-   skips an already mapped native page. Add overlap, release/reallocate and
-   failed-publication controls before using identity for native mapping.
-   Replace independent checkpoint clones with one machine-level relineage;
-   prove original keys are rejected in the clone and clone-local aliases stay
-   shared with each other but not with the original.
-2. Migrate the private `VirtualAlloc` family in one change: stable committed
-   backing, exact pinned native page ledger, owner-qualified startup
-   reconciliation/map/fault/reclaim, checked failure latch, and removal of
-   that family's whole-`initial_bytes` reseed/copy path. No migrated private
-   page may reappear as native-owned `mem_map` RAM. Promote the isolated
-   pointer-map diagnostic to a normal native control. Turn E-18 green without
-   retaining the old engine; add
-   public COREDLL two-slice store/load, two-PID same-VA private isolation,
-   untouched/two-page writes, free/reallocate, decommit/protect, independent
-   clone and injected second-page map/identity failures. E-16 view regressions
-   must remain green. These tests, not this design record, prove the boundary.
+1. Complete the Stage 2/3 identity boundary around the E-21 process-birth
+   directory: selected-state, full machine checkpoint relineage and
+   guest-visible exhaustion handling. Keep private, image, heap, shared-view
+   and native overlap checks in one owner-qualified region authority; do not
+   infer ownership from selected PID or a bare VA. Inventory locale/file
+   views, Toolhelp snapshots, shared allocation and Ex export/targeting gaps.
+   A clone must reject source-machine keys and keep its own private bytes;
+   cloned shared aliases must agree with each other, not the original.
+2. Extend E35's passing private-family controls to real native two-process
+   A→B→A same-VA byte isolation, stale identity and second-page failure cases.
+   Preserve public reserve/commit/decommit/protect/query, fresh-owner store,
+   independent private-clone, pin-budget and 64-cycle checked-unmap controls;
+   no later change may reintroduce a second writable authority. E-16 native
+   view regressions must remain green.
 3. Migrate shared file views with stable mapping backing and exact view
    identities. Exercise public two-process same-VA distinct files, same-file
    aliases, closed-handle live views, flush/unmap, lazy faults and foreign
    private/view collision. Then migrate image/heap blobs without leaving a
    second writable copy for any migrated family.
-4. Only after private/shared bytes and exact closed-owner CPU Context pass,
-   select O-P4 fresh-per-slice as production default. Repeat focused, full
-   release, no-feature and alternate-feature suites, then bounded app runs.
+4. Treat O-P4's fresh-default code/test result as complete only for its
+   pinned-source boundary; persistent reuse stays an explicit Stage 8 opt-in.
+   A bounded read/write iNavi run requires **fresh human approval** and fresh
+   adjacent ZIP backups of the original SD, ResidentFlash and emulator-root
+   mount folders. Compare phase-matched host memory peak, busy-slice MIPS and
+   fixed per-slice setup cost with BED2 E-1 and persistent E-22/E-27/E-29;
+   no map readiness or speed/footprint gain is established by the suite.
    Keep the preserved BED2 fallback distinct from candidate builds.
 
 Measure reserved versus committed guest bytes, slab capacity, native map

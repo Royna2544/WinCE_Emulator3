@@ -29,11 +29,16 @@ native control. This does not explain the 650/E-32 crashes, validate a cache
 budget or accept any stage.
 
 Per [DECISIONS D-003](DECISIONS.md), the Task, object, outcome and clock work
-runs on the fresh-engine-per-slice target lifetime after the Stage 2 O-P4 gate;
-production currently retains an owner, so this native-lifetime investigation
-does not gate later scheduler design. Persistent engines are a later swap behind the
-CPU interface (plan Stage 8). Hot-path throughput facts (amortized block hook,
-hookless default, per-slice MIPS logging) are in ledger E-9.
+runs on a fresh-engine-per-slice lifetime. O-P4 now makes a new native owner
+the default for each slice under the pinned, statically linked vendored Unicorn
+2.1.5 teardown proof; its frozen-source code/test gate passed
+([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
+`WINCE_EMU_PERSISTENT_NATIVE_ENGINE=1` explicitly opts into the experimental
+process-owned path, which remains a later Stage 8 swap behind the CPU
+interface. Neither the O-P4 suite nor this lifetime choice establishes live
+iNavi, footprint/map readiness or full Stage 2 acceptance. Native arena work
+does not gate later scheduler design. Hot-path throughput facts (amortized
+block hook, hookless default, per-slice MIPS logging) are in ledger E-9.
 
 ## A1. Machine authority
 

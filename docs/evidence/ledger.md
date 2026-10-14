@@ -1230,6 +1230,42 @@ real native two-process A→B→A same-VA byte isolation, shared-view slab
 coherence and Stage 2 acceptance remain open. No iNavi run or writable-mount
 operation occurred.
 
+## E-36 O-P4 source-bound fresh-default native owner (2026-10-14, executed)
+
+`ProcessNativeEngine::new` now chooses one fresh owner per native slice;
+`WINCE_EMU_PERSISTENT_NATIVE_ENGINE=1` explicitly opts into the separate
+Stage 8 experiment. A fresh finish, abort or unfinished-lease drop closes the
+unique owning Unicorn wrapper while the nonowning run wrapper, callback boxes
+and pointer-backed pins remain alive, then releases them. It does not call
+individual `remove_hook` first. The pinned vendored Unicorn 2.1.5 C
+`uc_close` has only successful exits, and the patched sys crate statically
+builds that in-repo C. This is a source-specific closure proof, not a general
+checked-close API; dependency, linkage or vendored-source changes require
+reaudit. No closed owner's blank Context, map ledger or pins enter a new lease;
+only exact-key CPU state can transfer.
+
+The formerly ignored E-7 closed-owner Context/MIPS continuation control is
+normal and green; the 200-slice pointer-backed guest-store test alternated
+checked unmap and close-while-mapped without retained pins or inherited maps.
+Focused finish-failure, public private-byte, count-stop, typed-stop and mixed
+JR controls passed. Frozen-source full release passed **1,730/0/14 ignored**
+(`full-release-final.raw.log`, `28F25760…283AE9`), no-feature passed
+**1,292/0/13 ignored** (`full-no-feature.raw.log`, `399499AA…A81F06`);
+both no-trace checks and release build exited 0. The preserved EXE/PDB and
+all exact source/log hashes are in the
+[O-P4 receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md).
+An earlier diagnostic full run had nine distinct library failures from tests
+that inspected an owner after normal fresh closure; the final tests read the
+captured per-attempt report and retained their PC/TIMEOUT/outcome assertions.
+
+The frozen-source O-P4 gate is closed, **not** full Stage 2 or live
+acceptance. No post-switch iNavi run, memory peak, busy-slice MIPS, fixed
+per-slice setup-cost comparison or map-readiness measurement was made. A run
+on the original writable mounts requires fresh human approval and fresh
+adjacent ZIP backups; previous single-run approvals are spent. Real native
+two-process A→B→A same-VA bytes, shared-view slabs and Stage 3 checkpoint
+relineage remain open.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
