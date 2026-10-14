@@ -69,9 +69,12 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   checked owner/unmap closure; persistent-pin budget release is deferred until
   that closure. Exhaustive host-write inventory, memory-mode checkpoint
   relineage, `PrivatePageBudget` treatment, and an approved matched app run
-  remain open.
-  A host-import write into an untouched reserved stack page is a required
-  E-44 native safety gate, not a demonstrated or accepted behavior.
+  remain open. Registry, time, geometry, find-data and module/path startup
+  outputs use guarded hooks with whole-span preflight, but unconverted direct-
+  import outputs can still fail closed on a cold, untouched stack page. The
+  shared sparse `ThreadStack` has no per-thread/slot committed low-water;
+  a 128-KiB per-slot contiguous `[page(SP), slot_top)` commit is a conditional
+  follow-up only if an approved live run encounters that bypass.
   The earlier 155-page original-byte filter result is historical; no new app
   memory, speed, or map-readiness gain has been measured
   ([E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),

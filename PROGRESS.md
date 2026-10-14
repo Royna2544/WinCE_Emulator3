@@ -14,11 +14,14 @@ references for historical reconstruction.
   lifetime. Queued payload delivery checks fixed-slab overlap and permits its
   prepared heap path, rather than silently writing a stale copied blob.
 - This is an implementation inventory, **not** an E-44 source gate. Frozen
-  source hashes and integrated test results are pending, including the required
-  native host-import write into an untouched reserved stack page. The global
-  heap cursor and ownerless allocation metadata still need O-M2 ownership
-  work; heap spillover remains copy-backed. There has been no E-44 iNavi run,
-  RSS, speed, or map-readiness measurement.
+  source hashes and integrated test results are pending. An audited startup
+  boundary routes registry, time, geometry, find-data and module/path outputs
+  through guarded hooks with whole-span preflight. Unconverted direct-import
+  outputs can still fail closed on an untouched stack page; this is not a
+  claim that all host writes are covered. The global heap cursor and ownerless
+  allocation metadata still need O-M2 ownership work; heap spillover remains
+  copy-backed. There has been no E-44 iNavi run, RSS, speed, or map-readiness
+  measurement.
 
 ## 2026-10-14 E-43 Final-Byte Main-Image Source Gate
 

@@ -9,10 +9,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 
 0. Finish the E-44 fixed initial heap/stack slab gate: frozen-source broad
    suites and focused clone, native ownership, host-write, readback and
-   accounting controls. A native host-import write into an untouched reserved
-   stack page is a required safety check, not an accepted limitation. Preserve
-   writable semantics and process/thread isolation; no speed or RSS inference
-   follows from the E-43 load-only 34.980469-MiB blob census.
+   accounting controls. Check whole-span preflight for the guarded startup
+   output families and keep unconverted direct-import cold-stack outputs
+   fail-closed. Preserve writable semantics and process/thread isolation; no
+   speed or RSS inference follows from E-43's load-only blob census.
 1. O-M2: move the global heap cursor and ownerless allocation metadata to
    birth-qualified authority before Stage 3. Prove foreign `HeapFree`/
    `HeapSize` rejection and prevent one birth's allocation high-water from
@@ -31,6 +31,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 - E-43's final-byte main-image **source** gate passed, but full host-write
   inventory, memory-mode checkpoint relineage, and live app behavior remain
   open ([receipt](evidence/sealed-main-image-20261014/validation.receipt.md)).
+- If a later approved live run reaches a direct-import cold-stack bypass,
+  consider per-thread/slot 128-KiB committed low-water tracked by slot, with
+  contiguous `[page(SP), slot_top)` commit. The current shared sparse
+  `ThreadStack` has no per-slot low-water state; do not add this speculatively.
 - Splash stall (app evidence lane): run the E-29 post-120 s trace as one
   instrumentation change plus one run using `NativeAttemptReport`
   (`docs/evidence/e29-post120-native-attempt-trace-design.md`). Record the
