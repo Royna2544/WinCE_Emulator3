@@ -223,42 +223,53 @@ focused controls, counts, hashes and logs are in the
 This is a source gate: no O-M2 live iNavi run, host-RSS/speed gain, map
 readiness, general heap address reuse or full Stage 2 acceptance follows.
 
-### 1-MiB host-block native mapper (design gate, not implemented)
+### 1-MiB host-block native mapper (bounded source validation)
 
 The opt-in 8,192-page/32-MiB fresh-owner profile measured 78.690 s mapping:
 78.524 s in 8,192 Unicorn `mem_map_ptr` calls versus 0.164 s in Rust setup
 and scans ([receipt](../../evidence/om2-native-map-profile-20261014/validation.receipt.md)).
-Its 154.06-s total leaves about 75 s after the map print uninstrumented;
-measure owner/pin teardown separately before attributing that remainder.
+An expected-red repeat instrumented that tail: native owner close took 75.753 s,
+while pin/guard drop took 0.636 ms. The release before-change assertion saw
+8,192 calls and failed as intended
+([receipt](../../evidence/om2-native-map-profile-20261014/validation.receipt.md)).
 The E-43 pre-slab copy setup used a different workload and debug profile,
 so neither number is a controlled app-speed or RSS comparison.
 
-Plan: lazily reserve aligned **1-MiB host blocks** per `(process birth,
-allocation incarnation, guest block base)`; physically commit only guest-
-committed 4-KiB private **heap/stack** pages. Shared-view pins from
-`stable_page_pins_for` keep their separate canonical backing and must not be
-rehomed or grouped with private blocks. Keep the existing `PrivatePageIdentity` and one exact
-page charge/pin/guard per committed page; a reserved hole has no guest-RAM
-charge. Current independent 4-KiB host allocations cannot be grouped: page
-pins need a block reference plus offset. Native mapping groups only contiguous
-committed pages of one block
-with identical permissions into one `mem_map_ptr` run, while the VM remains
-the sole byte authority under A4. Split a run at a later native collision so
-earlier pages map and stay pinned as today's page-ordered failure control
-requires. Pin every run page before FFI; uncertain mapping or failed unmap
-keeps every page pin and charge from the pre-split run plus its host block
-quarantined until checked owner closure. Vendored `uc.c:1572-1715,1842-1911`
-can unmap the whole pointer run before remapping its sides and cannot roll
-back a remap failure. A successful subrange unmap may release only its exact
-page after checking the surviving native coverage and permissions.
-Checkpoint clone must allocate independent blocks, copy committed pages only,
-and never share a mutable host pointer; full machine relineage stays separate.
-An expected-red counter test should see 8,192 native map calls now and at
-most 32 for a fully committed, uniform-permission 32-MiB heap after the
-1-MiB design, while also checking 8,192 page records/pins and the full
-32-MiB budget charge with no copy fallback. Cold-hole, mid-run collision,
-same-VA birth, clone and failed-unmap controls precede any source gate or
-live claim.
+The implementation reserves **1-MiB-sized host blocks** keyed by process
+birth, allocation incarnation and 1-MiB-aligned guest block base, then
+physically commits only guest-committed 4-KiB private **heap/stack** pages.
+Host block bases need only Unicorn's 4-KiB alignment. Shared-view pins from
+`stable_page_pins_for` remain independently backed; they are not rehomed or
+grouped. A weak, non-owning pending-block fence prevents competing detached
+first-cold-page proposals from obtaining two byte authorities. Canonical
+`PrivatePageIdentity`, page-level budget charge, native pin and execution
+guard remain exact; reserved holes have no guest-RAM charge. A clone reserves
+new blocks and copies committed pages without sharing writable pointers.
+
+Both fresh-owner and prepared in-slice heap/stack growth map maximal
+contiguous, uniformly protected committed runs within one block through one
+`mem_map_ptr` each. A later collision maps the valid prefix before returning
+the ordered error. Every page is pinned before FFI; an uncertain map retains
+the run's pins until checked native owner close. Vendored
+`uc.c:1572-1715,1842-1911` may unmap an entire pointer run to split one
+page; checked unmap now requires complete pre-split ledger and native-pin
+coverage and verifies all surviving pages after FFI before releasing the
+requested page pin. Failed or ambiguous unmap leaves the entire affected run
+pinned/quarantined. VM remains the sole byte authority under A4; full machine
+checkpoint relineage stays separate.
+
+On one interim synthetic **release** source, the 8,192-page/32-MiB uniform
+heap mapped as exactly **32 native regions/calls**: fresh-owner wall 4.427 ms
+and native close 0.398 ms; prepared growth wall 4.741 ms and close 0.394 ms.
+The same binary's ideal old-shape control (one 32-MiB pointer map plus a
+32-MiB memcpy seed) took 3.133 ms map+copy, so batched canonical pages were
+not faster than that copy control in this one sample. Exact 8,192 page
+records/pins and 32-MiB guest-budget charge passed, along with sparse hole,
+clone, first-cold competing proposal, mid-run collision, same-VA birth and
+checked-unmap controls. The release timing preceded the final peer-safety
+follow-up; paired broad gates on a fixed combined source remain pending.
+Neither these synthetic measurements nor the E-43 debug copied-image receipt
+establishes iNavi lag, host RSS, frame readiness or live-run acceptance.
 
 ## Target authority and permitted interfaces
 
