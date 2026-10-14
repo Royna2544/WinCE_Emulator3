@@ -7,13 +7,13 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-1. Make fresh-default ownership the default (O-P4): turn the E-7 closed-owner
-   red green and delete `close_idle_owner_preserving_snapshot_for_test`. Run the
-   full suite; only after fresh user approval, make one bounded live run and
-   compare its memory peak with the persistent-owner runs (about 1.5 GiB;
-   E-22, E-27, E-29) and BED2 (E-1). Close each fresh owner after hook
-   removal and document the vendored Unicorn teardown guarantees and their
-   upgrade recheck so private-slab pins are released with that owner.
+1. Only after fresh human approval and fresh adjacent ZIP backups of the
+   original SD, ResidentFlash and emulator-root writable mounts, run one
+   bounded iNavi comparison on the O-P4 fresh-default build. Compare sampled
+   host memory, busy-slice guest MIPS, fixed per-slice setup cost and guest/map
+   progress with the persistent-owner runs (about 1.5 GiB; E-22, E-27, E-29)
+   and BED2 (E-1); retain exact binary, input and run evidence. The
+   source-bound O-P4 suite alone is not live acceptance.
 2. Then finish the remaining D-008 families: real native E-20 two-PID same-VA
    A→B→A byte isolation, shared file views on slabs, and image/heap blobs.
 3. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26

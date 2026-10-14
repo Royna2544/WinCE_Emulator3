@@ -4,6 +4,26 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-36 O-P4 Source-Bound Fresh Default
+
+- `ProcessNativeEngine::new` now selects a fresh native owner for each slice;
+  `WINCE_EMU_PERSISTENT_NATIVE_ENGINE=1` is the explicit Stage 8 experiment.
+  Fresh finish/abort closes the owning wrapper while run callback boxes and
+  private-page pins remain alive, then releases them; it does not individually
+  remove hooks first. This close proof is specific to the pinned, statically
+  built vendored Unicorn 2.1.5 C source, not a general checked-close API.
+  The ordinary closed-owner Context/MIPS continuation and 200-slice pointer-
+  backed churn controls passed. Full release passed **1,730/0/14 ignored**,
+  no-feature **1,292/0/13 ignored**; both no-trace checks and release build
+  exited 0. The [O-P4 receipt](evidence/op4-fresh-default-20261014/validation.receipt.md)
+  retains exact source, log, EXE and PDB hashes and limits.
+- This closes the frozen-source O-P4 gate only. No post-switch bounded iNavi
+  run, host-memory comparison or map-readiness measurement occurred. Such a
+  writable-mount run needs fresh human approval and fresh adjacent ZIP backups.
+  Real native two-process same-VA A→B→A bytes, shared-view coherence, Stage 3
+  checkpoint relineage and full Stage 2 acceptance remain open
+  ([ledger E-36](docs/evidence/ledger.md)).
+
 ## 2026-10-14 E-35 Public Private-VM Slab Gate
 
 - Public COREDLL private `VirtualAlloc` and current-target Ex now use

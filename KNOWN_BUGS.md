@@ -27,16 +27,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   phase (Stage 8 diagnostic, ledger E-12). Legacy in-hook register helpers
   still zero failed reads and drop write errors; o32 float-return restore sites
   are unaudited (CPU page, E-12 follow-ups).
-- Fresh-per-slice is not yet the default (O-P4). E-35 validates the public
-  private-slab family and two-PID same-VA metadata, but real native A→B→A
-  byte isolation and shared-view slab coherence remain unproved. Checked
-  native-engine close and hook teardown are still absent: an unverifiable
-  close conservatively retains slab pins and their host memory, which can
-  accumulate across uncertain closes. A same-PID DIB view without VA
-  metadata can Flush but not Unmap; the immediate CreateProcess view-sync
-  failure path has no fault injection. `VirtualAllocEx`/`VirtualQueryEx` name
-  exports remain absent. History: ledger E-14, E-16, E-18, E-20, E-22 to
-  E-25 and E-35.
+- E-35 public private slabs and E-36 source-bound fresh-per-slice default are
+  validated, but no post-switch bounded iNavi run has measured memory or map
+  readiness. Real native two-process A→B→A byte isolation and shared-view slab
+  coherence remain unproved. A same-PID DIB view without VA metadata can Flush
+  but not Unmap; the immediate CreateProcess view-sync failure path has no
+  fault injection. `VirtualAllocEx`/`VirtualQueryEx` name exports remain
+  absent. History: ledger E-14, E-16, E-18, E-20, E-22 to E-25, E-35, E-36.
 - Canonical Task/alias ownership is absent: 12 expected-red Task controls live
   in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are
   fixed (E-21); thread/task aliases, wait pins and clone lineage are not.
