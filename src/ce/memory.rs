@@ -1490,13 +1490,22 @@ impl MemorySystem {
         let next_incarnation = incarnation.checked_add(1)?;
         let (base, size, next_cursor) = if address == 0 {
             let size = align_up(size, VIRTUAL_ALIGN)?;
-            let base = self
+            let mut base = self
                 .next_virtual_ptr_by_owner
                 .get(&owner)
                 .copied()
                 .unwrap_or(VIRTUAL_PTR_BASE)
                 .max(self.next_virtual_ptr);
-            let next_cursor = base.checked_add(size)?;
+            // Compatibility views still use a VA-only native mapper. A
+            // private slab may occupy this cursor without advancing the old
+            // global high-water mark, so search subsequent aligned slots.
+            let next_cursor = loop {
+                let end = base.checked_add(size)?;
+                if !self.virtual_overlaps(base, size) {
+                    break end;
+                }
+                base = base.checked_add(VIRTUAL_ALIGN)?;
+            };
             (base, size, Some(next_cursor))
         } else {
             let base = align_down(address, VIRTUAL_ALIGN);
@@ -2433,6 +2442,62 @@ mod tests {
                 .unwrap()
                 .initial_bytes,
             [1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn null_base_legacy_view_scans_past_private_slab_and_occupied_legacy_slot() {
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        let slab_owner = handles.process_birth_key(1).unwrap();
+        let _view_handle = handles.create_process(2);
+        let view_owner = handles.process_birth_key(2).unwrap();
+        let mut memory = MemorySystem::default();
+        let slab_base = committed_private_slab(&mut memory, slab_owner, 0, 0x1000);
+        assert_eq!(slab_base, VIRTUAL_PTR_BASE);
+        let occupied = memory
+            .virtual_alloc(
+                view_owner,
+                VirtualAllocationSource::FileViewLegacy,
+                slab_base + VIRTUAL_ALIGN,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        assert_eq!(occupied, slab_base + VIRTUAL_ALIGN);
+
+        let view_base = memory
+            .virtual_alloc(
+                view_owner,
+                VirtualAllocationSource::FileViewLegacy,
+                0,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .unwrap();
+        assert_eq!(view_base, slab_base + 2 * VIRTUAL_ALIGN);
+        assert_eq!(
+            memory
+                .virtual_allocation(view_owner, view_base)
+                .unwrap()
+                .backing,
+            VirtualAllocationBacking::LegacySeed
+        );
+        assert!(memory.private_page_pin(slab_owner, slab_base).is_some());
+        assert!(
+            memory
+                .virtual_alloc(
+                    view_owner,
+                    VirtualAllocationSource::FileViewLegacy,
+                    slab_base,
+                    0x1000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    4,
+                )
+                .is_none(),
+            "explicit LegacySeed placement still cannot alias a private slab"
         );
     }
 

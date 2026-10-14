@@ -29821,6 +29821,18 @@ fn virtual_protect_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
+    // A private reservation owned by another process is not a legacy
+    // protectable region in this process, even when a global host map happens
+    // to expose the same guest VA. Match Free/Query/IsBadPtr owner isolation.
+    if kernel
+        .memory
+        .intersects_foreign_virtual_allocation(owner, address, size.max(1))
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
     // Unmigrated shared/view callers retain the historical compatibility
     // behavior; only the private slab family has checked page protection.
     if old_protect_ptr != 0 {
@@ -29911,6 +29923,17 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
         (buf_ptr + 20, protect),           // Protect
         (buf_ptr + 24, 0x20000u32),        // Type = MEM_PRIVATE
     ];
+    // A malformed output range must not leave a partially written MBI, and
+    // native adapters must check actual page permissions, not host access.
+    if writes
+        .iter()
+        .any(|(offset, _)| memory.validate_writable_u32(*offset).is_err())
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     for (offset, value) in writes {
         if !write_guest_u32(kernel, memory, thread_id, offset, value) {
             return 0;
@@ -70522,6 +70545,41 @@ mod tests {
     }
 
     #[test]
+    fn public_virtual_query_preflights_complete_mbi_before_writing() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let mut memory = UnitGuestMemory::default();
+        let base = 0x5600_0000;
+        let query_buf = 0x0002_0000;
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                &mut memory,
+                1,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE,
+                PAGE_READWRITE,
+            ),
+            base
+        );
+        // The final MBI word is unmapped; none of the first six may change.
+        memory.map_bytes(query_buf, 24);
+        for index in 0..6u32 {
+            memory.write_u32(query_buf + index * 4, 0xfeed_0000 + index)?;
+        }
+        assert_eq!(
+            virtual_query_raw(&mut kernel, &mut memory, 1, &[base, query_buf, 28], false),
+            0
+        );
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_PARAMETER);
+        for index in 0..6u32 {
+            assert_eq!(memory.read_u32(query_buf + index * 4)?, 0xfeed_0000 + index);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn heap_snapshot_rejects_forged_private_pointer_and_growth_beyond_owned_va() -> Result<()> {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
         let owner = kernel.current_process_birth_key().expect("boot birth");
@@ -70848,6 +70906,34 @@ mod tests {
                 .memory
                 .virtual_allocation(child_owner, base)
                 .is_none()
+        );
+        memory.write_u32(query_buf, 0xfeed_beef)?;
+        let foreign_protect = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            child_thread,
+            ORD_VIRTUAL_PROTECT,
+            [base, 0x1000, 0x02, query_buf],
+        );
+        assert!(matches!(
+            foreign_protect,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(child_thread),
+            ERROR_INVALID_PARAMETER
+        );
+        assert_eq!(memory.read_u32(query_buf)?, 0xfeed_beef);
+        assert_eq!(
+            kernel
+                .memory
+                .private_vm_query(parent, base)
+                .unwrap()
+                .page_protect,
+            Some(PAGE_READWRITE)
         );
         memory.map_bytes(base, 4);
         let foreign_probe = table.dispatch_raw_ordinal_with_memory(
