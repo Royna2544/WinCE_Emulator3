@@ -10947,7 +10947,7 @@ impl UnicornMips {
                         report.failure_operation = Some("finish decoded process exit");
                         self.persist_run_state_handles(&run_state);
                         return Err(Error::Backend(format!(
-                            "finish private slab process exit: {err:?}"
+                            "finish owner-bound process exit: {err:?}"
                         )));
                     }
                     if !Self::terminate_decoded_kernel_process(kernel, &exit) {
@@ -11097,7 +11097,7 @@ impl UnicornMips {
                         report.failure_operation = Some("finish decoded process exit");
                         self.persist_run_state_handles(&run_state);
                         return Err(Error::Backend(format!(
-                            "finish private slab process exit: {err:?}"
+                            "finish owner-bound process exit: {err:?}"
                         )));
                     }
                     if !Self::terminate_decoded_kernel_process(kernel, &exit) {
@@ -11329,7 +11329,7 @@ impl UnicornMips {
                 self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                 self.persist_run_state_handles(&run_state);
                 return Err(Error::Backend(format!(
-                    "finish private slab native slice: {err:?}"
+                    "finish owner-bound native slice: {err:?}"
                 )));
             }
             self.saved_context = staged_saved_context;
@@ -31925,6 +31925,8 @@ fn prepare_native_message_pointer_payload<D>(
             heap_mapping: Some(mapping),
             private_vm_mapping: None,
             private_vm_applied_generation: None,
+            #[cfg(test)]
+            fail_next_private_unmap_for_test: false,
         };
         memory.ensure_heap_mapped(message.lparam, len)?;
     }
@@ -50043,6 +50045,8 @@ struct UnicornGuestMemory<'a, 'uc, D> {
     heap_mapping: Option<UnicornHeapMapping<'a>>,
     private_vm_mapping: Option<UnicornPrivateVmMapping<'a>>,
     private_vm_applied_generation: Option<u64>,
+    #[cfg(test)]
+    fail_next_private_unmap_for_test: bool,
 }
 
 #[cfg(feature = "unicorn")]
@@ -50070,6 +50074,8 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
             heap_mapping: None,
             private_vm_mapping: None,
             private_vm_applied_generation: None,
+            #[cfg(test)]
+            fail_next_private_unmap_for_test: false,
         }
     }
 
@@ -50086,6 +50092,8 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
             }),
             private_vm_mapping: None,
             private_vm_applied_generation: None,
+            #[cfg(test)]
+            fail_next_private_unmap_for_test: false,
         }
     }
 
@@ -50279,6 +50287,13 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             }
             match action {
                 PrivateVmNativePageChange::Unmap(_) => {
+                    #[cfg(test)]
+                    if self.fail_next_private_unmap_for_test {
+                        self.fail_next_private_unmap_for_test = false;
+                        return Err(Error::Backend(
+                            "injected checked private VM unmap failure".to_owned(),
+                        ));
+                    }
                     self.uc
                         .mem_unmap(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64)
                         .map_err(|err| {
@@ -55862,6 +55877,34 @@ mod unicorn_tests {
         Ok(kernel)
     }
 
+    /// Stage a private page before any native owner exists. Runtime public
+    /// imports use the same proposal, but check native mapping before commit.
+    fn phase1_publish_private_page_without_native_owner(
+        kernel: &mut crate::ce::kernel::CeKernel,
+        owner: crate::ce::object::ProcessBirthKey,
+    ) -> u32 {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE, VirtualAllocationSource};
+
+        let proposal = kernel
+            .memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_COMMIT | MEM_RESERVE,
+                0x04,
+            )
+            .expect("prepare canonical private page before native owner exists");
+        let base = proposal.result_ptr();
+        assert_eq!(
+            kernel.memory.commit_prepared_private_vm(proposal),
+            Some(base),
+            "publish canonical private page before native owner exists"
+        );
+        base
+    }
+
     fn phase1_run_twenty(
         cpu: &mut super::UnicornMips,
         kernel: &mut crate::ce::kernel::CeKernel,
@@ -56356,9 +56399,11 @@ mod unicorn_tests {
             report.failure_operation().is_some(),
             "a sealed backend failure needs its failing operation"
         );
+        let detail = format!("{error:#}");
         assert!(
-            format!("{error:#}").contains("release native slice hooks"),
-            "{error:#}"
+            detail.contains("release native slice hooks")
+                || detail.contains("finish owner-bound native slice"),
+            "{detail}"
         );
         assert_eq!(
             kernel.current_process_id(),
@@ -56683,19 +56728,15 @@ mod unicorn_tests {
     #[test]
     fn native_file_view_partial_private_slab_overlap_is_rejected_before_sync() -> crate::Result<()>
     {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("slab-view-overlap.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let base = kernel
+        let base = phase1_publish_private_page_without_native_owner(&mut kernel, owner);
+        kernel
             .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("diagnostic private reservation");
-        assert!(
-            kernel
-                .memory
-                .set_virtual_initial_bytes(owner, base, vec![1, 2, 3, 4])
-        );
+            .private_page_pin(owner, base)
+            .expect("canonical private page")
+            .write_bytes(0, &[1, 2, 3, 4])
+            .expect("seed canonical private bytes");
         let handle = kernel.handles.create_file_mapping(None, 4, 4, None);
         let mapping = kernel.handles.file_mapping_mut(handle)?;
         mapping.data[..4].copy_from_slice(&[5, 6, 7, 8]);
@@ -56764,14 +56805,9 @@ mod unicorn_tests {
 
     #[test]
     fn native_private_slab_mapper_rejects_unowned_ram_before_pin_or_ffi() -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("slab-collision.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let base = kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("diagnostic private reservation");
+        let base = phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let pin = kernel
             .memory
             .private_page_pin(owner, base)
@@ -56814,14 +56850,11 @@ mod unicorn_tests {
     #[test]
     fn native_private_slab_mapper_rejects_cloned_and_released_pins_before_ffi() -> crate::Result<()>
     {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE};
+        use crate::ce::memory::MEM_RELEASE;
 
         let mut kernel = phase1_kernel("slab-stale-pin.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let base = kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("diagnostic private reservation");
+        let base = phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let source_pin = kernel
             .memory
             .private_page_pin(owner, base)
@@ -56837,7 +56870,14 @@ mod unicorn_tests {
 
         for stale_pin in [cloned_pin, source_pin.clone()] {
             if stale_pin.native_ptr() == source_pin.native_ptr() {
-                assert!(kernel.memory.virtual_free(owner, base, 0, MEM_RELEASE));
+                let release = kernel
+                    .memory
+                    .prepare_private_vm_free(owner, base, 0, MEM_RELEASE)
+                    .expect("prepare release before native mapping");
+                assert_eq!(
+                    kernel.memory.commit_prepared_private_vm_change(release),
+                    Some(crate::ce::memory::PrivateVmChangeResult::Free)
+                );
             }
             let err = super::map_private_slab_page(
                 &mut uc,
@@ -56858,44 +56898,268 @@ mod unicorn_tests {
     }
 
     #[test]
-    // E25 diagnostic opt-in for the historical E18 shape. Public VirtualAlloc
-    // still selects LegacySeed, so this is not a general O-M1/O-P4 closure.
+    fn native_private_vm_sixty_four_checked_unmaps_reclaim_pins_and_budget() -> crate::Result<()> {
+        use crate::ce::coredll::CoredllGuestMemory;
+        use crate::ce::memory::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, VirtualAllocationSource};
+
+        const BASE: u32 = 0x5b00_0000;
+        const PAGE_BYTES: u64 = 0x1000;
+        let mut kernel = phase1_kernel("private-checked-churn.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        kernel.memory.set_private_commit_limit_bytes(PAGE_BYTES);
+        let native_pins = super::NativeMappingPins::default();
+        let guards = RefCell::new(BTreeMap::new());
+        let terminal_error = RefCell::new(None);
+        let mut blobs: Vec<MappedBlob> = Vec::new();
+        let mut native_ledger = super::KernelMemoryMappings::new(&blobs);
+        native_ledger.heap_generation = kernel.memory.heap_generation();
+        native_ledger.virtual_generation = kernel.memory.virtual_generation();
+        let mapped = RefCell::new(native_ledger);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+
+        for cycle in 0..64 {
+            let proposal = kernel
+                .memory
+                .prepare_private_vm(
+                    owner,
+                    VirtualAllocationSource::Private,
+                    BASE,
+                    0x1000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    0x04,
+                )
+                .expect("prepare fixed private page within one-page budget");
+            {
+                // SAFETY: blobs belongs to this live, sequential adapter and
+                // the ledger records this exact native owner for the test.
+                let mut guest = unsafe {
+                    super::UnicornGuestMemory::with_heap_mapping(
+                        &mut uc,
+                        &mapped,
+                        &mut blobs as *mut _,
+                    )
+                }
+                .with_private_vm_mapping(super::UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &native_pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                });
+                guest.apply_prepared_private_vm(&kernel, &proposal)?;
+                assert_eq!(
+                    native_pins.private_len(),
+                    1,
+                    "cycle {cycle}: exactly the live page must be pinned"
+                );
+                assert_eq!(
+                    kernel.memory.commit_prepared_private_vm(proposal),
+                    Some(BASE)
+                );
+                guest.private_vm_commit_complete(kernel.memory.virtual_generation());
+            }
+            assert_eq!(kernel.memory.private_commit_used_bytes(), PAGE_BYTES);
+            assert_eq!(
+                super::native_page_perms(&uc, BASE)?,
+                Some(super::unicorn_perms(super::virtual_allocation_perms(0x04)).0 as u32)
+            );
+            let release = kernel
+                .memory
+                .prepare_private_vm_free(owner, BASE, 0, MEM_RELEASE)
+                .expect("prepare checked native unmap");
+            {
+                // SAFETY: same live owner and ledger as the allocation above.
+                let mut guest = unsafe {
+                    super::UnicornGuestMemory::with_heap_mapping(
+                        &mut uc,
+                        &mapped,
+                        &mut blobs as *mut _,
+                    )
+                }
+                .with_private_vm_mapping(super::UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &native_pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                });
+                guest.apply_prepared_private_vm_change(&kernel, &release)?;
+                assert_eq!(
+                    kernel.memory.commit_prepared_private_vm_change(release),
+                    Some(crate::ce::memory::PrivateVmChangeResult::Free)
+                );
+                guest.private_vm_commit_complete(kernel.memory.virtual_generation());
+            }
+            assert_eq!(native_pins.private_len(), 0, "cycle {cycle}: stale pin");
+            assert!(mapped.borrow().private_pages.is_empty());
+            assert!(guards.borrow().is_empty());
+            assert_eq!(super::native_page_perms(&uc, BASE)?, None);
+            assert_eq!(
+                kernel.memory.private_commit_used_bytes(),
+                0,
+                "cycle {cycle}: checked unmap must return the page budget"
+            );
+            assert!(terminal_error.borrow().is_none());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_private_vm_injected_unmap_failure_retains_pin_and_budget() -> crate::Result<()> {
+        use crate::ce::coredll::CoredllGuestMemory;
+        use crate::ce::memory::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, VirtualAllocationSource};
+
+        const BASE: u32 = 0x5b10_0000;
+        let mut kernel = phase1_kernel("private-unmap-reject.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        kernel.memory.set_private_commit_limit_bytes(0x1000);
+        let native_pins = super::NativeMappingPins::default();
+        let guards = RefCell::new(BTreeMap::new());
+        let terminal_error = RefCell::new(None);
+        let mut blobs: Vec<MappedBlob> = Vec::new();
+        let mut native_ledger = super::KernelMemoryMappings::new(&blobs);
+        native_ledger.heap_generation = kernel.memory.heap_generation();
+        native_ledger.virtual_generation = kernel.memory.virtual_generation();
+        let mapped = RefCell::new(native_ledger);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let proposal = kernel
+            .memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                BASE,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                0x04,
+            )
+            .expect("prepare private page");
+        {
+            // SAFETY: the blob pointer and ledger outlive this synchronous adapter.
+            let mut guest = unsafe {
+                super::UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs as *mut _)
+            }
+            .with_private_vm_mapping(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &native_pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            });
+            guest.apply_prepared_private_vm(&kernel, &proposal)?;
+            assert_eq!(
+                kernel.memory.commit_prepared_private_vm(proposal),
+                Some(BASE)
+            );
+            guest.private_vm_commit_complete(kernel.memory.virtual_generation());
+        }
+        assert_eq!(native_pins.private_len(), 1);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0x1000);
+
+        // The test seam fires after the native owner/permission preflight and
+        // before checked uc_mem_unmap can take effect. Failure must keep the
+        // page pinned, committed, and charged to the same owner.
+        let release = kernel
+            .memory
+            .prepare_private_vm_free(owner, BASE, 0, MEM_RELEASE)
+            .expect("prepare release of live private page");
+        {
+            // SAFETY: same live blob pointer and native owner as above.
+            let mut guest = unsafe {
+                super::UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs as *mut _)
+            }
+            .with_private_vm_mapping(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &native_pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            });
+            guest.fail_next_private_unmap_for_test = true;
+            let error = guest
+                .apply_prepared_private_vm_change(&kernel, &release)
+                .expect_err("injected native unmap failure must prevent release");
+            assert!(format!("{error:#}").contains("injected checked private VM unmap failure"));
+        }
+        drop(release);
+        assert!(kernel.memory.private_page_pin(owner, BASE).is_some());
+        assert_eq!(native_pins.private_len(), 1, "failed unmap retains the pin");
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0x1000);
+        assert_eq!(
+            super::native_page_perms(&uc, BASE)?,
+            Some(super::unicorn_perms(super::virtual_allocation_perms(0x04)).0 as u32),
+            "the native owner still maps the failed-unmap page"
+        );
+        assert!(
+            kernel
+                .memory
+                .prepare_private_vm(
+                    owner,
+                    VirtualAllocationSource::Private,
+                    BASE + 0x1_0000,
+                    0x1000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    0x04,
+                )
+                .is_none(),
+            "retained private page still exhausts the one-page budget"
+        );
+
+        // The one-shot fault has cleared; a later checked unmap must reclaim
+        // both resources rather than leaving this fixture dirty.
+        let retry = kernel
+            .memory
+            .prepare_private_vm_free(owner, BASE, 0, MEM_RELEASE)
+            .expect("retry release after one-shot unmap failure");
+        {
+            // SAFETY: same synchronous owner and blob pointer as above.
+            let mut guest = unsafe {
+                super::UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs as *mut _)
+            }
+            .with_private_vm_mapping(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &native_pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            });
+            guest.apply_prepared_private_vm_change(&kernel, &retry)?;
+            assert_eq!(
+                kernel.memory.commit_prepared_private_vm_change(retry),
+                Some(crate::ce::memory::PrivateVmChangeResult::Free)
+            );
+            guest.private_vm_commit_complete(kernel.memory.virtual_generation());
+        }
+        assert_eq!(native_pins.private_len(), 0);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
+        assert_eq!(super::native_page_perms(&uc, BASE)?, None);
+        assert!(terminal_error.borrow().is_none());
+        Ok(())
+    }
+
+    #[test]
+    // E18's seeded read/modify/write now enters through the real public
+    // VirtualAlloc ordinal, rather than a test-only backing selector.
     fn native_private_virtual_write_survives_closed_owner_next_slice() -> crate::Result<()> {
         use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
 
         const INITIAL: u32 = 0x1122_3344;
-        const PRIVATE_BASE: u32 = 0x5000_0000;
         const PAGE_READWRITE: u32 = 0x04;
 
         let mut kernel = phase1_kernel("private-virtual-fresh.exe")?;
         let boot_owner = kernel.current_process_birth_key().expect("boot birth");
-        let private_base = kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(
-                boot_owner,
-                0,
-                0x1000,
-                MEM_COMMIT | MEM_RESERVE,
-                PAGE_READWRITE,
-            )
-            .expect("reserve ordinary private VirtualAlloc backing");
-        assert_eq!(private_base, PRIVATE_BASE);
-        assert!(kernel.memory.set_virtual_initial_bytes(
-            boot_owner,
-            private_base,
-            INITIAL.to_le_bytes().to_vec()
-        ));
-
+        let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
         let mut bytes = tiny_mips_spinner_pe();
         write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
         let words = [
-            0x3c08_0000 | (private_base >> 16),    // lui t0, private_base_hi
-            0x3508_0000 | (private_base & 0xffff), // ori t0,t0,private_base_lo
-            0x8d09_0000,                           // lw t1,0(t0)
-            0x2529_0001,                           // addiu t1,t1,1
-            0xad09_0000,                           // sw t1,0(t0)
-            0x8d0a_0000,                           // lw t2,0(t0) after fresh owner
-            0x1000_ffff,                           // bounded safety spinner
+            0x3c19_0000 | (trap >> 16),    // lui t9,VirtualAlloc trap high
+            0x3739_0000 | (trap & 0xffff), // ori t9,t9,trap low
+            0x0320_f809,                   // jalr t9: public VirtualAlloc import
+            0,                             // delay-slot nop
+            0x8c49_0000,                   // lw t1,0(v0): canonical seed
+            0x2529_0001,                   // addiu t1,t1,1
+            0xac49_0000,                   // sw t1,0(v0)
+            0x8c4a_0000,                   // lw t2,0(v0) after fresh owner
+            0x1000_ffff,                   // bounded safety spinner
             0,
         ];
         for (index, word) in words.into_iter().enumerate() {
@@ -56905,6 +57169,24 @@ mod unicorn_tests {
         let mut cpu = super::UnicornMips::new()?;
         cpu.load_pe_image(&image)?;
         let entry = cpu.entry.expect("fixture PE entry");
+        cpu.import_traps
+            .insert(crate::emulator::imports::ImportTrap {
+                address: trap,
+                module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(crate::ce::coredll_ordinals::ORD_VIRTUAL_ALLOC),
+                name: Some("VirtualAlloc".to_owned()),
+                iat_va: 0,
+            });
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = 0; // lpAddress
+        regs.regs[5] = 0x1000; // dwSize
+        regs.regs[6] = MEM_COMMIT | MEM_RESERVE; // flAllocationType
+        regs.regs[7] = PAGE_READWRITE; // flProtect
+        regs.regs[29] = cpu.stack_top.expect("guest stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        cpu.running_guest_thread = Some((cpu.current_thread_id, u32::MAX));
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
         let run = |instruction_limit| super::UnicornRunLimits {
             instruction_limit,
@@ -56913,12 +57195,38 @@ mod unicorn_tests {
             live_pump: false,
         };
 
-        cpu.run_until_import_trap_with_framebuffer_limits(&mut kernel, &mut framebuffer, run(5))?;
+        // Let the import finish, then seed its published canonical page while
+        // the native execution fence is down. No test-only allocation or
+        // reseed hook participates in this path.
+        cpu.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                stop_pc: Some(entry + 0x10),
+                ..run(64)
+            },
+        )?;
+        let imported = cpu
+            .saved_context
+            .as_ref()
+            .expect("public import continuation");
+        assert_eq!(imported.pc, entry + 0x10);
+        let private_base = imported.regs.regs[2];
+        assert_ne!(private_base, 0, "public VirtualAlloc returned a page");
+        let private_pin = kernel
+            .memory
+            .private_page_pin(boot_owner, private_base)
+            .expect("public import published a canonical private page");
+        private_pin
+            .write_bytes(0, &INITIAL.to_le_bytes())
+            .expect("seed public canonical private page");
+
+        cpu.run_until_import_trap_with_framebuffer_limits(&mut kernel, &mut framebuffer, run(3))?;
         let first = cpu
             .saved_context
             .as_ref()
             .expect("first native slice saved a continuation");
-        assert_eq!(first.pc, entry + 5 * 4, "the guest store completed");
+        assert_eq!(first.pc, entry + 7 * 4, "the guest store completed");
         assert_eq!(first.regs.regs[9], INITIAL + 1);
         let first_written = first.regs.regs[9];
         assert_eq!(
@@ -56930,10 +57238,6 @@ mod unicorn_tests {
             cpu.last_debug_snapshot()
                 .is_some_and(|snapshot| snapshot.memory_fault.is_none())
         );
-        let private_pin = kernel
-            .memory
-            .private_page_pin(boot_owner, private_base)
-            .expect("diagnostic private page remains committed");
         let mut canonical = [0; 4];
         private_pin
             .read_bytes(0, &mut canonical)
@@ -56966,7 +57270,7 @@ mod unicorn_tests {
             .saved_context
             .as_ref()
             .expect("fresh native slice saved a continuation");
-        assert_eq!(second.pc, entry + 6 * 4, "the second guest load completed");
+        assert_eq!(second.pc, entry + 8 * 4, "the second guest load completed");
         assert_eq!(
             cpu.last_native_slice_outcome(),
             super::NativeSliceOutcome::CountLimit,
@@ -57252,14 +57556,9 @@ mod unicorn_tests {
 
     #[test]
     fn private_native_error_report_keeps_primary_failure_class() -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("private-native-error.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("enable diagnostic private native path");
+        phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let mut cpu = phase1_counter_cpu(0x1000, "private-native-error.exe")?;
         cpu.entry = Some(0x7000_0000); // deliberately unmapped guest fetch
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
@@ -58113,14 +58412,9 @@ mod unicorn_tests {
     #[test]
     fn private_real_mips_host_budget_query_error_preserves_executed_thread_wait()
     -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("private-budget-error-wait.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("enable diagnostic private native path");
+        phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let mut cpu = phase1_counter_cpu(0x1000, "private-budget-error-wait.exe")?;
         let thread_id = cpu.current_thread_id();
         let wait_id = phase1_seed_executed_thread_sleep_wait(&mut kernel, &mut cpu);
@@ -58198,14 +58492,9 @@ mod unicorn_tests {
     #[test]
     fn private_real_mips_successful_host_budget_stop_prunes_executed_thread_wait()
     -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("private-budget-success-wait.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("enable diagnostic private native path");
+        phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let mut cpu = phase1_counter_cpu(0x1000, "private-budget-success-wait.exe")?;
         let thread_id = cpu.current_thread_id();
         let wait_id = phase1_seed_executed_thread_sleep_wait(&mut kernel, &mut cpu);
@@ -58272,14 +58561,9 @@ mod unicorn_tests {
 
     #[test]
     fn private_pre_entry_fence_failure_preserves_executed_thread_wait() -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("private-pre-entry-fence-wait.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let private_base = kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("enable diagnostic private native path");
+        let private_base = phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let private_pin = kernel
             .memory
             .private_page_pin(owner, private_base)
@@ -58332,14 +58616,9 @@ mod unicorn_tests {
 
     #[test]
     fn private_pre_entry_fence_failure_must_not_consume_ready_worker_wait() -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("private-pre-entry-ready-wait.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let private_base = kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("enable diagnostic private native path");
+        let private_base = phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let private_pin = kernel
             .memory
             .private_page_pin(owner, private_base)
@@ -58430,23 +58709,16 @@ mod unicorn_tests {
 
     #[test]
     fn private_ready_get_message_writes_guarded_slab_before_native_slice() -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("private-ready-get-message.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        let private_base = kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("enable diagnostic private native path");
-        assert!(
-            kernel
-                .memory
-                .set_virtual_initial_bytes(owner, private_base, vec![0xa5; 28])
-        );
+        let private_base = phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let private_pin = kernel
             .memory
             .private_page_pin(owner, private_base)
             .expect("committed private page");
+        private_pin
+            .write_bytes(0, &[0xa5; 28])
+            .expect("seed canonical private MSG bytes");
         let mut cpu = phase1_counter_cpu(0x1000, "private-ready-get-message.exe")?;
         let main_thread_id = cpu.current_thread_id();
         let entry = cpu.entry.expect("loaded guest entry");
@@ -58543,14 +58815,9 @@ mod unicorn_tests {
 
     #[test]
     fn private_real_mips_count_query_adapter_error_preserves_provenance() -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
         let mut kernel = phase1_kernel("private-count-query-error.exe")?;
         let owner = kernel.current_process_birth_key().expect("boot birth");
-        kernel
-            .memory
-            .virtual_alloc_private_slab_for_test(owner, 0, 0x1000, MEM_COMMIT | MEM_RESERVE, 0x04)
-            .expect("enable diagnostic private native path");
+        phase1_publish_private_page_without_native_owner(&mut kernel, owner);
         let mut cpu = phase1_counter_cpu(0x1000, "private-count-query-error.exe")?;
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
         cpu.native_engine
@@ -59556,9 +59823,11 @@ mod unicorn_tests {
                 },
             )
             .expect_err("checked native finish failure must reject a decoded exit");
+        let detail = format!("{error:#}");
         assert!(
-            format!("{error:#}").contains("finish decoded CE process exit"),
-            "{error:#}"
+            detail.contains("finish decoded CE process exit")
+                || detail.contains("finish owner-bound process exit"),
+            "{detail}"
         );
         assert_eq!(
             kernel.current_process_state().exit_code,
