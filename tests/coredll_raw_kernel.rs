@@ -7442,7 +7442,7 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         read_guest_le_u32(&memory, thread_snapshot + 4),
         THSNAP_SIZE + PROCESSENTRY32_SIZE * 2 + THREADENTRY32_SIZE * 3
     );
-    assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 16), 3);
+    assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 16), 2);
     assert_eq!(read_guest_le_u32(&memory, thread_snapshot + 24), 3);
     assert_eq!(
         read_guest_le_u32(&memory, thread_snapshot + 28),

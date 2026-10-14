@@ -8,6 +8,7 @@ use wince_emulation_v3::{
         gwe::{Rect, WS_VISIBLE},
         kernel::{CeKernel, STILL_ACTIVE},
         memory::VirtualAllocationSource,
+        object::TaskWaitPin,
         scheduler::{SchedulerBlockedWaitKind, WaitObjectKey},
         timer::{INFINITE, WAIT_OBJECT_0},
     },
@@ -185,7 +186,18 @@ fn execution_completion_sweeps_only_its_birth_and_wakes_waiters_once() -> Result
         kernel.wait_for_single_object(first_alias, 0, 1),
         WAIT_OBJECT_0
     );
-    assert!(!kernel.handles.contains_thread_birth(second_birth));
+    assert!(kernel.handles.contains_thread_birth(second_birth));
+    assert_eq!(
+        kernel
+            .handles
+            .wait_target_signaled(TaskWaitPin::Thread(second_birth)),
+        Some(true)
+    );
+    assert!(kernel.registered_wait_has_ready_handle(aliasless_worker_wait));
+    assert_eq!(
+        kernel.wait_for_registered_wait_without_scheduler_record(aliasless_worker_wait, 1),
+        WAIT_OBJECT_0
+    );
     assert_eq!(kernel.is_wait_ready(launch.thread_handle, 1), Some(true));
     assert!(
         kernel
@@ -198,9 +210,8 @@ fn execution_completion_sweeps_only_its_birth_and_wakes_waiters_once() -> Result
         wakes_before + 3,
         "the process, retained-alias worker, and aliasless worker waits should each queue once"
     );
-    // The aliasless wait's canonical key can still enqueue a candidate. E11
-    // wait-target pins are not implemented, so this does not yet prove that
-    // the closed handle can complete its blocked wait after object retirement.
+    // The registered wait pins the aliasless worker birth until its own
+    // completion, so the closed public handle never has to be reopened.
     assert!(kernel.blocked_waiter(aliasless_worker_wait).is_some());
 
     let after_first_completion = kernel.scheduler_stats();
@@ -223,6 +234,7 @@ fn execution_completion_sweeps_only_its_birth_and_wakes_waiters_once() -> Result
             .remove_blocked_waiter(aliasless_worker_wait)
             .is_some()
     );
+    assert!(!kernel.handles.contains_thread_birth(second_birth));
     assert!(kernel.remove_blocked_waiter(process_wait).is_some());
     assert!(kernel.close_handle(first_alias)?);
     assert!(kernel.close_handle(launch.thread_handle)?);
