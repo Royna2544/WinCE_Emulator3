@@ -160,6 +160,8 @@ impl PreparedReallocation {
 pub enum VirtualAllocationSource {
     Private,
     PrivateExCompatibility,
+    ProcessHeapArena,
+    ThreadStack,
     FileViewLegacy,
     FileViewSlab,
     LocaleViewLegacy,
@@ -475,6 +477,10 @@ impl Drop for StablePrivatePageExecutionGuard {
 impl VirtualAllocationSource {
     fn is_private(self) -> bool {
         matches!(self, Self::Private | Self::PrivateExCompatibility)
+    }
+
+    fn is_native_fixed(self) -> bool {
+        matches!(self, Self::ProcessHeapArena | Self::ThreadStack)
     }
 }
 
@@ -986,6 +992,135 @@ impl MemorySystem {
         ptr == 0 || (ptr >= POINTER_FLOOR && self.allocations.contains_key(&ptr))
     }
 
+    /// Publish a fixed process heap or stack reservation in the same
+    /// owner-qualified VM directory as private VirtualAlloc. Reserving costs
+    /// no guest RAM; each native fault prepares exactly one stable page.
+    pub fn reserve_fixed_private_range(
+        &mut self,
+        owner: ProcessBirthKey,
+        source: VirtualAllocationSource,
+        base: u32,
+        size: u32,
+        protect: u32,
+    ) -> Option<u32> {
+        let page_size = STABLE_PRIVATE_PAGE_SIZE as u32;
+        if !source.is_native_fixed()
+            || base < POINTER_FLOOR
+            || base & (page_size - 1) != 0
+            || size == 0
+            || size & (page_size - 1) != 0
+            || base.checked_add(size).is_none()
+            || !valid_private_protect(protect)
+            || (source == VirtualAllocationSource::ProcessHeapArena && base != HEAP_PTR_BASE)
+        {
+            return None;
+        }
+        if let Some(existing) = self.virtual_allocation(owner, base) {
+            return (existing.size == size
+                && existing.source == source
+                && existing.backing == VirtualAllocationBacking::StablePrivateSlab
+                && existing.protect == protect)
+                .then_some(base);
+        }
+        // Heap allocations are intentional occupants of the process heap
+        // reservation; a stack retains the ordinary heap collision fence.
+        let overlaps = if source == VirtualAllocationSource::ProcessHeapArena {
+            self.virtual_allocations.values().any(|allocation| {
+                (allocation.owner == owner
+                    || allocation.backing == VirtualAllocationBacking::LegacySeed)
+                    && ranges_overlap(base, size, allocation.base, allocation.size)
+            }) || self
+                .pending_private_holes
+                .iter()
+                .any(|((hole_owner, hole_base), hole_size)| {
+                    *hole_owner == owner && ranges_overlap(base, size, *hole_base, *hole_size)
+                })
+        } else {
+            self.private_vm_overlaps(owner, base, size)
+        };
+        if overlaps {
+            return None;
+        }
+        let incarnation = self.next_virtual_incarnation;
+        self.next_virtual_incarnation = incarnation.checked_add(1)?;
+        self.virtual_allocations.insert(
+            (owner, base),
+            VirtualAllocation {
+                base,
+                size,
+                allocation_type: MEM_RESERVE,
+                protect,
+                initial_bytes: Vec::new(),
+                owner,
+                incarnation,
+                source,
+                backing: VirtualAllocationBacking::StablePrivateSlab,
+                private_committed_pages: BTreeMap::new(),
+            },
+        );
+        self.stable_private_slabs_seen = true;
+        self.bump_virtual_generation();
+        Some(base)
+    }
+
+    /// Prepare only the faulting 4-KiB page of a fixed heap/stack reservation.
+    /// The caller must check its native pointer map before publishing this
+    /// token with `commit_prepared_private_vm`. A previously committed page
+    /// produces no new pin or budget charge.
+    pub fn prepare_fixed_private_page(
+        &self,
+        owner: ProcessBirthKey,
+        fault_address: u32,
+    ) -> Option<PreparedPrivateVm> {
+        let page_size = STABLE_PRIVATE_PAGE_SIZE as u32;
+        let page_base = align_down(fault_address, page_size);
+        let original = self
+            .virtual_allocations_for(owner)
+            .find(|allocation| {
+                allocation.backing == VirtualAllocationBacking::StablePrivateSlab
+                    && allocation.source.is_native_fixed()
+                    && fault_address >= allocation.base
+                    && allocation
+                        .base
+                        .checked_add(allocation.size)
+                        .is_some_and(|end| fault_address < end)
+            })?
+            .clone();
+        let mut proposed = original.clone();
+        let mut new_page_pins = Vec::new();
+        if proposed.private_committed_pages.contains_key(&page_base) {
+            self.private_page_pin(owner, page_base)?;
+        } else {
+            if !self.private_page_budget.can_fit(1) {
+                return None;
+            }
+            new_page_pins.try_reserve_exact(1).ok()?;
+            new_page_pins.push(StablePrivatePagePin {
+                identity: PrivatePageIdentity {
+                    owner,
+                    allocation_base: original.base,
+                    allocation_incarnation: original.incarnation,
+                    page_base,
+                },
+                page: Rc::new(StablePrivatePage::zeroed(&self.private_page_budget)?),
+            });
+            proposed
+                .private_committed_pages
+                .insert(page_base, original.protect);
+            proposed.allocation_type |= MEM_COMMIT;
+        }
+        Some(PreparedPrivateVm {
+            instance: Rc::clone(&self.instance),
+            previous_owner_cursor: None,
+            owner,
+            result_ptr: page_base,
+            proposed_allocation: proposed,
+            original_allocation: Some(original),
+            expected_virtual_generation: self.virtual_generation,
+            new_page_pins,
+        })
+    }
+
     /// Prepare one private reservation or a commit within an existing private
     /// reservation. No allocation or page becomes visible until the caller has
     /// checked any required native mapping and calls `commit_prepared_private_vm`.
@@ -1203,7 +1338,10 @@ impl MemorySystem {
             || self.virtual_generation != expected_virtual_generation
             || proposed_allocation.owner != owner
             || proposed_allocation.backing != VirtualAllocationBacking::StablePrivateSlab
-            || !proposed_allocation.source.is_private()
+            || !(proposed_allocation.source.is_private()
+                || proposed_allocation.source.is_native_fixed())
+            || (proposed_allocation.source.is_native_fixed()
+                && (original_allocation.is_none() || new_page_pins.len() > 1))
         {
             return None;
         }
@@ -1535,6 +1673,9 @@ impl MemorySystem {
         allocation_type: u32,
         protect: u32,
     ) -> Option<u32> {
+        if source.is_native_fixed() {
+            return None;
+        }
         self.virtual_alloc_legacy_seed(owner, source, address, size, allocation_type, protect)
     }
 
@@ -2312,7 +2453,7 @@ impl MemorySystem {
         // A local committed owner-qualified range remains valid even if a
         // foreign process independently owns the same guest VA.
         if self.virtual_allocations_for(owner).any(|allocation| {
-            (allocation.source.is_private()
+            ((allocation.source.is_private() || allocation.source.is_native_fixed())
                 || allocation.backing == VirtualAllocationBacking::StableSharedViewSlab)
                 && allocation_contains_committed_range(allocation, ptr, end)
         }) {
@@ -2320,7 +2461,7 @@ impl MemorySystem {
         }
         self.virtual_allocations.values().any(|allocation| {
             allocation.owner != owner
-                && allocation.source.is_private()
+                && (allocation.source.is_private() || allocation.source.is_native_fixed())
                 && allocation
                     .base
                     .checked_add(allocation.size)
@@ -2357,7 +2498,10 @@ impl MemorySystem {
             let collision_end = self
                 .virtual_allocations
                 .values()
-                .filter(|allocation| ranges_overlap(ptr, step, allocation.base, allocation.size))
+                .filter(|allocation| {
+                    allocation.source != VirtualAllocationSource::ProcessHeapArena
+                        && ranges_overlap(ptr, step, allocation.base, allocation.size)
+                })
                 .filter_map(|allocation| allocation.base.checked_add(allocation.size))
                 .chain(
                     self.pending_private_holes
@@ -4009,5 +4153,251 @@ mod tests {
         // Completely outside (past actual end, and before ptr) → None.
         assert_eq!(memory.heap_range_status(ptr + 16, 1), None);
         assert_eq!(memory.heap_range_status(ptr - 1, 1), None);
+    }
+
+    #[test]
+    fn fixed_heap_reserve_is_budget_free_and_first_touch_charges_one_page() {
+        const ARENA_SIZE: u32 = 0x0100_0000;
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        memory.set_private_commit_limit_bytes(0);
+        let first_heap_ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
+        assert_eq!(first_heap_ptr, HEAP_PTR_BASE);
+        assert_eq!(
+            memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ProcessHeapArena,
+                HEAP_PTR_BASE,
+                ARENA_SIZE,
+                4,
+            ),
+            Some(HEAP_PTR_BASE)
+        );
+        assert_eq!(memory.private_commit_used_bytes(), 0);
+        assert!(memory.private_page_pins_for(owner).is_empty());
+        assert_eq!(
+            memory
+                .private_vm_query(owner, HEAP_PTR_BASE)
+                .unwrap()
+                .page_protect,
+            None
+        );
+        assert_eq!(
+            memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16),
+            Some(HEAP_PTR_BASE + 16),
+            "the fixed reservation must not redirect process heap pointers"
+        );
+        assert_eq!(
+            memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ProcessHeapArena,
+                HEAP_PTR_BASE,
+                ARENA_SIZE,
+                4,
+            ),
+            Some(HEAP_PTR_BASE),
+            "an exact repeated reservation retains its incarnation and pages"
+        );
+        assert!(
+            memory
+                .prepare_fixed_private_page(owner, HEAP_PTR_BASE + 7)
+                .is_none()
+        );
+        memory.set_private_commit_limit_bytes(STABLE_PRIVATE_PAGE_SIZE as u64);
+
+        let prepared = memory
+            .prepare_fixed_private_page(owner, HEAP_PTR_BASE + 7)
+            .unwrap();
+        assert_eq!(prepared.result_ptr(), HEAP_PTR_BASE);
+        assert_eq!(prepared.new_page_pins().len(), 1);
+        let pointer = prepared.new_page_pins()[0].native_ptr();
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert!(memory.private_page_pin(owner, HEAP_PTR_BASE).is_none());
+        assert_eq!(
+            memory.commit_prepared_private_vm(prepared),
+            Some(HEAP_PTR_BASE)
+        );
+        assert_eq!(
+            memory
+                .private_page_pin(owner, HEAP_PTR_BASE)
+                .unwrap()
+                .native_ptr(),
+            pointer
+        );
+        assert_eq!(memory.private_page_pins_for(owner).len(), 1);
+        assert_eq!(
+            memory
+                .private_vm_query(owner, HEAP_PTR_BASE)
+                .unwrap()
+                .page_protect,
+            Some(4)
+        );
+        let repeat = memory
+            .prepare_fixed_private_page(owner, HEAP_PTR_BASE + 7)
+            .unwrap();
+        assert!(repeat.new_page_pins().is_empty());
+        assert_eq!(
+            memory.commit_prepared_private_vm(repeat),
+            Some(HEAP_PTR_BASE)
+        );
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert!(
+            memory
+                .prepare_fixed_private_page(owner, HEAP_PTR_BASE + 0x1000)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn fixed_stack_pages_at_same_va_are_isolated_by_process_birth() {
+        const STACK_BASE: u32 = 0x7000_0000;
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        let first_owner = handles.process_birth_key(1).unwrap();
+        let _child_handle = handles.create_process(2);
+        let second_owner = handles.process_birth_key(2).unwrap();
+        let mut memory = MemorySystem::default();
+        for owner in [first_owner, second_owner] {
+            assert_eq!(
+                memory.reserve_fixed_private_range(
+                    owner,
+                    VirtualAllocationSource::ThreadStack,
+                    STACK_BASE,
+                    0x2000,
+                    4,
+                ),
+                Some(STACK_BASE)
+            );
+            let prepared = memory
+                .prepare_fixed_private_page(owner, STACK_BASE + 3)
+                .unwrap();
+            assert_eq!(prepared.new_page_pins().len(), 1);
+            assert_eq!(
+                memory.commit_prepared_private_vm(prepared),
+                Some(STACK_BASE)
+            );
+        }
+        let first = memory.private_page_pin(first_owner, STACK_BASE).unwrap();
+        let second = memory.private_page_pin(second_owner, STACK_BASE).unwrap();
+        assert_ne!(first.native_ptr(), second.native_ptr());
+        first.write_bytes(0, &[0x31]).unwrap();
+        second.write_bytes(0, &[0x72]).unwrap();
+        let mut byte = [0];
+        first.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x31]);
+        second.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x72]);
+        assert_eq!(memory.private_page_pins_for(first_owner).len(), 1);
+        assert_eq!(memory.private_page_pins_for(second_owner).len(), 1);
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            2 * STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert!(!memory.intersects_foreign_virtual_allocation(first_owner, STACK_BASE, 1));
+        assert!(!memory.intersects_foreign_virtual_allocation(second_owner, STACK_BASE, 1));
+    }
+
+    #[test]
+    fn fixed_stack_clone_deep_copies_pages_and_guest_vm_mutations_are_rejected() {
+        const STACK_BASE: u32 = 0x7100_0000;
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        assert_eq!(
+            memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ThreadStack,
+                STACK_BASE,
+                0x2000,
+                4,
+            ),
+            Some(STACK_BASE)
+        );
+        let prepared = memory
+            .prepare_fixed_private_page(owner, STACK_BASE + 1)
+            .unwrap();
+        assert_eq!(
+            memory.commit_prepared_private_vm(prepared),
+            Some(STACK_BASE)
+        );
+        let source_pin = memory.private_page_pin(owner, STACK_BASE).unwrap();
+        source_pin.write_bytes(0, &[0x45]).unwrap();
+        let clone = memory.clone();
+        let clone_pin = clone.private_page_pin(owner, STACK_BASE).unwrap();
+        assert_ne!(source_pin.native_ptr(), clone_pin.native_ptr());
+        assert!(!clone.contains_private_page_pin(&source_pin));
+        assert!(!memory.contains_private_page_pin(&clone_pin));
+        clone_pin.write_bytes(0, &[0x99]).unwrap();
+        let mut byte = [0];
+        source_pin.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x45]);
+        clone_pin.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x99]);
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert_eq!(
+            clone.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+
+        assert!(
+            memory
+                .virtual_alloc(
+                    owner,
+                    VirtualAllocationSource::ThreadStack,
+                    STACK_BASE,
+                    0x1000,
+                    MEM_COMMIT,
+                    4,
+                )
+                .is_none()
+        );
+        assert!(
+            memory
+                .prepare_private_vm(
+                    owner,
+                    VirtualAllocationSource::Private,
+                    STACK_BASE,
+                    0x1000,
+                    MEM_COMMIT,
+                    4,
+                )
+                .is_none()
+        );
+        assert!(!memory.virtual_free(owner, STACK_BASE, 0, MEM_RELEASE));
+        assert!(!memory.virtual_free(owner, STACK_BASE, 0x1000, MEM_DECOMMIT));
+        assert!(
+            memory
+                .prepare_private_vm_free(owner, STACK_BASE, 0, MEM_RELEASE)
+                .is_none()
+        );
+        assert!(
+            memory
+                .prepare_private_vm_free(owner, STACK_BASE, 0x1000, MEM_DECOMMIT)
+                .is_none()
+        );
+        assert!(
+            memory
+                .prepare_private_vm_protect(owner, STACK_BASE, 0x1000, 0x02)
+                .is_none()
+        );
+        assert_eq!(
+            memory
+                .private_page_pin(owner, STACK_BASE)
+                .unwrap()
+                .native_ptr(),
+            source_pin.native_ptr()
+        );
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            STABLE_PRIVATE_PAGE_SIZE as u64
+        );
     }
 }
