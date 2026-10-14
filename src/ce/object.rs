@@ -1539,11 +1539,12 @@ impl HandleTable {
         exit_code: u32,
     ) -> Option<Vec<u32>> {
         let process = self.processes.get_mut(&process_id)?;
-        if process.execution_live {
-            process
-                .termination_requested_exit_code
-                .get_or_insert(exit_code);
+        if !process.execution_live {
+            return None;
         }
+        process
+            .termination_requested_exit_code
+            .get_or_insert(exit_code);
         Some(process.aliases.iter().copied().collect())
     }
 
@@ -1855,6 +1856,46 @@ mod alias_tests {
             Err(Error::InvalidArgument(_))
         ));
         assert!(table.thread_birth_key_by_id(10).is_none());
+    }
+
+    #[test]
+    fn real_process_termination_request_rejects_completed_birth() {
+        let mut table = HandleTable::default();
+        let process_handle = table.create_process(9);
+        let birth = table.process_birth_key_for_handle(process_handle).unwrap();
+
+        assert_eq!(
+            table.request_process_termination_by_id(9, 0x11),
+            Some(vec![process_handle])
+        );
+        assert_eq!(
+            table.request_process_termination_by_id(9, 0x22),
+            Some(vec![process_handle])
+        );
+        assert_eq!(
+            table.process_termination_requested_exit_code_by_birth(birth),
+            Some(0x11),
+            "the first live request owns the eventual exit code"
+        );
+        assert_eq!(
+            table.process_exit_code_by_id(9),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(table.process_signaled_by_id(9), Some(false));
+
+        table
+            .finish_process_execution_by_birth(birth, 0x33)
+            .unwrap();
+        assert_eq!(table.process_exit_code_by_id(9), Some(0x11));
+        assert_eq!(table.process_signaled_by_id(9), Some(true));
+        assert_eq!(table.request_process_termination_by_id(9, 0x44), None);
+        assert_eq!(table.process_exit_code_by_id(9), Some(0x11));
+        assert_eq!(table.process_signaled_by_id(9), Some(true));
+
+        table.register_boot_process(1);
+        assert!(table.signal_pseudo_process_exit_by_id(1, 0x55).is_some());
+        assert_eq!(table.process_exit_code_by_id(1), Some(0x55));
+        assert_eq!(table.process_signaled_by_id(1), Some(true));
     }
 
     #[test]

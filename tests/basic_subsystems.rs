@@ -690,6 +690,16 @@ fn thread_and_process_exit_queue_scheduler_wait_candidates() -> Result<()> {
                 .iter()
                 .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
         }),
+        None
+    );
+    assert!(kernel.mark_process_launch_exited(&launch, 0x77));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 60, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
         Some(terminate_wait)
     );
     kernel.remove_blocked_waiter(terminate_wait).unwrap();
