@@ -1376,6 +1376,42 @@ records commands, hashes, the separate E-20 source present at broad gate,
 and this accounting limit. Shared-view and image/heap migration must either
 charge the same budget or explicitly justify a different accounting rule.
 
+## E-41 D-008 public shared-view slab source gate (2026-10-14, executed)
+
+Public named `CreateFileMappingW`/`MapViewOfFile` now publishes one canonical,
+address-stable, 4-KiB shared-page slab rather than retaining a second
+writable Legacy byte copy. A real-MIPS A→B→A fixture reopens the named object,
+manually selects two process births, and confirms alias byte coherence across
+fresh native owners, including an unflushed in-slice alias read. The equal
+guest VAs demonstrate isolation **at a shared VA** produced by the emulator's
+per-owner cursor; they do not assert a CE same-VA guarantee or prove guest
+`CreateProcessW` handoff. DIB migration, file-backed underlay, budget-OOM
+rollback, same-birth raw Flush propagation, and explicit refusal of a new DIB
+view after slab transition have focused controls. Shared pages now charge the
+existing private-page budget, but that still is not a full memory census.
+
+On the same independently rechecked nine-file source/test hash set, including
+`memory.rs` SHA-256 `CF7CF08F6D80D9D4183ADE958A4BD92B5CCBB298660D724693B3AA774D3884B6`,
+serial full release passed **1,744/0/14 ignored** across 17 blocks (raw log
+SHA-256 `E373A3712D5BB21C89DDD4BF05245A09346506CC2FB004B0BCE1422E87E02F6C`),
+and no-feature passed **1,297/0/13 ignored** across 17 blocks (raw log SHA-256
+`DA43812484166EED583C8F2C894B130DD3D1CFE905F7BC0AD90168E64939B69B`).
+The [D-008 receipt](../../evidence/d008-shared-view-20261014/validation.receipt.md)
+records the exact commands, focused controls, source and executable hashes,
+and earlier failed/partial logs. A pre-fix debug run caught an offset
+underflow hidden by release; only the final same-source pair is signoff.
+
+This closes a **source-bound D-008 shared-view gate**, not live iNavi, map
+readiness, full Stage 2, image/heap accounting, Task authority or handle
+lifetime. Named reopen still uses global handle numbers, not per-process
+handle transfer. File-backed view coherence with `ReadFile`/`WriteFile` and
+external edits remains excluded; raw adapter alias writes are not
+rollback-atomic after an error. First public mapping migrates and charges the
+whole existing anonymous Legacy backing at `MapViewOfFile`, while [Microsoft's CE mapping reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms923951%28v%3Dmsdn.10%29)
+documents default whole-section `SEC_COMMIT` at creation for CE 4.2/5;
+CE6 device-specific accounting is unmeasured. No iNavi launch or writable
+mount operation occurred in E-41.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

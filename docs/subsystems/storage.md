@@ -8,7 +8,7 @@ Status: subsystem design for review, not a new filesystem implementation. The [c
 
 Read-only existing files use host handles with a bounded 64 KiB read window; larger transfers stream through bounded chunks rather than retain the whole file. Zero-length reads preserve preceding EOF state. Writable existing files in the current 1–128MiB range may use private full-file Vec buffers; other writable files use host handles. Private buffers become host-visible at flush/close, which invalidates read windows. This is current behavior, not a universal CE cache/coherence contract.
 
-duplicate_open_file clones its OpenFile state/backing; private buffers and read windows can be copied and host handles use try_clone. Current logical cursors/alias visibility require a separate CE open-context audit. Public file mappings now use canonical VM-owned shared pages with birth-qualified per-process views in the focused D008 path; older DIB/injected views remain copy-backed until their object makes a one-way transition. Neither mapping backing is the same authority as every private OpenFile buffer. Ordinary process parking moves CPU owners; optional checkpoints can clone filesystem state/resources.
+duplicate_open_file clones its OpenFile state/backing; private buffers and read windows can be copied and host handles use try_clone. Current logical cursors/alias visibility require a separate CE open-context audit. Public file mappings now use canonical VM-owned shared pages with birth-qualified per-process views in the source-gated D008 path; older DIB/injected views remain copy-backed until their object makes a one-way transition. Neither mapping backing is the same authority as every private OpenFile buffer. Ordinary process parking moves CPU owners; optional checkpoints can clone filesystem state/resources.
 
 The first public view after all DIB views are deleted migrates the entire
 legacy mapping byte store, including pages outside a tiny first view, into
@@ -16,8 +16,11 @@ the same charged physical-page budget as private slabs. Insufficient budget
 leaves the legacy object unchanged; live DIB/public mixing and a new DIB on
 an already-migrated object fail instead of creating two writable authorities.
 File-backed pages are seeded from the host file when first needed, with any
-preexisting DIB bytes overlaid before the old store is discarded. Focused
-controls pass; broad D008 validation and live-app behavior are separate gates.
+preexisting DIB bytes overlaid before the old store is discarded. Focused and
+final frozen-source release/no-feature gates pass (1,744/0/14 ignored and
+1,297/0/13 ignored, 17 result blocks each;
+[D008 receipt](../../evidence/d008-shared-view-20261014/validation.receipt.md)).
+Live-app behavior and ordinary file-buffer/view coherence remain separate gates.
 
 Known transaction limit: file read_into commits its logical cursor only after the guest sink succeeds, but a streamed failure can leave an already-written guest prefix. ReadFile's transferred-count write can fail after bytes/cursor effects. No complete byte rollback is implemented. Host flush errors prevent successful close; current broad raw error mapping does not prove precise CE error parity.
 

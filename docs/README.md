@@ -13,14 +13,14 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | --- | --- |
 | Installed baseline | BED2: clean bounded 330 s run, still on the decorative splash (ledger E-1) |
 | App goal | The latest approved E-38 fresh-owner run survived 330 s with COM7 reads and returned tap handlers, but stayed on the splash. Map and responsive navigation remain open |
-| Architecture implemented | Process-birth identity, public private slabs, fresh-owner default and focused public shared-view controls exist. Canonical Task/Frame authority, remaining VM families and full Stage 2 acceptance are not complete |
+| Architecture implemented | Process-birth identity, public private slabs, fresh-owner default and source-gated public shared views exist. Canonical Task/Frame authority, remaining VM families and full Stage 2 acceptance are not complete |
 | Experiment | Persistent-owner 650 passed 1,618 tests, then host-crashed at 129.108 s with 1.62 GiB RSS (E-2). Source preserved in the D: checkout; deferred to Stage 8 |
 | Plan position | Stage 0 evidence is diagnostic and ongoing; Stage 1 pages are written. E-21 migrated public process-birth aliases, not full Stage 2/3 Task ownership. Stages 3-6 run on fresh engines (D-003) |
-| Red baselines | Historical E-7 stop/error and E-18 private-byte reds became narrow greens; twelve Task/alias controls remain expected red for Stage 3. Focused D008 public views do not close the full Stage 2 VM gate |
-| Decisions | D-001 to D-009 decided; D-008's single-byte-authority design now has public private and focused shared-view implementations, while image/heap, clone lineage and broader acceptance remain open. E-34 closes O-P1 stop classification |
+| Red baselines | Historical E-7 stop/error and E-18 private-byte reds became narrow greens; twelve Task/alias controls remain expected red for Stage 3. D008's public-view source gate does not close the full Stage 2 VM gate |
+| Decisions | D-001 to D-009 decided; D-008's single-byte-authority design now has public private and source-gated shared-view implementations, while image/heap, clone lineage and broader acceptance remain open. E-34 closes O-P1 stop classification |
 | Source control | D-004 now permits an external supervisor's unsigned backup commits on `main`; those snapshots are not reviewed releases and do not replace frozen test evidence |
 | Source of truth | One active source dir (this repo) and one disposable Cargo target dir (D-007). Fresh native owners are the default; persistent reuse is a Stage 8 opt-in. O-P1 classification is closed, but report hardening and Stage 2 VM coherence remain open |
-| Next action | Finish D008 focused regressions and frozen-source broad validation; then advance remaining image/heap backing and identity/clone boundaries before Stage 2 acceptance. The E-29 attempt trace remains a parallel app-evidence lane. Any further original-mount run needs new approval and verified adjacent backups. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
+| Next action | Advance immutable PE image pages as the next Stage 2 backing slice, then writable image/heap and identity/clone boundaries. D008's [source gate](../evidence/d008-shared-view-20261014/validation.receipt.md) passed release 1,744/0/14 ignored and no-feature 1,297/0/13 ignored, each across 17 result blocks; no D008 live run occurred. The E-29 attempt trace remains a parallel app-evidence lane. Any further original-mount run needs new approval and verified adjacent backups. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
 
 ## Standalone boundaries
 

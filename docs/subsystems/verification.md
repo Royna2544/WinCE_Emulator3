@@ -46,8 +46,11 @@ page owns only how to read it:
   E35 later validated public private `VirtualAlloc`, O-P4 the fresh-owner
   default, and E-39 native public-private/injected-view A→B→A same-VA bytes.
   D008's public named-reopen view and in-slice alias fixture, plus DIB-to-
-  public migration/low-budget controls, have focused passes; its broad suites
-  remain pending. The fixture selects queued child state manually, so it is
+  public migration/low-budget controls, passed focused and final frozen-source
+  broad suites: release 1,744/0/14 ignored and no-feature 1,297/0/13 ignored,
+  each across 17 result blocks
+  ([receipt](../../evidence/d008-shared-view-20261014/validation.receipt.md)).
+  The fixture selects queued child state manually, so it is
   not a guest `CreateProcessW` or scheduler handoff proof.
 - E-19's global deferred-stop slice types the first hook-observed remote or
   host-budget reason. On that frozen source, three serial focused runs passed;

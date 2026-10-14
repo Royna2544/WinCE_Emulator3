@@ -24,8 +24,11 @@ architecture is implemented.
   This is a code/test gate, not a bounded iNavi run or Stage 2 acceptance.
 - E-39 then proved public private-VM and injected file-view A→B→A same-VA
   bytes across fresh native owners. D008's public named mapping A→B→A plus
-  same-slice alias and legacy-DIB migration controls have focused passes;
-  its frozen-source broad suites are pending. These do not prove guest
+  same-slice alias and legacy-DIB migration controls passed focused and final
+  frozen-source broad gates: release 1,744/0/14 ignored and no-feature
+  1,297/0/13 ignored, each across 17 result blocks
+  ([receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)).
+  These source controls do not prove guest
   `CreateProcessW` handoff, image/heap migration or full clone relineage.
 - Phase 0 hot-path hygiene is done (E-9): amortized scheduler block hook,
   hookless trampoline default, per-slice guest-MIPS logging. It changed no
@@ -53,7 +56,7 @@ and the durable status files.
 | --- | --- | --- | --- |
 | 0 Recovery/evidence | Crash ledger, preserved 650/BED2, scoped cleanup manifest | Diagnostic-only probes/fixtures; no architecture policy change | Exact crash symbol/source recorded in the ledger; clean fallback intact |
 | 1 Common boundaries | Anchor + subsystem ownership/interface/error pages, dependency review | Named interfaces only when they replace actual consumers | No duplicate state authority; no unresolved identity/time semantics hidden in defaults |
-| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | E35 private backing, O-P4 fresh owner and E-39 native cross-process controls landed; D008 public shared views have focused passes, pending broad validation; connect image/heap and remaining identity/failure boundaries | Keep E-7/E-18, E35 public private, O-P4 closed-owner Context/pin, E-39 and D008 controls green; prove full clone relineage and bounded live behavior before Stage 2 acceptance |
+| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | E35 private backing, O-P4 fresh owner, E-39 native cross-process and D008 public shared-view source gates landed; connect immutable then writable image/heap and remaining identity/failure boundaries | Keep E-7/E-18, E35 public private, O-P4 closed-owner Context/pin, E-39 and D008 controls green; prove full clone relineage and bounded live behavior before Stage 2 acceptance |
 | 3 Task/object authority | Extend the Stage 2 canonical process-birth directory with Task/object execution/alias/wait pins | Migrate task, alias and lifecycle consumers to that same authority; do not re-mint boot/child identities | Ledger E-8 reds turn green; alias coherence, durable PID/primary identity, close/exit/wait lifetime, independent checkpoint clones |
 | 4 Continuation ownership | Raw-native vs synthesized frames; nested callback/wait state | One complete continuation family, removing old duplicate authority | Native wait→callback→resume/exit, FPU/HI/LO/branch correctness, cancellation and debugger exactness |
 | 5 Outcomes and scheduler | Explicit count/yield/deadline/error, ready indexes, CE6 priorities/quantum | Replace false timeout inference and policy heuristics together | Native errors hard-fail, equal-priority RR, higher-priority preemption, blocked/suspended eligibility; no starvation |
@@ -81,24 +84,19 @@ close/pin/context code and test gate
 ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
 The pinned vendored C `uc_close` proof is not a general checked-close API.
 E-39 separately validated real native public-private and injected-file-view
-cross-process same-VA isolation. D008 now has focused public shared-view,
-same-slice alias and DIB migration controls, with broad validation pending.
+cross-process same-VA isolation. D008's public shared-view, same-slice alias
+and DIB migration controls passed focused and final frozen-source broad gates
+([receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)).
 Unmigrated image/heap bytes, full machine checkpoint relineage, guest
 `CreateProcessW` handoff, and live footprint/map readiness retain separate
 gates; Stage 2 is not complete. Stage 3 extends, rather than recreates, the
 process-birth authority.
 
-### Next Stage 2 slice after the D008 broad gate (design only)
+### Next Stage 2 slice after the D008 source gate (design only)
 
-Make anonymous Legacy mapping creation lazy and migrate only its nonzero
-4-KiB ranges plus requested view pages to canonical slabs; keep file-backed
-zero overlays intact. First run a large-section, one-dirty-DIB-page expected-
-red control: a dirty-page view costs one page, then an untouched zero-page
-view costs one more, with matching `GlobalMemoryStatus` deltas. Viewed pages
-remain eagerly admitted; demand-zero faults are a separate measured gate.
-Keep A4's one-way authority and rollback controls. Immutable PE image pages
-are the following separate Stage 2 slice; writable image/heap and Stage 3
-Task authority stay later. See [memory](subsystems/guest-memory.md).
+Sparse migration was dropped: Microsoft's [CE `CreateFileMapping` reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms923951%28v%3Dmsdn.10%29)
+documents default `SEC_COMMIT` for the whole section. Next are immutable PE
+image pages; writable image/heap and Stage 3 Task authority stay later.
 
 ### Parallel lanes (never gate a stage)
 
@@ -139,7 +137,9 @@ close only their named gates, not Stage 2 or live acceptance.
   E-39's native public-private and injected-view A→B→A controls passed on
   later source. D008's public named-reopen A→B→A and in-slice alias controls
   passed focused runs, as did DIB-to-public whole-object migration/low-budget
-  rejection; its broad gate is pending. A raw adapter still copies guest
+  rejection; its final frozen-source release/no-feature broad gates passed
+  ([receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)).
+  A raw adapter still copies guest
   bytes, and alias propagation failure can leave already-committed effects.
   None of these controls is Stage 2 acceptance or a demonstrated footprint/
   timing improvement.
@@ -153,7 +153,7 @@ close only their named gates, not Stage 2 or live acceptance.
   on frozen source ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
   The source-specific vendored `uc_close` proof does not establish a generic
   checked-close API, cross-task context or application readiness. Later E-39
-  and focused D008 gates address native same-VA and shared views separately.
+  and D008's source gate address native same-VA and shared views separately.
 
 ## Integration discipline
 

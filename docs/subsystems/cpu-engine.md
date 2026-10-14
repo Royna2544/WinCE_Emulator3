@@ -137,9 +137,9 @@ Neither earlier gate exercised closed-owner exact-key Context transfer; O-P4
 subsequently did so under the pinned-source teardown proof above. O-P4 alone
 did not prove native A→B→A same-VA or shared-view coherence. E-39 later
 validated public-private and injected-view A→B→A bytes; D008's public
-named-view A→B→A and in-slice alias controls passed focused runs, with its
-frozen-source broad gate pending. Guest process-handoff and full Stage 2
-acceptance remain distinct.
+named-view A→B→A and in-slice alias controls passed focused and final frozen-
+source broad gates ([D008 receipt](../../evidence/d008-shared-view-20261014/validation.receipt.md)).
+Guest process-handoff and full Stage 2 acceptance remain distinct.
 
 ## Dependencies and prohibitions
 
@@ -409,8 +409,10 @@ its separate frozen source):
   Context, fresh ledger/pin reset, typed-stop and broad feature gates. E35
   separately passes the public private-page family, and E-39 proves native
   public-private/injected-view A→B→A bytes. D008's public shared-view
-  same-VA/alias fixture is focused green, not yet broad-gated. Full Task/frame-
-  qualified continuation and failure gates, image/heap coherence, machine
+  same-VA/alias fixture passed focused and final frozen-source broad suites
+  (release 1,744/0/14 ignored; no-feature 1,297/0/13 ignored, 17 result
+  blocks each). Full Task/frame-qualified continuation and failure gates,
+  image/heap coherence, machine
   clone relineage and bounded live validation remain open; neither O-P4 nor
   these narrow VM controls close Stage 2.
 - A future approved live run must report host memory peak, busy-slice MIPS

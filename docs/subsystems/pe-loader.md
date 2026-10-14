@@ -17,6 +17,32 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 - Current layout contains CE5-style addresses although the target is CE6. A loader
   address choice is implementation evidence, not a normative CE6 memory-layout contract.
 
+## Next Stage 2 slice: sealed immutable image pages (design only)
+
+The loader currently publishes each patched image as one copy-backed `MappedBlob`
+and maps its whole region RWX. After relocation, cross-DLL imports, main IAT
+and trampoline patching finish, select only complete 4-KiB pages whose PE
+section characteristics are non-writable. Exclude mixed/header, writable
+IAT/data, trampoline and runtime-loaded DLL pages from this first slice; do
+not infer immutability from `.text`/`.rdata` names alone. The sealed final
+bytes need one module-generation-qualified authority, pinned across each
+fresh owner's `mem_map_ptr` lease with RX or R guest protection. Reconciliation
+must skip the old map/copy/readback path for those pages and must not retain a
+second writable full-image Vec. Clone and unload must respect pins and module
+generation; the physical-budget treatment of ROM/XIP-style pages is still an
+explicit decision, not an assumed `GlobalMemoryStatus` improvement.
+
+Run expected-red section-eligibility and final-byte tests before changing the
+loader. Native controls then execute one sealed page in two fresh owners with
+the same pinned page identity and no per-owner blob write; a guest store must
+raise native `WRITE_PROT` without changing bytes. Repeat 200 owner cycles and
+map/finish failure cleanup with zero leaked lease pins. A synthetic roughly
+56-MiB image setup benchmark can compare its own setup/copy/RSS counters; it
+is not an iNavi timing result. Today a protection fault is a native error,
+not a synthesized CE access violation. Dynamic DLLs, writable image/heap
+pages, CE exception translation and matched iNavi setup/frame timing remain
+separate gates; another writable-mount run needs fresh approval and backups.
+
 ## Target transaction and owner
 
 - `CeMachine` sequences load/unload effects. An `AddressSpace` owns module mappings,

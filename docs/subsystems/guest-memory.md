@@ -98,7 +98,7 @@ public private-family gate, and O-P4 later passed its pinned-source fresh-owner
 teardown code/test gate
 ([receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
 
-### D008 public shared-view candidate (2026-10-14, focused controls)
+### D008 public shared-view source gate (2026-10-14)
 
 E-39 separately passed real native public-private and injected-file-view
 A→B→A same-VA bytes. D008 now routes public `MapViewOfFile` through
@@ -107,8 +107,12 @@ pages. A named `CreateFileMappingW` reopen in A/B maps the same canonical
 page at the same guest VA across fresh native owners; A→B→A stores/loads and
 an unflushed in-slice alias store/load passed the focused real-MIPS control.
 This manually selects the queued child state, not guest `CreateProcessW` or
-Scheduler handoff. The frozen-source broad release/no-feature gates remain
-pending; no D008 iNavi run, footprint or speed result exists.
+Scheduler handoff. The final frozen-source broad release/no-feature gates
+passed 1,744/0/14 ignored and 1,297/0/13 ignored, respectively, each across
+17 result blocks ([D008 receipt](../../evidence/d008-shared-view-20261014/validation.receipt.md)).
+This is isolation at a shared VA selected by the emulator's per-owner cursor,
+not CE same-VA placement semantics. No D008 iNavi run, footprint or speed
+result exists.
 
 `FileMappingObject` now has mutually exclusive `MappingBacking::Legacy` and
 `Slab` variants. The first public view preflights and migrates the **entire**
@@ -130,17 +134,9 @@ already have changed; there is no atomic rollback. Image/heap and older
 legacy-view backing, full machine checkpoint relineage, other native failure
 edges and live map readiness remain separate gates.
 
-### Post-D008 sparse anonymous Legacy conversion (design only; not implemented)
-
-After D008's broad gate, make anonymous Legacy creation lazy and first public
-migration sparse: nonzero 4-KiB Legacy ranges plus viewed pages; file-backed
-zero overlays remain full. Preflight before one-way Slab publication and
-preserve Legacy on failure (A4). An expected-red large-section/dirty-DIB test
-must show a dirty one-page view charges 4 KiB, then an untouched zero-page
-view charges 4 KiB more in public `GlobalMemoryStatus`; rollback, file,
-alias and broad controls stay green. Eager viewed-page admission and far-offset
-DIB Vec prefixes remain; demand-zero, immutable images and Stage 3 are later
-gates. No live-app acceptance is implied.
+Sparse migration was dropped: Microsoft's [CE `CreateFileMapping` reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms923951%28v%3Dmsdn.10%29)
+documents default `SEC_COMMIT` for the whole section. The next Stage 2
+backing slice is immutable PE image pages, not a demand-zero file view.
 
 ## Target authority and permitted interfaces
 
@@ -282,8 +278,9 @@ native public-private and injected-view A→B→A same-VA bytes. D008 now gives
 public file views a per-birth VA cursor, exact `(birth, base)` view binding,
 and one canonical page per `(mapping object, file offset)`. Fresh native
 owners pointer-map those pages; the focused named-reopen A→B→A and same-slice
-alias tests pass. This is a connected public view change, not a completed
-AddressSpace, Task or machine-checkpoint migration.
+alias tests and frozen-source broad gates pass. This is a connected public
+view change, not a completed AddressSpace, Task or machine-checkpoint
+migration.
 
 The public fixture uses named `CreateFileMappingW` reopen because the current
 `DuplicateHandle` mapping path clones an object by value. It manually selects
@@ -301,14 +298,14 @@ private RAM at the same VA. A raw adapter's copied aliases are a separate
 boundary: failed propagation may leave canonical and prior guest-byte
 effects, which must be reported rather than rolled back by assertion. These
 requirements, full clone relineage and image/heap migration keep O-M1 and
-Stage 2 open after the focused D008 result.
+Stage 2 open after the D008 source gate.
 
 ## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
 **Design selected; E35 validates the public private family, O-P4 validates
 the pinned-source fresh-owner code/test gate, E-39 validates native private/
-injected-view A→B→A bytes, and D008 public shared views have focused passes
-only. Stage 2 acceptance remains open.** Per anchor A4, each
+injected-view A→B→A bytes, and D008 public shared views passed focused and
+frozen-source broad gates. Stage 2 acceptance remains open.** Per anchor A4, each
 migrated page has one writable byte authority: stable host backing mapped into
 the selected native engine with `mem_map_ptr`. An `AddressSpace` owns private
 slabs and its view records; a canonical VM/file-mapping object owns shared
@@ -467,7 +464,7 @@ The receipt's failure seam is before publication, not evidence of a failing
 vendored-C `uc_close`. Public private backing is separately covered by E35.
 O-P4 alone established no live iNavi result, host-footprint comparison,
 native A→B→A isolation, shared-view coherence or full Stage 2 acceptance;
-later E-38/E-39 and focused D008 controls address those questions separately
+later E-38/E-39 and D008 source controls address those questions separately
 and do not retroactively broaden the O-P4 gate.
 
 ### Connected migration and executable gates
@@ -476,9 +473,10 @@ The optional E-25 internal slab milestone, E35 public private-family gate and
 O-P4 source-bound fresh-default code/test gate are executed, not still-proposed
 steps ([E35 receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md),
 [O-P4 receipt](../../evidence/op4-fresh-default-20261014/validation.receipt.md)).
-E-39 adds real native public-private/injected-view two-process bytes; focused
-D008 controls add public same-mapping shared-page coherence. D008 broad suites
-and a D008 live-app run remain unexecuted. The remaining connected gates are:
+E-39 adds real native public-private/injected-view two-process bytes; D008's
+focused controls and final frozen-source broad suites add public same-mapping
+shared-page coherence ([receipt](../../evidence/d008-shared-view-20261014/validation.receipt.md)).
+A D008 live-app run has not occurred. The remaining connected gates are:
 
 1. Complete the Stage 2/3 identity boundary around the E-21 process-birth
    directory: selected-state, full machine checkpoint relineage and
@@ -494,8 +492,8 @@ and a D008 live-app run remain unexecuted. The remaining connected gates are:
    independent private-clone, pin-budget and 64-cycle checked-unmap controls;
    no later change may reintroduce a second writable authority. E-16 native
    view regressions must remain green.
-3. Finish D008's public shared-view gate with frozen-source broad suites and
-   public two-process same-VA **distinct** mappings, closed-handle live views,
+3. Extend D008's source-gated public shared-view family with public two-process
+   same-VA **distinct** mappings, closed-handle live views,
    checked lazy faults, raw-adapter partial-effect controls and foreign
    private/view collision. The focused same-file named-reopen, same-slice alias,
    DIB transition and low-budget controls must stay green. Then migrate

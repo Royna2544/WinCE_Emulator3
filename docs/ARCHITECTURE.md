@@ -43,9 +43,13 @@ block hook, hookless default, per-slice MIPS logging) are in ledger E-9.
 Later E-39 controls proved public private-VM and injected file-view A→B→A
 same-VA bytes across fresh native owners. The D008 public named-mapping
 A→B→A and in-slice alias control, plus DIB-to-public migration controls,
-have focused passes; frozen-source broad validation remains pending. These
-do not prove guest `CreateProcessW` handoff, remaining image/heap backing,
-machine checkpoint relineage or another live-app result. A4 below remains
+passed focused and final frozen-source broad gates: release 1,744/0/14 ignored
+and no-feature 1,297/0/13 ignored, each across 17 result blocks
+([D008 receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)).
+This proves isolation at a shared VA selected by the emulator's per-owner
+cursor, not CE same-VA placement semantics or guest `CreateProcessW` handoff.
+Distinct public mappings at one VA, remaining image/heap backing, machine
+checkpoint relineage and live-app behavior remain unproved. A4 below remains
 the shared ownership contract, not a declaration that all consumers migrated.
 
 ## A1. Machine authority
