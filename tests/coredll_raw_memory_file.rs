@@ -18206,7 +18206,10 @@ fn coredll_raw_file_mapping_multiple_views_share_flushed_backing() -> Result<()>
         }
     ));
     let mapping_state = kernel.handles.file_mapping(mapping)?;
-    assert_eq!(&mapping_state.legacy_data().unwrap()[32..42], b"unmap-sync");
+    assert!(mapping_state.is_slab());
+    let mut canonical = [0; 10];
+    assert!(kernel.memory.shared_mapping_read(mapping, 32, &mut canonical));
+    assert_eq!(&canonical, b"unmap-sync");
     Ok(())
 }
 
