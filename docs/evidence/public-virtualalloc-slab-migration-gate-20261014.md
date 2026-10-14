@@ -1,11 +1,11 @@
 # Public `VirtualAlloc` slab migration: next dependency gate
 
-Status: **plan only; no public backing change or test result is claimed here.**
+Status: **E-35 implementation in progress; public backing is not yet validated.**
 This is a narrow update to [D-008](../DECISIONS.md), the [Stage 2 plan](../PLAN.md),
 and the detailed [E25 design](e25-private-slab-design.md), not a replacement for
 them. E25 proved guest-written bytes survive a fresh native owner only through
-an internal `cfg(test)` slab opt-in. Public `VirtualAlloc` still selects
-`LegacySeed` ([allocator](../../src/ce/memory.rs),
+an internal `cfg(test)` slab opt-in. At that baseline, public `VirtualAlloc`
+selected `LegacySeed` ([allocator](../../src/ce/memory.rs),
 [COREDLL dispatch](../../src/ce/coredll.rs)). The later [E29](ledger.md)
 330-second app run ended on splash despite observed GPS `COM7:` transfers and
 tap dequeue; it neither identifies a VM cause nor relaxes this gate. E-34
@@ -58,10 +58,11 @@ one-line change to `MemorySystem::virtual_alloc` is not that boundary.
   and same-VA new-incarnation controls. Include private-versus-foreign-view
   overlap and current-only/remote Ex target behavior; a metadata-only success
   is insufficient.
-- Inject second-page map, fault-repair, protect, unmap, hook cleanup, and
-  close failures. Assert no successful pointer/continuation/exit/rotation
-  publication, no stale-VA reuse, and retained pins until proven unmap or
-  close. Preserve the E16 owner-qualified view regressions.
+- Inject second-page map, fault-repair, protect, and unmap failures. Assert no
+  successful pointer/continuation/exit/rotation publication, no stale-VA
+  reuse, and retained pins after an uncertain unmap. Preserve the E16
+  owner-qualified view regressions. Checked hook cleanup and engine-close
+  injection belong to O-P4, not this E-35 public-VM gate.
 
 ## Gates that the transaction cannot bypass
 
@@ -77,16 +78,20 @@ checkpoint support. Machine-level birth-key relineage and enabled slab-backed
 checkpoint save/restore remain Stage 3 work. Record green test evidence before
 claiming this gate passed.
 
-The current [native lease](../../src/emulator/native_engine.rs) can check hook
-cleanup but its owning Unicorn wrapper discards `uc_close` status; pin
-quarantine is diagnostic safety, not bounded public retirement. Before public
-backing, provide a unique checked-close owner and inject close failures both
-before and after possible native side effects, proving one close attempt, no
-alias escape/double close, and no early callback or pin drop. On any mapping,
-sync, or close failure, keep old metadata when still valid, poison the native
-attempt if side effects are uncertain, retain its pins, and forbid a successful
-continuation. Already-executed writes to a live slab are attributed to the
-failed attempt, not promised rollback.
+The persistent engine can outlive many VM allocations. E-35 therefore tracks
+native page pins by page and releases a pin only after that page's checked
+`mem_unmap` succeeds. A failed unmap retains the affected pin and charges its
+bytes against the same device-derived private-RAM budget as live committed
+pages; otherwise repeated guest free/recommit could grow host memory without
+limit while appearing under budget. A 64-cycle commit/free/recommit control
+must keep pin count equal to live pages, and a forced unmap failure must reduce
+the remaining budget. On map/protect/unmap or sync failure, forbid successful
+pointer or continuation publication, keep old metadata only where still valid,
+and poison an attempt with uncertain native side effects. Already-executed
+writes to a live slab are attributed to the failed attempt, not promised
+rollback. The [native lease](../../src/emulator/native_engine.rs) still cannot
+verify `uc_close` through its Unicorn wrapper; checked close and hook teardown
+are deferred to O-P4, with conservative pin retention if close is uncertain.
 
 Only then remove the test-only selector, unignore the appropriate public
 controls, and run focused, complete release, no-feature and alternate-feature
