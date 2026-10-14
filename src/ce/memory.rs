@@ -173,8 +173,8 @@ pub enum VirtualAllocationBacking {
 
 pub const STABLE_PRIVATE_PAGE_SIZE: usize = 0x1000;
 /// Physical RAM reported by the target device's `sources/SYSTEM.TXT`.
-/// One runtime setting may override this; the same budget should later drive
-/// GlobalMemoryStatus, but its API behavior is a separate migration.
+/// One runtime setting may override this; the same budget drives private
+/// committed pages and the GlobalMemoryStatus physical-memory fields.
 pub const DEFAULT_GUEST_PHYSICAL_RAM_BYTES: u64 = 195_350_528;
 
 /// Exact page identity within a MemorySystem lineage. A native owner must

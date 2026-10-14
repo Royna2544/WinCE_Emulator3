@@ -10057,11 +10057,22 @@ fn write_global_memory_status<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let total = 64 * 1024 * 1024;
-    let available = 48 * 1024 * 1024;
+    // Boot installs the configured guest-physical-RAM size as the private-page
+    // budget. Report that same accountable budget rather than an unrelated
+    // fixed device size; only committed private pages are charged today.
+    let total_bytes = kernel.memory.private_commit_limit_bytes();
+    let used_bytes = kernel.memory.private_commit_used_bytes().min(total_bytes);
+    let available_bytes = total_bytes - used_bytes;
+    let memory_load = if total_bytes == 0 {
+        100
+    } else {
+        ((u128::from(used_bytes) * 100) / u128::from(total_bytes)) as u32
+    };
+    let total = total_bytes.min(u64::from(u32::MAX)) as u32;
+    let available = available_bytes.min(u64::from(u32::MAX)) as u32;
     let writes = [
         (0, 32),
-        (4, 25),
+        (4, memory_load),
         (8, total),
         (12, available),
         (16, total),
