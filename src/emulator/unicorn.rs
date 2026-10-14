@@ -77160,7 +77160,9 @@ mod unicorn_tests {
         let (a_handle, a_thread) = kernel.create_guest_thread(0x0040_a000, 0, false);
         let (b_handle, b_thread) = kernel.create_guest_thread(0x0040_a100, 0, false);
         let a_birth = kernel.handles.thread_birth_key_by_id(a_thread).unwrap();
-        let hwnd = kernel.gwe.create_window(1, "SMT_NATIVE_OCCUPIED", "receiver");
+        let hwnd = kernel
+            .gwe
+            .create_window(1, "SMT_NATIVE_OCCUPIED", "receiver");
         let blocked_smt = Rc::new(RefCell::new(None));
         let a_current = Rc::new(super::NativeCurrentThread::new(a_thread, Some(a_birth)));
         let a_running = Rc::new(RefCell::new(Some((a_thread, a_handle))));
@@ -77180,7 +77182,11 @@ mod unicorn_tests {
             &a_running,
         ));
         let a_blocked = blocked_smt.borrow().as_ref().expect("A blocked").clone();
-        let a_sent = kernel.gwe.sent_message(a_blocked.block_state.send_id).unwrap().clone();
+        let a_sent = kernel
+            .gwe
+            .sent_message(a_blocked.block_state.send_id)
+            .unwrap()
+            .clone();
 
         let trap = super::IMPORT_TRAP_BASE + 0x400;
         let mut image_bytes = tiny_mips_spinner_pe();
@@ -77201,14 +77207,15 @@ mod unicorn_tests {
         let mut cpu = super::UnicornMips::new()?;
         cpu.load_pe_image(&image)?;
         cpu.set_initial_thread_id(b_thread);
-        cpu.import_traps.insert(crate::emulator::imports::ImportTrap {
-            address: trap,
-            module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
-            module_name: "COREDLL.dll".to_owned(),
-            ordinal: Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
-            name: Some("SendMessageTimeout".to_owned()),
-            iat_va: 0,
-        });
+        cpu.import_traps
+            .insert(crate::emulator::imports::ImportTrap {
+                address: trap,
+                module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+                name: Some("SendMessageTimeout".to_owned()),
+                iat_va: 0,
+            });
         super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
         cpu.blocked_send_message_timeout = blocked_smt.borrow_mut().take();
         let stack_pointer = cpu.stack_top.expect("fixture stack") - 0x100;
@@ -77242,10 +77249,16 @@ mod unicorn_tests {
             Err(Error::Backend(message)) => assert!(message.contains("slot occupied"), "{message}"),
             other => panic!("occupied native import did not report Backend: {other:?}"),
         }
-        assert_eq!(attempt.report.final_outcome(), super::NativeSliceOutcome::BackendError);
+        assert_eq!(
+            attempt.report.final_outcome(),
+            super::NativeSliceOutcome::BackendError
+        );
         assert_eq!(kernel.threads.get_last_error(b_thread), 0xa100_1234);
         assert_eq!(kernel.blocked_waiters().count(), 1);
-        assert_eq!(kernel.gwe.sent_message(a_blocked.block_state.send_id), Some(&a_sent));
+        assert_eq!(
+            kernel.gwe.sent_message(a_blocked.block_state.send_id),
+            Some(&a_sent)
+        );
         assert_eq!(
             kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
             vec![a_blocked.block_state.send_id]
