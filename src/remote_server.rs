@@ -95,7 +95,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Condvar, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -158,6 +158,7 @@ struct RemoteServerState {
     config: RemoteServerConfig,
     listener: TcpListener,
     pending_control: Mutex<VecDeque<Value>>,
+    pending_control_ready: Condvar,
     latest_status: Mutex<Value>,
     latest_framebuffer: Mutex<Option<RemoteFramebufferImage>>,
     latest_debug: Mutex<BTreeMap<String, String>>,
@@ -207,6 +208,7 @@ impl RemoteServer {
                 config,
                 listener,
                 pending_control: Mutex::new(VecDeque::new()),
+                pending_control_ready: Condvar::new(),
                 latest_status: Mutex::new(v2_status_json(&RemoteStatus {
                     running: true,
                     guest_width: 0,
@@ -414,13 +416,25 @@ impl RemoteServer {
             .collect()
     }
 
-    #[cfg(test)]
-    pub(crate) fn enqueue_control_message_for_test(&self, message: Value) {
-        self.state
+    /// Wait for a queued remote control message without consuming it.
+    /// Returns false when the timeout expires with no message available.
+    pub fn wait_for_control_or_timeout(&self, timeout: Duration) -> bool {
+        let pending = self
+            .state
             .pending_control
             .lock()
-            .expect("remote control mutex")
-            .push_back(message);
+            .expect("remote control mutex");
+        let (pending, _) = self
+            .state
+            .pending_control_ready
+            .wait_timeout_while(pending, timeout, |pending| pending.is_empty())
+            .expect("remote control mutex");
+        !pending.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn enqueue_control_message_for_test(&self, message: Value) {
+        queue_control_message(&self.state, message);
     }
 
     pub fn pending_control_count(&self) -> usize {
@@ -1120,7 +1134,10 @@ fn queue_control_message(state: &RemoteServerState, message: Value) -> usize {
     while pending.len() > MAX_PENDING_CONTROL_MESSAGES {
         pending.pop_front();
     }
-    pending.len()
+    let len = pending.len();
+    drop(pending);
+    state.pending_control_ready.notify_one();
+    len
 }
 
 fn recent_log_lines(state: &RemoteServerState, max_lines: usize) -> Vec<String> {
@@ -1683,6 +1700,38 @@ mod tests {
     use super::*;
     use crate::ce::framebuffer::{PixelFormat, VirtualFramebuffer};
     use std::io::{Read, Write};
+
+    #[test]
+    fn remote_control_wait_wakes_on_arrival_and_times_out() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+
+        let start = Instant::now();
+        assert!(!server.wait_for_control_or_timeout(Duration::from_millis(50)));
+        assert!(start.elapsed() >= Duration::from_millis(40));
+
+        let waiter_server = server.clone();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            ready_tx.send(()).unwrap();
+            result_tx
+                .send(waiter_server.wait_for_control_or_timeout(Duration::from_secs(2)))
+                .unwrap();
+        });
+        ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        server.enqueue_control_message_for_test(json!({"type": "resume"}));
+        assert!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        waiter.join().unwrap();
+        assert_eq!(
+            server.drain_control_messages(),
+            vec![json!({"type": "resume"})]
+        );
+        assert!(!server.wait_for_control_or_timeout(Duration::ZERO));
+    }
 
     #[test]
     fn remote_server_accepts_v2_touch_route() {

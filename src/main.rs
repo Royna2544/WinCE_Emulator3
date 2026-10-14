@@ -380,7 +380,18 @@ fn run_cpu_loop(
                 continue;
             }
             if cpu.has_parked_child_processes() {
-                std::thread::sleep(Duration::from_millis(16));
+                let remaining = (args.cpu_wall_clock_limit_ms != 0).then(|| {
+                    Duration::from_millis(remaining_wall_clock_limit_ms(
+                        args.cpu_wall_clock_limit_ms,
+                        run_started.elapsed(),
+                    ))
+                });
+                let delay = completed_cpu_idle_delay(kernel, args.desktop, remaining);
+                if let Some(server) = kernel.remote_server.as_ref() {
+                    server.wait_for_control_or_timeout(delay);
+                } else {
+                    std::thread::sleep(delay);
+                }
                 continue;
             }
             if let Some(snapshot) = cpu.last_debug_snapshot() {
@@ -1221,6 +1232,42 @@ fn remaining_wall_clock_limit_ms(limit_ms: u64, elapsed: Duration) -> u64 {
 
 fn wall_clock_limit_expired(limit_ms: u64, elapsed: Duration) -> bool {
     limit_ms != 0 && elapsed >= Duration::from_millis(limit_ms)
+}
+
+fn completed_cpu_idle_delay(
+    kernel: &CeKernel,
+    desktop: DesktopMode,
+    remaining_run: Option<Duration>,
+) -> Duration {
+    // Host input has no shared wake event yet; retain a short guard there.
+    // Remote control has its own notification, so it may sleep longer when
+    // no canonical wait or GWE timer is approaching.
+    let guard_ms = if desktop == DesktopMode::Host {
+        16
+    } else {
+        100
+    };
+    let mut delay = Duration::from_millis(guard_ms);
+    if let Some(timer_ms) = kernel.timers.next_due_delay_ms() {
+        delay = delay.min(Duration::from_millis(u64::from(timer_ms)));
+    }
+    let now = kernel.timers.tick_count();
+    if let Some(wait_ms) = kernel
+        .scheduler
+        .blocked_waits()
+        .filter(|wait| wait.timeout_ms != u32::MAX)
+        .map(|wait| {
+            wait.timeout_ms
+                .saturating_sub(now.wrapping_sub(wait.wait_started_ms))
+        })
+        .min()
+    {
+        delay = delay.min(Duration::from_millis(u64::from(wait_ms)));
+    }
+    if let Some(remaining_run) = remaining_run {
+        delay = delay.min(remaining_run);
+    }
+    delay.max(Duration::from_millis(1))
 }
 
 fn should_rotate_parked_process(
@@ -4477,6 +4524,36 @@ mod tests {
         assert!(wall_clock_limit_expired(500, Duration::from_millis(500)));
         assert!(wall_clock_limit_expired(500, Duration::from_secs(10)));
         assert!(!wall_clock_limit_expired(0, Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn completed_cpu_idle_delay_uses_canonical_wait_deadline_and_run_cap() {
+        let config = RuntimeConfig::load_default().expect("default config");
+        let mut kernel = CeKernel::boot(config);
+        assert_eq!(
+            completed_cpu_idle_delay(&kernel, DesktopMode::Virtual, None),
+            Duration::from_millis(100)
+        );
+        let started = kernel.timers.tick_count();
+        let _ = kernel.register_blocked_waiter(
+            1,
+            0,
+            vec![],
+            SchedulerBlockedWaitKind::Sleep,
+            started,
+            7,
+        );
+        let delay = completed_cpu_idle_delay(&kernel, DesktopMode::Virtual, None);
+        assert!(delay <= Duration::from_millis(7));
+        assert!(delay >= Duration::from_millis(1));
+        assert_eq!(
+            completed_cpu_idle_delay(
+                &kernel,
+                DesktopMode::Virtual,
+                Some(Duration::from_millis(1))
+            ),
+            Duration::from_millis(1)
+        );
     }
 
     #[cfg(not(feature = "unicorn"))]

@@ -83,6 +83,10 @@ impl UnicornMips {
         false
     }
 
+    pub fn active_process_execution_completed(&self) -> bool {
+        false
+    }
+
     pub fn saved_context_at_import(
         &self,
         _module_kind: crate::emulator::imports::ImportModuleKind,
@@ -156,6 +160,10 @@ impl UnicornMips {
 
     pub fn parked_child_process_count_for_kernel(&self, _kernel: &CeKernel) -> usize {
         0
+    }
+
+    pub fn parked_timer_fallback_thread_id(&self) -> Option<u32> {
+        None
     }
 
     pub fn preserve_current_on_process_handoff(&self, _kernel: &CeKernel) -> bool {
