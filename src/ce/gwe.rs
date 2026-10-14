@@ -6937,6 +6937,159 @@ mod tests {
     }
 
     #[test]
+    fn abandoning_exact_queued_send_preserves_reused_sender_tid_send() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 27;
+        let receiver_thread = 28;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+        let abandoned_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 59, 1, 2, 0),
+                SMF_NULL,
+                Some(90),
+            )
+            .expect("queued old send");
+        gwe.set_sent_message_sender_process(abandoned_id, 100);
+        assert!(gwe.set_sent_message_result_ptr(abandoned_id, 0x1234));
+        assert!(gwe.set_sent_message_timeout_flags(abandoned_id, 0x2));
+        let replacement_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 60, 3, 4, 0),
+                SMF_NULL,
+                Some(180),
+            )
+            .expect("queued new send");
+        gwe.set_sent_message_sender_process(replacement_id, 200);
+
+        assert!(gwe.abandon_sent_message_from_sender(
+            abandoned_id,
+            sender_thread,
+            100,
+            receiver_thread,
+            Some(0x1234),
+            Some(90),
+            0x2,
+        ));
+        assert!(gwe.sent_message(abandoned_id).is_none());
+        assert!(gwe.has_pending_sent_message_for_thread(receiver_thread));
+        assert_eq!(
+            gwe.get_message(receiver_thread).map(|message| message.msg),
+            Some(WM_USER + 60)
+        );
+        assert_eq!(
+            gwe.active_sent_message_id(receiver_thread),
+            Some(replacement_id)
+        );
+        assert_eq!(
+            gwe.sent_message(replacement_id).unwrap().sender_process_id,
+            Some(200)
+        );
+        assert_eq!(
+            gwe.complete_active_sent_message(receiver_thread, 0xfeed),
+            Some(replacement_id)
+        );
+        assert_eq!(
+            gwe.take_completed_sent_message_result(replacement_id),
+            Some(0xfeed)
+        );
+    }
+
+    #[test]
+    fn abandoning_exact_active_send_detaches_sender_and_receiver_can_unwind() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 29;
+        let receiver_thread = 30;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 61, 1, 2, 0),
+                SMF_NULL,
+                Some(90),
+            )
+            .expect("queued send");
+        gwe.set_sent_message_sender_process(send_id, 300);
+        assert!(gwe.set_sent_message_result_ptr(send_id, 0x5678));
+        assert!(gwe.set_sent_message_timeout_flags(send_id, 0x4));
+        assert_eq!(gwe.get_message(receiver_thread).unwrap().msg, WM_USER + 61);
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(send_id));
+
+        assert!(gwe.abandon_sent_message_from_sender(
+            send_id,
+            sender_thread,
+            300,
+            receiver_thread,
+            Some(0x5678),
+            Some(90),
+            0x4,
+        ));
+        let sent = gwe
+            .sent_message(send_id)
+            .expect("receiver still owns active send");
+        assert_eq!(sent.sender_thread_id, None);
+        assert_eq!(sent.sender_process_id, None);
+        assert_eq!(sent.result_ptr, None);
+        assert_ne!(sent.flags & SMF_SENDER_TERMINATED, 0);
+        assert_eq!(sent.flags & SMF_RESULT_READY, 0);
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(send_id));
+        assert!(gwe.in_send_message(receiver_thread));
+        assert_eq!(gwe.reply_message(receiver_thread, 0xdead), None);
+        assert_eq!(
+            gwe.complete_active_sent_message(receiver_thread, 0xbeef),
+            Some(send_id)
+        );
+        assert!(!gwe.in_send_message(receiver_thread));
+        assert!(gwe.sent_message(send_id).is_none());
+        assert_eq!(gwe.take_completed_sent_message_result(send_id), None);
+    }
+
+    #[test]
+    fn abandoning_send_with_wrong_result_timeout_or_flags_is_noop() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 31;
+        let receiver_thread = 32;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 62, 1, 2, 0),
+                SMF_NULL,
+                Some(90),
+            )
+            .expect("queued send");
+        gwe.set_sent_message_sender_process(send_id, 400);
+        assert!(gwe.set_sent_message_result_ptr(send_id, 0x9abc));
+        assert!(gwe.set_sent_message_timeout_flags(send_id, 0x6));
+        let original = gwe.sent_message(send_id).unwrap().clone();
+
+        for (result_ptr, timeout_ms, send_timeout_flags) in [
+            (Some(0x9abd), Some(90), 0x6),
+            (Some(0x9abc), Some(91), 0x6),
+            (Some(0x9abc), Some(90), 0x7),
+        ] {
+            assert!(!gwe.abandon_sent_message_from_sender(
+                send_id,
+                sender_thread,
+                400,
+                receiver_thread,
+                result_ptr,
+                timeout_ms,
+                send_timeout_flags,
+            ));
+            assert_eq!(gwe.sent_message(send_id), Some(&original));
+            assert!(gwe.has_pending_sent_message_for_thread(receiver_thread));
+        }
+        assert_eq!(gwe.get_message(receiver_thread).unwrap().msg, WM_USER + 62);
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(send_id));
+    }
+
+    #[test]
     fn timed_out_sent_message_is_removed_from_receiver_queue() {
         let mut gwe = Gwe::default();
         let sender_thread = 31;
