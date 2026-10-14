@@ -1266,6 +1266,40 @@ adjacent ZIP backups; previous single-run approvals are spent. Real native
 two-process A→B→A same-VA bytes, shared-view slabs and Stage 3 checkpoint
 relineage remain open.
 
+## E-37 Fresh-default view and legacy-page sync (2026-10-14, executed)
+
+The one approved O-P4 iNavi launch used a preserved fresh-default EXE and fresh
+adjacent, SHA-verified ZIP backups of the three original writable mounts. It
+exited 1 after **2.9344481 s**, before NMEA or tap delivery, with
+`Backend("read process 67 mapped view 0x50000000: READ_UNMAPPED")`. Its two
+memory samples and 37 busy slices are startup diagnostics, not a 330-second
+memory, throughput, splash/map or Stage 2 result. The single-run approval is
+spent; the [live receipt](../../evidence/e22-live-20261014T041105Z/analysis.receipt.md)
+retains the exact backup, binary, input and output evidence.
+
+The fresh-owner outgoing view sync now reads only native mapped intersections,
+leaving untouched canonical mapping bytes intact. The incoming sync writes
+only mapped spans and fails when an unmapped gap lacks matching canonical lazy
+seed bytes. A separate first-import generation sweep now seeds only newly
+mapped virtual pages; it cannot replay stale `initial_bytes` over a guest
+store to a page fault-mapped earlier in that slice. Direct native tests cover
+unmapped/partial readback, partial inbound positive and stale-seed negative,
+and a real MIPS guest store before the generation sweep. Public controls cover
+`MapViewOfFile` across fresh slices, a guest store around its first subsequent
+import, and a successful `CreateProcessW` with `live_pump: true` through the
+deferred launch/re-seed path. The public CreateProcess control does not by
+itself prove partial inbound mapping: the generic mapper fills remaining pages
+before re-seed; the direct positive/negative tests discriminate that case.
+
+Frozen-source full release passed **1,739/0/14 ignored**, no-feature
+**1,294/0/13 ignored**; both no-trace checks and release build exited 0.
+The [E-37 receipt](../../evidence/op4-fresh-view-readback-20261014/validation.receipt.md)
+has source, raw-log, preserved EXE/PDB hashes and test-scope limits. This is a
+source-bound sync gate only; no iNavi re-run occurred after the fixes. Another
+original-mount launch requires fresh human approval and fresh adjacent verified
+ZIP backups. GMS, real native E-20 A→B→A bytes, shared-view slab coherence and
+full Stage 2/live acceptance remain separate.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
