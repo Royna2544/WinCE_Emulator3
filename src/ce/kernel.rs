@@ -3086,6 +3086,9 @@ impl CeKernel {
         exit_code: u32,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) {
+        // Capture the birth before execution completion can retire its last
+        // directory entry. Queued typed payloads and heap state share it.
+        let exiting_birth = self.handles.process_birth_key(launch.process_id);
         let backing_store_targets =
             self.process_window_backing_store_targets(launch.process_id, launch.thread_id);
         self.destroy_process_windows(launch.process_id, launch.thread_id);
@@ -3094,9 +3097,9 @@ impl CeKernel {
         } else {
             self.discard_window_backing_stores(&backing_store_targets);
         }
-        // Completion may retire the last birth-directory entry immediately.
-        // Keep its exact incarnation for the fixed heap/stack VM cleanup.
-        let exiting_birth = self.handles.process_birth_key(launch.process_id);
+        if let Some(owner) = exiting_birth {
+            self.release_message_pointer_payloads_for_owner(owner);
+        }
         if let Some(aliases) = self
             .handles
             .finish_process_execution_by_id(launch.process_id, exit_code)
@@ -3106,6 +3109,7 @@ impl CeKernel {
                 // alive until that owner's checked close; only canonical VM
                 // records are retired here.
                 self.memory.retire_fixed_private_ranges_for_owner(owner);
+                self.memory.retire_heap_state_for_owner(owner);
             }
             for alias in aliases {
                 self.queue_object_wake_candidates(alias);
@@ -3172,6 +3176,7 @@ impl CeKernel {
                 Some(format!("reason=process_exit/process_id={process_id}")),
             );
             let _ = self.gwe.destroy_window(*hwnd, self.timers.tick_count());
+            self.release_discarded_message_pointer_payloads();
             self.record_window_lifecycle_trace(
                 "destroy_window_end",
                 thread_id,
@@ -8368,12 +8373,23 @@ impl CeKernel {
             state: data.state,
             state_mask: data.state_mask,
         };
-        let lparam = self.queue_notify_icon_payload(payload, NOTIFYICONDATA_FIXED_SIZE_W);
-        if lparam == 0 {
+        let Some((owner, lparam)) =
+            self.queue_notify_icon_payload(taskbar_hwnd, payload, NOTIFYICONDATA_FIXED_SIZE_W)
+        else {
             return false;
+        };
+        if self.post_window_typed_payload_message(
+            taskbar_hwnd,
+            WM_HANDLESHELLNOTIFYICON,
+            op,
+            lparam,
+            owner,
+        ) {
+            true
+        } else {
+            let _ = self.release_message_pointer_payload(owner, lparam);
+            false
         }
-        self.post_window_message(taskbar_hwnd, WM_HANDLESHELLNOTIFYICON, op, lparam);
-        true
     }
 
     pub fn post_shell_notification_callback(
@@ -8539,7 +8555,7 @@ impl CeKernel {
         if record.hwnd_sink == 0 || !self.gwe.is_window(record.hwnd_sink) {
             return false;
         }
-        let lparam = self.queue_shell_notification_payload(ShellNotificationMessage {
+        let Some((owner, lparam)) = self.queue_shell_notification_payload(record.hwnd_sink, ShellNotificationMessage {
             hwnd_from: 0,
             id_from: record.id,
             code,
@@ -8548,14 +8564,19 @@ impl CeKernel {
             data0,
             data1,
             link,
-        });
-        if lparam == 0 {
+        }) else {
             return false;
-        }
-        if self.post_message_w(record.hwnd_sink, WM_NOTIFY, record.id, lparam) {
+        };
+        if self.post_window_typed_payload_message(
+            record.hwnd_sink,
+            WM_NOTIFY,
+            record.id,
+            lparam,
+            owner,
+        ) {
             true
         } else {
-            let _ = self.release_message_pointer_payload(lparam);
+            let _ = self.release_message_pointer_payload(owner, lparam);
             false
         }
     }
@@ -8692,6 +8713,7 @@ impl CeKernel {
                 time_ms,
                 source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
                 mouse_pos_at_post: None,
+                typed_payload_owner: None,
             };
             self.gwe
                 .post_message(hot_key_thread, hot_key_message.clone());
@@ -8712,6 +8734,7 @@ impl CeKernel {
             time_ms,
             source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
             mouse_pos_at_post: None,
+            typed_payload_owner: None,
         };
         self.gwe.post_message(target_thread, key_message.clone());
         self.record_message_op(
@@ -8735,6 +8758,7 @@ impl CeKernel {
                     time_ms,
                     source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
                     mouse_pos_at_post: None,
+                    typed_payload_owner: None,
                 };
                 self.gwe.post_message(target_thread, char_message.clone());
                 self.record_message_op(
@@ -8967,6 +8991,7 @@ impl CeKernel {
         }
         let destroyed = self.gwe.destroy_window(hwnd, self.timers.tick_count());
         if destroyed {
+            self.release_discarded_message_pointer_payloads();
             self.shell.remove_windows_state(&targets);
             self.timers.remove_window_timers(&targets);
             for send_id in doomed_send_ids {
@@ -9124,6 +9149,13 @@ impl CeKernel {
         if message.msg == crate::ce::gwe::WM_QUIT {
             return message.wparam;
         }
+        if message.typed_payload_owner.is_some()
+            && self.message_pointer_payload_for_message(&message).is_none()
+        {
+            // A tagged host payload cannot become an ordinary guest lParam
+            // after its window/birth or registry entry has gone stale.
+            return 0;
+        }
         let sent_context_thread = if message.source == crate::ce::gwe::MSGSRC_SOFTWARE_SEND {
             self.gwe
                 .window(message.hwnd)
@@ -9150,21 +9182,61 @@ impl CeKernel {
         result
     }
 
-    pub fn message_pointer_payload(&self, ptr: u32) -> Option<MessagePointerPayload> {
-        self.gwe.message_pointer_payload(ptr)
+    fn recipient_birth_for_window(&self, hwnd: u32) -> Option<ProcessBirthKey> {
+        let window = self.gwe.window(hwnd)?;
+        if window.destroyed {
+            return None;
+        }
+        self.handles.process_birth_key(window.process_id)
     }
 
-    pub fn release_message_pointer_payload(&mut self, ptr: u32) -> Option<MessagePointerPayload> {
-        let payload = self.gwe.take_message_pointer_payload(ptr)?;
-        let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+    pub fn message_pointer_payload_for_message(
+        &self,
+        message: &Message,
+    ) -> Option<MessagePointerPayload> {
+        let owner = message.typed_payload_owner?;
+        (self.recipient_birth_for_window(message.hwnd) == Some(owner))
+            .then(|| self.gwe.message_pointer_payload(owner, message.lparam))
+            .flatten()
+    }
+
+    pub fn message_pointer_payload(
+        &self,
+        owner: ProcessBirthKey,
+        ptr: u32,
+    ) -> Option<MessagePointerPayload> {
+        self.gwe.message_pointer_payload(owner, ptr)
+    }
+
+    pub fn release_message_pointer_payload(
+        &mut self,
+        owner: ProcessBirthKey,
+        ptr: u32,
+    ) -> Option<MessagePointerPayload> {
+        let payload = self.gwe.take_message_pointer_payload(owner, ptr)?;
+        let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
         Some(payload)
+    }
+
+    fn release_discarded_message_pointer_payloads(&mut self) {
+        for message in self.gwe.take_discarded_host_payload_messages() {
+            if let Some(owner) = message.typed_payload_owner {
+                let _ = self.release_message_pointer_payload(owner, message.lparam);
+            }
+        }
+    }
+
+    fn release_message_pointer_payloads_for_owner(&mut self, owner: ProcessBirthKey) {
+        for ptr in self.gwe.message_pointer_payload_addresses_for_owner(owner) {
+            let _ = self.release_message_pointer_payload(owner, ptr);
+        }
     }
 
     fn release_dispatch_message_pointer_payload(&mut self, message: &Message) {
         let should_release = matches!(
             (
                 message.msg,
-                self.gwe.message_pointer_payload(message.lparam)
+                self.message_pointer_payload_for_message(message)
             ),
             (
                 WM_WINDOWPOSCHANGED,
@@ -9176,7 +9248,9 @@ impl CeKernel {
                 )
         );
         if should_release {
-            self.release_message_pointer_payload(message.lparam);
+            if let Some(owner) = message.typed_payload_owner {
+                self.release_message_pointer_payload(owner, message.lparam);
+            }
         }
     }
 
@@ -9860,12 +9934,23 @@ impl CeKernel {
             return;
         };
         if before != after || force_window_pos_changed {
-            let lparam = self
+            let payload = self
                 .gwe
                 .window_pos_for_rect(hwnd, after, insert_after, flags)
-                .map(|payload| self.queue_window_pos_payload(payload))
-                .unwrap_or(0);
-            self.post_window_message(hwnd, WM_WINDOWPOSCHANGED, 0, lparam);
+                .and_then(|payload| self.queue_window_pos_payload(hwnd, payload));
+            if let Some((owner, lparam)) = payload {
+                if !self.post_window_typed_payload_message(
+                    hwnd,
+                    WM_WINDOWPOSCHANGED,
+                    0,
+                    lparam,
+                    owner,
+                ) {
+                    let _ = self.release_message_pointer_payload(owner, lparam);
+                }
+            } else {
+                self.post_window_message(hwnd, WM_WINDOWPOSCHANGED, 0, 0);
+            }
         }
         let moved = before.left != after.left || before.top != after.top;
         let sized = before.width() != after.width() || before.height() != after.height();
@@ -9899,22 +9984,32 @@ impl CeKernel {
         }
     }
 
-    fn queue_window_pos_payload(&mut self, payload: WindowPos) -> u32 {
-        let Some(ptr) = self.memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 28) else {
-            return 0;
+    fn queue_window_pos_payload(
+        &mut self,
+        hwnd: u32,
+        payload: WindowPos,
+    ) -> Option<(ProcessBirthKey, u32)> {
+        let owner = self.recipient_birth_for_window(hwnd)?;
+        let Some(ptr) = self.memory.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 28) else {
+            return None;
         };
         if self
             .gwe
-            .insert_message_pointer_payload(ptr, MessagePointerPayload::WindowPos(payload))
+            .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::WindowPos(payload))
         {
-            ptr
+            Some((owner, ptr))
         } else {
-            let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
-            0
+            let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
+            None
         }
     }
 
-    fn queue_shell_notification_payload(&mut self, payload: ShellNotificationMessage) -> u32 {
+    fn queue_shell_notification_payload(
+        &mut self,
+        hwnd: u32,
+        payload: ShellNotificationMessage,
+    ) -> Option<(ProcessBirthKey, u32)> {
+        let owner = self.recipient_birth_for_window(hwnd)?;
         let link_bytes = payload
             .link
             .as_ref()
@@ -9923,33 +10018,42 @@ impl CeKernel {
         let alloc_size = 28usize.saturating_add(link_bytes);
         let Some(ptr) = self
             .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, 0, alloc_size as u32)
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, alloc_size as u32)
         else {
-            return 0;
+            return None;
         };
         if self
             .gwe
-            .insert_message_pointer_payload(ptr, MessagePointerPayload::ShellNotification(payload))
+            .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::ShellNotification(payload))
         {
-            ptr
+            Some((owner, ptr))
         } else {
-            let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
-            0
+            let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
+            None
         }
     }
 
-    fn queue_notify_icon_payload(&mut self, payload: NotifyIconMessage, alloc_size: u32) -> u32 {
-        let Some(ptr) = self.memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, alloc_size) else {
-            return 0;
+    fn queue_notify_icon_payload(
+        &mut self,
+        hwnd: u32,
+        payload: NotifyIconMessage,
+        alloc_size: u32,
+    ) -> Option<(ProcessBirthKey, u32)> {
+        let owner = self.recipient_birth_for_window(hwnd)?;
+        let Some(ptr) = self
+            .memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, alloc_size)
+        else {
+            return None;
         };
         if self
             .gwe
-            .insert_message_pointer_payload(ptr, MessagePointerPayload::NotifyIcon(payload))
+            .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::NotifyIcon(payload))
         {
-            ptr
+            Some((owner, ptr))
         } else {
-            let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
-            0
+            let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
+            None
         }
     }
 
@@ -9988,12 +10092,22 @@ impl CeKernel {
                 attributes,
                 file_size,
             };
-            let lparam = self.queue_shell_file_change_payload(payload);
-            if lparam == 0 {
+            let Some((owner, lparam)) =
+                self.queue_shell_file_change_payload(registration.hwnd, payload)
+            else {
                 continue;
+            };
+            if self.post_window_typed_payload_message(
+                registration.hwnd,
+                WM_FILECHANGEINFO,
+                event_id,
+                lparam,
+                owner,
+            ) {
+                posted = posted.saturating_add(1);
+            } else {
+                let _ = self.release_message_pointer_payload(owner, lparam);
             }
-            self.post_window_message(registration.hwnd, WM_FILECHANGEINFO, event_id, lparam);
-            posted = posted.saturating_add(1);
         }
         posted
     }
@@ -10161,7 +10275,12 @@ impl CeKernel {
         }
     }
 
-    fn queue_shell_file_change_payload(&mut self, payload: FileChangeNotificationMessage) -> u32 {
+    fn queue_shell_file_change_payload(
+        &mut self,
+        hwnd: u32,
+        payload: FileChangeNotificationMessage,
+    ) -> Option<(ProcessBirthKey, u32)> {
+        let owner = self.recipient_birth_for_window(hwnd)?;
         let item_bytes = if payload.flags == SHCNF_IDLIST {
             payload
                 .pidl1
@@ -10182,19 +10301,42 @@ impl CeKernel {
         let alloc_size = FILECHANGENOTIFY_BASE_SIZE.saturating_add(item_bytes);
         let Some(ptr) = self
             .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, 0, alloc_size as u32)
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, alloc_size as u32)
         else {
-            return 0;
+            return None;
         };
         if self.gwe.insert_message_pointer_payload(
+            owner,
             ptr,
             MessagePointerPayload::FileChangeNotification(payload),
         ) {
-            ptr
+            Some((owner, ptr))
         } else {
-            let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
-            0
+            let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
+            None
         }
+    }
+
+    fn post_window_typed_payload_message(
+        &mut self,
+        hwnd: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+        owner: ProcessBirthKey,
+    ) -> bool {
+        if self.recipient_birth_for_window(hwnd) != Some(owner)
+            || self.gwe.message_pointer_payload(owner, lparam).is_none()
+        {
+            return false;
+        }
+        let Some(thread_id) = self.gwe.window(hwnd).map(|window| window.thread_id) else {
+            return false;
+        };
+        let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count())
+            .with_typed_payload_owner(owner);
+        self.post_gwe_message(thread_id, message);
+        true
     }
 
     fn post_window_message(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) {

@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use crate::ce::object::ProcessBirthKey;
+
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct PeekFlags: u32 {
@@ -317,6 +319,9 @@ pub struct Message {
     pub time_ms: u32,
     pub source: u32,
     pub mouse_pos_at_post: Option<u32>,
+    /// Host-owned typed payload provenance. Ordinary guest lParam values are
+    /// unmarked even when another process owns a payload at the same VA.
+    pub typed_payload_owner: Option<ProcessBirthKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -934,7 +939,8 @@ pub struct Gwe {
     ime_components: BTreeMap<u32, ImeComponentState>,
     ime_registered_words: Vec<ImeRegisteredWord>,
     sip_panel: SipPanelState,
-    message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
+    message_pointer_payloads: BTreeMap<(ProcessBirthKey, u32), MessagePointerPayload>,
+    discarded_host_payload_messages: Vec<Message>,
     replied_send_depth_by_thread: BTreeMap<u32, BTreeSet<u32>>,
     clipboard: ClipboardState,
     caret: Option<CaretState>,
@@ -1049,6 +1055,7 @@ impl Default for Gwe {
             ime_registered_words: Vec::new(),
             sip_panel: SipPanelState::default(),
             message_pointer_payloads: BTreeMap::new(),
+            discarded_host_payload_messages: Vec::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             clipboard: ClipboardState::default(),
             caret: None,
@@ -1856,9 +1863,18 @@ impl Gwe {
             .retain(|hwnd, _| !targets.contains(hwnd));
         self.ime_contexts
             .retain(|_, context| context.hwnd.is_none_or(|hwnd| !targets.contains(&hwnd)));
+        let mut discarded_host_payload_messages = Vec::new();
         for queue in self.queues.values_mut() {
-            queue.retain(|message| message.hwnd == 0 || !targets.contains(&message.hwnd));
+            queue.retain(|message| {
+                let keep = message.hwnd == 0 || !targets.contains(&message.hwnd);
+                if !keep && message.typed_payload_owner.is_some() {
+                    discarded_host_payload_messages.push(message.clone());
+                }
+                keep
+            });
         }
+        self.discarded_host_payload_messages
+            .extend(discarded_host_payload_messages);
         let doomed_sent: Vec<u64> = self
             .sent_messages
             .iter()
@@ -3542,22 +3558,47 @@ impl Gwe {
 
     pub fn insert_message_pointer_payload(
         &mut self,
+        owner: ProcessBirthKey,
         ptr: u32,
         payload: MessagePointerPayload,
     ) -> bool {
         if ptr == 0 {
             return false;
         }
-        self.message_pointer_payloads.insert(ptr, payload);
-        true
+        match self.message_pointer_payloads.entry((owner, ptr)) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(payload);
+                true
+            }
+            std::collections::btree_map::Entry::Occupied(_) => false,
+        }
     }
 
-    pub fn message_pointer_payload(&self, ptr: u32) -> Option<MessagePointerPayload> {
-        self.message_pointer_payloads.get(&ptr).cloned()
+    pub fn message_pointer_payload(
+        &self,
+        owner: ProcessBirthKey,
+        ptr: u32,
+    ) -> Option<MessagePointerPayload> {
+        self.message_pointer_payloads.get(&(owner, ptr)).cloned()
     }
 
-    pub fn take_message_pointer_payload(&mut self, ptr: u32) -> Option<MessagePointerPayload> {
-        self.message_pointer_payloads.remove(&ptr)
+    pub fn take_message_pointer_payload(
+        &mut self,
+        owner: ProcessBirthKey,
+        ptr: u32,
+    ) -> Option<MessagePointerPayload> {
+        self.message_pointer_payloads.remove(&(owner, ptr))
+    }
+
+    pub fn message_pointer_payload_addresses_for_owner(&self, owner: ProcessBirthKey) -> Vec<u32> {
+        self.message_pointer_payloads
+            .range((owner, 0)..=(owner, u32::MAX))
+            .map(|((_, ptr), _)| *ptr)
+            .collect()
+    }
+
+    pub fn take_discarded_host_payload_messages(&mut self) -> Vec<Message> {
+        std::mem::take(&mut self.discarded_host_payload_messages)
     }
 
     pub fn queue_sent_message_for_window(&mut self, hwnd: u32, message: Message) -> bool {
@@ -5871,6 +5912,7 @@ impl Message {
             time_ms,
             source: MSGSRC_UNKNOWN,
             mouse_pos_at_post: None,
+            typed_payload_owner: None,
         }
     }
 
@@ -5881,6 +5923,11 @@ impl Message {
 
     pub fn with_mouse_pos(mut self, mouse_pos: u32) -> Self {
         self.mouse_pos_at_post = Some(mouse_pos);
+        self
+    }
+
+    pub fn with_typed_payload_owner(mut self, owner: ProcessBirthKey) -> Self {
+        self.typed_payload_owner = Some(owner);
         self
     }
 }
