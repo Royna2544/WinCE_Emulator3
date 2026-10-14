@@ -101,7 +101,7 @@ use wince_emulation_v3::{
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_LOCK_VIOLATION, ERROR_NO_MORE_FILES,
-            ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
+            ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
         },
         timer::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -4347,7 +4347,11 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
 
-    let virtual_base = match table.dispatch_raw_ordinal_with_memory(
+    let virtual_count_before = kernel.memory.virtual_allocations().count();
+    let private_bytes_before = kernel.memory.private_commit_used_bytes();
+    // A null-address MEM_COMMIT-only request has no reservation. The public
+    // private-VM path must reject it before any guest page is published.
+    let rejected_virtual_ptr = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
         thread_id,
@@ -4358,13 +4362,20 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             value: CoredllValue::Handle(ptr),
             ..
         } => ptr,
-        other => panic!("VirtualAlloc did not return a base: {other:?}"),
+        other => panic!("VirtualAlloc did not return a handle result: {other:?}"),
     };
-    assert!(
-        kernel
-            .memory
-            .virtual_allocation(kernel.current_process_birth_key().unwrap(), virtual_base)
-            .is_some()
+    assert_eq!(rejected_virtual_ptr, 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_ENOUGH_MEMORY
+    );
+    assert_eq!(
+        kernel.memory.virtual_allocations().count(),
+        virtual_count_before
+    );
+    assert_eq!(
+        kernel.memory.private_commit_used_bytes(),
+        private_bytes_before
     );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -4372,20 +4383,24 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             &mut memory,
             thread_id,
             ORD_IS_BAD_WRITE_PTR,
-            [virtual_base, 0x1234],
+            [rejected_virtual_ptr, 0x1234],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(false),
+            value: CoredllValue::Bool(true),
             ..
         }
     ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
             ORD_FLUSH_INSTRUCTION_CACHE,
-            [0xffff_fffe, virtual_base, 0x1234],
+            [0xffff_fffe, rejected_virtual_ptr, 0x1234],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -4398,13 +4413,17 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             &mut memory,
             thread_id,
             ORD_VIRTUAL_FREE,
-            [virtual_base, 0, MEM_RELEASE],
+            [rejected_virtual_ptr, 0, MEM_RELEASE],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(true),
+            value: CoredllValue::Bool(false),
             ..
         }
     ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     let com_path_ptr = 0x1_0800;
     let ioctl_in = 0x1_0900;
