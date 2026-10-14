@@ -57952,15 +57952,12 @@ mod unicorn_tests {
             .cpu
             .saved_context_pc()
             .expect("parent continuation");
-        let native = outgoing
-            .cpu
-            .native_engine
-            .lease()
-            .expect("parent native owner");
-        let native_pc = native.reg_read(RegisterMIPS::PC).expect("native PC") as u32;
-        native.finish().expect("finish parent inspection lease");
+        assert!(
+            outgoing.cpu.native_engine_identity_for_test().is_none(),
+            "the outgoing parent's native owner closed before handoff"
+        );
         eprintln!(
-            "E34 mixed JR: raw={:?} saved=0x{saved_pc:08x} native=0x{native_pc:08x} snapshot=0x{:08x} marker={} outcome={:?}",
+            "E34 mixed JR: raw={:?} saved=0x{saved_pc:08x} snapshot=0x{:08x} marker={} outcome={:?}",
             report.raw_stop_pc(),
             snapshot.pc,
             snapshot.host_wall_clock_stop.is_some(),
@@ -57974,7 +57971,6 @@ mod unicorn_tests {
             saved_pc, jr_pc,
             "the checked JR continuation must not be rewritten"
         );
-        assert_eq!(native_pc, jr_pc);
         assert_eq!(snapshot.pc, jr_pc);
         assert!(
             snapshot.import_counts.is_empty(),
@@ -58903,7 +58899,7 @@ mod unicorn_tests {
             "the fixture must use the hookless code path and its scheduler block hook"
         );
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
-        cpu.run_until_import_trap_with_framebuffer_limits(
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
@@ -58912,7 +58908,8 @@ mod unicorn_tests {
                 stop_pc: None,
                 live_pump: true,
             },
-        )?;
+        );
+        execution.result?;
         assert_eq!(
             cpu.last_native_slice_outcome(),
             super::NativeSliceOutcome::HookStop(super::NativeHookStopReason::HostWallBudget),
@@ -58920,20 +58917,22 @@ mod unicorn_tests {
         );
         assert!(cpu.last_native_slice_outcome().is_service_boundary());
         assert!(cpu.saved_context_pc().is_some());
-        let native = cpu.native_engine.lease().unwrap();
         assert_eq!(
-            native
-                .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
-                .unwrap(),
-            0,
+            execution.report.timeout_query(),
+            &super::AttemptObservation::Value(false),
             "the native one-second deadline did not cause this stop"
         );
-        native.finish().unwrap();
+        assert_eq!(
+            execution.report.raw_stop_pc(),
+            &super::AttemptObservation::Value(cpu.saved_context_pc().unwrap())
+        );
+        assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
     }
 
     fn assert_global_deferred_hook_stop(
         cpu: &super::UnicornMips,
+        report: &super::NativeAttemptReport,
         reason: super::NativeHookStopReason,
     ) {
         assert_eq!(
@@ -58954,19 +58953,16 @@ mod unicorn_tests {
             snapshot.host_wall_clock_stop.as_ref().map(|stop| stop.pc),
             Some(saved_pc)
         );
-        let native = cpu.native_engine.lease().unwrap();
         assert_eq!(
-            native.reg_read(RegisterMIPS::PC).unwrap(),
-            u64::from(saved_pc)
+            report.raw_stop_pc(),
+            &super::AttemptObservation::Value(saved_pc)
         );
         assert_eq!(
-            native
-                .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
-                .unwrap(),
-            0,
+            report.timeout_query(),
+            &super::AttemptObservation::Value(false),
             "the native one-second deadline did not cause the deferred stop"
         );
-        native.finish().unwrap();
+        assert!(cpu.native_engine_identity_for_test().is_none());
     }
 
     #[test]
@@ -58977,7 +58973,7 @@ mod unicorn_tests {
             inner: VirtualFramebuffer::default_primary()?,
             ticks: 0,
         };
-        cpu.run_until_import_trap_with_framebuffer_limits(
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
@@ -58986,9 +58982,14 @@ mod unicorn_tests {
                 stop_pc: Some(0xdead_beef), // unreachable; selects the global hook
                 live_pump: true,
             },
-        )?;
+        );
+        execution.result?;
         assert_eq!(framebuffer.ticks, 1, "the global hook serviced the pause");
-        assert_global_deferred_hook_stop(&cpu, super::NativeHookStopReason::HostWallBudget);
+        assert_global_deferred_hook_stop(
+            &cpu,
+            &execution.report,
+            super::NativeHookStopReason::HostWallBudget,
+        );
         Ok(())
     }
 
@@ -59026,7 +59027,7 @@ mod unicorn_tests {
             "y": 34,
         }));
         assert_eq!(server.pending_control_count(), 1);
-        cpu.run_until_import_trap_with_framebuffer_limits(
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
@@ -59035,8 +59036,13 @@ mod unicorn_tests {
                 stop_pc: Some(0xdead_beef), // unreachable; selects the global hook
                 live_pump: true,
             },
-        )?;
-        assert_global_deferred_hook_stop(&cpu, super::NativeHookStopReason::RemoteControlService);
+        );
+        execution.result?;
+        assert_global_deferred_hook_stop(
+            &cpu,
+            &execution.report,
+            super::NativeHookStopReason::RemoteControlService,
+        );
         assert_eq!(server.pending_control_count(), 0);
         let mut delivered = false;
         for _ in 0..64 {
@@ -59052,7 +59058,11 @@ mod unicorn_tests {
         Ok(())
     }
 
-    fn assert_sparse_hook_stop(cpu: &super::UnicornMips, reason: super::NativeHookStopReason) {
+    fn assert_sparse_hook_stop(
+        cpu: &super::UnicornMips,
+        report: &super::NativeAttemptReport,
+        reason: super::NativeHookStopReason,
+    ) {
         assert_eq!(
             cpu.last_native_slice_outcome(),
             super::NativeSliceOutcome::HookStop(reason)
@@ -59078,19 +59088,16 @@ mod unicorn_tests {
             snapshot.host_wall_clock_stop.as_ref().map(|stop| stop.pc),
             Some(saved_pc)
         );
-        let native = cpu.native_engine.lease().unwrap();
         assert_eq!(
-            native.reg_read(RegisterMIPS::PC).unwrap(),
-            u64::from(saved_pc)
+            report.raw_stop_pc(),
+            &super::AttemptObservation::Value(saved_pc)
         );
         assert_eq!(
-            native
-                .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
-                .unwrap(),
-            0,
+            report.timeout_query(),
+            &super::AttemptObservation::Value(false),
             "the native deadline did not cause the sparse stop"
         );
-        native.finish().unwrap();
+        assert!(cpu.native_engine_identity_for_test().is_none());
     }
 
     #[test]
@@ -59132,7 +59139,7 @@ mod unicorn_tests {
             "y": 34,
         }));
         assert_eq!(server.pending_control_count(), 1);
-        cpu.run_until_import_trap_with_framebuffer_limits(
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
@@ -59141,8 +59148,13 @@ mod unicorn_tests {
                 stop_pc: None,
                 live_pump: true,
             },
-        )?;
-        assert_sparse_hook_stop(&cpu, super::NativeHookStopReason::RemoteControlService);
+        );
+        execution.result?;
+        assert_sparse_hook_stop(
+            &cpu,
+            &execution.report,
+            super::NativeHookStopReason::RemoteControlService,
+        );
         assert_eq!(server.pending_control_count(), 0);
         let mut delivered = false;
         for _ in 0..64 {
@@ -59168,7 +59180,7 @@ mod unicorn_tests {
             inner: VirtualFramebuffer::default_primary()?,
             ticks: 0,
         };
-        cpu.run_until_import_trap_with_framebuffer_limits(
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
@@ -59177,9 +59189,14 @@ mod unicorn_tests {
                 stop_pc: None,
                 live_pump: true,
             },
-        )?;
+        );
+        execution.result?;
         assert!(framebuffer.ticks >= 1);
-        assert_sparse_hook_stop(&cpu, super::NativeHookStopReason::HostWallBudget);
+        assert_sparse_hook_stop(
+            &cpu,
+            &execution.report,
+            super::NativeHookStopReason::HostWallBudget,
+        );
         Ok(())
     }
 
@@ -59272,7 +59289,7 @@ mod unicorn_tests {
         // would rotate to the visible peer before any native attempt.
         active.slice_end_rotation_pending = true;
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
-        active.run_until_import_trap_with_framebuffer_limits(
+        let execution = active.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
@@ -59281,7 +59298,8 @@ mod unicorn_tests {
                 stop_pc: global.then_some(0xdead_beef),
                 live_pump: true,
             },
-        )?;
+        );
+        execution.result?;
         assert_eq!(kernel.current_process_id(), launch.process_id);
         let outgoing = active
             .parked_child_processes
@@ -59315,29 +59333,35 @@ mod unicorn_tests {
             snapshot.host_wall_clock_stop.as_ref().map(|stop| stop.pc),
             sparse.then_some(saved_pc)
         );
-        let native = outgoing.cpu.native_engine.lease().unwrap();
         assert_eq!(
-            native.reg_read(RegisterMIPS::PC).unwrap(),
-            u64::from(saved_pc)
+            execution.report.raw_stop_pc(),
+            &super::AttemptObservation::Value(saved_pc)
         );
         assert_eq!(
-            native
-                .query(unicorn_engine::unicorn_const::Query::TIMEOUT)
-                .unwrap(),
-            0,
+            execution.report.timeout_query(),
+            &super::AttemptObservation::Value(false),
             "the bounded native deadline did not cause the peer yield"
         );
+        assert!(outgoing.cpu.native_engine_identity_for_test().is_none());
         assert_eq!(
             super::scheduler_timeslice_context_pc(
                 saved_pc,
                 &outgoing.cpu.trampoline_ranges,
                 &super::MipsTrampolineJumpIndex::new(&outgoing.cpu.trampoline_jumps),
-                |addr| super::read_unicorn_u32(&native, addr),
+                // These fixtures execute static mapped code (the counter's
+                // stores target only heap); this is not a general substitute
+                // for reading a live native owner's guest RAM.
+                |addr| {
+                    outgoing
+                        .cpu
+                        .read_mapped_bytes(addr, 4)
+                        .and_then(|bytes| bytes.try_into().ok())
+                        .map(u32::from_le_bytes)
+                },
             ),
             Some(saved_pc),
             "the captured restart PC remains a safe scheduler context"
         );
-        native.finish().unwrap();
         Ok(())
     }
 

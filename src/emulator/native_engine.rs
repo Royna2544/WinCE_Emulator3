@@ -561,7 +561,7 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
         }
         if self.lifetime == NativeEngineLifetime::FreshPerSlice {
             // `uc_close` in the pinned vendored 2.1.5 C source has only
-            // UC_ERR_OK exits (uc.c:497-570). A fresh owner is unique and
+            // UC_ERR_OK exits (uc.c:497-574). A fresh owner is unique and
             // hook-free itself; its nonowning run wrapper retains all Rust
             // callback Boxes. Do not call remove_hook: that Rust wrapper drops
             // a Box before its C call, and deletion is unnecessary when the
