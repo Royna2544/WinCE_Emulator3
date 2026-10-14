@@ -4477,6 +4477,7 @@ fn gwe_get_queue_status_and_peek_queue_status() {
             source: 0,
             mouse_pos_at_post: None,
             typed_payload_owner: None,
+            timer_origin: None,
         },
     );
 

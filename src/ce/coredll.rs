@@ -49,7 +49,7 @@ use crate::{
             CriticalSectionObject, DeviceSearchObject, FileMappingView, KernelObject,
             PartitionObject, PartitionSearchObject, PowerNotificationObject,
             PowerRelationshipObject, PowerRequirementObject, ProcessBirthKey, StoreObject,
-            StoreSearchObject, ThreadResumeResult, ThreadSuspendResult,
+            StoreSearchObject, ThreadBirthKey, ThreadResumeResult, ThreadSuspendResult,
         },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, HKey,
@@ -906,6 +906,7 @@ pub struct CoredllStubResult {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CoredllRawContext {
     pub thread_id: u32,
+    pub caller_birth: Option<ThreadBirthKey>,
     pub caller_pc: Option<u32>,
     pub raw_caller_pc: Option<u32>,
     pub trap_pc: Option<u32>,
@@ -1092,12 +1093,14 @@ impl CoredllExportTable {
         I: IntoIterator<Item = u32>,
     {
         let args = args.into_iter().collect::<Vec<_>>();
+        let caller_birth = kernel.live_thread_birth_key_by_id(thread_id);
         self.dispatch_raw_ordinal_with_framebuffer_args_and_context(
             kernel,
             memory,
             framebuffer,
             CoredllRawContext {
                 thread_id,
+                caller_birth,
                 caller_pc: None,
                 trap_pc: None,
                 caller_module: None,
@@ -1144,12 +1147,14 @@ impl CoredllExportTable {
     where
         M: CoredllGuestMemory,
     {
+        let caller_birth = kernel.live_thread_birth_key_by_id(thread_id);
         self.dispatch_raw_ordinal_with_framebuffer_args_and_context(
             kernel,
             memory,
             framebuffer,
             CoredllRawContext {
                 thread_id,
+                caller_birth,
                 caller_pc: None,
                 trap_pc: None,
                 caller_module: None,
@@ -2218,18 +2223,43 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.timers.sleep_ms(1);
             Some(CoredllValue::U32(0))
         }
-        ORD_SET_TIMER => Some(CoredllValue::U32(kernel.set_timer_for_thread(
-            thread_id,
-            (raw_arg(args, 0) != 0).then_some(raw_arg(args, 0)),
-            (raw_arg(args, 1) != 0).then_some(raw_arg(args, 1)),
-            raw_arg(args, 2),
-            (raw_arg(args, 3) != 0).then_some(raw_arg(args, 3)),
-        ))),
-        ORD_KILL_TIMER => Some(CoredllValue::Bool(kernel.kill_timer_for_thread(
-            thread_id,
-            (raw_arg(args, 0) != 0).then_some(raw_arg(args, 0)),
-            raw_arg(args, 1),
-        ))),
+        ORD_SET_TIMER => {
+            let hwnd = raw_arg(args, 0);
+            let requested_id = (raw_arg(args, 1) != 0).then_some(raw_arg(args, 1));
+            let period_ms = raw_arg(args, 2);
+            let callback = (raw_arg(args, 3) != 0).then_some(raw_arg(args, 3));
+            let id = if hwnd == 0 {
+                context
+                    .caller_birth
+                    .filter(|birth| birth.thread_id() == thread_id)
+                    .map(|birth| {
+                        kernel.set_timer_for_birth(birth, requested_id, period_ms, callback)
+                    })
+                    .unwrap_or(0)
+            } else {
+                kernel.set_timer_for_thread(
+                    thread_id,
+                    Some(hwnd),
+                    requested_id,
+                    period_ms,
+                    callback,
+                )
+            };
+            Some(CoredllValue::U32(id))
+        }
+        ORD_KILL_TIMER => {
+            let hwnd = raw_arg(args, 0);
+            let id = raw_arg(args, 1);
+            let killed = if hwnd == 0 {
+                context
+                    .caller_birth
+                    .filter(|birth| birth.thread_id() == thread_id)
+                    .is_some_and(|birth| kernel.kill_timer_for_birth(birth, id))
+            } else {
+                kernel.kill_timer_for_thread(thread_id, Some(hwnd), id)
+            };
+            Some(CoredllValue::Bool(killed))
+        }
         ORD_CREATE_THREAD => Some(CoredllValue::Handle(create_thread_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -68684,6 +68714,7 @@ fn read_guest_message<M: CoredllGuestMemory>(
         source: crate::ce::gwe::MSGSRC_UNKNOWN,
         mouse_pos_at_post: None,
         typed_payload_owner: None,
+        timer_origin: None,
     })
 }
 

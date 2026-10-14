@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::ce::object::{ProcessBirthKey, ThreadBirthKey};
+use crate::ce::timer::TimerMessageOrigin;
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,6 +323,8 @@ pub struct Message {
     /// Host-owned typed payload provenance. Ordinary guest lParam values are
     /// unmarked even when another process owns a payload at the same VA.
     pub typed_payload_owner: Option<ProcessBirthKey>,
+    /// Host-only identity of a delivered thread timer; never part of guest MSG.
+    pub timer_origin: Option<TimerMessageOrigin>,
 }
 
 /// Delivery ownership is attached to a queued entry, not to the public MSG
@@ -6417,6 +6420,7 @@ impl Message {
             source: MSGSRC_UNKNOWN,
             mouse_pos_at_post: None,
             typed_payload_owner: None,
+            timer_origin: None,
         }
     }
 

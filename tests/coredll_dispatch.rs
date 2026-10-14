@@ -926,6 +926,7 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
         None,
         CoredllRawContext {
             thread_id: 7,
+            caller_birth: None,
             caller_pc: Some(0x0040_1234),
             raw_caller_pc: None,
             trap_pc: Some(0x7fff_4000),
@@ -947,6 +948,7 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
                 && stub.audit == CoredllStubAuditClassification::SafeFailure
                 && stub.context == Some(CoredllRawContext {
                     thread_id: 7,
+                    caller_birth: None,
                     caller_pc: Some(0x0040_1234),
                     raw_caller_pc: None,
                     trap_pc: Some(0x7fff_4000),

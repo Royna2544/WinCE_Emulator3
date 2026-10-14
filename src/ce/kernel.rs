@@ -3507,19 +3507,37 @@ impl CeKernel {
     pub fn pump_timers_to_gwe(&mut self, thread_id: u32) {
         self.expire_timed_out_send_messages();
         self.expire_shell_notifications();
-        for timer in self.timers.due_timers() {
+        for timer in self.timers.due_candidates() {
+            if let Some(birth) = timer.owner_birth
+                && !self.is_live_thread_birth(birth)
+            {
+                // A stale due candidate must not publish to a replacement TID
+                // or remain stuck in the store with its pending bit set.
+                self.timers.cancel_timer_instance(&timer);
+                continue;
+            }
+            if !self.timers.activate_due_timer(&timer) {
+                continue;
+            }
             let target_thread_id = if timer.thread_id == 0 {
                 thread_id
             } else {
                 timer.thread_id
             };
-            let message = crate::ce::gwe::Message::new(
+            let mut message = crate::ce::gwe::Message::new(
                 timer.hwnd.unwrap_or(0),
                 timer.message,
                 timer.id,
                 timer.callback.unwrap_or(0),
                 self.timers.tick_count(),
             );
+            if let Some(birth) = timer.owner_birth {
+                message.timer_origin = Some(crate::ce::timer::TimerMessageOrigin {
+                    birth,
+                    id: timer.id,
+                    instance: timer.instance,
+                });
+            }
             self.record_message_op(
                 "timer_due",
                 target_thread_id,
@@ -3535,7 +3553,17 @@ impl CeKernel {
                     target_thread_id
                 )),
             );
-            self.post_gwe_message(target_thread_id, message);
+            if let Some(birth) = timer.owner_birth {
+                // The due candidate was validated before its pending transition;
+                // this exact-birth queue route is infallible and never wakes B.
+                self.gwe
+                    .post_thread_message_for_birth(birth, message.clone());
+                self.record_message_op("post_message", target_thread_id, &message, Some(1), None);
+                self.scheduler
+                    .queue_message_wake_candidates_for_birth(birth);
+            } else {
+                self.post_gwe_message(target_thread_id, message);
+            }
         }
     }
 
@@ -6925,6 +6953,7 @@ impl CeKernel {
             // Retire only input published to this incarnation. Numeric TID
             // cleanup would also destroy a replacement task's queue.
             self.gwe.retire_thread_birth(key);
+            self.timers.remove_thread_timers_for_birth(key);
             // A completed owner cannot resume its frame. Cancel through the
             // Kernel removal path so every acquired target pin is released;
             // birth matching must precede numeric TID reuse.
@@ -9647,6 +9676,7 @@ impl CeKernel {
                 source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
                 mouse_pos_at_post: None,
                 typed_payload_owner: None,
+                timer_origin: None,
             };
             self.gwe
                 .post_message(hot_key_thread, hot_key_message.clone());
@@ -9668,6 +9698,7 @@ impl CeKernel {
             source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
             mouse_pos_at_post: None,
             typed_payload_owner: None,
+            timer_origin: None,
         };
         self.gwe.post_message(target_thread, key_message.clone());
         self.record_message_op(
@@ -9692,6 +9723,7 @@ impl CeKernel {
                     source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
                     mouse_pos_at_post: None,
                     typed_payload_owner: None,
+                    timer_origin: None,
                 };
                 self.gwe.post_message(target_thread, char_message.clone());
                 self.record_message_op(
@@ -10533,6 +10565,52 @@ impl CeKernel {
         id
     }
 
+    /// Guest HWND-less SetTimer retains its captured caller incarnation.
+    /// Numeric-TID and HWND compatibility entry points cannot authorize it.
+    pub fn set_timer_for_birth(
+        &mut self,
+        birth: ThreadBirthKey,
+        requested_id: Option<u32>,
+        period_ms: u32,
+        callback: Option<u32>,
+    ) -> u32 {
+        if !self.is_live_thread_birth(birth) {
+            return 0;
+        }
+        let thread_id = birth.thread_id();
+        let id = self.timers.set_thread_timer_for_birth(
+            birth,
+            requested_id,
+            period_ms,
+            crate::ce::gwe::WM_TIMER,
+            callback,
+        );
+        if id == 0 {
+            return 0;
+        }
+        let message = crate::ce::gwe::Message::new(
+            0,
+            crate::ce::gwe::WM_TIMER,
+            id,
+            callback.unwrap_or(0),
+            self.timers.tick_count(),
+        );
+        self.record_message_op(
+            "set_timer",
+            thread_id,
+            &message,
+            Some(id),
+            Some(format!(
+                "hwnd=none/requested_id={}/id=0x{id:08x}/period_ms={period_ms}/callback=0x{:08x}",
+                requested_id
+                    .map(|id| format!("0x{id:08x}"))
+                    .unwrap_or_else(|| "auto".to_owned()),
+                callback.unwrap_or(0)
+            )),
+        );
+        id
+    }
+
     pub fn kill_timer(&mut self, hwnd: Option<u32>, id: u32) -> bool {
         let thread_id = hwnd
             .and_then(|hwnd| self.gwe.window_thread_process_id(hwnd))
@@ -10551,6 +10629,23 @@ impl CeKernel {
             &message,
             Some(u32::from(ok)),
             Some(format!("hwnd={}/id=0x{id:08x}", format_optional_hwnd(hwnd))),
+        );
+        ok
+    }
+
+    /// A delayed caller A cannot cancel B's same-ID timer after TID reuse.
+    pub fn kill_timer_for_birth(&mut self, birth: ThreadBirthKey, id: u32) -> bool {
+        if !self.is_live_thread_birth(birth) {
+            return false;
+        }
+        let ok = self.timers.kill_thread_timer_for_birth(birth, id);
+        let message = crate::ce::gwe::Message::new(0, crate::ce::gwe::WM_TIMER, id, 0, 0);
+        self.record_message_op(
+            "kill_timer",
+            birth.thread_id(),
+            &message,
+            Some(u32::from(ok)),
+            Some(format!("hwnd=none/id=0x{id:08x}")),
         );
         ok
     }
@@ -11428,6 +11523,12 @@ impl CeKernel {
 
     fn clear_timer_message_pending(&mut self, thread_id: u32, message: &Message) {
         if message.msg != crate::ce::gwe::WM_TIMER {
+            return;
+        }
+        if let Some(origin) = message.timer_origin {
+            if self.is_live_thread_birth(origin.birth) {
+                let _ = self.timers.clear_pending_for_origin(origin);
+            }
             return;
         }
         let hwnd = (message.hwnd != 0).then_some(message.hwnd);
@@ -12580,6 +12681,213 @@ mod tests {
                 .map(|message| message.msg),
             Some(new_message)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn hwndless_thread_timers_do_not_cross_reused_tid_birth() -> Result<()> {
+        use crate::ce::gwe::{QS_TIMER, WM_TIMER};
+
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_handle)
+            .expect("A birth");
+        let queued_a_id = 0xa1;
+        let later_a_id = 0xa2;
+        let fresh_b_id = 0xb1;
+
+        assert_eq!(
+            kernel.set_timer_for_birth(old_birth, Some(queued_a_id), 0, None),
+            queued_a_id
+        );
+        kernel.pump_timers_to_gwe(thread_id);
+        assert!(kernel.timers.pending_timers().iter().any(|timer| {
+            timer.owner_birth == Some(old_birth)
+                && timer.hwnd.is_none()
+                && timer.id == queued_a_id
+                && timer.pending_message
+        }));
+        assert_eq!(
+            kernel.set_timer_for_birth(old_birth, Some(later_a_id), 25, None),
+            later_a_id
+        );
+
+        assert!(kernel.mark_guest_thread_exited_by_birth(old_birth, 0));
+        assert!(kernel.close_handle(old_handle)?);
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+        let new_handle = kernel.handles.create_thread(thread_id, 0x402000, 0, false);
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_handle)
+            .expect("B birth");
+        assert_ne!(old_birth, new_birth);
+
+        let prequeued_for_b = kernel
+            .peek_ready_message_w_filtered(thread_id, None, 0, 0)
+            .map(|message| (message.msg, message.wparam));
+        let timer_status_for_b = kernel.gwe.peek_queue_status_for_birth(new_birth, QS_TIMER);
+        let ready_time_for_b = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
+        let surviving_a_timer_ids: Vec<_> = kernel
+            .timers
+            .pending_timers()
+            .into_iter()
+            .filter(|timer| {
+                timer.owner_birth == Some(old_birth)
+                    && timer.hwnd.is_none()
+                    && (timer.id == queued_a_id || timer.id == later_a_id)
+            })
+            .map(|timer| timer.id)
+            .collect();
+
+        let trace_start = kernel.recent_message_ops().len();
+        kernel.timers.sleep_ms(25);
+        kernel.pump_timers_to_gwe(thread_id);
+        let late_a_due: Vec<_> = kernel.recent_message_ops()[trace_start..]
+            .iter()
+            .filter(|record| {
+                record.op == "timer_due"
+                    && record.thread_id == thread_id
+                    && record.msg == Some(WM_TIMER)
+                    && record.wparam == Some(later_a_id)
+            })
+            .map(|record| record.wparam)
+            .collect();
+        let queued_a_for_b: Vec<_> = kernel
+            .gwe
+            .queue_snapshot()
+            .into_iter()
+            .filter(|(owner, _)| *owner == thread_id)
+            .flat_map(|(_, messages)| messages)
+            .filter(|message| {
+                message.hwnd == 0
+                    && message.msg == WM_TIMER
+                    && (message.wparam == queued_a_id || message.wparam == later_a_id)
+            })
+            .map(|message| message.wparam)
+            .collect();
+
+        assert_eq!(
+            kernel.set_timer_for_birth(new_birth, Some(fresh_b_id), 0, None),
+            fresh_b_id
+        );
+        kernel.pump_timers_to_gwe(thread_id);
+        let first_visible_for_b = kernel
+            .peek_ready_message_w_filtered(thread_id, None, 0, 0)
+            .map(|message| (message.msg, message.wparam));
+
+        assert!(
+            prequeued_for_b.is_none()
+                && timer_status_for_b == 0
+                && ready_time_for_b == 0
+                && surviving_a_timer_ids.is_empty()
+                && late_a_due.is_empty()
+                && queued_a_for_b.is_empty()
+                && first_visible_for_b == Some((WM_TIMER, fresh_b_id)),
+            "B inherited A's HWND-less timer state: prequeued={prequeued_for_b:?}, status=0x{timer_status_for_b:08x}, ready_time={ready_time_for_b}, timers={surviving_a_timer_ids:?}, late_due={late_a_due:?}, queued={queued_a_for_b:?}, first_visible={first_visible_for_b:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hwndless_thread_timer_pending_clear_requires_its_live_instance() -> Result<()> {
+        use crate::ce::gwe::{PeekFlags, WM_TIMER};
+
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_handle)
+            .expect("A birth");
+        assert!(kernel.mark_guest_thread_exited_by_birth(old_birth, 0));
+        assert!(kernel.close_handle(old_handle)?);
+        let new_handle = kernel.handles.create_thread(thread_id, 0x402000, 0, false);
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_handle)
+            .expect("B birth");
+        let timer_id = 0xb7;
+        assert_eq!(
+            kernel.set_timer_for_birth(new_birth, Some(timer_id), 1, Some(0x1234)),
+            timer_id
+        );
+        let trace_count = kernel.recent_message_ops().len();
+        assert_eq!(
+            kernel.set_timer_for_birth(old_birth, Some(timer_id), 1, Some(0xdead)),
+            0
+        );
+        assert!(!kernel.kill_timer_for_birth(old_birth, timer_id));
+        assert_eq!(kernel.recent_message_ops().len(), trace_count);
+
+        assert!(kernel.post_thread_message_w_for_birth(new_birth, WM_TIMER, timer_id, 0));
+        kernel.timers.sleep_ms(1);
+        kernel.pump_timers_to_gwe(thread_id);
+        let pending = |kernel: &CeKernel| {
+            kernel
+                .timers
+                .pending_timers()
+                .into_iter()
+                .find(|timer| timer.owner_birth == Some(new_birth) && timer.id == timer_id)
+                .expect("B timer")
+        };
+        assert!(pending(&kernel).pending_message);
+        let peek = kernel
+            .peek_message_w_filtered(thread_id, None, 0, 0, PeekFlags::NO_REMOVE)
+            .expect("synthetic timer peek");
+        assert_eq!(peek.timer_origin, None);
+        assert!(pending(&kernel).pending_message);
+        let synthetic = kernel
+            .peek_message_w_filtered(thread_id, None, 0, 0, PeekFlags::REMOVE)
+            .expect("synthetic timer removal");
+        assert_eq!(synthetic.timer_origin, None);
+        assert!(pending(&kernel).pending_message);
+        let actual = kernel
+            .peek_message_w_filtered(thread_id, None, 0, 0, PeekFlags::REMOVE)
+            .expect("real B timer removal");
+        assert_eq!(
+            (actual.msg, actual.wparam, actual.lparam),
+            (WM_TIMER, timer_id, 0x1234)
+        );
+        assert_eq!(
+            actual.timer_origin.expect("host timer origin").birth,
+            new_birth
+        );
+        assert!(!pending(&kernel).pending_message);
+
+        // Replacing a same-ID timer gives it a new instance. A queued message
+        // from the previous instance cannot clear the replacement's bit.
+        assert_eq!(
+            kernel.set_timer_for_birth(new_birth, Some(timer_id), 1, Some(0x2222)),
+            timer_id
+        );
+        kernel.timers.sleep_ms(1);
+        kernel.pump_timers_to_gwe(thread_id);
+        let prior_instance = pending(&kernel).instance;
+        assert_eq!(
+            kernel.set_timer_for_birth(new_birth, Some(timer_id), 1, Some(0x3333)),
+            timer_id
+        );
+        kernel.timers.sleep_ms(1);
+        kernel.pump_timers_to_gwe(thread_id);
+        let current_instance = pending(&kernel).instance;
+        assert_ne!(prior_instance, current_instance);
+        let old_message = kernel
+            .peek_message_w_filtered(thread_id, None, 0, 0, PeekFlags::REMOVE)
+            .expect("old instance message");
+        assert_eq!(
+            old_message.timer_origin.expect("old origin").instance,
+            prior_instance
+        );
+        assert!(pending(&kernel).pending_message);
+        let new_message = kernel
+            .peek_message_w_filtered(thread_id, None, 0, 0, PeekFlags::REMOVE)
+            .expect("new instance message");
+        assert_eq!(
+            new_message.timer_origin.expect("new origin").instance,
+            current_instance
+        );
+        assert!(!pending(&kernel).pending_message);
         Ok(())
     }
 
