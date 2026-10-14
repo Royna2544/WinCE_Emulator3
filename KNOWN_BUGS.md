@@ -71,10 +71,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   thread births retain a checked ProcessBirthKey, including aliasless boot TID
   1 and child primary, and registered Toolhelp/GetProcessIdOfThread read it.
   Boot-main enumeration, durable child-primary identity, last-public-handle
-  execution, wait pins and clone relineage remain open. Process termination
-  can signal a process without completing every worker; a parked child can be
-  dropped on a request-only exit path before canonical cleanup. Whole-process
-  GMS reclamation and live-app behavior are not established.
+  execution, wait pins and clone relineage remain open. `TerminateProcess`
+  currently signals the process handle at request time
+  (`src/ce/object.rs::request_process_termination_by_id`) while keeping its
+  CPU execution live; CE signals the handle after process exit. A parked child
+  can be dropped on that request-only exit path before canonical cleanup.
+  Native/parked handoff, root-process completion, complete GMS reclamation and
+  live-app behavior are not established.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
   (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been
