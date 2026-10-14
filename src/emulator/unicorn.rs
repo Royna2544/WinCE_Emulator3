@@ -12387,6 +12387,13 @@ fn write_persisted_message_payload(
     let mut missing = Vec::new();
     while page < page_end {
         let region = memory.region_containing(page);
+        if region
+            .is_some_and(|region| matches!(region.name.as_str(), "ce-heap-arena" | "guest-stack"))
+        {
+            return Err(Error::InvalidArgument(
+                "message payload fallback cannot own a fixed system slab".to_owned(),
+            ));
+        }
         if region.is_some_and(|region| {
             !region
                 .perms
@@ -15020,12 +15027,33 @@ fn map_heap_spillover<D>(
     mapped: &mut KernelMemoryMappings,
     mapped_blobs: &mut Vec<MappedBlob>,
 ) -> Result<()> {
+    let reserved = heap_spillover_reserved_ranges(kernel, mapped.system_slab_owner);
     map_heap_spillover_through(
         uc,
         mapped,
         mapped_blobs,
         kernel.memory.heap_high_water_mark(),
+        &reserved,
     )
+}
+
+#[cfg(feature = "unicorn")]
+fn heap_spillover_reserved_ranges(
+    kernel: &CeKernel,
+    owner: Option<crate::ce::object::ProcessBirthKey>,
+) -> Vec<(u32, u32)> {
+    match owner {
+        Some(owner) => kernel
+            .memory
+            .virtual_allocations_visible_to(owner)
+            .map(|allocation| (allocation.base, allocation.size))
+            .collect(),
+        None => kernel
+            .memory
+            .virtual_allocations()
+            .map(|allocation| (allocation.base, allocation.size))
+            .collect(),
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -15034,6 +15062,7 @@ fn map_heap_spillover_through<D>(
     mapped: &mut KernelMemoryMappings,
     mapped_blobs: &mut Vec<MappedBlob>,
     high_water: u32,
+    reserved_ranges: &[(u32, u32)],
 ) -> Result<()> {
     if high_water <= mapped.heap_spill_cursor {
         return Ok(());
@@ -15046,6 +15075,16 @@ fn map_heap_spillover_through<D>(
     if overlaps_fixed_system_slab(mapped, base, mapped_end - base) {
         return Err(Error::Backend(
             "heap spillover overlaps a reserved fixed system slab".to_owned(),
+        ));
+    }
+    if reserved_ranges
+        .iter()
+        .any(|(reserved_base, reserved_size)| {
+            ranges_overlap(base, mapped_end - base, *reserved_base, *reserved_size)
+        })
+    {
+        return Err(Error::Backend(
+            "heap spillover overlaps an owner-visible VM reservation".to_owned(),
         ));
     }
     let (spans, _) = unmapped_guest_spans(mapped, base, mapped_end, "heap spillover", true)?;
@@ -33601,7 +33640,7 @@ fn prepare_native_message_pointer_payload<D>(
             #[cfg(test)]
             fail_next_private_unmap_for_test: false,
         };
-        memory.ensure_heap_mapped(message.lparam, len)?;
+        memory.ensure_heap_mapped_with_kernel(kernel, message.lparam, len)?;
     }
     let regions = uc.mem_regions().map_err(|err| {
         Error::Backend(format!("inspect native message payload mappings: {err:?}"))
@@ -52041,6 +52080,45 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
 }
 
 #[cfg(feature = "unicorn")]
+impl<D> UnicornGuestMemory<'_, '_, D> {
+    fn ensure_heap_spillover_with_kernel(
+        &mut self,
+        kernel: &CeKernel,
+        addr: u32,
+        len: u32,
+    ) -> Result<()> {
+        let Some(heap_mapping) = self.heap_mapping.as_mut() else {
+            return self.ensure_heap_mapped(addr, len);
+        };
+        let high_water = addr
+            .checked_add(len)
+            .ok_or_else(|| Error::InvalidArgument("heap spillover range overflow".to_owned()))?;
+        let owner = heap_mapping.mapped.borrow().system_slab_owner;
+        if owner.is_some_and(|owner| {
+            kernel.current_process_birth_key() != Some(owner)
+                || kernel.handles.process_birth_key(owner.process_id()) != Some(owner)
+        }) {
+            return Err(Error::Backend(
+                "heap spillover owner differs from selected process birth".to_owned(),
+            ));
+        }
+        let reserved = heap_spillover_reserved_ranges(kernel, owner);
+        // SAFETY: `with_heap_mapping` requires the engine-owned vector to
+        // outlive this sequential adapter call.
+        let blobs = unsafe { &mut *heap_mapping.mapped_blobs };
+        validate_heap_destination(self.uc, Some(blobs), addr, len, true)?;
+        map_heap_spillover_through(
+            self.uc,
+            &mut heap_mapping.mapped.borrow_mut(),
+            blobs,
+            high_water,
+            &reserved,
+        )?;
+        validate_heap_destination(self.uc, Some(blobs), addr, len, false)
+    }
+}
+
+#[cfg(feature = "unicorn")]
 impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     fn native_shared_view_owner(&self) -> Option<crate::ce::object::ProcessBirthKey> {
         self.private_vm_mapping.map(|mapping| mapping.owner)
@@ -52071,7 +52149,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                     "fixed heap allocation has no native private page context".to_owned(),
                 ));
             }
-            return self.ensure_heap_mapped(addr, len);
+            return self.ensure_heap_spillover_with_kernel(kernel, addr, len);
         };
         if kernel.handles.process_birth_key(mapping.owner.process_id()) != Some(mapping.owner)
             || kernel.current_process_birth_key() != Some(mapping.owner)
@@ -52082,11 +52160,11 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         }
         let Some((heap_base, heap_size)) = kernel.memory.fixed_heap_reservation(mapping.owner)
         else {
-            return self.ensure_heap_mapped(addr, len);
+            return self.ensure_heap_spillover_with_kernel(kernel, addr, len);
         };
         let heap_end = u64::from(heap_base) + u64::from(heap_size);
         if u64::from(addr) >= heap_end || u64::from(end) <= u64::from(heap_base) {
-            return self.ensure_heap_mapped(addr, len);
+            return self.ensure_heap_spillover_with_kernel(kernel, addr, len);
         }
         if addr < heap_base {
             return Err(Error::InvalidArgument(
@@ -52146,7 +52224,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             unicorn_engine::Prot::WRITE.0 as u32,
         )?;
         if u64::from(end) > heap_end {
-            self.ensure_heap_mapped(heap_end as u32, end - heap_end as u32)?;
+            self.ensure_heap_spillover_with_kernel(kernel, heap_end as u32, end - heap_end as u32)?;
         }
         Ok(())
     }
@@ -52549,6 +52627,14 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                 "fixed heap requires owner-qualified canonical page pins".to_owned(),
             ));
         }
+        if self
+            .heap_mapping
+            .is_some_and(|mapping| mapping.mapped.borrow().system_slab_owner.is_some())
+        {
+            return Err(Error::Backend(
+                "owner-qualified heap spillover requires kernel reservation preflight".to_owned(),
+            ));
+        }
         let Some(heap_mapping) = self.heap_mapping.as_mut() else {
             // Legacy memory-only adapters are used by non-allocating blocked
             // I/O and standalone fixtures; immediate runtime allocators carry
@@ -52569,6 +52655,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             &mut heap_mapping.mapped.borrow_mut(),
             mapped_blobs,
             high_water,
+            &[],
         )?;
         validate_heap_destination(self.uc, Some(mapped_blobs), addr, len, false)
     }
@@ -52614,6 +52701,7 @@ mod unicorn_tests {
             kernel::CeKernel,
         },
         config::RuntimeConfig,
+        error::Error,
     };
     use std::{
         cell::RefCell,
@@ -68180,6 +68268,398 @@ mod unicorn_tests {
     #[ignore = "opt-in synthetic 56-MiB loader/native setup profile"]
     fn sealed_main_image_56mib_profile_rwx_copy_control() -> crate::Result<()> {
         profile_56mib_main_image_setup(true)
+    }
+
+    #[test]
+    fn fixed_heap_real_mips_bytes_survive_200_fresh_owners_and_isolate_births() -> crate::Result<()>
+    {
+        const CODE: u32 = 0x0001_0000;
+        const STACK: u32 = 0x7000_0000;
+        const PARENT_VALUE: u32 = 0x51a7_c0de;
+        const CHILD_VALUE: u32 = 0x92b3_4e61;
+
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.map_region(
+            CODE,
+            0x1000,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+            "fixed-slab-test-code",
+        )?;
+        cpu.map_region(
+            super::GUEST_HEAP_ARENA_BASE,
+            super::GUEST_HEAP_ARENA_SIZE,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "ce-heap-arena",
+        )?;
+        cpu.map_region(
+            STACK,
+            0x2000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "guest-stack",
+        )?;
+        assert!(cpu.mapped_blobs.is_empty(), "system slabs need no RAM blob");
+
+        let mut kernel = phase1_kernel("fixed-heap-fresh-owner.exe")?;
+        let parent = kernel.current_process_birth_key().expect("boot birth");
+        let parent_ranges = super::reserve_fixed_system_slabs(
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &mut kernel,
+            Some(parent),
+        )?;
+        assert_eq!(parent_ranges.len(), 2);
+        let growth = kernel
+            .memory
+            .prepare_fixed_heap_growth(parent, super::GUEST_HEAP_ARENA_BASE + 4)
+            .expect("one budgeted parent heap page");
+        assert_eq!(growth.new_page_pins().len(), 1);
+        kernel
+            .memory
+            .commit_prepared_private_vm(growth)
+            .expect("publish parent page");
+
+        kernel.handles.create_process(2);
+        let child = kernel.handles.process_birth_key(2).expect("child birth");
+        assert_ne!(parent, child);
+        let child_ranges = super::reserve_fixed_system_slabs(
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &mut kernel,
+            Some(child),
+        )?;
+        assert_eq!(child_ranges, parent_ranges);
+        let growth = kernel
+            .memory
+            .prepare_fixed_heap_growth(child, super::GUEST_HEAP_ARENA_BASE + 4)
+            .expect("one budgeted child heap page");
+        kernel
+            .memory
+            .commit_prepared_private_vm(growth)
+            .expect("publish child page");
+        let parent_pin = kernel
+            .memory
+            .private_page_pin(parent, super::GUEST_HEAP_ARENA_BASE)
+            .expect("canonical parent page");
+        let child_pin = kernel
+            .memory
+            .private_page_pin(child, super::GUEST_HEAP_ARENA_BASE)
+            .expect("canonical child page");
+        assert_ne!(parent_pin.native_ptr(), child_pin.native_ptr());
+
+        let run_slice = |owner, instruction: u32, input: u32| -> crate::Result<u32> {
+            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+                .map_err(|err| Error::Backend(format!("create fresh MIPS owner: {err:?}")))?;
+            let native_pins = super::NativeMappingPins::default();
+            let active_guards = RefCell::new(BTreeMap::new());
+            let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+            mapped.system_slab_owner = Some(owner);
+            mapped.system_slab_ranges = parent_ranges.clone();
+            mapped.ranges =
+                super::reconcile_persistent_native_memory_with_private_and_system_slabs(
+                    &mut uc,
+                    &cpu.memory,
+                    &cpu.mapped_blobs,
+                    &HashSet::new(),
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
+                    &parent_ranges,
+                )?;
+            assert_eq!(
+                super::native_page_perms(&uc, super::GUEST_HEAP_ARENA_BASE)?,
+                None
+            );
+            assert_eq!(super::native_page_perms(&uc, STACK)?, None);
+            super::map_private_slab_pages(
+                &mut uc,
+                &kernel,
+                &mut mapped,
+                owner,
+                &native_pins,
+                Some(&active_guards),
+            )?;
+            assert_eq!(mapped.private_pages.len(), 1);
+            uc.mem_write(u64::from(CODE), &instruction.to_le_bytes())
+                .map_err(|err| Error::Backend(format!("write MIPS test instruction: {err:?}")))?;
+            uc.reg_write(RegisterMIPS::T0, u64::from(super::GUEST_HEAP_ARENA_BASE))
+                .map_err(|err| Error::Backend(format!("set heap address: {err:?}")))?;
+            uc.reg_write(RegisterMIPS::T1, u64::from(input))
+                .map_err(|err| Error::Backend(format!("set heap value: {err:?}")))?;
+            uc.emu_start(u64::from(CODE), u64::from(CODE + 4), 0, 0)
+                .map_err(|err| Error::Backend(format!("run real MIPS heap slice: {err:?}")))?;
+            let result = uc
+                .reg_read(RegisterMIPS::T2)
+                .map_err(|err| Error::Backend(format!("read MIPS result: {err:?}")))?
+                as u32;
+            drop(uc); // Native owner closes before its raw-pointer pins.
+            drop(active_guards);
+            drop(mapped);
+            drop(native_pins);
+            Ok(result)
+        };
+
+        run_slice(parent, 0xad09_0000, PARENT_VALUE)?; // sw t1,0(t0), slice N
+        assert_eq!(run_slice(parent, 0x8d0a_0000, 0)?, PARENT_VALUE); // lw t2,0(t0), N+1
+        assert_eq!(run_slice(child, 0x8d0a_0000, 0)?, 0);
+        run_slice(child, 0xad09_0000, CHILD_VALUE)?;
+        assert_eq!(run_slice(child, 0x8d0a_0000, 0)?, CHILD_VALUE);
+        for _ in 0..200 {
+            assert_eq!(run_slice(parent, 0x8d0a_0000, 0)?, PARENT_VALUE);
+        }
+        let mut bytes = [0; 4];
+        parent_pin
+            .read_bytes(0, &mut bytes)
+            .expect("unfenced parent page");
+        assert_eq!(u32::from_le_bytes(bytes), PARENT_VALUE);
+        child_pin
+            .read_bytes(0, &mut bytes)
+            .expect("unfenced child page");
+        assert_eq!(u32::from_le_bytes(bytes), CHILD_VALUE);
+        assert!(
+            cpu.mapped_blobs.is_empty(),
+            "no duplicate writable byte authority"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_stack_commits_only_on_real_mips_fault_and_heap_fault_does_not_grow()
+    -> crate::Result<()> {
+        use unicorn_engine::unicorn_const::HookType;
+
+        const CODE: u32 = 0x0001_0000;
+        const STACK: u32 = 0x7000_0000;
+        const VALUE: u32 = 0x7e31_a5c2;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.map_region(
+            CODE,
+            0x1000,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+            "fixed-slab-test-code",
+        )?;
+        cpu.map_region(
+            super::GUEST_HEAP_ARENA_BASE,
+            super::GUEST_HEAP_ARENA_SIZE,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "ce-heap-arena",
+        )?;
+        cpu.map_region(
+            STACK,
+            0x2000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "guest-stack",
+        )?;
+        let mut kernel = phase1_kernel("fixed-stack-first-touch.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let ranges = super::reserve_fixed_system_slabs(
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &mut kernel,
+            Some(owner),
+        )?;
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("create stack fault MIPS owner: {err:?}")))?;
+        let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+        mapped.system_slab_owner = Some(owner);
+        mapped.system_slab_ranges = ranges.clone();
+        mapped.ranges = super::reconcile_persistent_native_memory_with_private_and_system_slabs(
+            &mut uc,
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &HashSet::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &ranges,
+        )?;
+        let pins = Rc::new(super::NativeMappingPins::default());
+        let guards = Rc::new(RefCell::new(BTreeMap::new()));
+        assert!(!super::repair_missing_virtual_page_for_fault(
+            &mut uc,
+            &mut kernel,
+            &mut mapped,
+            super::GUEST_HEAP_ARENA_BASE,
+            Some(owner),
+            &pins,
+            &guards,
+        )?);
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(owner, super::GUEST_HEAP_ARENA_BASE)
+                .is_none()
+        );
+        assert!(kernel.memory.private_page_pin(owner, STACK).is_none());
+
+        let kernel = Rc::new(RefCell::new(kernel));
+        let mapped = Rc::new(RefCell::new(mapped));
+        let fault_error = Rc::new(RefCell::new(None));
+        let kernel_hook = Rc::clone(&kernel);
+        let mapped_hook = Rc::clone(&mapped);
+        let pins_hook = Rc::clone(&pins);
+        let guards_hook = Rc::clone(&guards);
+        let fault_error_hook = Rc::clone(&fault_error);
+        uc.add_mem_hook(
+            HookType::MEM_UNMAPPED,
+            1,
+            0,
+            move |uc, _access, addr, _, _| match super::repair_missing_virtual_page_for_fault(
+                uc,
+                &mut kernel_hook.borrow_mut(),
+                &mut mapped_hook.borrow_mut(),
+                addr as u32,
+                Some(owner),
+                &pins_hook,
+                &guards_hook,
+            ) {
+                Ok(repaired) => repaired,
+                Err(err) => {
+                    *fault_error_hook.borrow_mut() = Some(format!("{err}"));
+                    false
+                }
+            },
+        )
+        .map_err(|err| Error::Backend(format!("install stack fault hook: {err:?}")))?;
+        uc.mem_write(u64::from(CODE), &0xad09_0000u32.to_le_bytes())
+            .map_err(|err| Error::Backend(format!("write stack store instruction: {err:?}")))?;
+        uc.reg_write(RegisterMIPS::T0, u64::from(STACK))
+            .map_err(|err| Error::Backend(format!("set stack address: {err:?}")))?;
+        uc.reg_write(RegisterMIPS::T1, u64::from(VALUE))
+            .map_err(|err| Error::Backend(format!("set stack value: {err:?}")))?;
+        uc.emu_start(u64::from(CODE), u64::from(CODE + 4), 0, 0)
+            .map_err(|err| Error::Backend(format!("execute stack first touch: {err:?}")))?;
+        assert!(fault_error.borrow().is_none());
+        assert!(mapped.borrow().private_pages.contains_key(&STACK));
+        assert!(
+            kernel
+                .borrow()
+                .memory
+                .private_page_pin(owner, STACK + 0x1000)
+                .is_none()
+        );
+        drop(uc); // Close raw native pointer mapping before pins and guards.
+        drop(guards);
+        drop(mapped);
+        drop(pins);
+        let pin = kernel
+            .borrow()
+            .memory
+            .private_page_pin(owner, STACK)
+            .expect("fault committed exactly one canonical stack page");
+        let mut bytes = [0; 4];
+        pin.read_bytes(0, &mut bytes).expect("unfenced stack page");
+        assert_eq!(u32::from_le_bytes(bytes), VALUE);
+        assert!(cpu.mapped_blobs.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_stack_leaves_fixed_heap_unreserved_and_spillover_rejects_all_vm_overlap()
+    -> crate::Result<()> {
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.map_region(
+            super::GUEST_HEAP_ARENA_BASE,
+            super::GUEST_HEAP_ARENA_SIZE,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "ce-heap-arena",
+        )?;
+        cpu.map_region(0x7000_0000, 0x1000, MemoryPerms::READ, "guest-stack")?;
+        let mut kernel = phase1_kernel("invalid-fixed-stack.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        assert!(
+            super::reserve_fixed_system_slabs(
+                &cpu.memory,
+                &cpu.mapped_blobs,
+                &mut kernel,
+                Some(owner),
+            )
+            .is_err()
+        );
+        assert!(kernel.memory.fixed_heap_reservation(owner).is_none());
+
+        let spill = super::GUEST_HEAP_ARENA_BASE + super::GUEST_HEAP_ARENA_SIZE;
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        mapped.system_slab_ranges.push((spill + 0x1000, 0x1000));
+        let mut blobs = Vec::new();
+        assert!(
+            super::map_heap_spillover_through(
+                &mut uc,
+                &mut mapped,
+                &mut blobs,
+                spill + 0x2000,
+                &[],
+            )
+            .is_err()
+        );
+        assert!(blobs.is_empty());
+        assert_eq!(mapped.heap_spill_cursor, spill);
+        mapped.system_slab_ranges.clear();
+        assert!(
+            super::map_heap_spillover_through(
+                &mut uc,
+                &mut mapped,
+                &mut blobs,
+                spill + 0x2000,
+                &[(spill + 0x1000, 0x1000)],
+            )
+            .is_err()
+        );
+        assert!(blobs.is_empty());
+        assert_eq!(mapped.heap_spill_cursor, spill);
+        assert_eq!(super::native_page_perms(&uc, spill)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn queued_windowpos_payload_uses_canonical_heap_and_fallback_rejects_fixed_stack()
+    -> crate::Result<()> {
+        const STACK: u32 = 0x7000_0000;
+        let mut kernel = phase1_kernel("fixed-queued-payload.exe")?;
+        let hwnd = kernel.create_window_ex_w(1, "FIXED_PAYLOAD", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, 0x0001_0000);
+        let _ = kernel.gwe.validate_window(hwnd);
+        assert!(kernel.set_window_pos(hwnd, Some(0), 3, 4, 64, 32, 0));
+        let message = native_payload_message(&mut kernel, hwnd);
+        assert!(message.lparam >= super::GUEST_HEAP_ARENA_BASE);
+        assert!(message.lparam < super::GUEST_HEAP_ARENA_BASE + super::GUEST_HEAP_ARENA_SIZE);
+        let expected = crate::ce::coredll::message_pointer_payload_bytes(&mut kernel, 1, &message)?
+            .expect("host-owned WINDOWPOS bytes");
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.map_region(
+            super::GUEST_HEAP_ARENA_BASE,
+            super::GUEST_HEAP_ARENA_SIZE,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "ce-heap-arena",
+        )?;
+        cpu.map_region(
+            STACK,
+            0x2000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "guest-stack",
+        )?;
+        cpu.prepare_message_pointer_payload(&mut kernel, 1, &message)?;
+        assert!(cpu.mapped_blobs.is_empty());
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let pin = kernel
+            .memory
+            .private_page_pin(owner, message.lparam & !0xfff)
+            .expect("queued payload committed canonical heap page");
+        let mut actual = vec![0; expected.len()];
+        pin.read_bytes((message.lparam & 0xfff) as usize, &mut actual)
+            .expect("queued canonical payload");
+        assert_eq!(actual, expected);
+
+        let mut fallback_blobs = Vec::new();
+        assert!(
+            super::write_persisted_message_payload(
+                &cpu.memory,
+                &mut fallback_blobs,
+                STACK + 0xff0,
+                &[0xa5; 32],
+            )
+            .is_err()
+        );
+        assert!(fallback_blobs.is_empty());
+        Ok(())
     }
 
     fn write_u32(uc: &mut Unicorn<'_, ()>, address: u64, value: u32) {
