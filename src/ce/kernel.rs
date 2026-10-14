@@ -3122,8 +3122,12 @@ impl CeKernel {
         std::mem::take(&mut self.pending_process_launches)
     }
 
-    pub fn mark_process_launch_exited(&mut self, launch: &PendingProcessLaunch, exit_code: u32) {
-        self.mark_process_launch_exited_with_framebuffer(launch, exit_code, None);
+    pub fn mark_process_launch_exited(
+        &mut self,
+        launch: &PendingProcessLaunch,
+        exit_code: u32,
+    ) -> bool {
+        self.mark_process_launch_exited_with_framebuffer(launch, exit_code, None)
     }
 
     pub fn mark_process_launch_exited_with_framebuffer(
@@ -3131,19 +3135,22 @@ impl CeKernel {
         launch: &PendingProcessLaunch,
         exit_code: u32,
         framebuffer: Option<&mut dyn Framebuffer>,
-    ) {
+    ) -> bool {
         // An original launch retains its exact birth even after both public
         // aliases close. Reject a delayed completion after PID/TID reuse
         // before it can touch windows, VM, or another process's workers.
+        // A reconstructed launch without this witness cannot authorize any
+        // cleanup, even its old primary-only path: its PID may have been reused.
+        let Some(launch_birth) = launch.process_birth else {
+            return false;
+        };
         let Some(exiting_birth) = self.handles.process_birth_key(launch.process_id) else {
-            return;
+            return false;
         };
         if !self.handles.process_execution_live_by_birth(exiting_birth) {
-            return;
+            return false;
         }
-        if launch
-            .process_birth
-            .is_some_and(|birth| birth != exiting_birth)
+        if launch_birth != exiting_birth
             || launch.primary_thread_birth.is_some_and(|primary| {
                 self.handles.contains_thread_birth(primary)
                     && self
@@ -3152,7 +3159,7 @@ impl CeKernel {
                         != Some(exiting_birth)
             })
         {
-            return;
+            return false;
         }
         let primary = launch.primary_thread_birth.or_else(|| {
             self.handles
@@ -3161,9 +3168,19 @@ impl CeKernel {
                     self.handles.thread_creation_owner_by_id(key.thread_id()) == Some(exiting_birth)
                 })
         });
+        let cleanup_thread_id = if launch.primary_thread_birth.is_some_and(|original| {
+            original.thread_id() == launch.thread_id
+                && self.handles.thread_birth_key_by_id(launch.thread_id) == Some(original)
+                && self.handles.thread_creation_owner_by_id(launch.thread_id)
+                    == Some(exiting_birth)
+        }) {
+            launch.thread_id
+        } else {
+            0
+        };
         let backing_store_targets =
-            self.process_window_backing_store_targets(launch.process_id, launch.thread_id);
-        self.destroy_process_windows(launch.process_id, launch.thread_id);
+            self.process_window_backing_store_targets(launch.process_id, cleanup_thread_id);
+        self.destroy_process_windows(launch.process_id, cleanup_thread_id);
         if let Some(framebuffer) = framebuffer {
             let _ = self.restore_window_backing_stores(&backing_store_targets, framebuffer);
         } else {
@@ -3175,31 +3192,8 @@ impl CeKernel {
         self.module_heap_info_guest_ptrs.remove(&exiting_birth);
         self.process_name_guest_ptrs.remove(&exiting_birth);
         self.command_line_guest_ptrs.remove(&exiting_birth);
-        if launch.process_birth == Some(exiting_birth) {
-            let _ = self.complete_process_execution_by_birth(exiting_birth, primary, exit_code);
-        } else {
-            // Legacy trace/parked reconstruction can lack a verifiable launch
-            // birth after alias closure. Preserve its prior primary-only
-            // completion behavior; do not widen an unverified PID lookup into
-            // a sweep of another birth's workers. The native handoff slice
-            // must carry exact keys through these reconstructed paths.
-            let was_signaled = self.handles.process_signaled_by_id(launch.process_id);
-            if self
-                .handles
-                .finish_process_execution_by_id(launch.process_id, exit_code)
-                .is_some()
-            {
-                self.memory
-                    .retire_fixed_private_ranges_for_owner(exiting_birth);
-                self.memory.retire_heap_state_for_owner(exiting_birth);
-                if was_signaled == Some(false) {
-                    self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(
-                        exiting_birth,
-                    ));
-                }
-            }
-            let _ = self.mark_guest_thread_exited_by_id(launch.thread_id, exit_code);
-        }
+        let completed = self.complete_process_execution_by_birth(exiting_birth, primary, exit_code);
+        debug_assert!(completed, "preflighted process birth must complete");
         self.record_process_trace(ProcessTraceRecord {
             op: "CreateProcessExited",
             application: launch.application.clone(),
@@ -3213,6 +3207,7 @@ impl CeKernel {
             error: None,
             detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
         });
+        completed
     }
 
     /// Complete one stopped process CPU's canonical Task and VM lifetime.
@@ -3262,7 +3257,8 @@ impl CeKernel {
             .filter(|window| {
                 !window.destroyed
                     && window.hwnd != crate::ce::gwe::DESKTOP_HWND
-                    && (window.process_id == process_id || window.thread_id == thread_id)
+                    && (window.process_id == process_id
+                        || (thread_id != 0 && window.thread_id == thread_id))
             })
             .map(|window| window.hwnd)
             .collect()
@@ -3274,7 +3270,8 @@ impl CeKernel {
             .into_iter()
             .filter(|window| {
                 window.hwnd != crate::ce::gwe::DESKTOP_HWND
-                    && (window.process_id == process_id || window.thread_id == thread_id)
+                    && (window.process_id == process_id
+                        || (thread_id != 0 && window.thread_id == thread_id))
             })
             .map(|window| window.hwnd)
             .collect()

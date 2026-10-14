@@ -8,7 +8,7 @@ use wince_emulation_v3::{
     ce::{
         kernel::CeKernel,
         memory::VirtualAllocationSource,
-        scheduler::SchedulerBlockedWaitKind,
+        scheduler::{SchedulerBlockedWaitKind, WaitObjectKey},
         timer::{INFINITE, WAIT_OBJECT_0},
     },
     config::RuntimeConfig,
@@ -111,9 +111,24 @@ fn execution_completion_sweeps_only_its_birth_and_wakes_waiters_once() -> Result
         .handles
         .thread_birth_key_by_id(second_tid)
         .expect("second child worker birth");
+    let aliasless_worker_wait = kernel.register_blocked_waiter(
+        1,
+        0,
+        vec![second_handle],
+        SchedulerBlockedWaitKind::Kernel,
+        0,
+        INFINITE,
+    );
     assert!(kernel.close_handle(second_handle)?);
     assert_eq!(kernel.guest_thread_handle_by_id(second_tid), None);
     assert!(kernel.handles.contains_thread_birth(second_birth));
+    assert_eq!(
+        kernel
+            .blocked_waiter(aliasless_worker_wait)
+            .map(|wait| wait.wait_keys.as_slice()),
+        Some([WaitObjectKey::Thread(second_birth)].as_slice()),
+        "the closed alias's blocked wait must retain the worker birth as its wake key"
+    );
 
     let process_alias = kernel
         .open_process_handle(launch.process_id)
@@ -146,6 +161,7 @@ fn execution_completion_sweeps_only_its_birth_and_wakes_waiters_once() -> Result
     assert_eq!(kernel.is_wait_ready(process_alias, 1), Some(true));
     assert_eq!(kernel.is_wait_ready(first_alias, 1), Some(false));
     assert!(kernel.handles.contains_thread_birth(second_birth));
+    assert!(kernel.blocked_waiter(aliasless_worker_wait).is_some());
     assert_eq!(
         kernel.scheduler_stats().object_wake_candidate_count,
         wakes_before + 1
@@ -171,9 +187,13 @@ fn execution_completion_sweeps_only_its_birth_and_wakes_waiters_once() -> Result
     assert_eq!(kernel.is_wait_ready(parent_worker_handle, 1), Some(false));
     assert_eq!(
         kernel.scheduler_stats().object_wake_candidate_count,
-        wakes_before + 2,
-        "one process waiter and one worker waiter should be queued exactly once"
+        wakes_before + 3,
+        "the process, retained-alias worker, and aliasless worker waits should each queue once"
     );
+    // The aliasless wait's canonical key can still enqueue a candidate. E11
+    // wait-target pins are not implemented, so this does not yet prove that
+    // the closed handle can complete its blocked wait after object retirement.
+    assert!(kernel.blocked_waiter(aliasless_worker_wait).is_some());
 
     let after_first_completion = kernel.scheduler_stats();
     kernel.mark_process_launch_exited(&queued[0], 0x99);
@@ -190,6 +210,11 @@ fn execution_completion_sweeps_only_its_birth_and_wakes_waiters_once() -> Result
     assert_eq!(kernel.process_exit_code(process_alias), Some(0x66));
 
     assert!(kernel.remove_blocked_waiter(worker_wait).is_some());
+    assert!(
+        kernel
+            .remove_blocked_waiter(aliasless_worker_wait)
+            .is_some()
+    );
     assert!(kernel.remove_blocked_waiter(process_wait).is_some());
     assert!(kernel.close_handle(first_alias)?);
     assert!(kernel.close_handle(launch.thread_handle)?);
@@ -372,5 +397,29 @@ fn stale_completion_does_not_touch_reused_pid_and_tid_birth() -> Result<()> {
         kernel.memory.private_commit_used_bytes(),
         replacement_budget
     );
+    Ok(())
+}
+
+#[test]
+fn reconstructed_launch_without_birth_cannot_retire_live_process() -> Result<()> {
+    let mut kernel = boot()?;
+    let launch = kernel.queue_process_launch(None, None);
+    let birth = launch.process_birth.expect("original launch birth");
+    let (worker_handle, worker_tid) =
+        kernel.try_create_guest_thread_for_creator(launch.thread_id, 0x406000, 0, false)?;
+    let mut reconstructed = launch.clone();
+    reconstructed.process_birth = None;
+
+    assert!(!kernel.mark_process_launch_exited(&reconstructed, 0x33));
+    assert!(kernel.handles.process_execution_live_by_birth(birth));
+    assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+    assert!(kernel.handles.thread_execution_live_by_id(worker_tid));
+    assert_eq!(kernel.is_wait_ready(worker_handle, 1), Some(false));
+    assert!(!kernel.recent_process_ops().iter().any(|record| {
+        record.op == "CreateProcessExited" && record.process_id == Some(launch.process_id)
+    }));
+
+    assert!(kernel.mark_process_launch_exited(&launch, 0x33));
+    assert!(!kernel.handles.process_execution_live_by_birth(birth));
     Ok(())
 }
