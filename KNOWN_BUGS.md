@@ -56,11 +56,17 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   heap, image and legacy-view memory do not reduce reported available physical
   memory. It is not a complete guest-memory census
   ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
-- Runtime PE images still use the loader's RWX mapping and byte-copy path.
-  E-42 validates only pure immutable-page eligibility on supplied bytes; it
-  has not sealed or pinned image pages, guarded host writes, isolated clone
-  and readback paths, or measured native setup and app behavior
-  ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
+- The new main-EXE sealed R/RX path does not cover mutable image pages,
+  preloaded or runtime DLLs, trap pages, heap, or stack; those remain
+  copy-backed. A read-only production-loader probe sealed 1,379/2,168 real
+  iNavi image pages (5.386719 MiB), including 1,224 with final patched
+  bytes, and counted 36,679,680 B (34.980469 MiB) in the initial owner's
+  mapped blobs. Direct native-write guard coverage, final-source validation,
+  `PrivatePageBudget` treatment, and an approved matched app run remain open.
+  The earlier 155-page original-byte filter result is historical; no new app
+  memory, speed, or map-readiness gain has been measured
+  ([load-only log](evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-06.raw.log),
+  [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
 - Canonical Task/alias ownership is absent: 12 expected-red Task controls live
   in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are
   fixed (E-21); thread/task aliases, wait pins and clone lineage are not.

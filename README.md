@@ -19,8 +19,9 @@ remote-control HTTP/WebSocket surface.
   shared-view named A→B→A and same-mapping alias controls pass focused tests
   and both frozen-source broad suites. One sealed task/frame-qualified run
   outcome, image/heap backing, Stage 2 and the Stage 3 task migration remain
-  open. E-42 now validates a pure immutable-image-page eligibility selector;
-  the runtime loader still uses its RWX/copy path.
+  open. After E-42's historical selector-only gate, the main EXE loader now
+  seals final patched R/RX bytes and retains mutable runs copy-backed; the
+  direct native-write safety gate is still under validation.
   Persistent-owner architecture is deferred to Stage 8.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
@@ -106,6 +107,16 @@ remote-control HTTP/WebSocket surface.
   manually, not by the actual loader. No sealed storage, native page mapping,
   host-write guard, 56-MiB benchmark or app run is claimed
   ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
+- A later read-only production-loader probe seals **1,379/2,168** iNavi main-
+  image pages (**5.386719 MiB**), including **1,224** pages whose final bytes
+  were changed by one-time loader patching. All 1,379 non-writable-section
+  candidates seal. The initial per-owner mapped-blob inventory is
+  **36,679,680 B (34.980469 MiB)**, including 16 MiB of heap backing, 4 MiB
+  of stack backing, and 5,648,384 B of sealed main-image bytes. The earlier
+  E-42 selector and 155-page equality-filter results are historical. This
+  probe did not execute iNavi or touch writable mounts; host-write safety,
+  final-source gates, app speed/memory, and map readiness remain unproved
+  ([coverage and blob log](evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-06.raw.log)).
 - An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
   and remained on the genuine splash, not the map. Guest `COM7:` reads
   transferred injected raw NMEA bytes, and tap down/up WNDPROC returns were

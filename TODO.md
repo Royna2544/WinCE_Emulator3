@@ -7,15 +7,14 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Migrate the E-42 eligible PE pages after final loader patching. First build
-   segmented sealed-versus-mutable image storage with clone isolation; then
-   add generation-qualified native pins, fresh-owner mapping/reconciliation
-   and zero sealed-page readback. Guard every host image write, including
-   restore/rebinding paths, and fail closed on memory-mode snapshots. Prove
-   pointer identity, guest write protection, independent writable sections,
-   and 200-slice pin churn. Measure setup with a roughly 56-MiB synthetic
-   image, then decide and document `PrivatePageBudget` accounting. Matched
-   iNavi timing needs a separate live-run approval and fresh mount backups.
+0. Finish the final-byte sealed main-EXE gate. The load-only iNavi probe now
+   seals 1,379/2,168 pages (5.386719 MiB), including 1,224 pages changed by
+   one-time loader patching; the earlier 155-page equality-filter result is
+   historical. Complete the direct native-write/restore/rebinding audit,
+   rerun final-source safety and broad gates, and document
+   `PrivatePageBudget` accounting. The synthetic 56-MiB setup path did not
+   establish a speed gain. Matched iNavi timing needs a separate live-run
+   approval and fresh mount backups; do not infer it from parse/load coverage.
 1. Migrate writable image sections and heap spillover as separate per-birth
    ownership slices, each with its own focused controls and memory accounting.
 2. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26

@@ -4,6 +4,26 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 Final-Byte Main-Image Sealing, Read-Only Coverage
+
+- The main EXE loader now partitions its final import- and trampoline-patched
+  bytes into sealed R/RX and mutable copy-backed runs. Final one-time branch
+  rewrites are eligible; IAT thunk pages and stub tails beyond `SizeOfImage`
+  are not. An opt-in, parse/load-only probe of the verified iNavi EXE plus
+  seven DLLs sealed **1,379/2,168** image pages and **1,379/1,379** eligible
+  non-writable-section pages: **5,648,384 B (5.386719 MiB)**. **1,224** of
+  those sealed pages contain final bytes changed by loader patching. The old
+  155-page result measured the now-superseded original-byte equality filter
+  ([attempt-06 log](evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-06.raw.log)).
+- The same load-only owner inventory totals **26 blobs, 36,679,680 B
+  (34.980469 MiB)**, including 16 MiB of heap-arena backing, 4 MiB of stack
+  backing, and 5,648,384 B sealed main-image backing. Runtime heap spillover
+  and later DLL loads are not in that startup inventory. E-38's 55.78-MiB
+  PID-1 `blob_mb` mean is an older live, per-slice truncated total, not a
+  matched byte or speed comparison. Direct native-write safety and final-
+  source validation remain open; no new app launch, mount write, boot timing,
+  or map-readiness claim follows.
+
 ## 2026-10-14 E-42 Immutable Image-Page Eligibility Source Gate
 
 - A pure PE-loader selector now borrows complete 4-KiB candidate pages from
@@ -21,10 +41,11 @@ references for historical reconstruction.
   ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
   A later test accidentally overwrote the expected-red raw log; its original
   bytes are gone. The four passing logs remain hash-verified in that receipt.
-- This is a selector-only source gate. Runtime image mapping remains the old
-  RWX/copy path; sealed backing, typed native pins, write guards, clone and
-  readback isolation, a 56-MiB setup benchmark, iNavi timing and Stage 2
-  acceptance are still open. No app run or writable-mount access occurred.
+- At E-42 this was a selector-only source gate: runtime image mapping still
+  used the RWX/copy path, with no sealed backing or native pointer mapping.
+  Later work added those paths and the final-byte coverage above. E-42 did
+  not run the app or access writable mounts; Stage 2 live acceptance remains
+  open.
 
 ## 2026-10-14 D-008 Public Shared-View Slab Source Gate
 
