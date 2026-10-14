@@ -205,7 +205,7 @@ impl Scheduler {
     /// Legacy/fixture compatibility registration for a wait with no known
     /// canonical birth. Production callers must publish through a verified
     /// birth-bearing Kernel path instead.
-    pub fn register_blocked_wait(
+    pub fn register_legacy_blocked_wait(
         &mut self,
         thread_id: u32,
         thread_handle: u32,
@@ -219,7 +219,7 @@ impl Scheduler {
             .copied()
             .map(WaitObjectKey::Handle)
             .collect();
-        self.register_blocked_wait_with_keys(
+        self.register_legacy_blocked_wait_with_keys(
             thread_id,
             thread_handle,
             wait_handles,
@@ -233,7 +233,7 @@ impl Scheduler {
     /// Legacy/fixture compatibility registration with canonical wake keys.
     /// The keys are an index, not wait-target lifetime references. Production
     /// callers must publish through a verified birth-bearing Kernel path.
-    pub fn register_blocked_wait_with_keys(
+    pub(crate) fn register_legacy_blocked_wait_with_keys(
         &mut self,
         thread_id: u32,
         thread_handle: u32,
@@ -244,7 +244,59 @@ impl Scheduler {
         timeout_ms: u32,
     ) -> u64 {
         let pinned_targets = vec![None; wait_handles.len()];
-        self.register_blocked_wait_with_keys_and_pins(
+        self.register_legacy_blocked_wait_with_keys_and_pins(
+            thread_id,
+            thread_handle,
+            wait_handles,
+            wait_keys,
+            pinned_targets,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        )
+    }
+
+    /// Publishes a prepared wait for a canonical owner. Kernel must verify
+    /// that this exact birth is execution-live immediately before calling.
+    /// The numeric TID is derived from the birth, never caller-selected.
+    pub(crate) fn register_blocked_wait_for_birth_with_keys_and_pins(
+        &mut self,
+        owner_birth: ThreadBirthKey,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        wait_keys: Vec<WaitObjectKey>,
+        pinned_targets: Vec<Option<TaskWaitPin>>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> u64 {
+        self.insert_blocked_wait_with_keys_and_pins(
+            owner_birth.thread_id(),
+            Some(owner_birth),
+            thread_handle,
+            wait_handles,
+            wait_keys,
+            pinned_targets,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        )
+    }
+
+    /// Explicit compatibility publication for a waiter whose canonical birth
+    /// was never known. Never use this for a production owner that is live.
+    pub(crate) fn register_legacy_blocked_wait_with_keys_and_pins(
+        &mut self,
+        thread_id: u32,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        wait_keys: Vec<WaitObjectKey>,
+        pinned_targets: Vec<Option<TaskWaitPin>>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> u64 {
+        self.insert_blocked_wait_with_keys_and_pins(
             thread_id,
             None,
             thread_handle,
@@ -257,11 +309,9 @@ impl Scheduler {
         )
     }
 
-    /// Low-level publication boundary for a fully prepared ordered wait set.
-    /// Each `Some` pin was acquired by Kernel before publication and remains
-    /// attached to its slot. `None` birth is for explicit legacy compatibility
-    /// only; production producers must have Kernel verify a live birth first.
-    pub fn register_blocked_wait_with_keys_and_pins(
+    /// One insertion transaction; its optional owner is private to the
+    /// scheduler so no external producer can silently publish unknown.
+    fn insert_blocked_wait_with_keys_and_pins(
         &mut self,
         thread_id: u32,
         owner_birth: Option<ThreadBirthKey>,
@@ -640,9 +690,8 @@ mod tests {
         birth: ThreadBirthKey,
         kind: SchedulerBlockedWaitKind,
     ) -> u64 {
-        scheduler.register_blocked_wait_with_keys_and_pins(
-            birth.thread_id(),
-            Some(birth),
+        scheduler.register_blocked_wait_for_birth_with_keys_and_pins(
+            birth,
             0,
             Vec::new(),
             Vec::new(),
@@ -651,6 +700,43 @@ mod tests {
             100,
             25,
         )
+    }
+
+    #[test]
+    fn scheduler_typed_birth_and_explicit_legacy_publication_keep_owner_kinds_distinct() {
+        let (birth, _) = reused_thread_births(7);
+        let mut scheduler = Scheduler::default();
+        let exact = scheduler.register_blocked_wait_for_birth_with_keys_and_pins(
+            birth,
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            SchedulerBlockedWaitKind::Sleep,
+            0,
+            u32::MAX,
+        );
+        let legacy = scheduler.register_legacy_blocked_wait_with_keys_and_pins(
+            birth.thread_id(),
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            SchedulerBlockedWaitKind::Sleep,
+            0,
+            u32::MAX,
+        );
+        assert_eq!(
+            scheduler.blocked_wait(exact).unwrap().thread_id,
+            birth.thread_id()
+        );
+        assert_eq!(
+            scheduler.blocked_wait(exact).unwrap().owner_birth,
+            Some(birth)
+        );
+        assert_eq!(scheduler.blocked_wait(legacy).unwrap().owner_birth, None);
+        assert_eq!(scheduler.waiter_ids_for_birth(birth), [exact]);
+        assert_eq!(scheduler.waiter_ids_for_thread(birth.thread_id()), [legacy]);
     }
 
     #[test]
@@ -664,7 +750,7 @@ mod tests {
                 dialog_hwnd: 0x20000,
             },
         );
-        let unknown = scheduler.register_blocked_wait(
+        let unknown = scheduler.register_legacy_blocked_wait(
             7,
             0,
             Vec::new(),
@@ -713,7 +799,7 @@ mod tests {
     #[test]
     fn scheduler_task_owned_cancellation_preserves_other_tasks_and_cleans_subscriptions() {
         let mut scheduler = Scheduler::default();
-        let first = scheduler.register_blocked_wait(
+        let first = scheduler.register_legacy_blocked_wait(
             7,
             0x107,
             vec![0x200],
@@ -721,7 +807,7 @@ mod tests {
             0,
             u32::MAX,
         );
-        let nested = scheduler.register_blocked_wait(
+        let nested = scheduler.register_legacy_blocked_wait(
             7,
             0x107,
             Vec::new(),
@@ -733,7 +819,7 @@ mod tests {
             0,
             u32::MAX,
         );
-        let serial = scheduler.register_blocked_wait(
+        let serial = scheduler.register_legacy_blocked_wait(
             8,
             0x108,
             Vec::new(),
@@ -741,7 +827,7 @@ mod tests {
             0,
             u32::MAX,
         );
-        let neighbor = scheduler.register_blocked_wait(
+        let neighbor = scheduler.register_legacy_blocked_wait(
             9,
             0x109,
             vec![0x200],
@@ -772,7 +858,7 @@ mod tests {
     #[test]
     fn scheduler_task_storage_keeps_global_wait_id_order() {
         let mut scheduler = Scheduler::default();
-        let first = scheduler.register_blocked_wait(
+        let first = scheduler.register_legacy_blocked_wait(
             20,
             0x120,
             Vec::new(),
@@ -780,7 +866,7 @@ mod tests {
             100,
             25,
         );
-        let second = scheduler.register_blocked_wait(
+        let second = scheduler.register_legacy_blocked_wait(
             1,
             0x101,
             Vec::new(),
@@ -788,7 +874,7 @@ mod tests {
             100,
             25,
         );
-        let third = scheduler.register_blocked_wait(
+        let third = scheduler.register_legacy_blocked_wait(
             20,
             0x120,
             Vec::new(),
@@ -817,7 +903,7 @@ mod tests {
     #[test]
     fn scheduler_registers_waits_under_each_handle_and_removes_them() {
         let mut scheduler = Scheduler::default();
-        let wait_id = scheduler.register_blocked_wait(
+        let wait_id = scheduler.register_legacy_blocked_wait(
             7,
             0x107,
             vec![0x200, 0x204],
@@ -841,7 +927,7 @@ mod tests {
     #[test]
     fn scheduler_waiter_lookup_falls_back_to_live_waits_when_index_is_stale() {
         let mut scheduler = Scheduler::default();
-        let wait_id = scheduler.register_blocked_wait(
+        let wait_id = scheduler.register_legacy_blocked_wait(
             7,
             0x107,
             vec![0x200, 0x204],
@@ -861,7 +947,7 @@ mod tests {
     #[test]
     fn scheduler_selects_ready_wait_by_ce_priority_then_fifo() {
         let mut scheduler = Scheduler::default();
-        let low_priority = scheduler.register_blocked_wait(
+        let low_priority = scheduler.register_legacy_blocked_wait(
             2,
             0x102,
             vec![0x200],
@@ -869,7 +955,7 @@ mod tests {
             0,
             crate::ce::timer::INFINITE,
         );
-        let high_priority = scheduler.register_blocked_wait(
+        let high_priority = scheduler.register_legacy_blocked_wait(
             3,
             0x103,
             vec![0x204],
@@ -894,7 +980,7 @@ mod tests {
     #[test]
     fn scheduler_timeout_uses_wrapping_tick_elapsed_time() {
         let mut scheduler = Scheduler::default();
-        let wait_id = scheduler.register_blocked_wait(
+        let wait_id = scheduler.register_legacy_blocked_wait(
             2,
             0x102,
             vec![0x200],
@@ -910,7 +996,7 @@ mod tests {
     #[test]
     fn scheduler_queues_pending_wakes_and_cleans_them_on_remove() {
         let mut scheduler = Scheduler::default();
-        let wait_id = scheduler.register_blocked_wait(
+        let wait_id = scheduler.register_legacy_blocked_wait(
             2,
             0x102,
             vec![0x200],
@@ -942,7 +1028,7 @@ mod tests {
     #[test]
     fn scheduler_prefers_pending_wakes_before_global_ready_scan() {
         let mut scheduler = Scheduler::default();
-        let globally_ready = scheduler.register_blocked_wait(
+        let globally_ready = scheduler.register_legacy_blocked_wait(
             2,
             0x102,
             vec![0x200],
@@ -950,7 +1036,7 @@ mod tests {
             0,
             crate::ce::timer::INFINITE,
         );
-        let signaled_waiter = scheduler.register_blocked_wait(
+        let signaled_waiter = scheduler.register_legacy_blocked_wait(
             3,
             0x103,
             vec![0x204],
@@ -972,7 +1058,7 @@ mod tests {
     #[test]
     fn scheduler_queues_message_waiters_by_thread() {
         let mut scheduler = Scheduler::default();
-        let global_ready = scheduler.register_blocked_wait(
+        let global_ready = scheduler.register_legacy_blocked_wait(
             2,
             0x102,
             vec![0x200],
@@ -980,7 +1066,7 @@ mod tests {
             0,
             crate::ce::timer::INFINITE,
         );
-        let message_waiter = scheduler.register_blocked_wait(
+        let message_waiter = scheduler.register_legacy_blocked_wait(
             3,
             0x103,
             Vec::new(),
@@ -1018,7 +1104,7 @@ mod tests {
     #[test]
     fn scheduler_queues_serial_read_waiters_by_handle() {
         let mut scheduler = Scheduler::default();
-        let global_ready = scheduler.register_blocked_wait(
+        let global_ready = scheduler.register_legacy_blocked_wait(
             2,
             0x102,
             vec![0x200],
@@ -1026,7 +1112,7 @@ mod tests {
             0,
             crate::ce::timer::INFINITE,
         );
-        let serial_waiter = scheduler.register_blocked_wait(
+        let serial_waiter = scheduler.register_legacy_blocked_wait(
             4,
             0x104,
             Vec::new(),
@@ -1065,7 +1151,7 @@ mod tests {
     #[test]
     fn scheduler_queues_serial_comm_event_waiters_by_handle() {
         let mut scheduler = Scheduler::default();
-        let global_ready = scheduler.register_blocked_wait(
+        let global_ready = scheduler.register_legacy_blocked_wait(
             2,
             0x102,
             vec![0x200],
@@ -1073,7 +1159,7 @@ mod tests {
             0,
             crate::ce::timer::INFINITE,
         );
-        let comm_waiter = scheduler.register_blocked_wait(
+        let comm_waiter = scheduler.register_legacy_blocked_wait(
             4,
             0x104,
             Vec::new(),
@@ -1112,7 +1198,7 @@ mod tests {
     #[test]
     fn scheduler_queues_send_reply_waiters_by_send_id() {
         let mut scheduler = Scheduler::default();
-        let global_ready = scheduler.register_blocked_wait(
+        let global_ready = scheduler.register_legacy_blocked_wait(
             2,
             0x102,
             vec![0x200],
@@ -1120,7 +1206,7 @@ mod tests {
             0,
             crate::ce::timer::INFINITE,
         );
-        let send_waiter = scheduler.register_blocked_wait(
+        let send_waiter = scheduler.register_legacy_blocked_wait(
             5,
             0x105,
             Vec::new(),
@@ -1155,7 +1241,7 @@ mod tests {
     #[test]
     fn scheduler_queues_get_message_waiters_by_thread() {
         let mut scheduler = Scheduler::default();
-        let get_message_waiter = scheduler.register_blocked_wait(
+        let get_message_waiter = scheduler.register_legacy_blocked_wait(
             7,
             0x107,
             Vec::new(),
@@ -1193,7 +1279,7 @@ mod tests {
     #[test]
     fn scheduler_selects_timeout_only_sleep_wait_after_timeout() {
         let mut scheduler = Scheduler::default();
-        let sleep_wait = scheduler.register_blocked_wait(
+        let sleep_wait = scheduler.register_legacy_blocked_wait(
             8,
             0x108,
             Vec::new(),

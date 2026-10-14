@@ -781,12 +781,14 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
                         kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
                     }
                 }
-                SchedulerBlockedWaitKind::ModalMessageBox { .. } => kernel.gwe.has_message_filtered(
-                    blocked.thread_id,
-                    None,
-                    wince_emulation_v3::ce::gwe::WM_PAINT,
-                    wince_emulation_v3::ce::gwe::WM_LBUTTONUP,
-                ),
+                SchedulerBlockedWaitKind::ModalMessageBox { .. } => {
+                    kernel.gwe.has_message_filtered(
+                        blocked.thread_id,
+                        None,
+                        wince_emulation_v3::ce::gwe::WM_PAINT,
+                        wince_emulation_v3::ce::gwe::WM_LBUTTONUP,
+                    )
+                }
                 SchedulerBlockedWaitKind::PopupMenuModal { mouse_message_max } => {
                     kernel.gwe.has_message_filtered(
                         blocked.thread_id,
@@ -8771,7 +8773,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
     let mut sched = Scheduler::default();
 
     // SerialRead waiter: appears in serial_read_waiter_ids_for_handle + all_serial_read_waiter_ids.
-    let sr_id = sched.register_blocked_wait(
+    let sr_id = sched.register_legacy_blocked_wait(
         1,
         0x101,
         vec![],
@@ -8784,7 +8786,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
     assert_eq!(sched.all_serial_read_waiter_ids(), vec![sr_id]);
 
     // SerialCommEvent waiter: appears in serial_event_waiter_ids_for_handle + all_serial_event_waiter_ids.
-    let se_id = sched.register_blocked_wait(
+    let se_id = sched.register_legacy_blocked_wait(
         2,
         0x102,
         vec![],
@@ -8797,7 +8799,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
     assert_eq!(sched.all_serial_event_waiter_ids(), vec![se_id]);
 
     // SendMessage waiter: appears in send_reply_waiter_ids_for_send.
-    let sm_id = sched.register_blocked_wait(
+    let sm_id = sched.register_legacy_blocked_wait(
         3,
         0x103,
         vec![],
@@ -8834,7 +8836,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
 
     // queue_all_serial_read_wake_candidates / queue_all_serial_event_wake_candidates.
     let mut sched2 = Scheduler::default();
-    let _a = sched2.register_blocked_wait(
+    let _a = sched2.register_legacy_blocked_wait(
         10,
         0x110,
         vec![],
@@ -8842,7 +8844,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
         0,
         INFINITE,
     );
-    let _b = sched2.register_blocked_wait(
+    let _b = sched2.register_legacy_blocked_wait(
         11,
         0x111,
         vec![],
@@ -8853,7 +8855,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
     let n = sched2.queue_all_serial_read_wake_candidates();
     assert_eq!(n, 2);
 
-    let _c = sched2.register_blocked_wait(
+    let _c = sched2.register_legacy_blocked_wait(
         12,
         0x112,
         vec![],
@@ -8866,7 +8868,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
 
     // queue_pending_wake_ids with explicit ids.
     let mut sched3 = Scheduler::default();
-    let d = sched3.register_blocked_wait(
+    let d = sched3.register_legacy_blocked_wait(
         20,
         0x120,
         vec![0x300],
@@ -8874,7 +8876,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
         0,
         1000,
     );
-    let e = sched3.register_blocked_wait(
+    let e = sched3.register_legacy_blocked_wait(
         21,
         0x121,
         vec![0x301],
@@ -8900,7 +8902,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
 
     // blocked_wait_timed_out: INFINITE timeout never elapses.
     let mut sched4 = Scheduler::default();
-    let f = sched4.register_blocked_wait(
+    let f = sched4.register_legacy_blocked_wait(
         30,
         0x130,
         vec![],
