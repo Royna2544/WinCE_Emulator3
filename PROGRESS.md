@@ -4,6 +4,29 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 D-008 Public Shared-View Slab Source Gate
+
+- Public named `CreateFileMappingW`/`MapViewOfFile` views now use one canonical,
+  budget-charged shared-page authority. Focused real-MIPS A→B→A tests prove
+  isolation at a shared guest VA across fresh owners and unflushed same-
+  mapping alias bytes within a slice. DIB-to-public migration, file-backed
+  prefix/tail preservation, budget-failure rollback and raw Flush alias
+  controls passed. The fixture manually selects the child; it does not prove
+  guest `CreateProcessW` handoff or CE same-VA guarantees.
+- The final serial broad gates passed **1,744/0/14 ignored** in release with
+  `unicorn,trace,win32-desktop` and **1,297/0/13 ignored** with no features on
+  one nine-file source/test/lock hash snapshot (`src/ce/memory.rs` SHA-256
+  `CF7CF08F6D80D9D4183ADE958A4BD92B5CCBB298660D724693B3AA774D3884B6`).
+  An earlier release attempt found stale assertions; a later no-feature run
+  caught a debug-only offset underflow that release had wrapped. The guarded
+  subtraction passed both final suites. The earlier logs are diagnostics,
+  not signoff ([D-008 receipt](evidence/d008-shared-view-20261014/validation.receipt.md)).
+- This closes the D-008 **source gate only**. No D-008 iNavi run or writable-
+  mount access occurred, so no new boot, frame, memory-peak or readiness claim
+  follows. E-38 remains the last bounded live run and stayed on the splash.
+  Image/heap backing, full Stage 2 acceptance, and Stage 3 task authority
+  remain open.
+
 ## 2026-10-14 E-39 Native Same-VA Controls and GMS Broad Gate
 
 - E-20's real-MIPS A→B→A controls passed across fresh native owners: public

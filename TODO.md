@@ -7,12 +7,16 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Finish D-008 shared file views on slabs through named `CreateFileMappingW`
-   reopen; one public A/B same-VA plus in-slice alias control lands with its
-   fix, then image/heap blobs. Each migrated family must charge the same
-   `PrivatePageBudget`, or its receipt must explain why not. Measure native
-   setup with each source gate.
-1. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
+0. Migrate immutable PE image pages after relocation and loader patching:
+   select only non-writable sections from PE characteristics, share pinned
+   pages across fresh owners with the section's read/execute permissions, and
+   prove identity, no-copy setup, write protection, and 200-slice pin churn.
+   Measure setup with a roughly 56-MB synthetic immutable image. Charge the
+   `PrivatePageBudget`, or explain the exception in the receipt; matched iNavi
+   timing requires a separately approved live run.
+1. Migrate writable image sections and heap spillover as separate per-birth
+   ownership slices, each with its own focused controls and memory accounting.
+2. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
 ## Parallel lanes (never gate the queue above)

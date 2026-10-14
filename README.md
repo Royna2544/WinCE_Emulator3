@@ -16,9 +16,10 @@ remote-control HTTP/WebSocket surface.
   rewrite; they do not mark it complete. The sole source checkout is the D:
   repository. Fresh-engine-per-slice is the source-bound default, and public
   private-VM native same-VA A→B→A isolation is validated. D-008 public
-  shared-view named A→B→A and same-mapping alias controls pass focused tests;
-  its broad gate is pending. One sealed task/frame-qualified run outcome,
-  image/heap backing, Stage 2 and the Stage 3 task migration remain open.
+  shared-view named A→B→A and same-mapping alias controls pass focused tests
+  and both frozen-source broad suites. One sealed task/frame-qualified run
+  outcome, image/heap backing, Stage 2 and the Stage 3 task migration remain
+  open.
   Persistent-owner architecture is deferred to Stage 8.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
@@ -79,7 +80,7 @@ remote-control HTTP/WebSocket surface.
   owners: public `VirtualAlloc` private memory and a separate injected
   `FileMappingView` fixture. That E-20 view fixture did not validate public
   `MapViewOfFile`, named reopen or shared alias coherence; the later D-008
-  focused source gate tests those separately. On the E-20 combined
+  source gate tests those separately. On the E-20 combined
   final source, full release passed **1,742/0/14 ignored** and no-feature
   **1,296/0/13 ignored**; the four public GMS tests passed in both. GMS now
   includes boot-reserved RAM in its stable-private-page budget, but heap,
@@ -90,10 +91,12 @@ remote-control HTTP/WebSocket surface.
 - D-008 first public maps now use one canonical, budget-charged shared page
   authority instead of the old copy-backed view. Focused real-MIPS named
   A→B→A and in-slice alias tests pass, as do DIB-to-public migration, file-
-  backed prefix/tail and memory-budget rollback controls. The first broad
-  release attempt exposed three stale test assertions; their focused rerun is
-  in progress, so full release/no-feature validation is **not yet complete**.
-  This source work did not launch iNavi or establish map readiness
+  backed prefix/tail and memory-budget rollback controls. The final same-
+  source broad gates passed **1,744/0/14 ignored** with release features and
+  **1,297/0/13 ignored** with no features. The no-feature suite caught an
+  offset underflow hidden by release wrapping; its guarded fix is included in
+  both final gates. This source work did not launch iNavi, measure a new boot
+  time, or establish map readiness
   ([D-008 receipt](evidence/d008-shared-view-20261014/validation.receipt.md)).
 - An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
   and remained on the genuine splash, not the map. Guest `COM7:` reads

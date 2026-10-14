@@ -33,23 +33,23 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   readback; E-37 repaired that path and the separately approved E-38 run
   survived 330 s at 430.676 MiB sampled RSS, but remained on the splash with
   no map. E-39 proves public private-VM native A→B→A same-VA isolation and
-  injected file-view isolation. D-008 focused controls now prove public named
-  `MapViewOfFile` A→B→A same-VA and same-mapping alias bytes, but its frozen-
-  source broad gate is still pending. The fixture manually selects the child;
+  injected file-view isolation. D-008 public named `MapViewOfFile` A→B→A
+  same-VA and same-mapping alias bytes pass focused controls and both frozen-
+  source broad suites; there has been no D-008 live run. The fixture manually
+  selects the child;
   guest `CreateProcessW`/scheduler handoff, distinct public mappings at one VA,
   and full machine clone relineage remain unproved. A same-PID DIB view
   without VA metadata can Flush but not Unmap; the immediate CreateProcess
   view-sync failure path has no fault injection. `VirtualAllocEx`/
   `VirtualQueryEx` name exports remain absent. History: ledger E-14, E-16,
   E-18, E-20, E-22 to E-25, E-35 to E-39.
-- D-008 first public mapping of an anonymous Legacy object migrates and
-  charges its entire zero-filled byte store as canonical 4 KiB pages. A tiny
-  view of a large mapping may therefore fail with insufficient memory where
-  demand-paged CE could admit it. Raw/non-Unicorn alias propagation reports
-  a failed guest write but is not rollback-atomic: canonical and earlier alias
-  bytes may already have changed. Native pointer-mapped aliases share the
-  canonical pages directly. The focused controls and open limits are in the
-  [D-008 receipt](evidence/d008-shared-view-20261014/validation.receipt.md).
+- D-008 charges the whole anonymous mapping at first public `MapViewOfFile`,
+  not at `CreateFileMapping` as documented for default `SEC_COMMIT` in
+  [Microsoft's CE mapping reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms923951%28v%3Dmsdn.10%29);
+  CE6 device-specific accounting remains unmeasured. Raw/non-Unicorn alias
+  propagation is also not rollback-atomic after a failed guest write; native
+  pointer aliases share canonical bytes directly
+  ([D-008 receipt](evidence/d008-shared-view-20261014/validation.receipt.md)).
 - GMS's boot-reserved physical RAM and stable private-page commit use one
   budget, with four public controls passing both E-39 broad suites. Only
   stable private pages and D-008 stable shared-view pages charge this budget;
