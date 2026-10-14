@@ -8086,6 +8086,30 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
                 .iter()
                 .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
         }),
+        None
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_EXIT_CODE_PROCESS,
+            [opened_process, process_exit_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(process_exit_ptr)?, 259);
+    assert!(kernel.mark_process_launch_exited(&launch, 0x66));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(thread_id, 0, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
         Some(process_wait)
     );
     kernel.remove_blocked_waiter(process_wait).unwrap();

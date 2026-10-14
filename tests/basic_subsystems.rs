@@ -724,7 +724,7 @@ fn thread_and_process_exit_queue_scheduler_wait_candidates() -> Result<()> {
     );
 
     let stats = kernel.scheduler_stats();
-    assert_eq!(stats.object_signal_count, 5);
+    assert_eq!(stats.object_signal_count, 6);
     assert_eq!(stats.object_wake_candidate_count, 5);
     Ok(())
 }
