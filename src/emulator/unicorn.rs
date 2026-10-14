@@ -155,6 +155,12 @@ pub struct UnicornMips {
     // An E18 diagnostic pointer-map failure cannot resume from an older CPU
     // snapshot or silently restart at process entry on a later call.
     private_slab_attempt_poisoned: bool,
+    /// The current child returned and its canonical execution was retired.
+    /// If no parked successor exists, the old CPU must never run another slice.
+    completed_active_process_exit: bool,
+    /// Original, birth-keyed child launch. Never reconstruct CPU ownership
+    /// from a reusable public handle or bounded diagnostic trace.
+    owned_process_launch: Option<crate::ce::kernel::PendingProcessLaunch>,
     /// Count of completed guest run slices; used to reject escaped-callout
     /// recovery based on stop evidence captured before the callout was pushed.
     run_slice_generation: u64,
@@ -1417,6 +1423,8 @@ impl UnicornMips {
             #[cfg(all(test, feature = "unicorn"))]
             native_mixed_jr_stop_probe: None,
             private_slab_attempt_poisoned: false,
+            completed_active_process_exit: false,
+            owned_process_launch: None,
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
@@ -1535,6 +1543,10 @@ impl UnicornMips {
         self.saved_context.is_some()
     }
 
+    pub fn active_process_execution_completed(&self) -> bool {
+        self.completed_active_process_exit
+    }
+
     #[cfg(all(test, feature = "unicorn"))]
     fn native_engine_identity_for_test(&self) -> Option<usize> {
         self.native_engine.identity()
@@ -1604,6 +1616,12 @@ impl UnicornMips {
 
     pub fn parked_child_process_count(&self) -> usize {
         self.parked_child_processes.len()
+    }
+
+    pub fn parked_timer_fallback_thread_id(&self) -> Option<u32> {
+        self.parked_child_processes
+            .iter()
+            .find_map(|process| (process.thread_id != 0).then_some(process.thread_id))
     }
 
     pub fn parked_child_process_count_for_kernel(&self, kernel: &CeKernel) -> usize {
@@ -4780,55 +4798,77 @@ impl UnicornMips {
             if Self::parked_process_handle_exit_code(&process, kernel).is_some() {
                 continue;
             }
+            if process.cpu.current_thread_id != process.cpu.initial_thread_id
+                && process.cpu.last_debug_snapshot().is_some_and(|snapshot| {
+                    snapshot.thread_exit_reached || snapshot.pc == THREAD_EXIT_STUB_ADDR
+                })
+            {
+                // A worker's exit stub is not process completion. Keep its
+                // CPU context for the ordinary worker-exit handoff.
+                kept.push_back(process);
+                continue;
+            }
             if let Some(exit_code) = Self::parked_process_thread_exit_code(&process, kernel) {
-                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-                    op: "CreateProcessChildReturned",
-                    application: process.application.clone(),
-                    command_line: Some(process.command_line.clone()),
-                    path: Some(process.module_host_path.display().to_string()),
-                    process_handle: process.process_handle,
-                    thread_handle: process.thread_handle,
-                    process_id: Some(process.process_state.process_id),
-                    thread_id: Some(process.thread_id),
-                    result: Some(exit_code),
-                    error: None,
-                    detail: Some(format!("parked_prune_exit thread_id={}", process.thread_id)),
-                });
-                if let (Some(process_handle), Some(thread_handle)) =
-                    (process.process_handle, process.thread_handle)
-                {
-                    let launch = crate::ce::kernel::PendingProcessLaunch {
-                        application: process.application.clone(),
-                        command_line: Some(process.command_line.clone()),
-                        current_directory: process.current_directory.clone(),
-                        show_cmd: None,
-                        process_handle,
-                        thread_handle,
-                        process_id: process.process_state.process_id,
-                        thread_id: process.thread_id,
-                        process_birth: process
-                            .process_handle
-                            .and_then(|handle| kernel.handles.process_birth_key_for_handle(handle)),
-                        primary_thread_birth: process
-                            .thread_handle
-                            .and_then(|handle| kernel.handles.thread_birth_key_for_handle(handle)),
-                    };
-                    let mut process_cpu = process.cpu;
-                    if let Some(modal_state) = process_cpu.take_terminal_blocked_modal(kernel) {
-                        if let Some(framebuffer) = framebuffer.as_mut() {
-                            modal_state.restore_framebuffer(&mut **framebuffer);
-                        }
-                    }
-                    if let Some(framebuffer) = framebuffer.as_mut() {
+                if let Some(launch) = process.cpu.owned_process_launch.as_ref().filter(|launch| {
+                    launch.process_id == process.process_state.process_id
+                        && launch.thread_id == process.cpu.initial_thread_id
+                }) {
+                    let completed = if let Some(framebuffer) = framebuffer.as_mut() {
                         kernel.mark_process_launch_exited_with_framebuffer(
-                            &launch,
+                            launch,
                             exit_code,
                             Some(&mut **framebuffer),
-                        );
+                        )
                     } else {
-                        kernel.mark_process_launch_exited(&launch, exit_code);
+                        kernel.mark_process_launch_exited(launch, exit_code)
+                    };
+                    if completed {
+                        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                            op: "CreateProcessChildReturned",
+                            application: process.application.clone(),
+                            command_line: Some(process.command_line.clone()),
+                            path: Some(process.module_host_path.display().to_string()),
+                            process_handle: process.process_handle,
+                            thread_handle: process.thread_handle,
+                            process_id: Some(process.process_state.process_id),
+                            thread_id: Some(process.thread_id),
+                            result: Some(exit_code),
+                            error: None,
+                            detail: Some(format!(
+                                "parked_prune_exit thread_id={}",
+                                process.thread_id
+                            )),
+                        });
+                        let mut process_cpu = process.cpu;
+                        if let Some(modal_state) = process_cpu.take_terminal_blocked_modal(kernel) {
+                            if let Some(framebuffer) = framebuffer.as_mut() {
+                                modal_state.restore_framebuffer(&mut **framebuffer);
+                            }
+                        }
+                        continue;
                     }
                 }
+                // A terminal snapshot without the CPU's original launch
+                // cannot authorize process cleanup, even if a current alias
+                // happens to resolve to the same numeric PID/TID.
+                kept.push_back(process);
+                continue;
+            }
+            if process.cpu.last_debug_snapshot().is_some_and(|snapshot| {
+                snapshot.thread_exit_reached
+                    || snapshot.pc == THREAD_EXIT_STUB_ADDR
+                    || snapshot.pc == GUEST_THREAD_RETURN_STUB_ADDR
+            }) {
+                // No verified completion consumed this stopped CPU. Do not
+                // let duplicate pruning turn an unverified stop into exit.
+                kept.push_back(process);
+                continue;
+            }
+            if Self::parked_process_has_request_only_signal(&process, kernel) {
+                // TerminateProcess has signaled the object, but this CPU still
+                // owns live execution. Duplicate pruning is not a completion
+                // witness and must not discard it either.
+                kept.push_back(process);
                 continue;
             }
             if !self.parked_process_matches_current_active(&process, kernel)
@@ -4843,9 +4883,40 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn parked_process_handle_exit_code(process: &ParkedProcess, kernel: &CeKernel) -> Option<u32> {
         let process_handle = process.process_handle?;
+        let owned_birth = process.cpu.owned_process_launch.as_ref().and_then(|launch| {
+            (launch.process_id == process.process_state.process_id
+                && launch.thread_id == process.cpu.initial_thread_id)
+                .then_some(launch.process_birth)
+                .flatten()
+        })?;
+        if kernel.handles.process_birth_key_for_handle(process_handle) != Some(owned_birth)
+            || kernel.handles.process_execution_live_by_birth(owned_birth)
+        {
+            return None;
+        }
         kernel
             .process_exit_code_for_handle(process_handle)
             .filter(|exit_code| *exit_code != crate::ce::kernel::STILL_ACTIVE)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn parked_process_has_request_only_signal(process: &ParkedProcess, kernel: &CeKernel) -> bool {
+        let Some(process_handle) = process.process_handle else {
+            return false;
+        };
+        let Some(owned_birth) = process.cpu.owned_process_launch.as_ref().and_then(|launch| {
+            (launch.process_id == process.process_state.process_id
+                && launch.thread_id == process.cpu.initial_thread_id)
+                .then_some(launch.process_birth)
+                .flatten()
+        }) else {
+            return false;
+        };
+        kernel.handles.process_birth_key_for_handle(process_handle) == Some(owned_birth)
+            && kernel.handles.process_execution_live_by_birth(owned_birth)
+            && kernel
+                .process_exit_code_for_handle(process_handle)
+                .is_some_and(|code| code != crate::ce::kernel::STILL_ACTIVE)
     }
 
     #[cfg(feature = "unicorn")]
@@ -4863,6 +4934,9 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
+        if self.completed_active_process_exit {
+            return false;
+        }
         if self.complete_saved_guest_thread_exit(kernel) {
             return false;
         }
@@ -4871,18 +4945,47 @@ impl UnicornMips {
             .is_some()
         {
             let _ = self.complete_active_terminal_child_process_return(kernel, framebuffer);
-            return self.switch_to_next_parked_process(kernel, false);
+            if !self.completed_active_process_exit {
+                return false;
+            }
+            let switched = self.switch_to_next_parked_process(kernel, false);
+            return switched || self.completed_active_process_exit;
         }
         let Some(exit_code) = self.active_process_thread_exit_code() else {
             return false;
         };
-        let Some(launch) = Self::active_process_launch_from_trace(kernel) else {
+        let Some(launch) = self
+            .owned_process_launch
+            .as_ref()
+            .filter(|launch| launch.process_id == kernel.current_process_id())
+            .cloned()
+        else {
+            if self.initial_thread_id != MAIN_GUEST_THREAD_ID {
+                tracing::warn!(
+                    target: "ce.scheduler",
+                    process_id = kernel.current_process_id(),
+                    thread_id = self.current_thread_id,
+                    "active child exit lacks its original launch; retaining its CPU"
+                );
+                return false;
+            }
+            // The boot process does not have a queued child launch. Its
+            // broader root/worker execution handoff remains a separate slice.
             let _ = kernel.terminate_process(
                 crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
                 exit_code,
             );
             return self.switch_to_next_parked_process(kernel, false);
         };
+        if launch.process_birth.is_none() {
+            tracing::warn!(
+                target: "ce.scheduler",
+                process_id = launch.process_id,
+                thread_id = launch.thread_id,
+                "active child exit lacks a verified birth; retaining its CPU"
+            );
+            return false;
+        }
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessChildReturned",
             application: launch.application.clone(),
@@ -4899,9 +5002,35 @@ impl UnicornMips {
             error: None,
             detail: Some(format!("active_exit show_cmd={:?}", launch.show_cmd)),
         });
-        kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer);
+        if !kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer) {
+            tracing::warn!(
+                target: "ce.scheduler",
+                process_id = launch.process_id,
+                thread_id = launch.thread_id,
+                "active child completion was rejected; retaining its CPU"
+            );
+            return false;
+        }
+        self.seal_completed_active_process_cpu();
         self.remove_parked_process_tree_by_identity(launch.process_id, launch.thread_id);
-        self.switch_to_next_parked_process(kernel, false)
+        let switched = self.switch_to_next_parked_process(kernel, false);
+        switched || self.completed_active_process_exit
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn seal_completed_active_process_cpu(&mut self) {
+        // Drop the old native owner before returning to any host scheduling
+        // path. A child with no parked successor remains in `self`, but can
+        // neither restore a saved context nor allocate a fresh engine to run.
+        self.completed_active_process_exit = true;
+        self.native_engine = ProcessNativeEngine::new(
+            unicorn_engine::unicorn_const::Arch::MIPS,
+            unicorn_engine::unicorn_const::Mode::MIPS32
+                | unicorn_engine::unicorn_const::Mode::LITTLE_ENDIAN,
+        );
+        self.saved_context = None;
+        self.running_guest_thread = None;
+        self.entry = None;
     }
 
     #[cfg(feature = "unicorn")]
@@ -4914,7 +5043,7 @@ impl UnicornMips {
         }
 
         let thread_id = self.current_thread_id;
-        if thread_id == 0 || thread_id == MAIN_GUEST_THREAD_ID {
+        if thread_id == 0 || thread_id == self.initial_thread_id {
             return false;
         }
         if kernel.handles.thread_birth_key_by_id(thread_id).is_none() {
@@ -4999,6 +5128,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn active_process_thread_exit_code(&self) -> Option<u32> {
+        if self.current_thread_id != self.initial_thread_id {
+            return None;
+        }
         self.last_debug_snapshot().and_then(|snapshot| {
             (snapshot.thread_exit_reached || snapshot.pc == THREAD_EXIT_STUB_ADDR)
                 .then_some(snapshot.v0)
@@ -5014,9 +5146,23 @@ impl UnicornMips {
         let Some(exit_code) = self.active_terminal_child_process_return_code(kernel) else {
             return None;
         };
-        let Some(launch) = Self::active_process_launch_from_trace(kernel) else {
+        let Some(launch) = self
+            .owned_process_launch
+            .as_ref()
+            .filter(|launch| launch.process_id == kernel.current_process_id())
+            .cloned()
+        else {
             return None;
         };
+        if launch.process_birth.is_none() {
+            tracing::warn!(
+                target: "ce.scheduler",
+                process_id = launch.process_id,
+                thread_id = launch.thread_id,
+                "terminal child return lacks a verified birth; retaining its CPU"
+            );
+            return None;
+        }
         let terminal_detail = self
             .last_debug_snapshot()
             .map(|snapshot| {
@@ -5058,8 +5204,17 @@ impl UnicornMips {
             error: None,
             detail: Some(terminal_detail),
         });
+        if !kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer) {
+            tracing::warn!(
+                target: "ce.scheduler",
+                process_id = launch.process_id,
+                thread_id = launch.thread_id,
+                "terminal child completion was rejected; retaining its CPU"
+            );
+            return None;
+        }
         let modal_state = self.take_terminal_blocked_modal(kernel);
-        kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer);
+        self.seal_completed_active_process_cpu();
         self.remove_parked_process_tree_by_identity(launch.process_id, launch.thread_id);
         self.saved_context = None;
         self.last_debug = None;
@@ -5084,7 +5239,8 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn active_terminal_child_process_return_code(&self, kernel: &CeKernel) -> Option<u32> {
         let snapshot = self.last_debug_snapshot()?;
-        if snapshot.pc != GUEST_THREAD_RETURN_STUB_ADDR
+        if self.current_thread_id != self.initial_thread_id
+            || snapshot.pc != GUEST_THREAD_RETURN_STUB_ADDR
             || self.active_process_has_resumable_context()
             || self.running_guest_thread.is_some()
             || !self.pending_guest_thread_returns.is_empty()
@@ -5192,13 +5348,6 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn active_process_launch_from_trace(
-        kernel: &CeKernel,
-    ) -> Option<crate::ce::kernel::PendingProcessLaunch> {
-        Self::process_launch_from_trace(kernel, kernel.current_process_id())
-    }
-
-    #[cfg(feature = "unicorn")]
     fn process_launch_from_trace(
         kernel: &CeKernel,
         process_id: u32,
@@ -5276,7 +5425,14 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn parked_process_thread_exit_code(process: &ParkedProcess, kernel: &CeKernel) -> Option<u32> {
-        if process.cpu.blocked_modal_message_box.is_some() {
+        if process.cpu.blocked_modal_message_box.is_some()
+            || process.cpu.current_thread_id != process.cpu.initial_thread_id
+            || !process.cpu.owned_process_launch.as_ref().is_some_and(|launch| {
+                launch.process_birth.is_some()
+                    && launch.process_id == process.process_state.process_id
+                    && launch.thread_id == process.cpu.initial_thread_id
+            })
+        {
             return None;
         }
         process.cpu.last_debug_snapshot().and_then(|snapshot| {
@@ -6007,8 +6163,9 @@ impl UnicornMips {
             });
         let mut image_launch = None;
         if !preserve_kernel_process_state {
-            image_launch =
-                Self::process_launch_for_image_from_trace(kernel, &module_path, &module_host_path);
+            image_launch = self.owned_process_launch.clone().or_else(|| {
+                Self::process_launch_for_image_from_trace(kernel, &module_path, &module_host_path)
+            });
             if let Some(launch) = image_launch.as_ref() {
                 if launch.process_id != process_state.process_id {
                     process_state = crate::ce::kernel::CurrentProcessState {
@@ -6046,7 +6203,10 @@ impl UnicornMips {
                 }
             }
         }
-        let active_launch = image_launch
+        let active_launch = self
+            .owned_process_launch
+            .clone()
+            .or(image_launch)
             .or_else(|| Self::process_launch_from_trace(kernel, process_state.process_id));
         ParkedProcess {
             application: Some(module_path.clone()),
@@ -6087,6 +6247,8 @@ impl UnicornMips {
                 private_slab_attempt_poisoned: std::mem::take(
                     &mut self.private_slab_attempt_poisoned,
                 ),
+                completed_active_process_exit: self.completed_active_process_exit,
+                owned_process_launch: self.owned_process_launch.take(),
                 run_slice_generation: self.run_slice_generation,
                 visible_callout_push_generation: self.visible_callout_push_generation,
                 slice_end_rotation_pending: false,
@@ -6437,6 +6599,15 @@ impl UnicornMips {
     ) -> AttemptExecution {
         let mut report = NativeAttemptReport::no_attempt(limits);
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
+        if self.completed_active_process_exit {
+            report.failure_operation = Some("completed process CPU preflight");
+            return AttemptExecution {
+                report,
+                result: Err(Error::Backend(
+                    "completed process CPU cannot execute another slice".to_owned(),
+                )),
+            };
+        }
         if self.private_slab_attempt_poisoned {
             report.failure_operation = Some("poisoned native-attempt preflight");
             return AttemptExecution {
@@ -12299,6 +12470,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             guest_thread_stack_slots: std::collections::BTreeMap::new(),
             saved_context: None,
             private_slab_attempt_poisoned: false,
+            completed_active_process_exit: false,
+            owned_process_launch: None,
         })
     }
 
@@ -16047,6 +16220,7 @@ fn run_pending_process_launches<D>(
 
         let child_result = (|| -> Result<(ChildProcessRunOutcome, Option<UnicornMips>)> {
             let mut child = UnicornMips::new()?;
+            child.owned_process_launch = Some(launch.clone());
             child.set_dll_search_dirs(dll_search_dirs.to_vec());
             child.set_initial_thread_id(launch.thread_id);
             let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
@@ -16207,6 +16381,15 @@ fn child_launch_handle_exit_code(
     kernel: &CeKernel,
     launch: &crate::ce::kernel::PendingProcessLaunch,
 ) -> Option<u32> {
+    let birth = launch.process_birth?;
+    if kernel
+        .handles
+        .process_birth_key_for_handle(launch.process_handle)
+        != Some(birth)
+        || kernel.handles.process_execution_live_by_birth(birth)
+    {
+        return None;
+    }
     kernel
         .process_exit_code_for_handle(launch.process_handle)
         .filter(|exit_code| *exit_code != crate::ce::kernel::STILL_ACTIVE)
@@ -38292,7 +38475,8 @@ mod guest_thread_stack_tests {
     fn parked_modal_message_box_does_not_report_thread_exit() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
-        let thread_id = 5;
+        let launch = kernel.queue_process_launch(None, None);
+        let thread_id = launch.thread_id;
         let mut memory = ModalTestMemory::default();
         let text_ptr = 0x2000;
         let caption_ptr = 0x2100;
@@ -38302,6 +38486,7 @@ mod guest_thread_stack_tests {
         let mut cpu = UnicornMips::new()?;
         cpu.set_initial_thread_id(thread_id);
         cpu.current_thread_id = thread_id;
+        cpu.owned_process_launch = Some(launch.clone());
         cpu.last_debug = Some(UnicornDebugSnapshot {
             pc: THREAD_EXIT_STUB_ADDR,
             ra: THREAD_EXIT_STUB_ADDR,
@@ -38310,6 +38495,7 @@ mod guest_thread_stack_tests {
             ..Default::default()
         });
         let mut parked = parked_process_for_cpu(thread_id, cpu);
+        parked.process_state.process_id = launch.process_id;
 
         assert_eq!(
             UnicornMips::parked_process_thread_exit_code(&parked, &kernel),
@@ -38561,6 +38747,134 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn active_worker_stop_cannot_complete_entire_child_process() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(None, None);
+        let birth = launch.process_birth.expect("queued child birth");
+        let (_, worker_tid) =
+            kernel.try_create_guest_thread_for_creator(launch.thread_id, 0x0040_1000, 0, false)?;
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(launch.thread_id);
+        scheduler.current_thread_id = worker_tid;
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x45,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+
+        assert!(!scheduler.complete_active_process_thread_exit_with_framebuffer(&mut kernel, None));
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        assert!(!scheduler.active_process_execution_completed());
+        Ok(())
+    }
+
+    #[test]
+    fn active_child_exit_without_successor_disposes_native_cpu_before_return() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\child.exe".to_owned()),
+            None,
+        );
+        let birth = launch.process_birth.expect("queued child birth");
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.native_engine = ProcessNativeEngine::new_persistent_for_test(
+            unicorn_engine::unicorn_const::Arch::MIPS,
+            unicorn_engine::unicorn_const::Mode::MIPS32
+                | unicorn_engine::unicorn_const::Mode::LITTLE_ENDIAN,
+        );
+        let native_lease = scheduler.native_engine.lease().expect("native owner initializes");
+        let live_native_identity = native_lease.identity();
+        native_lease.finish().expect("native owner publishes");
+        assert_eq!(scheduler.native_engine_identity_for_test(), Some(live_native_identity));
+        scheduler.owned_process_launch = Some(launch.clone());
+        scheduler.set_initial_thread_id(launch.thread_id);
+        scheduler.current_thread_id = launch.thread_id;
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[2] = 0x45;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: THREAD_EXIT_STUB_ADDR,
+            regs,
+        });
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x45,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+
+        assert!(scheduler.complete_active_process_thread_exit_with_framebuffer(&mut kernel, None));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(0x45));
+        assert!(!kernel.handles.process_execution_live_by_birth(birth));
+        assert!(scheduler.active_process_execution_completed());
+        assert!(scheduler.saved_context.is_none());
+        assert!(scheduler.native_engine_identity_for_test().is_none());
+        assert!(!scheduler.complete_active_process_thread_exit_with_framebuffer(&mut kernel, None));
+
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let attempt = scheduler.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 20,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        assert!(attempt.result.is_err());
+        assert_eq!(attempt.report.attempt_id(), None);
+        assert_eq!(attempt.report.failure_operation(), Some("completed process CPU preflight"));
+
+        let event = kernel.create_event_w(None, true, false);
+        let wait_id = kernel.register_blocked_waiter(
+            MAIN_GUEST_THREAD_ID,
+            0,
+            vec![event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut parent_cpu = UnicornMips::new()?;
+        parent_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            wait_id,
+            thread_id: MAIN_GUEST_THREAD_ID,
+            thread_handle: 0,
+            wait_handles: vec![event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0010_2000,
+        });
+        let mut parked_parent = parked_process_for_cpu(MAIN_GUEST_THREAD_ID, parent_cpu);
+        parked_parent.process_state.process_id = 1;
+        scheduler.parked_child_processes.push_back(parked_parent);
+        assert!(!scheduler.switch_to_next_parked_child_process(&mut kernel));
+        assert!(scheduler.active_process_execution_completed());
+        assert!(kernel.set_event(event));
+        assert!(scheduler.switch_to_next_parked_child_process(&mut kernel));
+        assert_eq!(kernel.current_process_id(), 1);
+        assert!(!scheduler.active_process_execution_completed());
+        Ok(())
+    }
+
+    #[test]
     fn active_terminal_child_exit_hands_back_to_parked_parent() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -38570,6 +38884,7 @@ mod guest_thread_stack_tests {
             Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
             Some("iNavi|SDMMC Disk\\mapdata".to_owned()),
         );
+        scheduler.owned_process_launch = Some(launch.clone());
         scheduler.set_initial_thread_id(launch.thread_id);
         scheduler.current_thread_id = launch.thread_id;
         scheduler.saved_context = Some(SavedCpuContext {
@@ -38666,7 +38981,9 @@ mod guest_thread_stack_tests {
         kernel.mark_process_launch_exited(&launch, 0x24);
 
         let mut scheduler = UnicornMips::new()?;
-        let child_cpu = UnicornMips::new()?;
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(launch.thread_id);
+        child_cpu.owned_process_launch = Some(launch.clone());
         scheduler.parked_child_processes.push_back(ParkedProcess {
             application: launch.application.clone(),
             process_handle: Some(launch.process_handle),
@@ -38712,6 +39029,148 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn prune_keeps_parked_child_after_request_only_process_signal() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(None, None);
+        let birth = launch.process_birth.expect("queued child birth");
+        let _ = kernel.take_pending_process_launches();
+        assert!(kernel.terminate_process(launch.process_handle, 0x24));
+        assert_eq!(child_launch_handle_exit_code(&kernel, &launch), None);
+
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(launch.thread_id);
+        child_cpu.owned_process_launch = Some(launch.clone());
+        let mut parked = parked_process_for_cpu(launch.thread_id, child_cpu);
+        parked.process_handle = Some(launch.process_handle);
+        parked.thread_handle = Some(launch.thread_handle);
+        parked.process_state.process_id = launch.process_id;
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(launch.thread_id);
+        scheduler.current_thread_id = launch.thread_id;
+        kernel.set_current_process_id(launch.process_id);
+        scheduler.parked_child_processes.push_back(parked);
+        scheduler.prune_exited_and_active_processes_from_parked(&mut kernel);
+
+        assert_eq!(scheduler.parked_child_processes.len(), 1);
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        Ok(())
+    }
+
+    #[test]
+    fn prune_keeps_terminal_parked_cpu_when_launch_birth_is_unavailable() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(None, None);
+        let birth = launch.process_birth.expect("queued child birth");
+        let _ = kernel.take_pending_process_launches();
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(launch.thread_id);
+        child_cpu.current_thread_id = launch.thread_id;
+        child_cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x24,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        let mut parked = parked_process_for_cpu(launch.thread_id, child_cpu);
+        parked.process_handle = Some(launch.process_handle);
+        parked.thread_handle = Some(launch.thread_handle);
+        parked.process_state.process_id = launch.process_id;
+        assert!(kernel.close_handle(launch.process_handle)?);
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.parked_child_processes.push_back(parked);
+        scheduler.prune_exited_and_active_processes_from_parked(&mut kernel);
+
+        assert_eq!(scheduler.parked_child_processes.len(), 1);
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record.op == "CreateProcessExited" && record.process_id == Some(launch.process_id)
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn prune_completes_parked_primary_from_original_birth_after_alias_closure() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(None, None);
+        let birth = launch.process_birth.expect("queued child birth");
+        let (worker_handle, worker_tid) =
+            kernel.try_create_guest_thread_for_creator(launch.thread_id, 0x407000, 0, false)?;
+        let _ = kernel.take_pending_process_launches();
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(launch.thread_id);
+        child_cpu.current_thread_id = launch.thread_id;
+        child_cpu.owned_process_launch = Some(launch.clone());
+        child_cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x24,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        let mut parked = parked_process_for_cpu(worker_tid, child_cpu);
+        parked.process_handle = Some(launch.process_handle);
+        parked.thread_handle = Some(launch.thread_handle);
+        parked.process_state.process_id = launch.process_id;
+        assert!(kernel.close_handle(launch.process_handle)?);
+        assert!(kernel.close_handle(launch.thread_handle)?);
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.parked_child_processes.push_back(parked);
+        scheduler.prune_exited_and_active_processes_from_parked(&mut kernel);
+
+        assert!(scheduler.parked_child_processes.is_empty());
+        assert!(!kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(kernel.guest_thread_exit_code(worker_handle), Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn prune_does_not_complete_process_for_parked_worker_exit_stub() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(None, None);
+        let birth = launch.process_birth.expect("queued child birth");
+        let (worker_handle, worker_tid) =
+            kernel.try_create_guest_thread_for_creator(launch.thread_id, 0x407000, 0, false)?;
+        let _ = kernel.take_pending_process_launches();
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(launch.thread_id);
+        child_cpu.current_thread_id = worker_tid;
+        child_cpu.owned_process_launch = Some(launch.clone());
+        child_cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x24,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        let mut parked = parked_process_for_cpu(worker_tid, child_cpu);
+        parked.process_handle = Some(launch.process_handle);
+        parked.thread_handle = Some(launch.thread_handle);
+        parked.process_state.process_id = launch.process_id;
+        assert_eq!(
+            UnicornMips::parked_process_thread_exit_code(&parked, &kernel),
+            None
+        );
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(launch.thread_id);
+        scheduler.current_thread_id = launch.thread_id;
+        kernel.set_current_process_id(launch.process_id);
+        scheduler.parked_child_processes.push_back(parked);
+        scheduler.prune_exited_and_active_processes_from_parked(&mut kernel);
+        assert_eq!(scheduler.parked_child_processes.len(), 1);
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        assert_eq!(kernel.is_wait_ready(worker_handle, 1), Some(false));
+        Ok(())
+    }
+
+    #[test]
     fn exited_child_launch_handle_is_not_parkable() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -38721,6 +39180,13 @@ mod guest_thread_stack_tests {
         );
 
         assert_eq!(child_launch_handle_exit_code(&kernel, &launch), None);
+
+        assert!(kernel.terminate_process(launch.process_handle, 0x24));
+        assert_eq!(
+            child_launch_handle_exit_code(&kernel, &launch),
+            None,
+            "a request-only process signal is not proof that its CPU stopped"
+        );
 
         let _ = kernel.take_pending_process_launches();
         kernel.mark_process_launch_exited(&launch, 0x24);

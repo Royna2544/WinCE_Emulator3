@@ -365,6 +365,29 @@ fn run_cpu_loop(
             }
             break;
         }
+        if cpu.active_process_execution_completed() {
+            // The child CPU is gone, but a parked parent may still be blocked
+            // on a wait, message, or remote input that becomes ready later.
+            // Keep servicing those host events without ever running the
+            // completed native owner again.
+            if let Some(thread_id) = cpu.parked_timer_fallback_thread_id() {
+                kernel.pump_timers_to_gwe(thread_id);
+            }
+            let remote_target = blocked_remote_input_target(cpu, kernel);
+            let _ = service_remote_endpoint(cpu, kernel, desktop, remote_target.as_ref());
+            if cpu.switch_to_next_parked_child_process(kernel) {
+                publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
+                continue;
+            }
+            if cpu.has_parked_child_processes() {
+                std::thread::sleep(Duration::from_millis(16));
+                continue;
+            }
+            if let Some(snapshot) = cpu.last_debug_snapshot() {
+                print_unicorn_stop(snapshot);
+            }
+            break;
+        }
         cpu.prune_exited_and_active_processes_from_parked_with_framebuffer(
             kernel,
             Some(desktop.framebuffer_mut()),
@@ -1330,8 +1353,10 @@ fn rotate_to_same_process_visible_receiver_thread(
 }
 
 fn active_process_exited(cpu: &UnicornMips) -> bool {
-    cpu.last_debug_snapshot()
-        .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some())
+    cpu.active_process_execution_completed()
+        || cpu
+            .last_debug_snapshot()
+            .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some())
 }
 
 fn should_keep_remote_active_exit_alive(
