@@ -16,7 +16,7 @@ The entry slice stores thread mutable state once in `HandleTable` and gives publ
 
 The same clone-by-value problem affects every object kind that is not a file, find, volume or notification handle. `CeKernel::duplicate_handle` (`src/ce/kernel.rs:6410-6453`) hands the cloned value to its `other => other` arm. A duplicated event, mutex, semaphore or file mapping therefore becomes an independent copy. Signalling the copy, or mapping a view through it, does not reach the source. CE's HNDLDuplicate (`handle.c` 775–829) instead points the new handle at the same PHDATA. The reviewed first alias slice below covers thread/process handles only; generic Event/Mutex/Semaphore/FileMapping aliasing is an explicitly open following slice, not a D-008 memory shortcut. Until then, a cross-process shared-view test should use a named `CreateFileMappingW` reopen as its public route: `HandleTable::create_file_mapping` (`src/ce/object.rs:696-725`) returns the existing object's handle.
 
-`HandleTable::try_insert` checks public handle-number exhaustion for typed alias issuance, but infallible birth creation and generic objects still call `insert`; those paths are not a complete failure transaction. The child launch record carries checked process and primary-thread births. Verified, exact-birth child completion signals the process wait and sweeps owned workers; a request-only parked child is retained rather than treated as exited. Saved worker contexts and exit stubs reject same-process TID reuse by birth, but an unpinned intra-slice worker switch currently fails closed. This is a bounded source-tested boundary, not full TaskDirectory retirement: root-process handoff, generic parked-wait continuation, wait pins and the TerminateProcess execution-stop handshake remain open.
+`HandleTable::try_insert` checks public handle-number exhaustion for typed alias issuance, but infallible birth creation and generic objects still call `insert`; those paths are not a complete failure transaction. The child launch record carries checked process and primary-thread births. Verified, exact-birth child completion signals the process wait and sweeps owned workers; a request alone never signals that wait. The bounded source-tested `TerminateProcess` handshake stops an owned active child at preflight or a self-call import boundary, and completes requested parked or pending children without another guest instruction. Saved worker contexts and exit stubs reject same-process TID reuse by birth, but an unpinned intra-slice worker switch currently fails closed. This is not full TaskDirectory retirement: CE caller wait/timeout, a safe old-MIPS direct-kernel real-handle continuation, root-process real-handle completion, generic parked-wait continuation and O-K3 wait pins remain open.
 
 Other object types have individual conventions: `OpenProcess(current PID)` now returns a distinct closable alias, while `GetCurrentProcess` remains pseudo. File duplication uses file-system bookkeeping and mapped views use canonical mapping data with process ownership. Named Event/Mapping CloseHandle can return success without removing a public handle, duplicated file/find contexts have separate cursors, and shared mapping pages are still keyed by a public handle. These exceptions do not establish a universal alias/lifetime model. Current global handle numbers and virtual-allocation metadata do not enforce CE6 per-process handle-table/address-space isolation.
 
@@ -118,11 +118,16 @@ Boot-main enumeration and durable child-primary identity controls remain
 ignored; an aliasless boot record alone does not satisfy their full contracts.
 The historical owner key was a prerequisite, not proof, of process cleanup.
 A subsequent child-exit slice sweeps workers and releases fixed-stack backing
-only after exact-birth verified completion; request-only parked children are
-retained. A TerminateProcess request still does not stop a running child, and
-intra-slice worker lineage and wait-target pins remain open. The owner-slice
+only after exact-birth verified completion; a request alone does not signal a
+real process wait. A later bounded `TerminateProcess` source slice stops an
+owned active child at preflight or a self-call import boundary, and completes
+requested parked or pending children without another guest instruction. The
+frozen-source broad gate for that latest slice is pending. CE caller
+wait/timeout, old-MIPS direct-kernel real-handle continuation, root-process
+real-handle completion, intra-slice unpinned-worker lineage and O-K3 wait pins
+remain open. The owner-slice
 [receipt](../../evidence/stage3-owner-20261014/validation.receipt.md) records
-its source-bound gates; no live app behavior was measured.
+its own source-bound gates; no live app behavior was measured for these slices.
 
 ## Test gates and pending decisions
 
