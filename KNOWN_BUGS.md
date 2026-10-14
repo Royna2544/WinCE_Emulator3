@@ -4,45 +4,19 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
-- The E-32 source-matched, read/write bounded iNavi run exited with host
-  `0xC0000005` after 135.282 s, before its planned tap. The matching
-  minidump/PDB locate a 4-byte write crossing a host page boundary in
-  Unicorn's `tcg_out32`/`tcg_out_movi` during `uc_emu_start`; there is no
-  terminal PPM, guest CPU exception, or evidence of map readiness. The dump
-  omits code-arena bounds and VEH return, so the known un-clipped Windows
-  commit-tail size bug cannot yet be assigned as this crash's cause.
-  Retained 121 post-120 completed slices disprove total native idleness, not
-  the reason for the later no-completion gap or persistent splash
-  ([E-32 receipt](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
-  E-33 repaired that isolated handler arithmetic defect and passed native and
-  broad tests. The later fresh-owner E-38 run survived 330 s, but its changed
-  source and owner mode cannot attribute that result to the E-33 repair.
-- Persistent-owner 650 trial: host AV at 129.1 s with 1.66 GiB RSS in TCG
-  TranslationBlock initialization; cause unattributed. EXE/PDB/minidump are
-  preserved under `evidence/legacy-target-release-20261013` (ledger E-2 to E-4).
-- TCG code-arena commit tail: the small-arena arithmetic defect is fixed in the
-  vendored source (E-33). Still open: concurrent in-flight VEH-handler versus
-  owner-teardown race, x64 trampoline unwind metadata, and the default 1 GiB
-  per-engine footprint (Stage 8 lane, paused; ledger E-5, E-6, E-33).
-- The persistent-owner E-12 map/unmap churn control failed at its first mapped
-  phase (Stage 8 diagnostic, ledger E-12). Legacy in-hook register helpers
-  still zero failed reads and drop write errors; o32 float-return restore sites
-  are unaudited (CPU page, E-12 follow-ups).
-- E-35 public private slabs and E-36 source-bound fresh-per-slice default are
-  validated. The first post-switch iNavi run failed at 2.9 s on mapped-view
-  readback; E-37 repaired that path and the separately approved E-38 run
-  survived 330 s at 430.676 MiB sampled RSS, but remained on the splash with
-  no map. E-39 proves public private-VM native A→B→A same-VA isolation and
-  injected file-view isolation. D-008 public named `MapViewOfFile` A→B→A
-  same-VA and same-mapping alias bytes pass focused controls and both frozen-
-  source broad suites; there has been no D-008 live run. The fixture manually
-  selects the child;
-  guest `CreateProcessW`/scheduler handoff, distinct public mappings at one VA,
-  and full machine clone relineage remain unproved. A same-PID DIB view
-  without VA metadata can Flush but not Unmap; the immediate CreateProcess
-  view-sync failure path has no fault injection. `VirtualAllocEx`/
-  `VirtualQueryEx` name exports remain absent. History: ledger E-14, E-16,
-  E-18, E-20, E-22 to E-25, E-35 to E-39.
+- Stage 8 (persistent owner, paused): E-32 crashed at 135.3 s and the 650
+  trial at 129.1 s, both in TCG code emission, cause unattributed. E-33 fixed
+  only the small-arena commit-tail arithmetic. Still open: VEH-handler versus
+  owner-teardown race, x64 trampoline unwind metadata, the 1 GiB per-engine
+  arena, E-12 map/unmap churn, in-hook register helpers that zero failed reads
+  and drop write errors, and unaudited o32 float-return restores (ledger E-2
+  to E-6, E-12, E-32, E-33).
+- VM coherence still unproved: guest `CreateProcessW`/scheduler handoff (the
+  fixtures select the child manually), distinct public mappings at one VA, and
+  full machine clone relineage. A same-PID DIB view without VA metadata can
+  Flush but not Unmap. The immediate CreateProcess view-sync failure path has
+  no fault injection. `VirtualAllocEx`/`VirtualQueryEx` name exports are
+  absent. History: ledger E-14 to E-41.
 - D-008 charges the whole anonymous mapping at first public `MapViewOfFile`,
   not at `CreateFileMapping` as documented for default `SEC_COMMIT` in
   [Microsoft's CE mapping reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms923951%28v%3Dmsdn.10%29);
@@ -96,17 +70,11 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   acts under the selected birth; `GetClipboardDataAlloc` sizes a global
   source handle under the current birth, so those cross-birth paths remain
   unresolved ([O-M2 receipt](evidence/om2-heap-20261014/validation.receipt.md)).
-- Host footprint and phase behavior still need work. Older persistent-owner
-  bounded 330 s runs peaked at about 1.49-1.55 GiB working set (E-22, E-27,
-  E-29), and E-32 crashed at 1.65 GiB. The preserved fresh-default E-37
-  executable peaked at 430.676 MiB in E-38, below BED2 E-1's 555.63 MiB
-  sampled peak, but both remained on the splash and the runs are not fully
-  input/host-matched. Fresh-default E-38 had 17.1 run-only MIPS across busy
-  slices of all guest processes, but **26.4 MIPS for iNavi**, inside E-9's
-  same-field hookless iNavi 22–34 range. A cold TCG cache per fresh owner
-  remains a possible, unisolated Stage 8 cost. Translation arenas, guest
-  blobs, file buffers and engine
-  copies are separate costs; virtual reservation is not resident RAM.
+- Host footprint: E-38 (fresh default) peaked at 430.7 MiB RSS, against BED2
+  at 555.6 MiB and persistent runs at about 1.5 GiB (ledger E-1, E-22/E-27/E-29,
+  E-38). No app run has measured E-41 to O-M2. A cold TCG cache per fresh owner
+  is a possible Stage 8 cost. Translation arenas and engine copies are
+  unmeasured; virtual reservation is not resident RAM.
 - Gesture FIFO is fixed, but a real tap still took about 1.29 s from successful
   HTTP response to first guest wndproc delivery in the prior 330 s input test,
   and 1.62 s in the bounded-cache repeat.
