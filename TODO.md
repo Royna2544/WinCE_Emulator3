@@ -7,15 +7,17 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Fix the fresh-default file-view readback regression (KNOWN_BUGS, top
-   entry). Read back only the parts of each view that are natively mapped in
-   this owner, using `mem_regions` intersected per page. A view range that is
-   not mapped received no native writes in this lease, so the kernel copy stays
-   authoritative. Hard-fail only on real read errors on mapped ranges.
-   Same change: a real-native public `MapViewOfFile` test on the fresh default
-   that is red first, then green. It covers three slices: one writes page 0, the
-   next touches nothing, the third writes page 1. Both pages must keep the right
-   bytes.
+0. Fresh-default view and legacy-page sync (KNOWN_BUGS, top two entries).
+   These are separate changes, and all of them come before any live re-run:
+   (a) outbound readback of mapped pages only (code and focused tests done);
+   (b) inbound seed of mapped spans only, with a positive and a negative unit
+   test;
+   (c) the generation mapper seeds only `newly_mapped` pages, the same per-page
+   rule as fault repair. Its test is a public `MapViewOfFile`, then a page-0
+   store, then an unrelated import, then a page-0 load in the same slice that
+   must see the store.
+   Then run the full release and no-feature suites with raw logs, and record
+   one ledger entry (E-37) for the live failure and these fixes.
 1. Only after fresh human approval and fresh adjacent ZIP backups of the
    original SD, ResidentFlash and emulator-root writable mounts, re-run the
    bounded iNavi comparison on a build with item 0 fixed. The O-P4 EXE run

@@ -14,6 +14,21 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   every view of the owner. A fresh owner maps a view page only when the guest
   touches it, so a view the slice never touches is not mapped and the read
   fails. Under the persistent owner, earlier slices had left the pages mapped.
+  The outbound readback now reads only mapped pages (backed up in 509e0c70; not
+  yet suite-validated). The inbound seed has the mirror-image defect: it writes
+  the whole view whenever any page overlaps, so a partial map gets
+  `WRITE_UNMAPPED`.
+- Fresh-default silent data loss in legacy virtual allocations, including
+  views:
+  - A fresh owner starts `virtual_generation` at `u64::MAX`, and its pre-entry
+    setup does not run the generation mapper.
+  - Pages are therefore mapped one at a time by fault repair, or by the mapper
+    after the first import of each slice
+    (`map_kernel_memory_allocations_for_owner`).
+  - When any page is newly mapped, that mapper writes the allocation's whole
+    `initial_bytes`.
+  - So a guest store to a page it faulted in earlier in the slice is
+    overwritten by the stale seed at the next import. No error is raised.
 - The E-32 source-matched, read/write bounded iNavi run exited with host
   `0xC0000005` after 135.282 s, before its planned tap. The matching
   minidump/PDB locate a 4-byte write crossing a host page boundary in
