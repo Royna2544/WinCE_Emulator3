@@ -171,14 +171,19 @@ close only their named gates, not Stage 2 or live acceptance.
   quarantines a stale exact wait before preselection timer delivery or input
   acknowledgement, and stamps a verified birth on normal resume. Its raw
   synchronous fallback paths are not covered.
+  The bounded [parked queue/socket source gate](../evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
+  verifies native MessageQueueIo/WinsockRead register birth before publication
+  or host socket work, rejects stale exact waits before wake consumption, and
+  stamps verified birth on normal resume. Raw synchronous/nonblocking fallbacks
+  and opaque non-task target pins remain separate.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE
   caller wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
   aliasless Sleep-suspend and generic parked-wait continuation remain open.
-  Serial, Winsock, message-queue I/O, SendMessage and other blocked payload
-  families have not been migrated by these parked-wait gates.
+  Serial, SendMessage and other blocked payload families have not been migrated
+  by these parked-wait gates.
   These bounded source slices are not full Stage 3 or live-app acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
