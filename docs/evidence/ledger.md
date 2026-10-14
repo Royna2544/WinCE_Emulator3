@@ -1333,6 +1333,31 @@ the full [E-38 receipt](../../evidence/e37-live-20261014T051228Z/analysis.receip
 remain on D:. This single-run approval is spent; map-readiness and full Stage
 2 acceptance remain open.
 
+## E-39 E-20 native two-process same-VA A→B→A bytes (2026-10-14, executed)
+
+Two real MIPS/Unicorn regressions passed with fresh native owners across
+A→B→A. The public private-VM control calls COREDLL `VirtualAlloc` for distinct
+process births at `0x52000000`: A writes `0x11223344`, B writes `0x55667788`,
+then A reloads, increments and stores only its own canonical slab bytes. The
+file-view control likewise proves owner-qualified native seeding/readback at
+one guest VA for separate file mappings, with exact birth reports and closed
+fresh owners, but injects the two views because the legacy public view
+allocator still has a global cursor. Both controls manually select the queued
+child and restore the parent; they do not prove guest `CreateProcessW`/scheduler
+handoff, public same-VA `MapViewOfFile`, named reopen, same-mapping aliases or
+shared-view slab coherence. No production fix, iNavi launch or mount write was
+part of this gate.
+
+On `unicorn.rs` SHA-256 `C36AEEB5300230804E8A170E34523E77DCF036239B19A1493D35B4163142B04F`,
+both focused controls passed **1/0**. The frozen-source full release suite
+passed **1,742/0/14 ignored** (raw log SHA-256
+`624AEB38A9A693FF019E1605E08B1FBDE8140A21710A05F817688551CDA1A288`),
+and no-feature passed **1,296/0/13 ignored** (raw log SHA-256
+`C0412636E84AEC4B17924C79C08FD7D708FF84E46356747564DBC7F58B246FAE`).
+The same broad source includes four passing public `GlobalMemoryStatus` tests,
+but that change has a separate gate. The [E-20 native receipt](../../evidence/e20-native-same-va-20261014/validation.receipt.md)
+binds the exact commands, source/test-executable/log hashes and limits.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
