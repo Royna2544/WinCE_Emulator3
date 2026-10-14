@@ -17,7 +17,7 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 - Current layout contains CE5-style addresses although the target is CE6. A loader
   address choice is implementation evidence, not a normative CE6 memory-layout contract.
 
-## Stage 2 slice: sealed main-EXE image runs (implemented, synthetic gate open)
+## Stage 2 slice: sealed main-EXE image runs (synthetic gate passed)
 
 The main EXE now takes a connected loader-to-native path, not just a page
 selector. After main imports and MIPS trampolines are patched,
@@ -54,16 +54,47 @@ guard coverage remains a separate acceptance check.
 | Checkpoint ([main.rs](../../src/main.rs): `try_monitor_checkpoint_save`, `try_monitor_checkpoint_restore`) | Monitor save/restore explicitly returns `Unsupported` for sealed images until machine-memory restoration is proven. CPU-only native Context remains the precondition; memory-mode native snapshots need a separate identity/COW gate. |
 
 The synthetic `sealed_main_image_*` tests in
-[unicorn.rs](../../src/emulator/unicorn.rs) exercise production loader selection,
-native pointer mapping, two owners, guest `WRITE_PROT`, a bounded real MIPS
-slice and 200 fresh pin cycles. Their source is present, but this document
-does not claim a passing final gate until its exact-source logs are retained.
-Two ignored 56-MiB profiles compare an RX sealed synthetic PE with an RWX
-copy-backed control through the production loader and native setup. They
-intentionally change the PE section write bit to select the two paths, so
-they are a setup-path comparison, not identical guest-permission workloads
-or an iNavi timing result. Record fresh/reused pointer maps, blob writes and
-readback, loader/setup time, retained bytes and process peak separately.
+[unicorn.rs](../../src/emulator/unicorn.rs) now pass with production loader
+selection, native pointer mapping, two owners, guest `WRITE_PROT`, a bounded
+real MIPS slice and 200 fresh pin cycles. The focused
+[native test log](../../evidence/sealed-main-image-20261014/test-unicorn-sealed-main-attempt-02.raw.log)
+records 2 passed / 0 failed with the two profiles ignored by default; full
+[Unicorn](../../evidence/sealed-main-image-20261014/test-full-unicorn-workspace-attempt-01.raw.log)
+and [no-feature](../../evidence/sealed-main-image-20261014/test-full-no-feature-workspace-attempt-01.raw.log)
+workspace runs also passed. This is a synthetic source gate, not an iNavi app
+or writable-mount run.
+
+The two opt-in 56-MiB profiles use the same sparse synthetic PE and production
+loader/native setup. Only the section write bit differs: RX selects sealed
+storage and RWX selects the copy-backed control. Their guest permissions are
+therefore **not identical**, and these are setup-path microprofiles, not an
+iNavi timing comparison. The first direct debug-test measurements were:
+
+| Path | Retained Owned blob capacity | Fresh / reused setup | Fresh pointer map | Fresh blob write / outbound readback |
+| --- | ---: | ---: | ---: | ---: |
+| [RX sealed](../../evidence/sealed-main-image-20261014/profile-56mib-rx-attempt-01.raw.log) | 21,053,440 B | 24.930 / 34.974 ms | 1 call, 58,712,064 B | 21,053,440 / 21,053,440 B |
+| [RWX copy](../../evidence/sealed-main-image-20261014/profile-56mib-rwx-attempt-01.raw.log) | 79,765,504 B | 17.810 / 29.566 ms | 0 | 79,765,504 / 79,765,504 B |
+
+The RX setup microprofile was **slower** in both cases; this gate does not
+establish a setup-speed improvement. RX also retains 58,712,064 bytes of
+sealed backing outside the Owned-capacity column, so the smaller Owned figure
+is not by itself a whole-process memory saving. In separate direct Windows
+debug-test processes, 50-ms samples recorded maximum private bytes of
+111,824,896 RX versus 179,552,256 RWX, and working sets of 115,429,376 RX
+versus 173,776,896 RWX ([RX samples](../../evidence/sealed-main-image-20261014/profile-56mib-rx-os-attempt-01.metrics.txt),
+[RWX samples](../../evidence/sealed-main-image-20261014/profile-56mib-rwx-os-attempt-01.metrics.txt)).
+These are sampled maxima, not kernel-maintained peaks, release-build results
+or iNavi measurements.
+
+A read-only production-loader pass over the actual iNavi EXE and seven DLLs
+selected only 155 sealed pages of 2,168 total image pages (155 of 1,379
+non-writable-section pages), or 0.605469 MiB
+([coverage log](../../evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-02.raw.log)).
+The final-byte comparison excluded 1,224 changed candidate pages; no
+unchanged eligible page was excluded. The 0.605469 MiB is only about 1.1% of
+the older E38 PID-1 55.8-MiB logical `blob_mb` figure, an upper-bound
+comparison across different evidence, **not** an observed app memory or speed
+gain. The change also does not justify relaxing changed-page exclusion.
 
 ROM/XIP physical-budget treatment and `GlobalMemoryStatus` accounting are
 undecided. A guest protection fault is still a native error, not a CE access
