@@ -797,6 +797,13 @@ pub trait CoredllGuestMemory {
         self.ensure_heap_mapped(addr, len)
     }
 
+    /// Give a native adapter the current owner before an import writes an
+    /// output buffer. An untouched fixed stack page is committed here through
+    /// the same checked private-VM path used by a guest CPU stack fault.
+    fn prepare_host_write(&mut self, _kernel: &mut CeKernel, _addr: u32, _len: u32) -> Result<()> {
+        Ok(())
+    }
+
     /// Pointer-mapped native views are published by the checked native
     /// reconcile after this API returns. Raw adapters require an immediate
     /// copy into their test/compatibility guest bytes instead.
@@ -26000,6 +26007,21 @@ fn read_file_raw<M: CoredllGuestMemory>(
             return false;
         }
     }
+    // ReadFile streams bytes while borrowing the kernel, so the callback
+    // cannot safely commit a lazy stack page. Probe the requested output span
+    // before entering that borrow, just as a kernel-side user-buffer probe
+    // would, then every streamed write sees canonical mapped stack pages.
+    if requested != 0
+        && memory
+            .prepare_host_write(kernel, buffer, requested)
+            .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, transferred_ptr, 0);
+        return false;
+    }
     let mut write_failed = false;
     let mut cursor = buffer;
     let transferred = match kernel.read_file_into(handle, requested, |bytes| {
@@ -29260,12 +29282,10 @@ fn local_alloc_raw<M: CoredllGuestMemory>(
     flags: u32,
     bytes: u32,
 ) -> u32 {
-    match allocate_guest_local(kernel, memory, flags, bytes) {
-        Some(ptr) => ptr,
-        None => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    match allocate_guest_local_checked(kernel, memory, flags, bytes) {
+        Ok(ptr) => ptr,
+        Err(error) => {
+            kernel.threads.set_last_error(thread_id, error);
             0
         }
     }
@@ -29463,7 +29483,7 @@ pub(crate) fn allocate_guest_heap<M: CoredllGuestMemory>(
     allocate_guest_heap_initialized(kernel, memory, heap, flags, bytes, |_, _| Ok(()))
 }
 
-fn allocate_guest_heap_checked<M: CoredllGuestMemory>(
+pub(crate) fn allocate_guest_heap_checked<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     heap: u32,
@@ -29495,8 +29515,20 @@ pub(crate) fn allocate_guest_local<M: CoredllGuestMemory>(
     flags: u32,
     bytes: u32,
 ) -> Option<u32> {
-    let prepared = kernel.memory.prepare_local_alloc(flags, bytes)?;
-    apply_prepared_allocation(kernel, memory, prepared, |_, _| Ok(()))
+    allocate_guest_local_checked(kernel, memory, flags, bytes).ok()
+}
+
+fn allocate_guest_local_checked<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    flags: u32,
+    bytes: u32,
+) -> std::result::Result<u32, u32> {
+    let prepared = kernel
+        .memory
+        .prepare_local_alloc(flags, bytes)
+        .ok_or(ERROR_INVALID_PARAMETER)?;
+    apply_prepared_allocation_checked(kernel, memory, prepared, |_, _| Ok(()))
 }
 
 fn apply_prepared_allocation<M: CoredllGuestMemory>(
@@ -63874,16 +63906,12 @@ fn preflight_ready_message_heap_payload<M: CoredllGuestMemory>(
     let Some(message) = candidate.as_ref() else {
         return Ok(None);
     };
-    let known_payload = match (message.msg, kernel.message_pointer_payload(message.lparam)) {
-        (crate::ce::gwe::WM_WINDOWPOSCHANGED, Some(MessagePointerPayload::WindowPos(_)))
-        | (crate::ce::gwe::WM_NOTIFY, Some(MessagePointerPayload::ShellNotification(_)))
-        | (WM_FILECHANGEINFO, Some(MessagePointerPayload::FileChangeNotification(_))) => true,
-        (msg, Some(MessagePointerPayload::NotifyIcon(_))) => {
-            msg == crate::ce::gwe::WM_USER + 0x0bad
-        }
-        _ => false,
-    };
-    if known_payload {
+    // Use the same bounded writer as native delivery to reject malformed
+    // registered payloads before removing the queued message.
+    if message_pointer_payload_bytes(kernel, thread_id, message)
+        .map_err(|_| ERROR_INVALID_PARAMETER)?
+        .is_some()
+    {
         let size = kernel
             .memory
             .allocation(message.lparam)
@@ -63909,13 +63937,20 @@ fn get_message_w_raw<M: CoredllGuestMemory>(
     let max_msg = raw_arg(args, 3);
     // Preflight only a ready host-owned payload before dequeue. No-message
     // polls and ordinary guest pointers must not commit the global heap span.
-    if let Err(error) =
-        preflight_ready_message_heap_payload(kernel, memory, thread_id, hwnd, min_msg, max_msg)
-    {
-        kernel.threads.set_last_error(thread_id, error);
+    let candidate = match preflight_ready_message_heap_payload(
+        kernel, memory, thread_id, hwnd, min_msg, max_msg,
+    ) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            kernel.threads.set_last_error(thread_id, error);
+            return false;
+        }
+    };
+    if candidate.is_none() {
         return false;
     }
-    let Some(message) = kernel.get_message_w_filtered(thread_id, hwnd, min_msg, max_msg) else {
+    let Some(message) = kernel.take_ready_message_w_filtered(thread_id, hwnd, min_msg, max_msg)
+    else {
         return false;
     };
     if !write_guest_message(kernel, memory, thread_id, msg_ptr, &message) {
@@ -63945,7 +63980,9 @@ fn peek_message_w_raw<M: CoredllGuestMemory>(
         }
     };
     let message = if flags.contains(PeekFlags::REMOVE) {
-        kernel.peek_message_w_filtered(thread_id, hwnd, min_msg, max_msg, flags)
+        candidate.and_then(|_| {
+            kernel.take_ready_peek_message_w_filtered(thread_id, hwnd, min_msg, max_msg)
+        })
     } else {
         candidate
     };
@@ -67817,7 +67854,12 @@ pub(crate) fn write_guest_bytes<M: CoredllGuestMemory>(
     addr: u32,
     bytes: &[u8],
 ) -> bool {
-    if memory.write_bytes(addr, bytes).is_err() {
+    if u32::try_from(bytes.len())
+        .map_err(|_| Error::InvalidArgument("host write length exceeds guest VA".to_owned()))
+        .and_then(|len| memory.prepare_host_write(kernel, addr, len))
+        .and_then(|()| memory.write_bytes(addr, bytes))
+        .is_err()
+    {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -67925,7 +67967,10 @@ fn write_guest_u32<M: CoredllGuestMemory>(
     addr: u32,
     value: u32,
 ) -> bool {
-    match memory.write_u32(addr, value) {
+    match memory
+        .prepare_host_write(kernel, addr, std::mem::size_of::<u32>() as u32)
+        .and_then(|()| memory.write_u32(addr, value))
+    {
         Ok(()) => true,
         Err(_) => {
             kernel
@@ -67960,7 +68005,10 @@ fn write_guest_u8<M: CoredllGuestMemory>(
     addr: u32,
     value: u8,
 ) -> bool {
-    match memory.write_u8(addr, value) {
+    match memory
+        .prepare_host_write(kernel, addr, std::mem::size_of::<u8>() as u32)
+        .and_then(|()| memory.write_u8(addr, value))
+    {
         Ok(()) => true,
         Err(_) => {
             kernel
@@ -67978,7 +68026,10 @@ pub(crate) fn write_guest_u16<M: CoredllGuestMemory>(
     addr: u32,
     value: u16,
 ) -> bool {
-    match memory.write_u16(addr, value) {
+    match memory
+        .prepare_host_write(kernel, addr, std::mem::size_of::<u16>() as u32)
+        .and_then(|()| memory.write_u16(addr, value))
+    {
         Ok(()) => true,
         Err(_) => {
             kernel
@@ -70751,6 +70802,41 @@ mod tests {
     }
 
     #[test]
+    fn local_and_crt_allocators_report_out_of_memory_before_pointer_publication() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        assert_eq!(
+            kernel.memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ProcessHeapArena,
+                0x3000_0000,
+                0x0100_0000,
+                PAGE_READWRITE,
+            ),
+            Some(0x3000_0000)
+        );
+        kernel.memory.set_private_commit_limit_bytes(0);
+        let mut memory = FailingPrivateVmMemory::default();
+
+        assert_eq!(local_alloc_raw(&mut kernel, &mut memory, 1, 0, 16), 0);
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(
+            crate::ce::crt::malloc_raw(&mut kernel, &mut memory, 1, 16),
+            0
+        );
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(
+            crate::ce::crt::calloc_raw(&mut kernel, &mut memory, 1, 2, 8),
+            0
+        );
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
+        assert_eq!(kernel.memory.allocations().count(), 0);
+        assert_eq!(memory.native_actions_attempted, 0);
+        Ok(())
+    }
+
+    #[test]
     fn empty_get_message_does_not_charge_reserved_heap_from_global_high_water() -> Result<()> {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
         let owner = kernel.current_process_birth_key().expect("boot birth");
@@ -70780,6 +70866,109 @@ mod tests {
         assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
         assert!(kernel.memory.private_page_pins_for(owner).is_empty());
         assert_eq!(memory.native_actions_attempted, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn peek_remove_preserves_queued_heap_pointer_when_growth_is_out_of_budget() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let heap_base = 0x3000_0000;
+        assert_eq!(
+            kernel.memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ProcessHeapArena,
+                heap_base,
+                0x0100_0000,
+                PAGE_READWRITE,
+            ),
+            Some(heap_base)
+        );
+        let ptr = kernel
+            .memory
+            .heap_alloc(PROCESS_HEAP_HANDLE, 0, 28)
+            .expect("queued host payload reserves heap metadata");
+        assert!(kernel.gwe.insert_message_pointer_payload(
+            ptr,
+            MessagePointerPayload::WindowPos(WindowPos {
+                hwnd: 0,
+                insert_after: 0,
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4,
+                flags: 0,
+            }),
+        ));
+        let message = Message::new(0, crate::ce::gwe::WM_WINDOWPOSCHANGED, 0, ptr, 0);
+        kernel.gwe.post_message(1, message.clone());
+        kernel.memory.set_private_commit_limit_bytes(0);
+
+        let msg_ptr = 0x0002_0000;
+        let mut memory = FailingPrivateVmMemory::default();
+        memory.guest.map_bytes(msg_ptr, 28);
+        let args = [msg_ptr, 0, 0, 0, PeekFlags::REMOVE.bits()];
+        assert!(!peek_message_w_raw(&mut kernel, &mut memory, 1, &args));
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
+        let queued = kernel
+            .gwe
+            .peek_message_filtered(1, None, 0, 0, PeekFlags::NO_REMOVE)
+            .expect("failed PeekMessage preflight must not remove the payload");
+        assert_eq!((queued.msg, queued.lparam), (message.msg, ptr));
+
+        kernel.memory.set_private_commit_limit_bytes(0x1000);
+        assert!(peek_message_w_raw(&mut kernel, &mut memory, 1, &args));
+        assert_eq!(memory.guest.read_u32(msg_ptr + 12)?, ptr);
+        assert!(
+            kernel
+                .gwe
+                .peek_message_filtered(1, None, 0, 0, PeekFlags::NO_REMOVE)
+                .is_none()
+        );
+        assert!(kernel.memory.private_page_pin(owner, heap_base).is_some());
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0x1000);
+        Ok(())
+    }
+
+    #[test]
+    fn peek_remove_rejects_undersized_registered_payload_without_dequeue() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let ptr = kernel
+            .memory
+            .heap_alloc(PROCESS_HEAP_HANDLE, 0, 4)
+            .expect("malformed host payload allocation");
+        assert!(kernel.gwe.insert_message_pointer_payload(
+            ptr,
+            MessagePointerPayload::WindowPos(WindowPos {
+                hwnd: 0,
+                insert_after: 0,
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4,
+                flags: 0,
+            }),
+        ));
+        let message = Message::new(0, crate::ce::gwe::WM_WINDOWPOSCHANGED, 0, ptr, 0);
+        kernel.gwe.post_message(1, message.clone());
+        let mut memory = FailingPrivateVmMemory::default();
+        let msg_ptr = 0x0002_0000;
+        memory.guest.map_bytes(msg_ptr, 28);
+        assert!(!peek_message_w_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            &[msg_ptr, 0, 0, 0, PeekFlags::REMOVE.bits()],
+        ));
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_PARAMETER);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
+        assert_eq!(memory.native_actions_attempted, 0);
+        let queued = kernel
+            .gwe
+            .peek_message_filtered(1, None, 0, 0, PeekFlags::NO_REMOVE)
+            .expect("malformed payload must remain queued");
+        assert_eq!((queued.msg, queued.lparam), (message.msg, ptr));
         Ok(())
     }
 

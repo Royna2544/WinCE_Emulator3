@@ -1,7 +1,7 @@
 use crate::ce::{
     coredll::{
-        CoredllGuestMemory, allocate_guest_heap, apply_prepared_reallocation, read_guest_bytes,
-        write_guest_bytes, write_guest_u16,
+        CoredllGuestMemory, allocate_guest_heap_checked, apply_prepared_reallocation,
+        read_guest_bytes, write_guest_bytes, write_guest_u16,
     },
     file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_ALWAYS, OPEN_EXISTING},
     kernel::CeKernel,
@@ -526,12 +526,10 @@ pub(crate) fn malloc_raw<M: CoredllGuestMemory>(
     bytes: u32,
 ) -> u32 {
     let heap = kernel.memory.get_process_heap();
-    match allocate_guest_heap(kernel, memory, heap, 0, bytes) {
-        Some(ptr) => ptr,
-        None => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    match allocate_guest_heap_checked(kernel, memory, heap, 0, bytes) {
+        Ok(ptr) => ptr,
+        Err(error) => {
+            kernel.threads.set_last_error(thread_id, error);
             0
         }
     }
@@ -3619,18 +3617,16 @@ pub(crate) fn calloc_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let heap = kernel.memory.get_process_heap();
-    match allocate_guest_heap(
+    match allocate_guest_heap_checked(
         kernel,
         memory,
         heap,
         crate::ce::memory::HEAP_ZERO_MEMORY,
         total,
     ) {
-        Some(ptr) => ptr,
-        None => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        Ok(ptr) => ptr,
+        Err(error) => {
+            kernel.threads.set_last_error(thread_id, error);
             0
         }
     }
