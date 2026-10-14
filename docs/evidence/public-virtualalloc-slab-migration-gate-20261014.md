@@ -1,9 +1,9 @@
 # Public `VirtualAlloc` slab migration: E-35 validation gate
 
-Status: **The public private-VM path is wired to stable slabs; final
-stable-source validation is pending.** The normal public-ordinal control has
-both an expected-red pre-switch run and a focused green run on an evolving
-source snapshot. Neither is a final full-suite sign-off; see the
+Status: **E-35 public private-allocation-family gate validated on frozen
+source.** The normal public-ordinal control first failed at the intended
+canonical-backing assertion before the switch, then passed on the frozen
+source; focused and complete feature-profile checks are recorded in the
 [validation receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md).
 This is a narrow update to [D-008](../DECISIONS.md), the [Stage 2 plan](../PLAN.md),
 and the detailed [E25 design](e25-private-slab-design.md), not a replacement for
@@ -17,7 +17,7 @@ tap dequeue; it neither identifies a VM cause nor relaxes this gate. E-34
 closed O-P1 stop classification, a separate CPU dependency; that does not
 switch public memory backing by itself.
 
-## Connected implementation now present, pending validation
+## Connected implementation validated for E-35 scope
 
 The public COREDLL `VirtualAlloc`/current-target `VirtualAllocEx` private
 family now prepares a detached, owner-qualified slab proposal. The native
@@ -41,9 +41,8 @@ that is not a private-VM test-only selector. The connected boundary is:
    Ex target checks use the owner-qualified private record. Shared views,
    image, and heap remain on their separate compatibility boundaries.
 
-The public switch is code-present, not yet accepted. A public slab-backed
-pointer remains a gate result only when the complete private-family
-publication/change boundary and final validation below are green.
+The public switch passed the E-35 private-family publication/change boundary.
+It does not by itself establish every O-M1 or Stage 2 acceptance condition.
 
 ## Public controls and remaining proof
 
@@ -56,18 +55,18 @@ publication/change boundary and final validation below are green.
   [`public_virtual_alloc_ordinal_store_survives_fresh_native_owner`](../../src/emulator/unicorn.rs)
   control calls the public COREDLL ordinal, stores with MIPS, closes its
   completed owner, and loads through a fresh owner. Its pre-switch canonical
-  backing assertion failed as expected; the evolving joined source passed
-  once. Final source-identical repeat remains pending.
+  backing assertion failed as expected; the frozen-source control then passed
+  1/0/0, alongside the raw integration control.
 - Unit and native controls now cover reserve-only/no native page, commit into
   the reservation, zero pages, two-page writes, protect, decommit/recommit,
   release, same-VA new incarnation, file-view collision, and current/remote Ex
-  behavior. Final suite results must confirm these together with the older
+  behavior. The frozen-source release suite passed 1,727/0/15 ignored and the
+  no-feature suite passed 1,292/0/13 ignored, including the applicable older
   owner-qualified view regressions.
 - Failure controls include public adapter map/protect/unmap rejection and a
   native test seam that simulates an unmap failure immediately before
   `uc.mem_unmap`; this proves retention accounting at that boundary, not an
-  actual Unicorn-returned unmap error. Fault-repair and later native-side
-  failures still require careful result review. Checked hook cleanup and
+  actual Unicorn-returned unmap error. Checked hook cleanup and
   engine-close injection belong to O-P4, not this E-35 public-VM gate.
 
 ## Gates that the transaction cannot bypass
@@ -81,8 +80,8 @@ snapshot into a clean destination. `MemorySystem::clone` deep-copies private
 page bytes; its isolation control belongs with the memory tests. These are
 the E-35 negative checkpoint and copy boundaries, not full independent
 checkpoint support. Machine-level birth-key relineage and enabled slab-backed
-checkpoint save/restore remain Stage 3 work. Record green test evidence before
-claiming this gate passed.
+checkpoint save/restore remain Stage 3 work. The negative guard and clone
+isolation controls are included in the frozen-source release suite.
 
 The persistent engine can outlive many VM allocations. E-35 tracks native
 page pins by page and releases a pin only after that page's checked
@@ -90,8 +89,8 @@ page pins by page and releases a pin only after that page's checked
 bytes against the same private-RAM budget as live committed pages. That budget
 defaults to the dumped device's 195,350,528 physical-RAM bytes and is
 configurable with `WINCE_EMU_GUEST_PHYSICAL_RAM_BYTES`. The 64-cycle checked
-unmap test and a pre-FFI injected unmap failure test are present; final suite
-evidence is still required. On map/protect/unmap or sync failure, forbid successful
+unmap test and a pre-FFI injected unmap failure test passed in the release
+suite. On map/protect/unmap or sync failure, forbid successful
 pointer or continuation publication, keep old metadata only where still valid,
 and poison an attempt with uncertain native side effects. Already-executed
 writes to a live slab are attributed to the failed attempt, not promised
@@ -100,8 +99,9 @@ verify `uc_close` through its Unicorn wrapper; checked close and hook teardown
 are deferred to O-P4, with conservative pin retention if close is uncertain.
 
 The old test-only slab selector has been removed and the public controls are
-non-ignored. Acceptance now requires final focused, complete release,
-no-feature and alternate-feature validation with source and raw-log hashes.
-Public shared-view coherence, full clone/relineage and O-P4
-fresh-default acceptance remain distinct Stage 2 gates; another splash-only
-bounded run would not close them.
+non-ignored. Focused, complete release, no-feature and both no-trace checks
+passed with source and raw-log hashes in the receipt. Public shared-view
+coherence, real native two-process A→B→A same-VA bytes, and O-P4 fresh-default
+acceptance remain distinct Stage 2 gates; full machine checkpoint relineage
+is Stage 3. No E-35 app run occurred, and another splash-only bounded run
+would not close those gates.

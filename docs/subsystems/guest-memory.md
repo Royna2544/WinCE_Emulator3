@@ -82,15 +82,18 @@ view overlap control, four existing native-memory controls and one retained-
 pin control also passed ([E-25 focused receipt](../../evidence/e25-private-slab-20261014/README.md),
 [ledger E-25](../evidence/ledger.md)). This is not the historical unchanged
 E-18 fixture: its earlier red used legacy internal `virtual_alloc`, whereas
-E-25 opts into a test-only slab. Public `VirtualAlloc` still selects
-`LegacySeed`. The first full release run caught a synthetic-PID compatibility
+E-25 opted into a test-only slab; at that checkpoint public `VirtualAlloc`
+still selected `LegacySeed`. E-35 later validated the public private slab
+family ([E-35 receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)).
+The first full release run caught a synthetic-PID compatibility
 regression (726/1/3 ignored); after its narrow birth-precondition fix, the
 corrected source passed full release **1,664/0/4 ignored**, no-feature
 **1,258/0/2 ignored**, a no-trace Unicorn+desktop release check and final
 format check ([separate broad receipt](../../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
-Public same-VA, shared-view, clone/relineage, checked-close, hook-failure and
-bounded pin-retention gates remain open. No O-M1/O-P4, Stage 2 or live-app
-acceptance follows from these tests.
+Real native two-process A→B→A same-VA bytes, shared-view coherence, full
+machine checkpoint relineage, checked close/hook teardown and fresh-default
+remain open. E-25 by itself established no O-M1/O-P4, Stage 2 or live-app
+acceptance; E-35 closes only the later bounded public private-family gate.
 
 ## Target authority and permitted interfaces
 
@@ -174,11 +177,12 @@ the Stage 2 fresh-engine private/shared-view gate. Design consequences:
   This is an expected-red private-byte boundary, not a Context failure or a
   production fresh-default change ([ledger E-18](../evidence/ledger.md),
   local `evidence/stage2-o-m1-private-fresh-20261013/expected-red.receipt.md`).
-  E-18 remained red on that legacy source; E-25's test-only opt-in makes the
-  diagnostic shape green, not public ordinary private pages. The selected
-  host-backing design below removes
-  private copy-in/readback rather than adding another copy-back path; public
-  COREDLL `VirtualAlloc` and cross-process isolation require separate controls.
+  E-18 remained red on that legacy source; E-25's test-only opt-in made the
+  diagnostic shape green, not public ordinary private pages. E-35 later
+  validated public COREDLL private `VirtualAlloc` on stable backing, while
+  real native two-process same-VA byte isolation remains a separate control.
+  The selected host-backing design below removes private copy-in/readback
+  rather than adding another copy-back path.
 - Historical read-only E-18 source audit: `MemorySystem` allocations/lazy seeds were
   global and base-keyed, mixing private `VirtualAlloc` and file-view backing;
   the native page ledger is VA-only. A copy-back interim would need captured

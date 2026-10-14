@@ -119,9 +119,11 @@ opt-in, never a prerequisite for Stages 2–6.
 E25 made the separate, test-only E-18 slab/fresh-owner private-byte control
 green on the corrected source
 ([broad receipt](../../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
-Public `VirtualAlloc` remains `LegacySeed`. This does not exercise the
-closed-owner exact-key Context transfer above or establish checked native
-`uc_close`, so O-P4 remains open.
+At that checkpoint public `VirtualAlloc` still used `LegacySeed`. E35 later
+validated public private slabs and the fresh-native-owner ordinal
+([E35 receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)).
+Neither gate exercises the closed-owner exact-key Context transfer above or
+establishes checked native `uc_close`/hook teardown, so O-P4 remains open.
 
 ## Dependencies and prohibitions
 
@@ -289,7 +291,8 @@ its separate frozen source):
   private-byte expected red; explicitly rerunning it there failed at the same
   final byte assertion. The corrected E25 source later passed the updated
   test-only slab/fresh-owner control, while public `VirtualAlloc` remained
-  `LegacySeed`. No scheduling tick or handoff policy changed in E-19.
+  `LegacySeed` at that checkpoint. No scheduling tick or handoff policy
+  changed in E-19.
 - Historical hook-site inventory on the E-15 source (not the E-19 source):
   `NativeSliceOutcome` had `UnknownNormalStop` and
   `HookStop(NativeHookStopReason)`, and `HostWallBudget` was its only reason.

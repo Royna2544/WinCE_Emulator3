@@ -60,14 +60,18 @@ frame and outcome ownership. A fixture's event signal is not live input-delivery
 proof. Full task-context transfer waits for Stage 3 canonical identity and
 Stage 4 continuation ownership.
 
-D-008 permits a narrow private-slab E-18 diagnostic before public owner/clone
-acceptance. E25 reached that diagnostic milestone on the corrected source
-([receipt](../evidence/e25-private-slab-20261014/broad-validation.receipt.md));
-public `VirtualAlloc` still uses `LegacySeed`. This does not move the Stage 2
-finish line or enable O-P4 fresh default. Fresh default before unmigrated
-private/shared outgoing bytes are coherent could reproduce the original E-18
-stale read on the public path. The full process birth authority needed for
-public two-process VM is then extended, not recreated, in Stage 3.
+D-008 permitted a narrow private-slab E-18 diagnostic before public owner/clone
+acceptance. E25 reached that historical diagnostic milestone on the corrected
+source under a test-only opt-in
+([receipt](../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
+E35 subsequently validated the public private `VirtualAlloc` family with
+owner-qualified backing and negative checkpoint guards
+([receipt](../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)).
+This does not move the Stage 2 finish line or enable O-P4 fresh default.
+Unmigrated shared-view outgoing bytes, real native cross-process same-VA
+isolation, checked engine close and full machine checkpoint relineage retain
+their separate gates. Stage 3 extends, rather than recreates, the process
+birth authority.
 
 ### Parallel lanes (never gate a stage)
 
@@ -99,8 +103,13 @@ Executed controls are recorded in the ledger; none of them is a stage pass.
   on the frozen E-19 source; its updated test-only slab control is green on
   the corrected E25 source
   ([receipt](../evidence/e25-private-slab-20261014/broad-validation.receipt.md)).
-  D-008's backing design is not Stage 2 acceptance or a demonstrated
-  footprint/timing improvement.
+  E35's normal public-ordinal control failed at its pre-switch backing
+  assertion, then passed on frozen source with the public private-slab
+  transaction, negative checkpoint boundary and checked pin budget
+  ([receipt](../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)).
+  Native A→B→A same-VA bytes and shared-view coherence remain open. D-008's
+  backing design is not Stage 2 acceptance or a demonstrated footprint/timing
+  improvement.
 - Native owner/arena: six Stage 0 owner controls, the pre-init budget
   differential and the commit-tail repair controls (E-4 to E-6) are isolated and
   diagnostic; they feed Stage 8 only.

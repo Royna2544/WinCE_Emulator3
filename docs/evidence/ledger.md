@@ -1196,6 +1196,40 @@ and other ready-resume failure consistency. Stage 2/fresh-default, broader
 scheduler and iNavi map acceptance remain open; no app run or mount write
 occurred.
 
+## E-35 Public private-VM slab family (2026-10-14, executed)
+
+The normal, non-ignored public COREDLL `VirtualAlloc` ordinal first failed at
+its canonical-backing assertion before the switch (expected red, 0/1). The
+current private family now prepares owner/birth- and incarnation-qualified
+stable 4-KiB pages; checked native map/protect/unmap applies before public
+allocation or change success is published. Reserve-only, commit, decommit,
+recommit, release, protect, Query, pointer probes, current-target Ex and
+two-process same-VA metadata controls are non-ignored. The old `cfg(test)`
+slab selector is gone. Shared views, image and heap are not silently migrated.
+
+The frozen-source public fresh-native-owner ordinal and raw integration
+controls each passed **1/0/0**. Full release passed **1,727/0/15 ignored**
+(`full-release-final.raw.log`, `C753DB02…5E5304`); no-feature passed
+**1,292/0/13 ignored** (`no-feature-final.raw.log`, `9C6A0B88…4CC8F9`).
+Both release no-trace checks and the release build exited 0. Nine exact source
+file hashes were rechecked unchanged afterward; the release EXE hash begins
+`5DF5B748`. Touched-file format and scoped diff checks passed. The
+[E-35 receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)
+has commands, full hashes, all raw logs and the earlier evolving-source
+diagnostic; the [gate note](public-virtualalloc-slab-migration-gate-20261014.md)
+defines this bounded scope.
+
+Negative monitor checkpoint save/restore guards and independent
+`MemorySystem::clone` page bytes passed, but full machine checkpoint
+relineage remains Stage 3. Persistent native pins are keyed by private page
+and released only after checked `mem_unmap`; a 64-cycle churn control and a
+forced pre-FFI unmap-failure control passed with budget retention. That seam
+is not a real Unicorn-returned unmap error. E-35's public private-family
+gate is closed; O-P4 checked `uc_close`/hook teardown and fresh-default,
+real native two-process A→B→A same-VA byte isolation, shared-view slab
+coherence and Stage 2 acceptance remain open. No iNavi run or writable-mount
+operation occurred.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
