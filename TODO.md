@@ -31,7 +31,11 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
   leads, not a proven cause ([E-29 receipt](evidence/e22-live-20261013T211230Z/analysis.receipt.md),
   [post-120 trace design](docs/evidence/e29-post120-native-attempt-trace-design.md)).
   The latter is design only; wait id 833 needs a separate boot-forward trace
-  because registration may precede the post-120 capture window.
+  because registration may precede the post-120 capture window. E-30's
+  [host-consumer bridge](evidence/e30-native-attempt-observer-20261014/validation.receipt.md)
+  now exposes the outgoing report to optional live/monitor observers; no
+  writer, native-stage markers, loop heartbeat, or child-report transport
+  exists yet. Do not interpret an empty attempt stream as guest idleness.
 - **Stage 2, now, in this repo** (source map:
   `docs/subsystems/cpu-engine.md`, "Stage 2 source map"):
   0. D-007's in-repo Unicorn dependency patch is present. The post-order
@@ -140,8 +144,10 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      handoff paths. Focused parent/child, checked-finish, preflight, private
      native-error and decoded-exit finish-error controls pass. This is still
      observational: `AttemptFrameBinding::LegacyUnbound` cannot authorize a
-     Task transition; `main.rs` discards the report through its `Result<()>`
-     wrapper and selected-CPU outcome remains the rotation input. The
+     Task transition; E-30 now offers the outgoing report to optional
+     live/monitor observers before handling the separate result, but normal
+     production still passes `None` and selected-CPU outcome remains the
+     rotation input. The
      ordinary checked-finish failed-retry control is now green: a failed
      entered attempt poisons the outgoing CPU, clears provisional context,
      and a retry returns `NoAttempt` before another native entry
@@ -171,10 +177,11 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      A separate [stale-snapshot remote-target red design](docs/evidence/stale-snapshot-host-routing-design-20261014.md)
      is proposed but unexecuted; keep its routing assertion separate from
      the snapshot-only host idle-slice pacing gate.
-     The report remains observational and the app still discards it.
+     The report remains observational; no production trace sink consumes it.
      Finish the other fallible context/PC/byte-view/lease-tail and
      partial-effect paths, then
-     migrate live/monitor consumers with explicit owner/frame validation
+     migrate beyond the E-30 live/monitor observational bridge with explicit
+     owner/frame validation
      ([report design](evidence/e28-run-outcome-20261014/sealed-report-next-gate.receipt.md)).
      The earlier report source passed **1,682/0/16 ignored** release
      and **1,262/0/14 ignored** no-feature; three check profiles, format and
@@ -195,7 +202,16 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      finish diagnostic-private query provenance validation. Remaining
      sparse/hookless stop reasons, typed restart-PC repair and failed
      PC-write/stop injection also remain. Do not close O-P1, Stage 2 or S3-A
-     or infer a scheduler-core rewrite from the count-only adapter.
+     or infer a scheduler-core rewrite from the count-only adapter. Two
+     `host_wall_clock_stop` decision reads still mix a debug marker into
+     native-deadline PC repair and retained wall-snapshot promotion. Replace
+     those only after focused marker/typed-disagreement and post-query/tail
+     failure controls; marker presence is not a typed stop witness, and
+     removing both reads alone does not close O-P1. The first JR-repair
+     predicate has an executed expected-red pure control, now ignored in the
+     normal suite; a separate unconditional post-run JR repair also needs a
+     real-MIPS mixed timeout/typed-peer-yield PC test before either path's
+     policy can be changed safely.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR

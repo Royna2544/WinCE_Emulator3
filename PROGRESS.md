@@ -4,6 +4,21 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-30 Detached Report Host Consumer
+
+- The live and monitor loops now consume the CPU's outgoing
+  `AttemptExecution` and offer its immutable report/result to an optional
+  host observer before their existing error or success handling. Production
+  passes `None`; scheduling and `LegacyUnbound` Task/Frame authority did not
+  change. Two no-feature host-consumer controls first failed at zero
+  observed reports and now pass 2/0. On the final source, full release passed
+  **1,691/0/16 ignored** and no-feature **1,265/0/14 ignored**; both
+  no-trace Unicorn checks, format, and diff checks passed. Exact hashes and
+  raw logs are in
+  [E-30 validation](evidence/e30-native-attempt-observer-20261014/validation.receipt.md).
+  This is not yet the opt-in bounded writer/native-stage/heartbeat trace;
+  nested child attempts are still uncollected, and no new app run occurred.
+
 ## 2026-10-13 Parallel Continuation
 
 - Decision D-003 now keeps the Stage 2 CPU/VM contract and Stages 3-6
