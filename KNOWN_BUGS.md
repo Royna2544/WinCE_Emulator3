@@ -60,9 +60,14 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   [E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md),
   [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
-- Canonical Task/alias ownership is absent: 12 expected-red Task controls live
-  in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are
-  fixed (E-21); thread/task aliases, wait pins and clone lineage are not.
+- The first canonical thread/process alias slice is source-implemented but not
+  finally gated: six Task controls are active and six remain ignored (ledger
+  E-8, E-11, E-26). Thread aliases now share one mutable record and one
+  canonical wake index, but creation-process ownership, boot/child primary
+  identity, last-public-handle execution, wait pins and clone relineage remain
+  open. Process termination can signal a process without completing every
+  worker; a parked child can be dropped on a request-only exit path before
+  canonical cleanup. Whole-process GMS reclamation is not established.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
   (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been
