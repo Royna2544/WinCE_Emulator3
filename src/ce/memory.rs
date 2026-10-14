@@ -57,6 +57,10 @@ pub struct MemorySystem {
     // reuse even if its token is dropped after a native mapping side effect.
     pending_private_holes: BTreeMap<(ProcessBirthKey, u32), u32>,
     stable_private_pages: BTreeMap<PrivatePageIdentity, Rc<StablePrivatePage>>,
+    // Public file views alias pages by mapping object and file offset, not by
+    // guest VA. A page is charged once even when several views pin it.
+    stable_shared_pages: BTreeMap<(u32, u32), Rc<StablePrivatePage>>,
+    shared_view_bindings: BTreeMap<(ProcessBirthKey, u32), SharedViewBinding>,
     private_page_budget: Rc<PrivatePageBudget>,
     // A native pin can outlive a released VM record. Keep the checkpoint
     // unsupported flag set for this MemorySystem lineage even after release.
@@ -157,6 +161,7 @@ pub enum VirtualAllocationSource {
     Private,
     PrivateExCompatibility,
     FileViewLegacy,
+    FileViewSlab,
     LocaleViewLegacy,
     ToolhelpSnapshotLegacy,
     SharedCompatibility,
@@ -169,6 +174,14 @@ pub enum VirtualAllocationSource {
 pub enum VirtualAllocationBacking {
     LegacySeed,
     StablePrivateSlab,
+    StableSharedViewSlab,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SharedViewBinding {
+    mapping_handle: u32,
+    offset: u32,
+    size: u32,
 }
 
 pub const STABLE_PRIVATE_PAGE_SIZE: usize = 0x1000;
@@ -250,10 +263,11 @@ impl PrivatePageBudget {
 
 /// The only owner of private page bytes. The page itself is allocated with a
 /// checked, 4-KiB-aligned request; the small Rc wrapper never moves it. Raw
-/// native and bounded host access are fenced by `native_execution_active`.
+/// native and bounded host access are fenced by execution guards.
 struct StablePrivatePage {
     bytes: NonNull<u8>,
-    native_execution_active: Cell<bool>,
+    native_execution_guards: Cell<u32>,
+    allow_nested_native: bool,
     budget: Rc<PrivatePageBudget>,
 }
 
@@ -261,8 +275,8 @@ impl fmt::Debug for StablePrivatePage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StablePrivatePage")
             .field(
-                "native_execution_active",
-                &self.native_execution_active.get(),
+                "native_execution_guards",
+                &self.native_execution_guards.get(),
             )
             .finish_non_exhaustive()
     }
@@ -290,9 +304,16 @@ impl StablePrivatePage {
         };
         Some(Self {
             bytes,
-            native_execution_active: Cell::new(false),
+            native_execution_guards: Cell::new(0),
+            allow_nested_native: false,
             budget: Rc::clone(budget),
         })
+    }
+
+    fn zeroed_shared(budget: &Rc<PrivatePageBudget>) -> Option<Self> {
+        let mut page = Self::zeroed(budget)?;
+        page.allow_nested_native = true;
+        Some(page)
     }
 
     fn deep_copy(&self, budget: &Rc<PrivatePageBudget>) -> Self {
@@ -300,11 +321,15 @@ impl StablePrivatePage {
         // native engine might be writing; a supported checkpoint operation
         // remains separately gated until machine-wide relineage exists.
         assert!(
-            !self.native_execution_active.get(),
+            self.native_execution_guards.get() == 0,
             "cannot clone stable private bytes during native execution"
         );
-        let copy =
-            Self::zeroed(budget).expect("cannot clone private page after host allocation failure");
+        let copy = if self.allow_nested_native {
+            Self::zeroed_shared(budget)
+        } else {
+            Self::zeroed(budget)
+        }
+        .expect("cannot clone stable page after host allocation failure");
         // SAFETY: the guard above excludes native execution, all host byte
         // methods finish before returning, and Rc keeps the page alive.
         unsafe {
@@ -394,9 +419,18 @@ impl StablePrivatePagePin {
     pub fn begin_native_execution(
         &self,
     ) -> std::result::Result<StablePrivatePageExecutionGuard, PrivatePageAccessError> {
-        if self.page.native_execution_active.replace(true) {
+        if self.page.native_execution_guards.get() != 0 && !self.page.allow_nested_native {
             return Err(PrivatePageAccessError::NativeExecutionActive);
         }
+        let next = self
+            .page
+            .native_execution_guards
+            .get()
+            .checked_add(1)
+            .ok_or(PrivatePageAccessError::NativeExecutionActive)?;
+        // Nested process launches run serially on this Rc-bound thread. The
+        // parent lease remains fenced while a child maps the same shared page.
+        self.page.native_execution_guards.set(next);
         Ok(StablePrivatePageExecutionGuard {
             page: Rc::clone(&self.page),
         })
@@ -407,7 +441,7 @@ impl StablePrivatePagePin {
         offset: usize,
         len: usize,
     ) -> std::result::Result<(), PrivatePageAccessError> {
-        if self.page.native_execution_active.get() {
+        if self.page.native_execution_guards.get() != 0 {
             return Err(PrivatePageAccessError::NativeExecutionActive);
         }
         if offset
@@ -428,7 +462,13 @@ pub struct StablePrivatePageExecutionGuard {
 
 impl Drop for StablePrivatePageExecutionGuard {
     fn drop(&mut self) {
-        self.page.native_execution_active.set(false);
+        self.page.native_execution_guards.set(
+            self.page
+                .native_execution_guards
+                .get()
+                .checked_sub(1)
+                .expect("stable page execution guard underflow"),
+        );
     }
 }
 
@@ -601,6 +641,12 @@ impl Clone for MemorySystem {
                 .iter()
                 .map(|(identity, page)| (*identity, Rc::new(page.deep_copy(&private_page_budget))))
                 .collect(),
+            stable_shared_pages: self
+                .stable_shared_pages
+                .iter()
+                .map(|(identity, page)| (*identity, Rc::new(page.deep_copy(&private_page_budget))))
+                .collect(),
+            shared_view_bindings: self.shared_view_bindings.clone(),
             private_page_budget,
             stable_private_slabs_seen: self.stable_private_slabs_seen,
         }
@@ -635,6 +681,8 @@ impl Default for MemorySystem {
             virtual_allocations: BTreeMap::new(),
             pending_private_holes: BTreeMap::new(),
             stable_private_pages: BTreeMap::new(),
+            stable_shared_pages: BTreeMap::new(),
+            shared_view_bindings: BTreeMap::new(),
             private_page_budget: Rc::new(PrivatePageBudget::new(
                 DEFAULT_GUEST_PHYSICAL_RAM_BYTES,
                 0,
@@ -1560,6 +1608,216 @@ impl MemorySystem {
         Some(base)
     }
 
+    /// Publish a public file view backed by one canonical page per mapping
+    /// offset. Aliases in this MemorySystem lineage share the same page Rc;
+    /// independent process births may choose the same guest VA.
+    pub fn allocate_shared_view(
+        &mut self,
+        owner: ProcessBirthKey,
+        mapping_handle: u32,
+        offset: u32,
+        size: u32,
+        protect: u32,
+        initial_bytes: &[u8],
+    ) -> Option<u32> {
+        if size == 0 || offset & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0 {
+            return None;
+        }
+        let page_size = STABLE_PRIVATE_PAGE_SIZE as u32;
+        let mapped_size = align_up(size, page_size)?;
+        let reservation_size = align_up(mapped_size, VIRTUAL_ALIGN)?;
+        let mut base = self
+            .next_virtual_ptr_by_owner
+            .get(&owner)
+            .copied()
+            .unwrap_or(VIRTUAL_PTR_BASE)
+            .max(VIRTUAL_PTR_BASE);
+        while self.owner_scoped_slab_overlaps(owner, base, reservation_size) {
+            base = base.checked_add(VIRTUAL_ALIGN)?;
+        }
+        let next_cursor = base.checked_add(reservation_size)?;
+        let incarnation = self.next_virtual_incarnation;
+        let next_incarnation = incarnation.checked_add(1)?;
+        let mut missing = Vec::new();
+        let mut delta = 0;
+        while delta < mapped_size {
+            let page_offset = offset.checked_add(delta)?;
+            if !self
+                .stable_shared_pages
+                .contains_key(&(mapping_handle, page_offset))
+            {
+                missing.push((page_offset, delta));
+            }
+            delta = delta.checked_add(page_size)?;
+        }
+        if !self.private_page_budget.can_fit(missing.len()) {
+            return None;
+        }
+        let mut new_pages = Vec::new();
+        new_pages.try_reserve_exact(missing.len()).ok()?;
+        for (page_offset, delta) in missing {
+            let page = Rc::new(StablePrivatePage::zeroed_shared(&self.private_page_budget)?);
+            let start = delta as usize;
+            let end = start
+                .saturating_add(STABLE_PRIVATE_PAGE_SIZE)
+                .min(initial_bytes.len());
+            if start < end {
+                StablePrivatePagePin {
+                    identity: PrivatePageIdentity {
+                        owner,
+                        allocation_base: base,
+                        allocation_incarnation: incarnation,
+                        page_base: base.checked_add(delta)?,
+                    },
+                    page: Rc::clone(&page),
+                }
+                .write_bytes(0, &initial_bytes[start..end])
+                .ok()?;
+            }
+            new_pages.push(((mapping_handle, page_offset), page));
+        }
+        let mut committed_pages = BTreeMap::new();
+        let mut delta = 0;
+        while delta < mapped_size {
+            committed_pages.insert(base.checked_add(delta)?, protect);
+            delta = delta.checked_add(page_size)?;
+        }
+        for (key, page) in new_pages {
+            self.stable_shared_pages.insert(key, page);
+        }
+        self.virtual_allocations.insert(
+            (owner, base),
+            VirtualAllocation {
+                base,
+                size: reservation_size,
+                allocation_type: MEM_RESERVE | MEM_COMMIT,
+                protect,
+                initial_bytes: Vec::new(),
+                owner,
+                incarnation,
+                source: VirtualAllocationSource::FileViewSlab,
+                backing: VirtualAllocationBacking::StableSharedViewSlab,
+                private_committed_pages: committed_pages,
+            },
+        );
+        self.shared_view_bindings.insert(
+            (owner, base),
+            SharedViewBinding {
+                mapping_handle,
+                offset,
+                size,
+            },
+        );
+        self.next_virtual_ptr_by_owner.insert(owner, next_cursor);
+        self.next_virtual_incarnation = next_incarnation;
+        self.stable_private_slabs_seen = true;
+        self.bump_virtual_generation();
+        Some(base)
+    }
+
+    pub fn release_shared_view(&mut self, owner: ProcessBirthKey, base: u32) -> bool {
+        if !self
+            .virtual_allocations
+            .get(&(owner, base))
+            .is_some_and(|allocation| {
+                allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
+            })
+        {
+            return false;
+        }
+        self.virtual_allocations.remove(&(owner, base));
+        self.shared_view_bindings.remove(&(owner, base));
+        self.bump_virtual_generation();
+        true
+    }
+
+    pub fn forget_shared_mapping(&mut self, mapping_handle: u32) {
+        if self
+            .shared_view_bindings
+            .values()
+            .any(|binding| binding.mapping_handle == mapping_handle)
+        {
+            return;
+        }
+        self.stable_shared_pages
+            .retain(|(handle, _), _| *handle != mapping_handle);
+    }
+
+    pub fn shared_mapping_read(&self, handle: u32, offset: u32, out: &mut [u8]) -> bool {
+        self.shared_mapping_transfer(handle, offset, out, false)
+    }
+
+    pub fn shared_mapping_write(&self, handle: u32, offset: u32, bytes: &[u8]) -> bool {
+        let mut bytes = bytes.to_vec();
+        self.shared_mapping_transfer(handle, offset, &mut bytes, true)
+    }
+
+    fn shared_mapping_transfer(
+        &self,
+        handle: u32,
+        offset: u32,
+        bytes: &mut [u8],
+        write: bool,
+    ) -> bool {
+        let mut copied = 0;
+        while copied < bytes.len() {
+            let Some(current) = usize::try_from(offset)
+                .ok()
+                .and_then(|offset| offset.checked_add(copied))
+            else {
+                return false;
+            };
+            let page_offset = (current & !(STABLE_PRIVATE_PAGE_SIZE - 1)) as u32;
+            let in_page = current & (STABLE_PRIVATE_PAGE_SIZE - 1);
+            let count = (bytes.len() - copied).min(STABLE_PRIVATE_PAGE_SIZE - in_page);
+            let Some(page) = self.stable_shared_pages.get(&(handle, page_offset)) else {
+                return false;
+            };
+            if page.native_execution_guards.get() != 0 {
+                return false;
+            }
+            // SAFETY: a guard above excludes native execution; this bounded
+            // copy ends before returning and the Rc holds the fixed page.
+            unsafe {
+                if write {
+                    std::ptr::copy_nonoverlapping(
+                        bytes.as_ptr().add(copied),
+                        page.bytes.as_ptr().add(in_page),
+                        count,
+                    );
+                } else {
+                    std::ptr::copy_nonoverlapping(
+                        page.bytes.as_ptr().add(in_page),
+                        bytes.as_mut_ptr().add(copied),
+                        count,
+                    );
+                }
+            }
+            copied += count;
+        }
+        true
+    }
+
+    pub fn shared_mapping_native_active(&self, handle: u32, offset: u32, len: usize) -> bool {
+        let Some(end) = (offset as usize).checked_add(len) else {
+            return false;
+        };
+        let mut current = offset as usize;
+        while current < end {
+            let page_offset = (current & !(STABLE_PRIVATE_PAGE_SIZE - 1)) as u32;
+            if !self
+                .stable_shared_pages
+                .get(&(handle, page_offset))
+                .is_some_and(|page| page.native_execution_guards.get() != 0)
+            {
+                return false;
+            }
+            current = (current & !(STABLE_PRIVATE_PAGE_SIZE - 1))
+                .saturating_add(STABLE_PRIVATE_PAGE_SIZE);
+        }
+        true
+    }
+
     pub fn set_virtual_initial_bytes(
         &mut self,
         owner: ProcessBirthKey,
@@ -1669,7 +1927,11 @@ impl MemorySystem {
     ) -> impl Iterator<Item = &VirtualAllocation> {
         self.virtual_allocations
             .values()
-            .filter(move |allocation| allocation.owner == owner || !allocation.source.is_private())
+            .filter(move |allocation| {
+                allocation.owner == owner
+                    || (allocation.backing == VirtualAllocationBacking::LegacySeed
+                        && !allocation.source.is_private())
+            })
     }
 
     /// Query the current owner's slab at one address. A reservation can
@@ -1714,6 +1976,104 @@ impl MemorySystem {
     /// still exist outside this VM directory.
     pub fn has_stable_private_slabs(&self) -> bool {
         self.stable_private_slabs_seen
+    }
+
+    pub fn stable_page_pin(
+        &self,
+        owner: ProcessBirthKey,
+        page_base: u32,
+    ) -> Option<StablePrivatePagePin> {
+        self.private_page_pin(owner, page_base).or_else(|| {
+            let allocation = self.virtual_allocations_for(owner).find(|allocation| {
+                allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
+                    && allocation.private_committed_pages.contains_key(&page_base)
+            })?;
+            let binding = self.shared_view_bindings.get(&(owner, allocation.base))?;
+            let delta = page_base.checked_sub(allocation.base)?;
+            let page_offset = binding.offset.checked_add(delta)?;
+            let page = Rc::clone(
+                self.stable_shared_pages
+                    .get(&(binding.mapping_handle, page_offset))?,
+            );
+            Some(StablePrivatePagePin {
+                identity: PrivatePageIdentity {
+                    owner,
+                    allocation_base: allocation.base,
+                    allocation_incarnation: allocation.incarnation,
+                    page_base,
+                },
+                page,
+            })
+        })
+    }
+
+    pub fn stable_page_pins_for(&self, owner: ProcessBirthKey) -> Vec<StablePrivatePagePin> {
+        let mut pins = self.private_page_pins_for(owner);
+        for ((binding_owner, base), binding) in &self.shared_view_bindings {
+            if *binding_owner != owner {
+                continue;
+            }
+            let Some(allocation) = self.virtual_allocation(owner, *base) else {
+                continue;
+            };
+            for page_base in allocation.private_committed_pages.keys().copied() {
+                let Some(delta) = page_base.checked_sub(*base) else {
+                    continue;
+                };
+                let Some(page_offset) = binding.offset.checked_add(delta) else {
+                    continue;
+                };
+                let Some(page) = self
+                    .stable_shared_pages
+                    .get(&(binding.mapping_handle, page_offset))
+                else {
+                    continue;
+                };
+                pins.push(StablePrivatePagePin {
+                    identity: PrivatePageIdentity {
+                        owner,
+                        allocation_base: *base,
+                        allocation_incarnation: allocation.incarnation,
+                        page_base,
+                    },
+                    page: Rc::clone(page),
+                });
+            }
+        }
+        pins
+    }
+
+    pub fn contains_stable_page_pin(&self, pin: &StablePrivatePagePin) -> bool {
+        if self.contains_private_page_pin(pin) {
+            return true;
+        }
+        let identity = pin.identity;
+        let Some(allocation) = self.virtual_allocation(identity.owner, identity.allocation_base)
+        else {
+            return false;
+        };
+        if allocation.backing != VirtualAllocationBacking::StableSharedViewSlab
+            || allocation.incarnation != identity.allocation_incarnation
+            || !allocation.private_committed_pages.contains_key(&identity.page_base)
+        {
+            return false;
+        }
+        let Some(binding) = self
+            .shared_view_bindings
+            .get(&(identity.owner, identity.allocation_base))
+        else {
+            return false;
+        };
+        let Some(offset) = identity
+            .page_base
+            .checked_sub(identity.allocation_base)
+            .and_then(|delta| binding.offset.checked_add(delta))
+        else {
+            return false;
+        };
+        self.stable_shared_pages
+            .get(&(binding.mapping_handle, offset))
+            .is_some_and(|page| Rc::ptr_eq(page, &pin.page))
     }
 
     pub fn private_page_pin(
@@ -1942,8 +2302,7 @@ impl MemorySystem {
         // global/VA-only native mapper and remains a collision.
         self.virtual_allocations.values().any(|allocation| {
             (allocation.owner == owner
-                || allocation.backing != VirtualAllocationBacking::StablePrivateSlab
-                || !allocation.source.is_private())
+                || allocation.backing == VirtualAllocationBacking::LegacySeed)
                 && ranges_overlap(base, size, allocation.base, allocation.size)
         }) || self
             .pending_private_holes
@@ -1958,6 +2317,10 @@ impl MemorySystem {
             || self.allocations.values().any(|allocation| {
                 ranges_overlap(base, size, allocation.ptr, allocation.actual_size)
             })
+    }
+
+    fn owner_scoped_slab_overlaps(&self, owner: ProcessBirthKey, base: u32, size: u32) -> bool {
+        self.private_vm_overlaps(owner, base, size)
     }
 
     fn bump_heap_generation(&mut self) {

@@ -30220,7 +30220,8 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let file_id = mapping.file_id;
-    let mut initial_bytes = if let Some(file_id) = file_id {
+    let protect = mapping.protect;
+    let initial_bytes = if let Some(file_id) = file_id {
         match kernel.read_file_at(file_id, offset_low as usize, size as usize) {
             Ok(mut bytes) => {
                 bytes.resize(size as usize, 0);
@@ -30251,23 +30252,21 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    let Some(base) = kernel.memory.virtual_alloc(
+    let Some(base) = kernel.memory.allocate_shared_view(
         owner,
-        VirtualAllocationSource::FileViewLegacy,
-        0,
+        mapping_handle,
+        offset_low,
         size,
-        MEM_COMMIT | MEM_RESERVE,
-        PAGE_READWRITE,
+        protect,
+        &mapping_bytes,
     ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
         return 0;
     };
-    kernel
-        .memory
-        .set_virtual_initial_bytes(owner, base, std::mem::take(&mut initial_bytes));
-    try_seed_guest_bytes(memory, base, &mapping_bytes);
+    // Native reconciliation after the import maps this canonical page by
+    // pointer. An unmapped guest VA cannot be seeded safely here.
     let process_id = kernel.current_process_id();
     let Ok(mapping) = kernel.handles.file_mapping_mut(mapping_handle) else {
         kernel
@@ -30286,6 +30285,7 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
         size,
         offset: offset_low,
         process_id,
+        process_birth: Some(owner),
     });
     kernel.threads.set_last_error(thread_id, 0);
     base
@@ -30349,6 +30349,51 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return None;
     };
+    if let Some((handle, mapping, view)) = kernel.handles.file_mapping_view_for_birth(owner, base)
+    {
+        if !kernel.memory.virtual_allocation(owner, base).is_some_and(|allocation| {
+            allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
+                && allocation.source == VirtualAllocationSource::FileViewSlab
+        }) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return None;
+        }
+        let file_id = mapping.file_id;
+        let count = bytes_to_commit.unwrap_or(view.size).min(view.size);
+        let bytes = read_guest_bytes(kernel, memory, thread_id, base, count)?;
+        // A native hook reads the pointer-mapped canonical page through uc;
+        // its host guard is active, so no second host write is legal. A raw
+        // non-native memory adapter instead commits its copied guest bytes.
+        if !kernel.memory.shared_mapping_write(handle, view.offset, &bytes)
+            && !kernel
+                .memory
+                .shared_mapping_native_active(handle, view.offset, bytes.len())
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return None;
+        }
+        let (views, data) = {
+            let Ok(mapping) = kernel.handles.file_mapping_mut(handle) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return None;
+            };
+            let start = view.offset as usize;
+            let end = start.saturating_add(bytes.len());
+            if end > mapping.data.len() {
+                mapping.data.resize(end, 0);
+            }
+            mapping.data[start..end].copy_from_slice(&bytes);
+            (mapping.views.clone(), mapping.data.clone())
+        };
+        sync_file_mapping_views_to_guest(memory, base, Some(owner), &views, &data);
+        return Some((file_id, view, bytes));
+    }
     let Some((mapping, view)) = kernel.handles.file_mapping_view(base) else {
         kernel
             .threads
@@ -30384,20 +30429,21 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
     } else {
         (Vec::new(), Vec::new())
     };
-    sync_file_mapping_views_to_guest(memory, base, &views, &data);
+    sync_file_mapping_views_to_guest(memory, base, None, &views, &data);
     Some((file_id, view, bytes))
 }
 
 fn sync_file_mapping_views_to_guest<M: CoredllGuestMemory>(
     memory: &mut M,
     source_base: u32,
+    source_birth: Option<crate::ce::object::ProcessBirthKey>,
     views: &[FileMappingView],
     data: &[u8],
 ) {
     for view in views
         .iter()
         .copied()
-        .filter(|view| view.base != source_base)
+        .filter(|view| view.base != source_base && view.process_birth == source_birth)
     {
         let start = view.offset as usize;
         let end = start.saturating_add(view.size as usize).min(data.len());
@@ -30420,11 +30466,14 @@ fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
-    if !kernel
+    let backing = kernel
         .memory
         .virtual_allocation(owner, base)
-        .is_some_and(|allocation| allocation.source == VirtualAllocationSource::FileViewLegacy)
-    {
+        .map(|allocation| allocation.backing);
+    if !matches!(
+        backing,
+        Some(VirtualAllocationBacking::LegacySeed | VirtualAllocationBacking::StableSharedViewSlab)
+    ) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -30438,8 +30487,20 @@ fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
     if let Some(file_id) = file_id {
         let _ = kernel.write_file_at(file_id, view.offset as usize, &bytes);
     }
-    if kernel.handles.remove_file_mapping_view(base).is_some() {
-        let _ = kernel.memory.virtual_free(owner, base, 0, MEM_RELEASE);
+    let removed = if backing == Some(VirtualAllocationBacking::StableSharedViewSlab) {
+        kernel.handles.remove_file_mapping_view_for_birth(owner, base)
+    } else {
+        kernel.handles.remove_file_mapping_view(base).map(|view| (0, view))
+    };
+    if let Some((handle, _)) = removed {
+        if backing == Some(VirtualAllocationBacking::StableSharedViewSlab) {
+            let _ = kernel.memory.release_shared_view(owner, base);
+            if !kernel.handles.has_file_mapping_object(handle) {
+                kernel.memory.forget_shared_mapping(handle);
+            }
+        } else {
+            let _ = kernel.memory.virtual_free(owner, base, 0, MEM_RELEASE);
+        }
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -50505,6 +50566,7 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
                 size: byte_count,
                 offset,
                 process_id,
+                process_birth: None,
             });
         }
     }
@@ -70676,6 +70738,7 @@ mod tests {
                 size: 0x1000,
                 offset: 0,
                 process_id,
+                process_birth: None,
             });
         assert_eq!(
             virtual_alloc_raw(
