@@ -2560,7 +2560,9 @@ impl UnicornMips {
                 kernel.take_ready_message_w_filtered(thread_id, None, 0, 0)
             }
         };
-        if message.msg == crate::ce::gwe::WM_QUIT {
+        // This is a window callout, not a thread Get/Peek. A hwnd=0 post
+        // belongs to that reader even if this CPU currently sees its queue.
+        if message.hwnd == 0 || message.msg == crate::ce::gwe::WM_QUIT {
             return false;
         }
         let Some(window) = kernel
@@ -2826,7 +2828,9 @@ impl UnicornMips {
                 kernel.take_ready_message_w_filtered(thread_id, None, min_msg, max_msg)
             }
         };
-        if message.msg == crate::ce::gwe::WM_QUIT {
+        // Do not consume a windowless thread post through an opportunistic
+        // window dispatch, including after a numeric receiver-work fallback.
+        if message.hwnd == 0 || message.msg == crate::ce::gwe::WM_QUIT {
             return false;
         }
         let Some(window) = kernel
@@ -38482,6 +38486,60 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn opportunistic_window_callouts_preserve_windowless_thread_posts() {
+        for orphaned in [false, true] {
+            let config = RuntimeConfig::load_default().unwrap();
+            let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+            let mut cpu = super::UnicornMips::new().unwrap();
+            let (_, reader_thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+            cpu.set_initial_thread_id(reader_thread_id);
+            let message_id = crate::ce::gwe::WM_USER + 0x79;
+            let mut regs = super::MipsGuestContext::zero();
+            regs.regs[29] = 0x7ffd_f578;
+            if orphaned {
+                cpu.saved_context = Some(super::SavedCpuContext {
+                    pc: super::GUEST_THREAD_RETURN_STUB_ADDR,
+                    regs,
+                });
+                cpu.last_debug = Some(super::UnicornDebugSnapshot {
+                    pc: super::GUEST_THREAD_RETURN_STUB_ADDR,
+                    ..Default::default()
+                });
+                assert!(kernel.post_message_w_for_thread(
+                    reader_thread_id,
+                    0,
+                    message_id,
+                    0x71,
+                    0x72,
+                ));
+            } else {
+                cpu.current_thread_id = reader_thread_id + 100;
+                cpu.saved_context = Some(super::SavedCpuContext {
+                    pc: 0x0040_4000,
+                    regs,
+                });
+                assert!(kernel.post_thread_message_w(reader_thread_id, message_id, 0x71, 0x72));
+            }
+            assert!(super::UnicornMips::thread_has_receiver_work(
+                reader_thread_id,
+                &kernel,
+            ));
+            let prepared = if orphaned {
+                cpu.prepare_active_orphaned_visible_message_callout(&mut kernel)
+            } else {
+                cpu.prepare_cross_thread_visible_message_callout(&mut kernel)
+            };
+            assert!(!prepared, "hwnd=0 must not become a window callout");
+            assert!(cpu.pending_wndproc_returns.is_empty());
+            let message = kernel
+                .take_ready_message_w_filtered(reader_thread_id, None, 0, 0)
+                .expect("the exact reader must still receive its thread post");
+            assert_eq!((message.hwnd, message.msg), (0, message_id));
+            assert_eq!((message.wparam, message.lparam), (0x71, 0x72));
+        }
+    }
+
+    #[test]
     fn cross_thread_visible_message_requires_mapped_wndproc_before_handoff() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -40534,7 +40592,8 @@ mod wait_scheduler_tests {
                 kernel.timers.tick_count(),
                 |wait, kernel| scheduler_blocked_wait_is_ready(wait, kernel),
             ),
-            Some(stale_wait_id),
+            None,
+            "B's input must not select A's stale MsgWait",
         );
 
         let boot_birth = kernel
@@ -46635,7 +46694,20 @@ mod guest_thread_stack_tests {
                 "\\SDMMC Disk\\INavi\\iNavi.exe",
             )?);
 
-        assert!(kernel.post_thread_message_w(other_thread, crate::ce::gwe::WM_USER + 8, 1, 2));
+        // This parked fixture has no canonical thread birth for TID 9. Keep
+        // its numeric compatibility input explicit rather than using a guest
+        // PostThreadMessageW call that now requires a live target birth.
+        kernel.gwe.post_thread_message_legacy_unknown(
+            other_thread,
+            crate::ce::gwe::Message::new(
+                0,
+                crate::ce::gwe::WM_USER + 8,
+                1,
+                2,
+                kernel.timers.tick_count(),
+            ),
+        );
+        kernel.scheduler.queue_message_wake_candidates(other_thread);
         assert!(kernel.post_thread_message_w(target_thread, crate::ce::gwe::WM_USER + 9, 3, 4));
         assert!(scheduler.rotate_to_ready_parked_threads(&mut kernel, &[target_thread]));
         assert_eq!(kernel.current_process_id(), 1);
@@ -80528,24 +80600,29 @@ mod unicorn_tests {
             None,
             "B's post must not select A's stale wait",
         );
-        // Directly present the escaped stale native payload as a separate
-        // guard control: selection must not be its only safety boundary.
+        // Check the direct birth guard as well as the scheduler selector.
         assert_eq!(
             current_thread_id.get(),
             (active_thread_id, Some(active_birth))
         );
-        assert!(super::try_resume_blocked_get_message_after_current_blocked(
-            &mut kernel,
-            &mut uc,
-            &super::SealedHostWriteGuard::default(),
-            active_thread_id,
-            &current_thread_id,
-            &blocked_guest_thread,
-            &displaced_blocked_get_messages,
-            &suspended_thread,
-            &running_thread,
-            &pending_wndproc_returns,
-        ));
+        assert!(
+            super::verified_get_message_wait_birth(&kernel, stale_wait_id, thread_id, old_handle)
+                .is_none()
+        );
+        assert!(
+            !super::try_resume_blocked_get_message_after_current_blocked(
+                &mut kernel,
+                &mut uc,
+                &super::SealedHostWriteGuard::default(),
+                active_thread_id,
+                &current_thread_id,
+                &blocked_guest_thread,
+                &displaced_blocked_get_messages,
+                &suspended_thread,
+                &running_thread,
+                &pending_wndproc_returns,
+            )
+        );
 
         assert_eq!(
             kernel
@@ -80562,7 +80639,10 @@ mod unicorn_tests {
         uc.mem_read(u64::from(stack_ptr), &mut observed_stack)
             .unwrap();
         assert_eq!(observed_stack, stack_bytes);
-        assert_eq!(current_thread_id.get(), (active_thread_id, None));
+        assert_eq!(
+            current_thread_id.get(),
+            (active_thread_id, Some(active_birth))
+        );
         assert_ne!(current_thread_id.get(), (thread_id, Some(new_birth)));
         assert_eq!(*running_thread.borrow(), None);
         assert!(suspended_thread.borrow().is_none());
