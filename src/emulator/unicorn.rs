@@ -14491,37 +14491,59 @@ fn sync_file_mapping_views_to_unicorn<D>(
             if start >= end {
                 continue;
             }
-            // A view page may not be mapped in this process yet (kernel
-            // allocations map lazily on the first import); the lazy map seeds
-            // from the canonical initial bytes instead.
+            // A view page may not be mapped in this process yet. Seed only
+            // native pages, and require the untouched gaps to retain their
+            // canonical lazy bytes for a later page fault.
             let bytes = &mapping.data[start..end];
-            let end_address = u64::from(view.base)
+            let view_start = u64::from(view.base);
+            let view_end = view_start
                 .checked_add(bytes.len() as u64)
                 .ok_or_else(|| Error::Backend("file-view seed range overflow".to_owned()))?;
-            let overlaps_native_ram = native_regions
+            let mut mapped_spans: Vec<(u64, u64)> = native_regions
                 .iter()
-                .any(|region| region.begin < end_address && region.end >= u64::from(view.base));
-            if !overlaps_native_ram {
-                let has_canonical_lazy_seed = kernel
-                    .memory
-                    .virtual_allocation_by_base_legacy(view.base)
-                    .is_some_and(|allocation| {
-                        allocation.initial_bytes.get(..bytes.len()) == Some(bytes)
+                .filter_map(|region| {
+                    let begin = view_start.max(region.begin);
+                    let end = view_end.min(region.end.saturating_add(1));
+                    (begin < end).then_some((begin, end))
+                })
+                .collect();
+            mapped_spans.sort_unstable_by_key(|(begin, _)| *begin);
+            let lazy_seed = kernel
+                .memory
+                .virtual_allocation_by_base_legacy(view.base)
+                .map(|allocation| allocation.initial_bytes.as_slice());
+            let mut cursor = view_start;
+            for (mapped_begin, mapped_end) in mapped_spans
+                .iter()
+                .copied()
+                .chain(std::iter::once((view_end, view_end)))
+            {
+                if cursor < mapped_begin {
+                    let gap_start = (cursor - view_start) as usize;
+                    let gap_end = (mapped_begin - view_start) as usize;
+                    let seed_matches = lazy_seed.is_some_and(|seed| {
+                        seed.get(gap_start..gap_end) == Some(&bytes[gap_start..gap_end])
                     });
-                if has_canonical_lazy_seed {
-                    continue;
+                    if !seed_matches {
+                        return Err(Error::Backend(format!(
+                            "process {owner_pid} file view 0x{:08x} is unmapped without its canonical lazy seed",
+                            view.base
+                        )));
+                    }
                 }
-                return Err(Error::Backend(format!(
-                    "process {owner_pid} file view 0x{:08x} is unmapped without its canonical lazy seed",
-                    view.base
-                )));
+                cursor = cursor.max(mapped_end);
             }
-            uc.mem_write(u64::from(view.base), bytes).map_err(|err| {
-                Error::Backend(format!(
-                    "seed process {owner_pid} file view 0x{:08x}: {err:?}",
-                    view.base
-                ))
-            })?;
+            for (mapped_begin, mapped_end) in mapped_spans {
+                let offset = (mapped_begin - view_start) as usize;
+                let size = (mapped_end - mapped_begin) as usize;
+                uc.mem_write(mapped_begin, &bytes[offset..offset + size])
+                    .map_err(|err| {
+                        Error::Backend(format!(
+                            "seed process {owner_pid} file view 0x{:08x}: {err:?}",
+                            mapped_begin
+                        ))
+                    })?;
+            }
         }
     }
     Ok(())
@@ -56791,6 +56813,90 @@ mod unicorn_tests {
                 .initial_bytes,
             expected
         );
+        Ok(())
+    }
+
+    fn two_page_legacy_view_seed_fixture(
+        name: &str,
+    ) -> crate::Result<(CeKernel, u32, u32, Vec<u8>)> {
+        const SIZE: usize = 0x2000;
+        let mut kernel = phase1_kernel(name)?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let base = kernel
+            .memory
+            .virtual_alloc(
+                owner,
+                crate::ce::memory::VirtualAllocationSource::FileViewLegacy,
+                0,
+                SIZE as u32,
+                0x3000,
+                0x04,
+            )
+            .expect("lazy file-view reservation");
+        let mut canonical = vec![0x5a; SIZE];
+        canonical[..4].copy_from_slice(&0x1122_3344u32.to_le_bytes());
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(owner, base, canonical.clone())
+        );
+        let handle = kernel
+            .handles
+            .create_file_mapping(None, SIZE as u32, 4, None);
+        let mapping = kernel.handles.file_mapping_mut(handle)?;
+        mapping.data.copy_from_slice(&canonical);
+        mapping.views.push(crate::ce::object::FileMappingView {
+            base,
+            size: SIZE as u32,
+            offset: 0,
+            process_id: owner.process_id(),
+        });
+        Ok((kernel, handle, base, canonical))
+    }
+
+    #[test]
+    fn native_file_view_partial_seed_writes_only_mapped_page() -> crate::Result<()> {
+        let (kernel, handle, base, canonical) =
+            two_page_legacy_view_seed_fixture("partial-seed.exe")?;
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(u64::from(base), 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(base), &0xaabb_ccddu32.to_le_bytes())
+            .unwrap();
+        assert!(uc.mem_read(u64::from(base) + 0x1000, &mut [0; 4]).is_err());
+
+        super::sync_file_mapping_views_to_unicorn(&mut uc, &kernel, kernel.current_process_id())?;
+        let mut actual = [0; 4];
+        uc.mem_read(u64::from(base), &mut actual).unwrap();
+        assert_eq!(actual, canonical[..4]);
+        assert!(uc.mem_read(u64::from(base) + 0x1000, &mut [0; 4]).is_err());
+        assert_eq!(kernel.handles.file_mapping(handle)?.data, canonical);
+        Ok(())
+    }
+
+    #[test]
+    fn native_file_view_partial_seed_rejects_stale_unmapped_page() -> crate::Result<()> {
+        let (mut kernel, handle, base, canonical) =
+            two_page_legacy_view_seed_fixture("stale-partial-seed.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut stale_seed = canonical.clone();
+        stale_seed[0x1000] ^= 0xff;
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(owner, base, stale_seed)
+        );
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(u64::from(base), 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(base), &0xaabb_ccddu32.to_le_bytes())
+            .unwrap();
+
+        let err = super::sync_file_mapping_views_to_unicorn(&mut uc, &kernel, owner.process_id())
+            .unwrap_err();
+        assert!(format!("{err:?}").contains("unmapped without its canonical lazy seed"));
+        let mut actual = [0; 4];
+        uc.mem_read(u64::from(base), &mut actual).unwrap();
+        assert_eq!(actual, 0xaabb_ccddu32.to_le_bytes());
+        assert_eq!(kernel.handles.file_mapping(handle)?.data, canonical);
         Ok(())
     }
 
