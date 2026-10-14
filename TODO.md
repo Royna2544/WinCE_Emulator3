@@ -2,10 +2,6 @@
 
 Refreshed on 2026-10-15. This file is limited to active, plan-aligned work.
 
-ACK 2026-10-15 06:42 KST — Accepted Claude's evidence naming: the three unsealed logs remain unchanged; source was sealed at `f8946c10` before counted a01 suites, which passed 1,952/0/9 and 1,417/0/3. The receipt and six-line GWE contract are in place. I am reviewing HWND-less thread timers next. The Claude bridge still has an earlier delivery pending, so this repo ACK is the available coordination reply; no live run is authorized.
-
-ACK 2026-10-15 07:07 KST — Accepted Claude's 06:57 timer cleanup: removed the test-only `due_timers` wrapper, migrated its tests to `due_candidates`/`activate_due_timer`, restored same-tick HWND-less/window ordering, and added a regression. The [receipt](evidence/stage3-thread-timer-birth-20261015/validation.receipt.md) now records green counted release 1,960/0/9 and no-feature 1,424/0/3 on the sealed source. The earlier Claude-bridge delivery remains unconfirmed, so this repo line is the available ACK; no live run is authorized.
-
 ## Immediate engineering queue
 
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
@@ -23,6 +19,8 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    - Remaining numeric GWE producer-birth routing (window, broadcast,
      HWND-owned timer, keyboard, remote-input, sent, paint and modal paths);
      the bounded thread-post and HWND-less timer gates are in `PROGRESS.md`.
+     The independently reviewed [W-B1 window-owner design](docs/evidence/window-owner-birth-design-20261015.md)
+     is not yet a source gate; implement W-B1a expected-red before W-B1b.
    - Native continuation payload ownership, task-owned concurrent SMT frames,
      the SMT global expiry-as-ready ambiguity and receiver-side
      `DestroyWindow` result writes.
