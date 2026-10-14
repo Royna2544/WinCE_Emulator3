@@ -6807,6 +6807,11 @@ impl CeKernel {
             for wait_id in wait_ids {
                 let _ = self.remove_blocked_waiter(wait_id);
             }
+            // Only this verified live birth may retire sends under its numeric
+            // TID. Queued sends are removed; an active receiver can finish
+            // after GWE detaches the now-dead sender.
+            self.gwe
+                .terminate_sent_messages_from_sender(key.thread_id());
             self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
         }
         success
@@ -11844,6 +11849,139 @@ mod tests {
         assert!(kernel.mark_guest_thread_exited_by_birth(new_birth, 0x77));
         assert!(kernel.blocked_waiter(wait_id).is_none());
         assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn exiting_sender_removes_queued_send_before_receiver_delivery() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (sender_handle, sender_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let (_, receiver_tid) = kernel.create_guest_thread(0x402000, 0, false);
+        let hwnd = kernel.gwe.create_window(receiver_tid, "target", "");
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 57,
+                1,
+                2,
+                None,
+            )
+            .expect("queued sync send");
+        let wait_id = kernel.register_opaque_compatibility_waiter(
+            sender_tid,
+            sender_handle,
+            vec![send_id as u32],
+            SchedulerBlockedWaitKind::SendMessage { send_id },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert!(kernel.gwe.has_pending_sent_message_for_thread(receiver_tid));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+
+        assert!(kernel.mark_guest_thread_exited(sender_handle, 0x71));
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(kernel.gwe.sent_message(send_id).is_none());
+        assert!(!kernel.gwe.has_pending_sent_message_for_thread(receiver_tid));
+        assert_eq!(kernel.gwe.get_message(receiver_tid), None);
+    }
+
+    #[test]
+    fn exiting_sender_detaches_active_send_until_receiver_returns() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (sender_handle, sender_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let (_, receiver_tid) = kernel.create_guest_thread(0x402000, 0, false);
+        let hwnd = kernel.gwe.create_window(receiver_tid, "target", "");
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 58,
+                1,
+                2,
+                None,
+            )
+            .expect("queued sync send");
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_tid, send_id)
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(send_id)
+        );
+
+        assert!(kernel.mark_guest_thread_exited(sender_handle, 0x72));
+        let sent = kernel.gwe.sent_message(send_id).expect("active send state");
+        assert_eq!(sent.sender_thread_id, None);
+        assert_ne!(sent.flags & crate::ce::gwe::SMF_SENDER_TERMINATED, 0);
+        assert_eq!(sent.flags & crate::ce::gwe::SMF_RESULT_READY, 0);
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(send_id)
+        );
+        assert_eq!(
+            kernel.complete_active_sent_message(receiver_tid, 0x1234),
+            Some(send_id)
+        );
+        assert!(kernel.gwe.sent_message(send_id).is_none());
+        assert_eq!(kernel.take_completed_send_message_result(send_id), None);
+    }
+
+    #[test]
+    fn stale_sender_birth_cannot_cancel_reused_tid_send() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (old_sender, sender_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_sender)
+            .expect("old sender birth");
+        assert!(kernel.mark_guest_thread_exited(old_sender, 0));
+        assert!(kernel.close_handle(old_sender)?);
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+
+        let new_sender = kernel.handles.create_thread(sender_tid, 0x403000, 0, false);
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_sender)
+            .expect("new sender birth");
+        assert_ne!(old_birth, new_birth);
+        let (_, receiver_tid) = kernel.create_guest_thread(0x402000, 0, false);
+        let hwnd = kernel.gwe.create_window(receiver_tid, "target", "");
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 59,
+                1,
+                2,
+                None,
+            )
+            .expect("new sender's queued send");
+        let wait_id = kernel.register_opaque_compatibility_waiter(
+            sender_tid,
+            new_sender,
+            vec![send_id as u32],
+            SchedulerBlockedWaitKind::SendMessage { send_id },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+
+        assert!(!kernel.mark_guest_thread_exited_by_birth(old_birth, 0x99));
+        assert!(kernel.handles.thread_execution_live_by_id(sender_tid));
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(send_id)
+                .and_then(|sent| sent.sender_thread_id),
+            Some(sender_tid)
+        );
+        assert!(kernel.gwe.has_pending_sent_message_for_thread(receiver_tid));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert!(kernel.mark_guest_thread_exited_by_birth(new_birth, 0x77));
+        assert!(kernel.gwe.sent_message(send_id).is_none());
+        assert!(kernel.blocked_waiter(wait_id).is_none());
         Ok(())
     }
 
