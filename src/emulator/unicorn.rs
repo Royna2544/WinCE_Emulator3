@@ -56571,7 +56571,7 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn native_two_process_same_va_distinct_file_views_keep_mapping_owners() -> crate::Result<()> {
+    fn native_two_process_same_va_file_views_isolate_bytes_across_a_b_a() -> crate::Result<()> {
         const PARENT_BYTES: u32 = 0x1122_3344;
         const CHILD_BYTES: u32 = 0x5566_7788;
 
@@ -56579,6 +56579,7 @@ mod unicorn_tests {
         // allocates virtual addresses from one global cursor. Both process
         // slices below still execute real guest MIPS on their own native CPU.
         let mut kernel = phase1_kernel("same-va-parent.exe")?;
+        let parent_state = kernel.current_process_state();
         let parent_mapping =
             kernel
                 .handles
@@ -56619,7 +56620,10 @@ mod unicorn_tests {
                 0x8d09_0000,                                  // lw t1,0(t0)
                 0x2529_0001,                                  // addiu t1,t1,1
                 0xad09_0000,                                  // sw t1,0(t0)
-                0x1000_ffff, // terminal spinner, not reached by five-count run
+                0x8d09_0000, // parent resume: read its own canonical bytes
+                0x2529_0001, // increment again after the child has run
+                0xad09_0000, // write only the parent's mapping
+                0x1000_ffff, // terminal spinner, not reached by these runs
                 0,
             ];
             for (index, word) in words.into_iter().enumerate() {
@@ -56646,6 +56650,11 @@ mod unicorn_tests {
             &mut framebuffer,
             limits,
         )?;
+        assert_eq!(
+            parent.last_native_slice_outcome(),
+            super::NativeSliceOutcome::CountLimit
+        );
+        assert!(parent.native_engine_identity_for_test().is_none());
         let parent_seen = parent
             .saved_context
             .as_ref()
@@ -56675,6 +56684,11 @@ mod unicorn_tests {
             &mut framebuffer,
             limits,
         )?;
+        assert_eq!(
+            child.last_native_slice_outcome(),
+            super::NativeSliceOutcome::CountLimit
+        );
+        assert!(child.native_engine_identity_for_test().is_none());
         let child_seen = child
             .saved_context
             .as_ref()
@@ -56711,6 +56725,44 @@ mod unicorn_tests {
         assert_eq!(
             observed, expected,
             "each actual native PID slice must read and write only its own mapping at the same guest VA"
+        );
+
+        kernel.set_current_process_state(parent_state);
+        kernel.set_process_module_path("\\Test\\same-va-parent.exe");
+        kernel.set_process_module_host_path(std::path::PathBuf::from("same-va-parent.exe"));
+        parent.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 3,
+                ..limits
+            },
+        )?;
+        assert_eq!(
+            parent.last_native_slice_outcome(),
+            super::NativeSliceOutcome::CountLimit
+        );
+        assert!(parent.native_engine_identity_for_test().is_none());
+        assert_eq!(kernel.current_process_id(), parent_state.process_id);
+        assert_eq!(
+            parent
+                .saved_context
+                .as_ref()
+                .expect("parent resumed")
+                .regs
+                .regs[9],
+            PARENT_BYTES + 2,
+            "the resumed parent must read its own bytes from a new native owner"
+        );
+        assert_eq!(
+            &kernel.handles.file_mapping(parent_mapping)?.data[..4],
+            &(PARENT_BYTES + 2).to_le_bytes(),
+            "A's second guest store must reach only A's canonical mapping"
+        );
+        assert_eq!(
+            &kernel.handles.file_mapping(child_mapping)?.data[..4],
+            &(CHILD_BYTES + 1).to_le_bytes(),
+            "A's resumed native readback must not overwrite B's mapping"
         );
         Ok(())
     }
@@ -58102,6 +58154,209 @@ mod unicorn_tests {
             Some(entry + 0x20)
         );
         assert!(snapshot.memory_fault.is_none(), "no unhandled native fault");
+        Ok(())
+    }
+
+    #[test]
+    fn public_two_process_same_va_private_bytes_survive_native_a_b_a() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE, VirtualAllocationSource};
+
+        const BASE: u32 = 0x5200_0000;
+        const PARENT_BYTES: u32 = 0x1122_3344;
+        const CHILD_BYTES: u32 = 0x5566_7788;
+        const PAGE_READWRITE: u32 = 0x04;
+
+        let mut kernel = phase1_kernel("same-va-private-parent.exe")?;
+        let parent_state = kernel.current_process_state();
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\same-va-private-child.exe".to_owned()), None);
+        assert!(
+            kernel
+                .take_pending_process_launches()
+                .iter()
+                .any(|queued| queued.process_id == launch.process_id)
+        );
+        let child_state = crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        };
+        let child_birth = kernel
+            .handles
+            .process_birth_key(launch.process_id)
+            .expect("queued child birth");
+        assert_ne!(parent_birth, child_birth);
+
+        let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let make_cpu = |name: &str,
+                        thread_id: u32,
+                        initial: u32|
+         -> crate::Result<(super::UnicornMips, u32)> {
+            let mut bytes = tiny_mips_spinner_pe();
+            let words = [
+                0x3c19_0000 | (trap >> 16),       // lui t9,VirtualAlloc trap high
+                0x3739_0000 | (trap & 0xffff),    // ori t9,t9,trap low
+                0x0320_f809,                      // jalr t9: public VirtualAlloc
+                0,                                // delay-slot nop
+                0x0040_4021,                      // addu t0,v0,zero: private VA
+                0x3c09_0000 | (initial >> 16),    // lui t1,initial high
+                0x3529_0000 | (initial & 0xffff), // ori t1,t1,initial low
+                0xad09_0000,                      // sw t1,0(t0)
+                0x8d0a_0000,                      // parent resume: lw t2,0(t0)
+                0x254a_0001,                      // addiu t2,t2,1
+                0xad0a_0000,                      // sw t2,0(t0)
+                0x1000_ffff,                      // bounded safety spinner
+                0,
+            ];
+            for (index, word) in words.into_iter().enumerate() {
+                write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+            }
+            let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
+            let mut cpu = super::UnicornMips::new()?;
+            cpu.load_pe_image(&image)?;
+            cpu.native_engine = super::ProcessNativeEngine::with_lifetime(
+                Arch::MIPS,
+                Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+                crate::emulator::native_engine::NativeEngineLifetime::FreshPerSlice,
+            );
+            cpu.set_initial_thread_id(thread_id);
+            cpu.import_traps
+                .insert(crate::emulator::imports::ImportTrap {
+                    address: trap,
+                    module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                    module_name: "COREDLL.dll".to_owned(),
+                    ordinal: Some(crate::ce::coredll_ordinals::ORD_VIRTUAL_ALLOC),
+                    name: Some("VirtualAlloc".to_owned()),
+                    iat_va: 0,
+                });
+            super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+            let entry = cpu.entry.expect("fixture PE entry");
+            let mut regs = super::MipsGuestContext::zero();
+            regs.regs[4] = BASE;
+            regs.regs[5] = 0x1000;
+            regs.regs[6] = MEM_COMMIT | MEM_RESERVE;
+            regs.regs[7] = PAGE_READWRITE;
+            regs.regs[29] = cpu.stack_top.expect("guest stack") - 0x100;
+            cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+            cpu.running_guest_thread = Some((thread_id, u32::MAX));
+            Ok((cpu, entry))
+        };
+        let (mut parent, parent_entry) = make_cpu("same-va-private-parent.exe", 1, PARENT_BYTES)?;
+        let (mut child, child_entry) =
+            make_cpu("same-va-private-child.exe", launch.thread_id, CHILD_BYTES)?;
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let run_to = |stop_pc| super::UnicornRunLimits {
+            instruction_limit: 64,
+            wall_clock_limit_ms: 500,
+            stop_pc: Some(stop_pc),
+            live_pump: false,
+        };
+
+        let a_first = parent.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            run_to(parent_entry + 8 * 4),
+        );
+        a_first.result?;
+        assert_eq!(a_first.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(a_first.report.end_process_birth(), Some(parent_birth));
+        assert_eq!(
+            a_first.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        let a_context = parent.saved_context.as_ref().expect("A after guest store");
+        assert_eq!(a_context.pc, parent_entry + 8 * 4);
+        assert_eq!(a_context.regs.regs[2], BASE, "A's public allocation");
+        assert_eq!(a_context.regs.regs[9], PARENT_BYTES);
+        assert!(parent.native_engine_identity_for_test().is_none());
+        let a_pin = kernel
+            .memory
+            .private_page_pin(parent_birth, BASE)
+            .expect("A's canonical slab");
+        let mut actual = [0; 4];
+        a_pin.read_bytes(0, &mut actual).expect("A's written bytes");
+        assert_eq!(actual, PARENT_BYTES.to_le_bytes());
+
+        kernel.set_current_process_state(child_state);
+        kernel.set_process_module_path("\\Test\\same-va-private-child.exe");
+        kernel.set_process_module_host_path(std::path::PathBuf::from("same-va-private-child.exe"));
+        let b = child.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            run_to(child_entry + 8 * 4),
+        );
+        b.result?;
+        assert_eq!(b.report.start_process_birth(), Some(child_birth));
+        assert_eq!(b.report.end_process_birth(), Some(child_birth));
+        assert_eq!(
+            b.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        let b_context = child.saved_context.as_ref().expect("B after guest store");
+        assert_eq!(b_context.pc, child_entry + 8 * 4);
+        assert_eq!(
+            b_context.regs.regs[2], BASE,
+            "B's public same-VA allocation"
+        );
+        assert_eq!(b_context.regs.regs[9], CHILD_BYTES);
+        assert!(child.native_engine_identity_for_test().is_none());
+        let b_pin = kernel
+            .memory
+            .private_page_pin(child_birth, BASE)
+            .expect("B's distinct canonical slab");
+        b_pin.read_bytes(0, &mut actual).expect("B's written bytes");
+        assert_eq!(actual, CHILD_BYTES.to_le_bytes());
+        a_pin.read_bytes(0, &mut actual).expect("A survives B");
+        assert_eq!(actual, PARENT_BYTES.to_le_bytes());
+        assert_eq!(
+            kernel
+                .memory
+                .virtual_allocation(parent_birth, BASE)
+                .expect("A allocation")
+                .source,
+            VirtualAllocationSource::Private
+        );
+        assert_eq!(
+            kernel
+                .memory
+                .virtual_allocation(child_birth, BASE)
+                .expect("B allocation")
+                .source,
+            VirtualAllocationSource::Private
+        );
+
+        kernel.set_current_process_state(parent_state);
+        kernel.set_process_module_path("\\Test\\same-va-private-parent.exe");
+        kernel.set_process_module_host_path(std::path::PathBuf::from("same-va-private-parent.exe"));
+        let a_second = parent.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            run_to(parent_entry + 11 * 4),
+        );
+        a_second.result?;
+        assert_eq!(a_second.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(a_second.report.end_process_birth(), Some(parent_birth));
+        assert_eq!(
+            a_second.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        let a_context = parent.saved_context.as_ref().expect("A after resume");
+        assert_eq!(a_context.pc, parent_entry + 11 * 4);
+        assert_eq!(
+            a_context.regs.regs[10],
+            PARENT_BYTES + 1,
+            "A must reload its own guest bytes after B ran at the same VA"
+        );
+        assert!(parent.native_engine_identity_for_test().is_none());
+        a_pin
+            .read_bytes(0, &mut actual)
+            .expect("A after second store");
+        assert_eq!(actual, (PARENT_BYTES + 1).to_le_bytes());
+        b_pin
+            .read_bytes(0, &mut actual)
+            .expect("B remains isolated");
+        assert_eq!(actual, CHILD_BYTES.to_le_bytes());
         Ok(())
     }
 
