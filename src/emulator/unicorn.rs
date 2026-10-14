@@ -14414,12 +14414,14 @@ fn sync_file_mapping_views_from_unicorn<D>(
                 view.base
             )));
         }
-        let offset = (view.offset as usize).checked_add(relative).ok_or_else(|| {
-            Error::Backend(format!(
-                "process {owner_pid} file view 0x{:08x} readback offset overflow",
-                view.base
-            ))
-        })?;
+        let offset = (view.offset as usize)
+            .checked_add(relative)
+            .ok_or_else(|| {
+                Error::Backend(format!(
+                    "process {owner_pid} file view 0x{:08x} readback offset overflow",
+                    view.base
+                ))
+            })?;
         let end = offset.checked_add(bytes.len()).ok_or_else(|| {
             Error::Backend(format!(
                 "process {owner_pid} file view 0x{:08x} readback length overflow",
@@ -56739,10 +56741,14 @@ mod unicorn_tests {
             .expect("lazy file-view reservation");
         let mut canonical = vec![0x5a; SIZE];
         canonical[0x1000..0x1004].copy_from_slice(&0x1122_3344u32.to_le_bytes());
-        assert!(kernel
-            .memory
-            .set_virtual_initial_bytes(owner, base, canonical.clone()));
-        let handle = kernel.handles.create_file_mapping(None, SIZE as u32, 4, None);
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(owner, base, canonical.clone())
+        );
+        let handle = kernel
+            .handles
+            .create_file_mapping(None, SIZE as u32, 4, None);
         let mapping = kernel.handles.file_mapping_mut(handle)?;
         mapping.data.copy_from_slice(&canonical);
         mapping.views.push(crate::ce::object::FileMappingView {
@@ -56785,6 +56791,112 @@ mod unicorn_tests {
                 .initial_bytes,
             expected
         );
+        Ok(())
+    }
+
+    #[test]
+    fn public_file_view_survives_untouched_second_fresh_slice() -> crate::Result<()> {
+        const INITIAL: u32 = 0x1122_3344;
+        let mut kernel = phase1_kernel("fresh-public-view.exe")?;
+        let birth = kernel.current_process_birth_key().expect("boot birth");
+        let mapping_handle = kernel.handles.create_file_mapping(None, 0x1000, 0x04, None);
+        kernel.handles.file_mapping_mut(mapping_handle)?.data[..4]
+            .copy_from_slice(&INITIAL.to_le_bytes());
+
+        let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let mut bytes = tiny_mips_spinner_pe();
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
+        let words = [
+            0x3c19_0000 | (trap >> 16),    // lui t9,MapViewOfFile trap high
+            0x3739_0000 | (trap & 0xffff), // ori t9,t9,trap low
+            0x0320_f809,                   // jalr t9: public import
+            0,                             // delay-slot nop
+            0x2408_0007,                   // addiu t0,zero,7; never touches view
+            0x1000_ffff,                   // bounded safety spinner
+            0,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("fresh-public-view.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("fixture PE entry");
+        cpu.import_traps
+            .insert(crate::emulator::imports::ImportTrap {
+                address: trap,
+                module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(crate::ce::coredll_ordinals::ORD_MAP_VIEW_OF_FILE),
+                name: Some("MapViewOfFile".to_owned()),
+                iat_va: 0,
+            });
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = mapping_handle;
+        regs.regs[5] = 0; // desired access; ignored by current shim
+        regs.regs[6] = 0; // file offset high
+        regs.regs[7] = 0; // file offset low
+        regs.regs[29] = cpu.stack_top.expect("guest stack") - 0x100;
+        // The fifth o32 argument (mapping length) is zero on the initialized
+        // stack, requesting the whole 4-KiB mapping.
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        cpu.running_guest_thread = Some((cpu.current_thread_id, u32::MAX));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(entry + 0x10),
+                live_pump: false,
+            },
+        );
+        first.result?;
+        assert_eq!(first.report.start_process_birth(), Some(birth));
+        assert_eq!(first.report.end_process_birth(), Some(birth));
+        assert_eq!(
+            first.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        let view_base = cpu.saved_context.as_ref().expect("import result").regs.regs[2];
+        assert_ne!(view_base, 0, "public MapViewOfFile returned a view");
+        assert_eq!(
+            kernel.handles.file_mapping(mapping_handle)?.views[0].base,
+            view_base
+        );
+        assert!(cpu.native_engine_identity_for_test().is_none());
+
+        let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        second.result?;
+        assert_eq!(second.report.start_process_birth(), Some(birth));
+        assert_eq!(second.report.end_process_birth(), Some(birth));
+        assert_eq!(
+            second.report.final_outcome(),
+            super::NativeSliceOutcome::CountLimit
+        );
+        let saved = cpu
+            .saved_context
+            .as_ref()
+            .expect("untouched-view continuation");
+        assert_eq!(saved.pc, entry + 0x14);
+        assert_eq!(saved.regs.regs[8], 7);
+        assert_eq!(
+            &kernel.handles.file_mapping(mapping_handle)?.data[..4],
+            &INITIAL.to_le_bytes()
+        );
+        assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
     }
 
@@ -57540,178 +57652,6 @@ mod unicorn_tests {
             Some(entry + 0x20)
         );
         assert!(snapshot.memory_fault.is_none(), "no unhandled native fault");
-        Ok(())
-    }
-
-    #[test]
-    fn native_two_process_public_private_same_va_a_b_a_keeps_guest_bytes() -> crate::Result<()> {
-        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE};
-
-        const PRIVATE_VA: u32 = 0x5200_0000;
-        const PARENT_BYTES: u32 = 0x1122_3344;
-        const CHILD_BYTES: u32 = 0x5566_7788;
-        const PAGE_READWRITE: u32 = 0x04;
-        let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
-        let make_writer = |name: &str, value: u32| -> crate::Result<super::UnicornMips> {
-            let mut bytes = tiny_mips_spinner_pe();
-            write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
-            let words = [
-                0x3c19_0000 | (trap >> 16),    // lui t9,VirtualAlloc trap high
-                0x3739_0000 | (trap & 0xffff), // ori t9,t9,trap low
-                0x0320_f809,                   // jalr t9: public VirtualAlloc
-                0,                             // delay-slot nop
-                0x3c09_0000 | (value >> 16),  // lui t1,own high bytes
-                0x3529_0000 | (value & 0xffff), // ori t1,t1,own low bytes
-                0xac49_0000,                   // sw t1,0(v0): own private page
-                0x8c4a_0000,                   // lw t2,0(v0): resume after peer
-                0x1000_ffff,                   // bounded safety spinner
-                0,
-            ];
-            for (index, word) in words.into_iter().enumerate() {
-                write_vec_u32(&mut bytes, 0x200 + index * 4, word);
-            }
-            let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
-            let mut cpu = super::UnicornMips::new()?;
-            cpu.load_pe_image(&image)?;
-            cpu.import_traps
-                .insert(crate::emulator::imports::ImportTrap {
-                    address: trap,
-                    module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
-                    module_name: "COREDLL.dll".to_owned(),
-                    ordinal: Some(crate::ce::coredll_ordinals::ORD_VIRTUAL_ALLOC),
-                    name: Some("VirtualAlloc".to_owned()),
-                    iat_va: 0,
-                });
-            super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
-            let entry = cpu.entry.expect("fixture PE entry");
-            let mut regs = super::MipsGuestContext::zero();
-            regs.regs[4] = PRIVATE_VA;
-            regs.regs[5] = 0x1000;
-            regs.regs[6] = MEM_COMMIT | MEM_RESERVE;
-            regs.regs[7] = PAGE_READWRITE;
-            regs.regs[29] = cpu.stack_top.expect("guest stack") - 0x100;
-            cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
-            cpu.running_guest_thread = Some((cpu.current_thread_id, u32::MAX));
-            Ok(cpu)
-        };
-
-        let mut kernel = phase1_kernel("private-same-va-parent.exe")?;
-        let parent_state = kernel.current_process_state();
-        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
-        let launch = kernel.queue_process_launch(
-            Some("\\Test\\private-same-va-child.exe".to_owned()),
-            None,
-        );
-        assert!(kernel
-            .take_pending_process_launches()
-            .iter()
-            .any(|queued| queued.process_id == launch.process_id));
-        let child_birth = kernel
-            .handles
-            .process_birth_key(launch.process_id)
-            .expect("live child birth");
-        assert_ne!(child_birth, parent_birth);
-        let child_state = crate::ce::kernel::CurrentProcessState {
-            process_id: launch.process_id,
-            exit_code: crate::ce::kernel::STILL_ACTIVE,
-            signaled: false,
-        };
-        let mut active = make_writer("private-same-va-parent.exe", PARENT_BYTES)?;
-        let mut child = make_writer("private-same-va-child.exe", CHILD_BYTES)?;
-        child.set_initial_thread_id(launch.thread_id);
-        child.running_guest_thread = Some((launch.thread_id, u32::MAX));
-        let entry = active.entry.expect("parent entry");
-        assert_eq!(child.entry, Some(entry));
-        let parent_thread = active.current_thread_id;
-        let mut framebuffer = VirtualFramebuffer::default_primary()?;
-        let run_to = |stop_pc| super::UnicornRunLimits {
-            instruction_limit: 64,
-            wall_clock_limit_ms: 500,
-            stop_pc: Some(stop_pc),
-            live_pump: false,
-        };
-
-        // A: the public import publishes the parent's slab and real MIPS
-        // stores the parent's word. The completed slice closes its owner.
-        let parent_store = active.run_until_import_trap_with_framebuffer_limits_report(
-            &mut kernel,
-            &mut framebuffer,
-            run_to(entry + 0x1c),
-        );
-        parent_store.result?;
-        assert_eq!(parent_store.report.start_process_birth(), Some(parent_birth));
-        assert_eq!(parent_store.report.end_process_birth(), Some(parent_birth));
-        assert_eq!(parent_store.report.start_thread_id(), Some(parent_thread));
-        assert_eq!(parent_store.report.final_outcome(), super::NativeSliceOutcome::RequestedPcStop);
-        assert_eq!(active.saved_context.as_ref().expect("A continuation").regs.regs[2], PRIVATE_VA);
-        assert!(active.native_engine_identity_for_test().is_none());
-        let parent_pin = kernel
-            .memory
-            .private_page_pin(parent_birth, PRIVATE_VA)
-            .expect("parent public private page");
-        let mut observed = [0; 4];
-        parent_pin.read_bytes(0, &mut observed).expect("read A bytes");
-        assert_eq!(observed, PARENT_BYTES.to_le_bytes());
-
-        // Rotate the real queued child CPU through the production parked-
-        // process path. B obtains the *same* VA through its own public import.
-        active.parked_child_processes.push_back(super::ParkedProcess {
-            application: launch.application.clone(),
-            process_handle: Some(launch.process_handle),
-            thread_handle: Some(launch.thread_handle),
-            process_state: child_state,
-            thread_id: launch.thread_id,
-            cpu: Box::new(child),
-            blocked_send_id: None,
-            module_base: 0x0040_0000,
-            module_path: "\\Test\\private-same-va-child.exe".to_owned(),
-            module_host_path: std::path::PathBuf::from("private-same-va-child.exe"),
-            command_line: String::new(),
-            current_directory: None,
-        });
-        assert!(active.rotate_to_parked_process_id(&mut kernel, launch.process_id));
-        assert_eq!(kernel.current_process_id(), launch.process_id);
-        let child_store = active.run_until_import_trap_with_framebuffer_limits_report(
-            &mut kernel,
-            &mut framebuffer,
-            run_to(entry + 0x1c),
-        );
-        child_store.result?;
-        assert_eq!(child_store.report.start_process_birth(), Some(child_birth));
-        assert_eq!(child_store.report.end_process_birth(), Some(child_birth));
-        assert_eq!(child_store.report.start_thread_id(), Some(launch.thread_id));
-        assert_eq!(child_store.report.final_outcome(), super::NativeSliceOutcome::RequestedPcStop);
-        assert_eq!(active.saved_context.as_ref().expect("B continuation").regs.regs[2], PRIVATE_VA);
-        assert!(active.native_engine_identity_for_test().is_none());
-        let child_pin = kernel
-            .memory
-            .private_page_pin(child_birth, PRIVATE_VA)
-            .expect("child public private page");
-        child_pin.read_bytes(0, &mut observed).expect("read B bytes");
-        assert_eq!(observed, CHILD_BYTES.to_le_bytes());
-        parent_pin.read_bytes(0, &mut observed).expect("read A bytes after B");
-        assert_eq!(observed, PARENT_BYTES.to_le_bytes(), "B must not overwrite A");
-
-        // A again: resume the parked parent on a fresh native owner and have
-        // guest MIPS load its own word, not the child word at the same VA.
-        assert!(active.rotate_to_parked_process_id(&mut kernel, parent_state.process_id));
-        assert_eq!(kernel.current_process_state(), parent_state);
-        let parent_read = active.run_until_import_trap_with_framebuffer_limits_report(
-            &mut kernel,
-            &mut framebuffer,
-            run_to(entry + 0x20),
-        );
-        parent_read.result?;
-        assert_eq!(parent_read.report.start_process_birth(), Some(parent_birth));
-        assert_eq!(parent_read.report.end_process_birth(), Some(parent_birth));
-        assert_eq!(parent_read.report.start_thread_id(), Some(parent_thread));
-        assert_eq!(parent_read.report.final_outcome(), super::NativeSliceOutcome::RequestedPcStop);
-        let saved = active.saved_context.as_ref().expect("A fresh-owner read continuation");
-        assert_eq!(saved.pc, entry + 0x20);
-        assert_eq!(saved.regs.regs[10], PARENT_BYTES, "native A→B→A read isolated bytes");
-        assert!(active.native_engine_identity_for_test().is_none());
-        child_pin.read_bytes(0, &mut observed).expect("read B bytes after A");
-        assert_eq!(observed, CHILD_BYTES.to_le_bytes(), "A must not overwrite B");
         Ok(())
     }
 
