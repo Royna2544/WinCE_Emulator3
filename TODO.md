@@ -19,7 +19,7 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    - Remaining numeric GWE producer-birth routing (window, broadcast,
      HWND-owned timer, keyboard, remote-input, sent, paint and modal paths);
      the bounded thread-post and HWND-less timer gates are in `PROGRESS.md`.
-     The independently reviewed [W-B1 window-owner design](docs/evidence/window-owner-birth-design-20261015.md)
+     The independently reviewed [W-B1 window-owner contract](docs/subsystems/gwe-messaging.md#w-b1-window-owner-birth-reviewed-not-source-tested)
      is not yet a source gate; implement W-B1a expected-red before W-B1b.
    - Native continuation payload ownership, task-owned concurrent SMT frames,
      the SMT global expiry-as-ready ambiguity and receiver-side
