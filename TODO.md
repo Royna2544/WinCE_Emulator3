@@ -30,10 +30,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    verifies captured birth before timer pumping/publication and the paired
    live owner before input or handle wake consumption. The bounded
    [parked queue/socket gate](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
-   covers native MessageQueueIo/WinsockRead birth ownership; next migrate
-   serial and SendMessage blocked payloads. Raw synchronous/nonblocking
-   queue/socket paths, opaque non-task pins, generic parked-wait closure and
-   caller parity remain separate. O-K3 execution and registered Thread/Process
+   covers native MessageQueueIo/WinsockRead birth ownership. The bounded
+   [parked serial gate](evidence/stage3-serial-birth-20261015/validation.receipt.md)
+   covers native SerialRead/SerialCommEvent birth ownership before host RX
+   polling, wait publication and paired wake/timeout completion; next migrate
+   SendMessage and other blocked payloads. Raw synchronous/nonblocking
+   queue/socket paths, raw synchronous/nonblocking/overlapped serial paths,
+   opaque non-task pins, generic parked-wait closure and caller parity remain
+   separate. O-K3 execution and registered Thread/Process
    wait-target pins passed a bounded source gate
    ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); opaque
    non-task wait slots remain compatibility-only and unpinned. The subsequent

@@ -15,8 +15,9 @@ references for historical reconstruction.
   the focused 120/0 scheduler suite passed. The bounded
   [source gate](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
   passed 1,901/0/9 ignored release and 1,395/0/3 ignored no-feature tests,
-  Unicorn-only/no-trace/all-target checks, and preserves the matching EXE/PDB
-  pair. Raw synchronous/nonblocking queue/socket paths, opaque non-task pins,
+  Unicorn-only/no-trace/all-target checks, retains hashed raw attempts for both
+  full suites, and preserves the matching EXE/PDB pair. Raw
+  synchronous/nonblocking queue/socket paths, opaque non-task pins,
   serial/SendMessage, full Stage 3 and live-app behavior remain unaccepted.
 
 ## 2026-10-15 Stage 3 parked MsgWait birth source slice
@@ -29,8 +30,11 @@ references for historical reconstruction.
   controls cover stale publication, inline timeout, input wake, due-timer
   delivery and normal verified resume. The bounded
   [source gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
-  passed 1,896/0/9 ignored release and 1,395/0/3 ignored no-feature tests,
-  no-trace/all-target checks, and preserves the matching EXE/PDB pair. Raw
+  recorded 1,896/0/9 ignored release and 1,395/0/3 ignored no-feature tests,
+  no-trace/all-target checks, and preserves the matching EXE/PDB pair. An
+  [evidence audit](evidence/stage3-msgwait-birth-20261015/validation.receipt.md#evidence-audit--2026-10-15)
+  found that raw full-suite logs were not retained for this exact source hash;
+  the reported tallies are not independently raw-log verified. Raw
   synchronous MsgWait paths, other parked payloads, full Stage 3 and live-app
   behavior remain unaccepted.
 

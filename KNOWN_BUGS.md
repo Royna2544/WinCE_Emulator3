@@ -103,10 +103,15 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   synchronous raw MsgWait paths remain outside that gate. The bounded
   [parked queue/socket source gate](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
   birth-verifies native MessageQueueIo/WinsockRead publication and paired
-  resume, but does not pin opaque queue/socket targets. Boot-main
+  resume, but does not pin opaque queue/socket targets. The bounded
+  [parked serial source gate](evidence/stage3-serial-birth-20261015/validation.receipt.md)
+  checks native SerialRead/SerialCommEvent birth before host RX polling,
+  publication and paired wake/timeout completion; opaque serial tokens remain
+  unpinned. Boot-main
   enumeration, aliasless Sleep-suspend, unpinned-worker lineage (currently
-  fails closed), serial/SendMessage and other parked-wait continuation, raw
-  synchronous/nonblocking queue/socket paths, clone relineage, complete GMS
+  fails closed), SendMessage and other parked-wait continuation, raw
+  synchronous/nonblocking queue/socket and synchronous/nonblocking/overlapped
+  serial paths, clone relineage, complete GMS
   reclamation and live-app behavior remain open. None of these
   bounded source gates is full Stage 3 acceptance.
 
