@@ -12742,7 +12742,14 @@ impl UnicornMips {
                 )
             }};
         }
-        if staged_saved_context.is_some() && staged_context_thread_birth.is_none() {
+        // A hook that deliberately terminates the attempt may invalidate the
+        // native register marker. Report its latched, more specific Backend
+        // error first; the generic provenance guard still covers unlatched
+        // stale contexts.
+        if staged_saved_context.is_some()
+            && staged_context_thread_birth.is_none()
+            && immediate_process_sync_failure.is_none()
+        {
             tracing::error!(
                 target: "ce.scheduler",
                 executed_thread_id,
@@ -21000,16 +21007,13 @@ fn try_block_for_send_message_timeout_wait<D>(
         {
             retire_stale_send_message_timeout_wait(kernel, &blocked);
             *blocked_smt.borrow_mut() = None;
-            stop_native_opaque_wait_error(
-                uc,
-                current_thread_id,
-                terminal_error,
+            tracing::error!(
+                target: "ce.gwe",
+                wait_id = blocked.wait_id,
                 thread_id,
-                format!(
-                    "SendMessageTimeout wait {} has stale re-entry before reply or deadline",
-                    blocked.wait_id
-                ),
+                "retired stale SendMessageTimeout re-entry before consuming reply or deadline"
             );
+            let _ = uc.emu_stop();
             return true;
         }
         let now_ms = kernel.timers.tick_count();
@@ -54825,6 +54829,14 @@ fn try_enter_dispatch_message_callout<D>(
 }
 
 #[cfg(feature = "unicorn")]
+#[cfg(test)]
+std::thread_local! {
+    /// One-shot control for the receiver-context send's post-publication
+    /// register-write rollback. Thread-local so parallel tests cannot trip it.
+    static TEST_FAIL_NEXT_RECEIVER_SEND_WNDPROC_REGISTERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_send_message_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -55281,7 +55293,8 @@ fn try_enter_send_message_callout<D>(
         pending_wndproc_returns = pending_returns.borrow().len(),
         "pushed SendMessage WNDPROC callout"
     );
-    if write_wndproc_call_registers(
+    let sender_pc_before_callout = read_mips_reg(uc, RegisterMIPS::PC);
+    let registers_written = write_wndproc_call_registers(
         uc,
         hwnd,
         msg,
@@ -55289,20 +55302,28 @@ fn try_enter_send_message_callout<D>(
         lparam,
         wndproc,
         WNDPROC_RETURN_STUB_ADDR,
-    ) {
+    );
+    #[cfg(test)]
+    let registers_written = registers_written
+        && !(should_receiver_context
+            && TEST_FAIL_NEXT_RECEIVER_SEND_WNDPROC_REGISTERS.with(|fault| fault.replace(false)));
+    if registers_written {
         true
     } else {
         if let Some(callout) = pending_returns.borrow_mut().pop() {
             if let Some(restore) = callout.send_restore {
-                let _ = kernel.complete_active_sent_message(restore.receiver_thread_id, 0);
-                let _ = kernel.take_completed_send_message_result(restore.send_id);
-                if let Some(index) = blocked_waits
+                retire_exact_opaque_send(
+                    kernel,
+                    restore.send_id,
+                    Some(restore.receiver_thread_id),
+                );
+                let _ = kernel.remove_blocked_waiter(restore.wait_id);
+                let blocked_index = blocked_waits
                     .borrow()
                     .iter()
-                    .position(|blocked| blocked.wait_id == restore.wait_id)
-                {
+                    .position(|blocked| blocked.wait_id == restore.wait_id);
+                if let Some(index) = blocked_index {
                     let blocked = blocked_waits.borrow_mut().remove(index);
-                    let _ = kernel.remove_blocked_waiter(blocked.wait_id);
                     let previous_running_thread = match blocked.kind {
                         BlockedWaitKind::SendMessage {
                             previous_running_thread,
@@ -55311,15 +55332,26 @@ fn try_enter_send_message_callout<D>(
                         _ => None,
                     };
                     restore_mips_gprs(uc, &blocked.regs);
+                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(sender_pc_before_callout));
                     *running_thread.borrow_mut() = previous_running_thread
                         .or_else(|| blocked_running_thread(kernel, &blocked));
                 }
-                current_thread_id.set_unverified(restore.sender_thread_id);
                 let _ = update_user_kdata_current_ids(
                     uc,
                     restore.sender_thread_id,
                     kernel.current_process_id(),
                 );
+                stop_native_opaque_wait_error(
+                    uc,
+                    current_thread_id,
+                    terminal_error,
+                    restore.sender_thread_id,
+                    format!(
+                        "receiver-context SendMessage {} callout register write failed",
+                        restore.send_id
+                    ),
+                );
+                return true;
             } else if let Some(thread_id) = callout.send_thread_id {
                 kernel.gwe.end_send_message(thread_id);
             }
@@ -75829,12 +75861,20 @@ mod unicorn_tests {
             .unwrap();
         uc.reg_write(RegisterMIPS::S0, 0x7777_0001).unwrap();
 
-        let current_thread_id = Rc::new(super::NativeCurrentThread::new(sender_thread, None));
+        let sender_birth = kernel
+            .handles
+            .thread_birth_key_by_id(sender_thread)
+            .expect("boot sender birth");
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+            sender_thread,
+            Some(sender_birth),
+        ));
         let running_thread = Rc::new(RefCell::new(Some((sender_thread, 0x0000_0120))));
         let blocked_waits = Rc::new(RefCell::new(Vec::new()));
         let pending = Rc::new(RefCell::new(Vec::new()));
         let parked = Rc::new(RefCell::new(VecDeque::new()));
         let cross_process_send_yield = Rc::new(RefCell::new(None));
+        let terminal_error = RefCell::new(None);
         assert!(super::try_enter_send_message_callout(
             &mut kernel,
             &mut uc,
@@ -75850,9 +75890,10 @@ mod unicorn_tests {
             &pending,
             &parked,
             &cross_process_send_yield,
-            &std::cell::RefCell::new(None),
+            &terminal_error,
         ));
 
+        assert!(terminal_error.borrow().is_none());
         assert_eq!(current_thread_id.get().0, receiver_thread);
         assert_eq!(
             *running_thread.borrow(),
@@ -75905,6 +75946,98 @@ mod unicorn_tests {
             Some(restore.send_id)
         );
         assert!(kernel.gwe.sent_message(restore.send_id).is_some());
+    }
+
+    #[test]
+    fn receiver_context_send_register_failure_rolls_back_exact_send_and_stops() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sender_thread = 1;
+        let (_receiver_handle, receiver_thread) =
+            kernel.create_guest_thread(0x0040_3000, 0, false);
+        let hwnd = kernel.create_window_ex_w(receiver_thread, "CROSS_SEND", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, 0x0001_3570);
+        let unrelated_send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                hwnd,
+                crate::ce::gwe::WM_USER + 87,
+                0,
+                0,
+                None,
+            )
+            .expect("neighboring queued send");
+        let sender_birth = kernel
+            .handles
+            .thread_birth_key_by_id(sender_thread)
+            .expect("boot sender birth");
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+            sender_thread,
+            Some(sender_birth),
+        ));
+        let running_thread = Rc::new(RefCell::new(Some((sender_thread, 0x0000_0120))));
+        let blocked_waits = Rc::new(RefCell::new(Vec::new()));
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let cross_process_send_yield = Rc::new(RefCell::new(None));
+        let terminal_error = RefCell::new(None);
+        let original_regs = [
+            (RegisterMIPS::PC, 0x0040_8880_u64),
+            (RegisterMIPS::RA, 0x0040_1000),
+            (RegisterMIPS::V0, 0xa5a5_1234),
+            (RegisterMIPS::SP, 0x0030_0000),
+            (RegisterMIPS::A0, 0x1111_1111),
+            (RegisterMIPS::A1, 0x2222_2222),
+            (RegisterMIPS::A2, 0x3333_3333),
+            (RegisterMIPS::A3, 0x4444_4444),
+            (RegisterMIPS::T9, 0x5555_5555),
+        ];
+        for &(register, value) in &original_regs {
+            uc.reg_write(register, value).unwrap();
+        }
+
+        // Fail only after the native call registers were actually written,
+        // exercising restoration and cancellation after B was activated.
+        super::TEST_FAIL_NEXT_RECEIVER_SEND_WNDPROC_REGISTERS
+            .with(|fault| assert!(!fault.replace(true)));
+        assert!(super::try_enter_send_message_callout(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W),
+            &[hwnd, crate::ce::gwe::WM_USER + 88, 0x55, 0x66],
+            sender_thread,
+            &[],
+            &current_thread_id,
+            &running_thread,
+            &blocked_waits,
+            &pending,
+            &parked,
+            &cross_process_send_yield,
+            &terminal_error,
+        ));
+        super::TEST_FAIL_NEXT_RECEIVER_SEND_WNDPROC_REGISTERS
+            .with(|fault| assert!(!fault.get()));
+
+        assert!(matches!(
+            terminal_error.borrow().as_ref(),
+            Some(crate::error::Error::Backend(reason))
+                if reason.contains("callout register write failed")
+        ));
+        assert_eq!(current_thread_id.get(), (sender_thread, None));
+        assert_eq!(*running_thread.borrow(), Some((sender_thread, 0x120)));
+        assert!(blocked_waits.borrow().is_empty());
+        assert_eq!(kernel.blocked_waiters().count(), 0);
+        assert!(pending.borrow().is_empty());
+        assert!(cross_process_send_yield.borrow().is_none());
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
+        assert!(kernel.gwe.sent_message(unrelated_send_id).is_some());
+        assert!(kernel.gwe.sent_message(unrelated_send_id + 1).is_none());
+        for &(register, value) in &original_regs {
+            assert_eq!(uc.reg_read(register).unwrap(), value, "{register:?}");
+        }
     }
 
     #[test]
@@ -79008,7 +79141,8 @@ mod unicorn_tests {
             Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
         kernel.threads.set_last_error(thread_id, 0x1234_5678);
 
-        assert!(super::test_block_for_send_message_timeout_wait(
+        let stale_terminal = RefCell::new(None);
+        assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -79019,7 +79153,10 @@ mod unicorn_tests {
             &current_thread_id,
             &blocked_smt,
             &running_thread,
+            &stale_terminal,
         ));
+        assert!(matches!(stale_terminal.borrow().as_ref(), Some(Error::Backend(_))));
+        assert_eq!(current_thread_id.get(), (thread_id, None));
         assert!(blocked_smt.borrow().is_none());
         assert_eq!(kernel.blocked_waiters().count(), 0);
         assert!(kernel.gwe.sent_message(1).is_none());
@@ -79079,7 +79216,8 @@ mod unicorn_tests {
 
         current_thread_id.set_verified(new_birth);
         *running_thread.borrow_mut() = Some((thread_id + 100, new_handle));
-        assert!(super::test_block_for_send_message_timeout_wait(
+        let mismatch_terminal = RefCell::new(None);
+        assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -79090,10 +79228,16 @@ mod unicorn_tests {
             &current_thread_id,
             &blocked_smt,
             &running_thread,
+            &mismatch_terminal,
         ));
+        assert!(matches!(mismatch_terminal.borrow().as_ref(), Some(Error::Backend(_))));
+        assert_eq!(current_thread_id.get(), (thread_id, None));
         assert!(blocked_smt.borrow().is_none());
         assert!(kernel.gwe.sent_message(1).is_none());
 
+        // A terminal native attempt cannot be reused. This next fixture is a
+        // separately staged B attempt after the rejected running metadata.
+        current_thread_id.set_verified(new_birth);
         assert!(kernel.close_handle(new_handle)?);
         assert!(kernel.handles.thread_execution_live_by_id(thread_id));
         *running_thread.borrow_mut() = Some((thread_id, new_handle));
