@@ -7,17 +7,9 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Only after fresh human approval and fresh adjacent ZIP backups of the
-   original SD, ResidentFlash and emulator-root writable mounts, re-run the
-   bounded iNavi comparison on the E-37 build. The O-P4 EXE run
-   failed at 2.9 s (`evidence/e22-live-20261014T041105Z`). Compare sampled
-   host memory, busy-slice guest MIPS, fixed per-slice setup cost and guest/map
-   progress with the persistent-owner runs (about 1.5 GiB; E-22, E-27, E-29)
-   and BED2 (E-1); retain exact binary, input and run evidence. The
-   source-bound E-37 suite alone is not live acceptance.
-1. Then finish the remaining D-008 families: real native E-20 two-PID same-VA
+0. Finish the remaining D-008 families: real native E-20 two-PID same-VA
    A→B→A byte isolation, shared file views on slabs, and image/heap blobs.
-2. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
+1. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
 ## Parallel lanes (never gate the queue above)
@@ -63,9 +55,6 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 
 ## Next
 
-- Make `GlobalMemoryStatus` report from the configured guest physical RAM
-  setting rather than its current 64 MiB total / 48 MiB available constants;
-  give that change its own public API test after the E-35 private-slab gate.
 - Add raw/non-Unicorn loader fixture variants for loader paths where Unicorn
   runtime coverage is currently stronger.
 - Expand PE icon/resource tests for uncommon formats, malformed resource tables,

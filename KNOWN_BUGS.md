@@ -28,8 +28,10 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   still zero failed reads and drop write errors; o32 float-return restore sites
   are unaudited (CPU page, E-12 follow-ups).
 - E-35 public private slabs and E-36 source-bound fresh-per-slice default are
-  validated, but the only post-switch iNavi run failed at 2.9 s (entry above)
-  and measured neither memory nor map readiness. Real native two-process A→B→A byte isolation and shared-view slab
+  validated. The first post-switch iNavi run failed at 2.9 s on mapped-view
+  readback; E-37 repaired that path and the separately approved E-38 run
+  survived 330 s at 430.676 MiB sampled RSS, but remained on the splash with
+  no map. Real native two-process A→B→A byte isolation and shared-view slab
   coherence remain unproved. A same-PID DIB view without VA metadata can Flush
   but not Unmap; the immediate CreateProcess view-sync failure path has no
   fault injection. `VirtualAllocEx`/`VirtualQueryEx` name exports remain
@@ -52,11 +54,17 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   but global allocation metadata lacks authoritative private-process ownership,
   immutable reservation footprint and incarnation identity needed for safe reuse.
   No free list, cross-process page reuse or speculative unmapping has landed.
-- Host footprint is too large. With the persistent owner as default, bounded
-  330 s runs peak at about 1.49-1.55 GiB working set (E-22, E-27, E-29), and
-  E-32 crashed at 1.65 GiB. The BED2 fresh-engine baseline peaked at 562-582
-  MiB (E-1). Translation arenas, guest blobs, file buffers and engine copies
-  are separate costs; virtual reservation is not resident RAM.
+- Host footprint and phase behavior still need work. Older persistent-owner
+  bounded 330 s runs peaked at about 1.49-1.55 GiB working set (E-22, E-27,
+  E-29), and E-32 crashed at 1.65 GiB. The preserved fresh-default E-37
+  executable peaked at 430.676 MiB in E-38, below BED2 E-1's 555.63 MiB
+  sampled peak, but both remained on the splash and the runs are not fully
+  input/host-matched. Fresh-default E-38 had 17.1 run-only MIPS across busy
+  slices of all guest processes, but **26.4 MIPS for iNavi**, inside E-9's
+  same-field hookless iNavi 22–34 range. A cold TCG cache per fresh owner
+  remains a possible, unisolated Stage 8 cost. Translation arenas, guest
+  blobs, file buffers and engine
+  copies are separate costs; virtual reservation is not resident RAM.
 - Gesture FIFO is fixed, but a real tap still took about 1.29 s from successful
   HTTP response to first guest wndproc delivery in the prior 330 s input test,
   and 1.62 s in the bounded-cache repeat.

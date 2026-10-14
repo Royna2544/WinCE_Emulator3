@@ -4,6 +4,33 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-38 Bounded E-37 Live Run and GMS Targeted Gate
+
+- A separate one-run approval and fresh adjacent SHA-verified ZIP backups
+  enabled a 330-second iNavi run of the **preserved E-37 release EXE**, not
+  later `target/` output. It exited 0 after 330.392 s, with no watchdog trip
+  or guest CPU error and a completed observer. The sampled RSS/private peaks
+  were **430.676/444.953 MiB**; the previous persistent 330-second runs
+  peaked around 1.49–1.54 GiB RSS. The first genuine iNavi SE splash appeared
+  at input-ready +4.967 s and stayed through the end; **no map** appeared.
+  Guest traces retained nine positive COM7 reads (2,262 B) and the tap's
+  down/up WNDPROC returns. The 1,714 busy slices give 17.120 weighted MIPS
+  and 7.278 ms setup+hooks per busy slice. This 17.120 MIPS counts `run_ms`
+  only, excluding setup; E-9's same-field hookless fresh-engine busy range
+  was 22–34 MIPS **for iNavi** in a different two-minute phase. E-38's
+  corresponding iNavi-only figure was **26.359 MIPS**, inside that range;
+  the overall 17.120 MIPS includes slower helper processes and does not
+  establish a regression. The prior persistent runs lack matched
+  per-slice profiles. The [E-38 receipt](evidence/e37-live-20261014T051228Z/analysis.receipt.md)
+  records authority, backup/bin hashes, timing, limits and caveats. That
+  launch approval is spent; map readiness and Stage 2 acceptance remain open.
+- The GMS follow-up charges boot-reserved physical RAM to the same private
+  commit budget it reports. Its focused no-feature release public API gate
+  passed **4/0/0**; no broad suite or app run was done for that later source.
+  The [GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)
+  records the source and raw-test hashes. Real native E-20 A→B→A and shared
+  file-view slabs remain separate gates.
+
 ## 2026-10-14 E-37 Fresh-Default View/Legacy-Page Sync
 
 - The first approved fresh-default iNavi run exited after 2.934 s with
