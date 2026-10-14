@@ -156,12 +156,17 @@ slab overlap instead of writing an unrelated persisted blob.
 
 This is an implementation inventory, not a frozen-source gate or live app
 result. Integrated clone/ownership, native host-write, readback, accounting
-and broad-suite checks are pending. A host-import write into an untouched
-reserved stack page is a required E-44 safety check; its behavior is not yet
-claimed. The global heap cursor and ownerless allocation metadata need O-M2
-birth-qualified authority before Stage 3. Heap spillover remains copy-backed;
-writable image sections and DLLs are separate later ownership slices. No
-E-44 iNavi, host RSS, speed or map-readiness result exists.
+and broad-suite checks are pending. The audited startup exact-output families
+(registry, time, geometry, find-data and module/path) route through guarded
+hooks with whole-span preflight. Unconverted direct-import outputs can still
+fail closed on a cold, untouched stack page; the shared sparse `ThreadStack`
+has no per-thread/slot low-water state. Only if an approved live run reaches
+that bypass should a per-thread/slot 128-KiB committed low-water be considered,
+tracked by slot and committing `[page(SP), slot_top)` contiguously. The global
+heap cursor and ownerless allocation metadata need O-M2 birth-qualified
+authority before Stage 3. Heap spillover remains copy-backed; writable image
+sections and DLLs are separate later ownership slices. No E-44 iNavi, host
+RSS, speed or map-readiness result exists.
 
 ## Target authority and permitted interfaces
 
