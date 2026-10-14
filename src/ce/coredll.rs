@@ -2905,38 +2905,29 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_EXIT_THREAD => {
             let exit_code = raw_arg(args, 0);
-            if let Some(handle) = kernel.guest_thread_handle_by_id(thread_id) {
-                kernel.mark_guest_thread_exited(handle, exit_code);
-            }
+            kernel.mark_guest_thread_exited_by_id(thread_id, exit_code);
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
         ORD_THREAD_BASE_FUNC => {
             // ThreadBaseFunc(pfnStartAddr, pvParam) — CE internal thread entry wrapper.
             // In emulation this is never dispatched directly by user code; treat as ExitThread(0).
-            if let Some(handle) = kernel.guest_thread_handle_by_id(thread_id) {
-                kernel.mark_guest_thread_exited(handle, 0);
-            }
+            kernel.mark_guest_thread_exited_by_id(thread_id, 0);
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
         ORD_THREAD_EXCEPTION_EXIT => {
             // ThreadExceptionExit(dwExitCode) — terminate thread on unhandled exception.
             let exit_code = raw_arg(args, 0);
-            if let Some(handle) = kernel.guest_thread_handle_by_id(thread_id) {
-                kernel.mark_guest_thread_exited(handle, exit_code);
-            }
+            kernel.mark_guest_thread_exited_by_id(thread_id, exit_code);
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
         ORD_TERMINATE_THREAD => {
             let handle = raw_arg(args, 0);
             let exit_code = raw_arg(args, 1);
-            let resolved = kernel
-                .guest_thread_id_for_handle(handle, thread_id)
-                .and_then(|tid| kernel.guest_thread_handle_by_id(tid));
-            if let Some(resolved_handle) = resolved {
-                kernel.mark_guest_thread_exited(resolved_handle, exit_code);
+            let resolved = kernel.guest_thread_id_for_handle(handle, thread_id);
+            if resolved.is_some_and(|tid| kernel.mark_guest_thread_exited_by_id(tid, exit_code)) {
                 kernel.threads.set_last_error(thread_id, 0);
                 Some(CoredllValue::Bool(true))
             } else {
@@ -5207,9 +5198,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             // FreeLibrary(hModule) then ExitThread(dwExitCode).
             free_library_raw(kernel, thread_id, raw_arg(args, 0));
             let exit_code = raw_arg(args, 1);
-            if let Some(handle) = kernel.guest_thread_handle_by_id(thread_id) {
-                kernel.mark_guest_thread_exited(handle, exit_code);
-            }
+            kernel.mark_guest_thread_exited_by_id(thread_id, exit_code);
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
@@ -31355,7 +31344,8 @@ fn create_thread_raw<M: CoredllGuestMemory>(
     let (handle, created_thread_id) =
         kernel.create_guest_thread(start_address, parameter, suspended);
     if !write_optional_count(kernel, memory, thread_id, thread_id_ptr, created_thread_id) {
-        let _ = kernel.close_handle(handle);
+        let discarded = kernel.discard_unpublished_guest_thread(handle, created_thread_id);
+        debug_assert!(discarded, "failed CreateThread must discard its unpublished birth");
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);

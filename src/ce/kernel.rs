@@ -6545,12 +6545,24 @@ impl CeKernel {
     }
 
     pub fn mark_guest_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {
-        let key = self.handles.thread_birth_key_for_handle(handle);
-        let success = self.handles.mark_thread_exited(handle, exit_code);
+        let Some(thread_id) = self.handles.thread_id(handle) else {
+            return false;
+        };
+        self.mark_guest_thread_exited_by_id(thread_id, exit_code)
+    }
+
+    pub fn mark_guest_thread_exited_by_id(&mut self, thread_id: u32, exit_code: u32) -> bool {
+        let key = self.handles.thread_birth_key_by_id(thread_id);
+        let success = self.handles.mark_thread_exited_by_id(thread_id, exit_code);
         if success && let Some(key) = key {
             self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
         }
         success
+    }
+
+    /// Roll back a newly created worker before its handle is made public.
+    pub fn discard_unpublished_guest_thread(&mut self, handle: u32, thread_id: u32) -> bool {
+        self.handles.discard_unpublished_thread(handle, thread_id)
     }
 
     pub fn guest_thread_id(&self, handle: u32) -> Option<u32> {

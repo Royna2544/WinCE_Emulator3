@@ -786,6 +786,31 @@ impl HandleTable {
         }))
     }
 
+    /// Undo a birth whose only alias has not yet been returned to the guest.
+    /// A failed CreateThread output write must not leave an execution-live
+    /// record that a later OpenThread can discover.
+    pub fn discard_unpublished_thread(&mut self, handle: u32, thread_id: u32) -> bool {
+        let Some(KernelObject::Thread(alias)) = self.objects.get(&handle) else {
+            return false;
+        };
+        if alias.thread_id != thread_id {
+            return false;
+        }
+        let Some(record) = self.threads.get(&thread_id) else {
+            return false;
+        };
+        if record.incarnation != alias.incarnation
+            || record.aliases.len() != 1
+            || !record.aliases.contains(&handle)
+            || !record.execution_live
+        {
+            return false;
+        }
+        self.objects.remove(&handle);
+        self.threads.remove(&thread_id);
+        true
+    }
+
     pub fn create_file_mapping(
         &mut self,
         name: Option<String>,

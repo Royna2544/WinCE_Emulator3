@@ -5,7 +5,10 @@ use wince_emulation_v3::{
     Result,
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllValue},
-        coredll_ordinals::{ORD_GET_PROCESS_ID_OF_THREAD, ORD_OPEN_PROCESS, ORD_OPEN_THREAD},
+        coredll_ordinals::{
+            ORD_CREATE_THREAD, ORD_EXIT_THREAD, ORD_GET_PROCESS_ID_OF_THREAD, ORD_OPEN_PROCESS,
+            ORD_OPEN_THREAD,
+        },
         kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CeKernel},
     },
     config::RuntimeConfig,
@@ -44,6 +47,67 @@ fn open_thread_returns_independent_alias_to_same_live_task() -> Result<()> {
     assert_eq!(kernel.guest_thread_id(original), Some(tid));
     kernel.close_handle(original)?;
     assert_eq!(kernel.guest_thread_handle_by_id(tid), None);
+    Ok(())
+}
+
+#[test]
+fn failed_create_thread_output_does_not_publish_a_live_birth() -> Result<()> {
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let (_, preceding_tid) = kernel.create_guest_thread(0x1234, 0, false);
+    let unpublished_tid = preceding_tid.checked_add(1).expect("test TID range");
+    let mut memory = TestGuestMemory::default();
+    let invalid_nonnull_tid_ptr = 0x7000;
+    let result = CoredllExportTable::default().dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        1,
+        ORD_CREATE_THREAD,
+        [0, 0, 0x5678, 0, 0, invalid_nonnull_tid_ptr],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.handles.thread_birth_key_by_id(unpublished_tid), None);
+    assert_eq!(kernel.open_thread_handle(unpublished_tid), None);
+    Ok(())
+}
+
+#[test]
+fn exit_thread_retires_live_birth_after_last_public_alias_closes() -> Result<()> {
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let (only_handle, tid) = kernel.create_guest_thread(0x1234, 0, false);
+    let birth = kernel
+        .handles
+        .thread_birth_key_by_id(tid)
+        .expect("live worker birth");
+    assert!(kernel.close_handle(only_handle)?);
+    assert_eq!(kernel.guest_thread_handle_by_id(tid), None);
+    assert!(kernel.handles.contains_thread_birth(birth));
+
+    let mut memory = TestGuestMemory::default();
+    let result = CoredllExportTable::default().dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        tid,
+        ORD_EXIT_THREAD,
+        [0x7654],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(
+        !kernel.handles.contains_thread_birth(birth),
+        "normal ExitThread must release execution ownership without a public alias"
+    );
+    assert_eq!(kernel.open_thread_handle(tid), None);
     Ok(())
 }
 
