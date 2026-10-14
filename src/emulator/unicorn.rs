@@ -108,13 +108,12 @@ fn should_repair_native_deadline_jr_import_thunk(
     native_result_ok: bool,
     requested_pc_stop: bool,
     outcome: NativeSliceOutcome,
-    _typed_hook_stop_reason: Option<NativeHookStopReason>,
-    debug_marker_present: bool,
+    typed_hook_stop_reason: Option<NativeHookStopReason>,
 ) -> bool {
     native_result_ok
         && !requested_pc_stop
         && outcome == NativeSliceOutcome::NativeDeadline
-        && !debug_marker_present
+        && typed_hook_stop_reason.is_none()
 }
 
 #[cfg(all(test, feature = "unicorn"))]
@@ -10556,7 +10555,6 @@ impl UnicornMips {
             native_requested_pc_stop.is_some(),
             self.last_native_slice_outcome,
             native_hook_stop_reason.get(),
-            host_wall_clock_stop.borrow().is_some(),
         ) {
             let mut pc = read_mips_reg(&uc, RegisterMIPS::PC);
             if let Some(target) =
@@ -10588,11 +10586,14 @@ impl UnicornMips {
         let mut snapshot_pc = read_mips_reg(&uc, RegisterMIPS::PC);
         if native_requested_pc_stop.is_none()
             && post_run_pc_repair_error.is_none()
+            && native_hook_stop_reason.get().is_none()
             && let Some(target) = import_trap_page_target_for_mips_jr_thunk(&uc, snapshot_pc)
         {
             match uc.reg_write(RegisterMIPS::PC, u64::from(target)) {
                 Ok(()) => {
                     snapshot_pc = target;
+                    // Keep an existing historical debug record in sync; its
+                    // presence is not authority to choose a PC repair.
                     if has_typed_repair_stop && host_wall_clock_stop.borrow().is_some() {
                         let elapsed_ms = host_wall_clock_stop.borrow().as_ref().map_or_else(
                             || host_wall_clock_started.elapsed().as_millis() as u64,
@@ -10631,6 +10632,7 @@ impl UnicornMips {
                 match uc.reg_write(RegisterMIPS::PC, u64::from(restart_pc)) {
                     Ok(()) => {
                         snapshot_pc = restart_pc;
+                        // This updates only a previously recorded debug stop.
                         if host_wall_clock_stop.borrow().is_some() {
                             let elapsed_ms = host_wall_clock_stop.borrow().as_ref().map_or_else(
                                 || host_wall_clock_started.elapsed().as_millis() as u64,
@@ -56769,7 +56771,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: typed peer-yield plus real timeout needs an end-to-end JR continuation control"]
     fn native_deadline_jr_repair_must_not_override_typed_safe_hook_stop() {
         use super::{NativeHookStopReason, NativeSliceOutcome};
 
@@ -56779,42 +56780,36 @@ mod unicorn_tests {
             false,
             NativeSliceOutcome::NativeDeadline,
             None,
-            false,
         ));
         assert!(!should_repair(
             false,
             false,
             NativeSliceOutcome::NativeDeadline,
             None,
-            false,
         ));
         assert!(!should_repair(
             true,
             true,
             NativeSliceOutcome::NativeDeadline,
             None,
-            false,
         ));
         assert!(!should_repair(
             true,
             false,
             NativeSliceOutcome::HookStop(NativeHookStopReason::HostWallBudget),
             Some(NativeHookStopReason::HostWallBudget),
-            false,
         ));
         assert!(!should_repair(
             true,
             false,
             NativeSliceOutcome::NativeDeadline,
-            None,
-            true,
+            Some(NativeHookStopReason::HostWallBudget),
         ));
         assert!(!should_repair(
             true,
             false,
             NativeSliceOutcome::NativeError,
             None,
-            false,
         ));
 
         assert!(
@@ -56823,9 +56818,8 @@ mod unicorn_tests {
                 false,
                 NativeSliceOutcome::NativeDeadline,
                 Some(NativeHookStopReason::VisibleParkedPeerYield),
-                false,
             ),
-            "a typed safe peer yield must not be overridden by a concurrent native deadline even when it has no debug marker"
+            "a typed safe peer yield must not be overridden by a concurrent native deadline"
         );
     }
 
@@ -56835,7 +56829,6 @@ mod unicorn_tests {
     /// deadline-only debug marker or rewriting the peer's raw JR continuation;
     /// resuming that continuation must dispatch the real import exactly once.
     #[test]
-    #[ignore = "expected red: E-34 mixed real-MIPS peer yield/native deadline still rewrites the checked JR continuation"]
     fn mixed_native_deadline_visible_peer_yield_preserves_checked_jr_continuation()
     -> crate::Result<()> {
         use super::{AttemptObservation, NativeHookStopReason, NativeMixedJrStopProbe};
