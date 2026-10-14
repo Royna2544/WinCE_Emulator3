@@ -36,6 +36,12 @@ One per-TID FIFO keeps each post's exact-birth, fixture-only legacy-unknown or u
 Get/Peek, status/new-input, timestamp, wait wake/readiness and exact exit use birth-eligible state; A retirement preserves B and unscoped work, while window-originated status remains compatibility state.
 Unknown-target return/LastError parity, window/broadcast/HWND-owned-timer/keyboard/remote/sent/paint/modal producer births and full GWES/live iNavi acceptance remain open. [Thread-post receipt](../../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md): release 1,952/0/9; no-feature 1,417/0/3. [HWND-less timer receipt](../../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md): release 1,960/0/9; no-feature 1,424/0/3.
 
+The next [window-owner birth design](../evidence/window-owner-birth-design-20261015.md)
+has completed independent contract review, but has no source implementation or
+runtime result. W-B1a is limited to checked guest window creation, explicit
+HWND posts, frozen typed-recipient authority and post-only exit isolation;
+remote input and owner-filtered teardown remain W-B1b.
+
 ## Failure and lifetime rules
 
 Preserve the existing prepare-before-consume boundary: preflight mapped writable MSG output, map/init persistent guest payload, then consume the exact message/send ID and expose its pointer. A missing destination-memory context must retain typed work for a real resume path, not deliver a host placeholder. Queue expiry/replacement between peek and commit must reject a mismatched ID without consuming its successor. Preparation failure preserves live queue/wait/caller state and authentic API failure; it is not an unhandled import fallthrough.

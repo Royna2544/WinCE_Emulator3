@@ -75,10 +75,11 @@ Build-environment traps (see also the repo-external notes in your memory):
 
 - `unicorn-engine-sys` (cmake + bindgen) rebuilds from scratch after any
   toolchain change. bindgen needs `LIBCLANG_PATH` (here:
-  `C:\Program Files\doxygen\bin`). The LLVM 23 copy at
-  `D:\GitHub\llvm-proj\build\bin\libclang.dll` also loads if that `bin`
-  directory is prepended to `PATH` as well as set in `LIBCLANG_PATH`;
-  `LIBCLANG_PATH` alone does not resolve its sibling `z.dll`/`zstd.dll`.
+  `C:\Program Files\doxygen\bin`). A user-supplied LLVM 23 copy at
+  `D:\GitHub\llvm-proj\build\bin\libclang.dll` existed on 2026-10-15 but
+  disappeared during validation; its first load also needed sibling DLLs on
+  `PATH`. Do not rely on that build-output path without checking it afresh.
+  The Doxygen copy compiled and ran the focused GWE tests in this checkout.
   The upstream cmake post-build step uses
   `create_symlink`, which fails without symlink privilege. Do not change system
   settings. Per D-007, the in-repo `vendor/unicorn-engine-sys` patch now copies
