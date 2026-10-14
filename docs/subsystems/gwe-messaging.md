@@ -22,6 +22,13 @@ Design the facade around existing operations: post/filter/peek/commit one messag
 
 A send transaction needs its actual sender and receiver frame plus send ID. A raw HWND/TID or latest trace cannot authorize an old reply. Cross-address-space typed payloads must be materialized in the recipient space, not expose a sender pointer. Unknown application-defined LPARAM values require an explicit ABI compatibility contract; do not reinterpret every integer as a pointer.
 
+Occupied native SMT slot: when A owns its one parked frame, an eligible B
+cross-thread send terminates the attempt with `Backend` error, without raw
+dispatch, B send/wait/result/register changes or disturbing A. Zero timeout,
+same-thread, invalid/destroyed/broadcast HWND, unsupported flags and hung
+`SMTO_ABORTIFHUNG` retain raw handling. This is not concurrent A+B support;
+per-task SMT frames remain required. Controls: `occupied_send_message_timeout_slot_fails_closed_for_second_sender`, `occupied_send_message_timeout_slot_preserves_raw_compatibility`.
+
 ## Failure and lifetime rules
 
 Preserve the existing prepare-before-consume boundary: preflight mapped writable MSG output, map/init persistent guest payload, then consume the exact message/send ID and expose its pointer. A missing destination-memory context must retain typed work for a real resume path, not deliver a host placeholder. Queue expiry/replacement between peek and commit must reject a mismatched ID without consuming its successor. Preparation failure preserves live queue/wait/caller state and authentic API failure; it is not an unhandled import fallthrough.

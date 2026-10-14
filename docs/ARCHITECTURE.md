@@ -148,6 +148,8 @@ Only the machine commits a task transition after context, memory and wait
 ownership validate. A nested callback can run while an outer wait remains;
 explicit suspension overlays ready/blocked state rather than erasing it.
 Do not infer CE suspension from the legacy SuspendedGuestThread queue name.
+Prepared waits revalidate their exact live task birth at publication; a stale
+candidate releases its prepared pins without becoming a scheduler frame.
 
 ## A4. Guest memory and publication
 

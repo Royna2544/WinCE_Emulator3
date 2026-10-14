@@ -19,6 +19,41 @@ In scope: authentic task birth/exit, runnable state, explicit suspension, waits,
 - [UnicornMips](../../src/emulator/unicorn.rs) owns numerous pending return, blocked wait/GetMessage/modal/send/clipboard, suspended context and parked process records. SuspendedGuestThread slot/queue often contains **ready displaced contexts**, not explicit SuspendThread state.
 - Persistent process engines are an experiment (ledger E-2) deferred to Stage 8; Task migration proceeds on the fresh-engine lifetime ([D-003](../DECISIONS.md)). Exact-scalar-key native snapshots are an initial migration, not full per-task native contexts.
 
+### Next bounded wait-owner gate (design, not implemented)
+
+Re-key the one authoritative `TaskWaitStore` from numeric TID to
+`Birth(ThreadBirthKey) | LegacyUnknownTid(u32)`; the wait-ID map remains only a
+locator. The wait record's TID must equal its birth's TID. Preserve global
+wait-ID order, duplicate frames, deadlines and independent mutable clones.
+Known-birth exit cancellation uses the exact birth bucket; an unknown legacy
+wait is never promoted to a later task that reuses its TID.
+Unknown records can be retired by exact wait ID or an explicitly legacy-only
+cleanup, not by canonical task exit; numeric message hints remain a separate
+unmigrated boundary below.
+
+`PreparedTaskWait` must revalidate its captured live birth immediately before
+publication; stale publication fails without a record or wake index and its
+guard releases each acquired target pin. The seven native single/multiple/
+MsgWait publish sites preflight before old-state mutation and propagate an
+unexpected late failure as a terminal backend error, not guest `WAIT_FAILED`
+or a fabricated resume. Remove the broad numeric-TID sweep after modal
+process completion; exact process/thread exit and the modal wait ID already
+retire its owned waits. Modal-button GetMessage cancellation must select the
+requested dialog HWND (or exact modal wait ID), check its exact live birth,
+and match each cancelled wait's owner birth (unknown-only fixture compatibility). Opaque compatibility
+producers remain separately audited; this slice does not migrate their frames.
+
+Expected-red controls: prepared A→exit/TID-reused B→publish, unknown-A versus
+B exit/cancellation, exact A cancellation with duplicate pins/pending wake,
+modal completion and modal-button cancellation preserving B, and a native
+late-publication terminal error. Preserve order/clone/deadline controls.
+Numeric-TID message queues remain derived wake hints: B's edge can still queue
+A or unknown, though native consumption has separate exact-birth guards.
+Same-TID GetMessage wake/delivery needs a later GWE producer-birth migration;
+this slice does not claim it. Wait-ID wrap/reuse, checkpoint relineage and full
+O-T1/O-T3 TaskDirectory/frame decisions remain open. Review this connected
+contract before source edits; do not add a second registry or engine policy.
+
 ## Target ownership and state
 
 Canonical TaskDirectory stores creation identity, lifecycle metadata, base/effective priority, suspend depth, quantum state and frame ownership once. Public thread handles resolve to canonical identity; Kernel cannot retain writable copies as another truth. Boot registration need not publish a new guest-visible handle. Creation identity survives launch-queue drain, trace eviction, process rotation and external-handle closure.

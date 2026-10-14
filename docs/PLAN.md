@@ -209,6 +209,11 @@ close only their named gates, not Stage 2 or live acceptance.
   occupied native slot can still fall back to raw SMT, global expiry may be
   misreported as ready/success, and receiver-side `DestroyWindow` result
   writes and broader GWE lifecycle remain separate.
+  The next proposed structural Stage 3 gate is the exact-birth wait-owner
+  migration in [tasks-scheduler](subsystems/tasks-scheduler.md): one wait store,
+  fallible publication and exact-birth cancellation, including the broad
+  modal sweep and modal-button GetMessage removal. Numeric message wake hints
+  remain unsafe across TID reuse until a later GWE producer-birth gate.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE
