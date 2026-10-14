@@ -14456,6 +14456,7 @@ type ActivePrivatePageGuards = RefCell<BTreeMap<usize, StablePrivatePageExecutio
 #[derive(Clone, Copy, Default)]
 struct NativePrivateMapProfile {
     mapped_pages: u64,
+    native_map_calls: u64,
     rust_setup_ns: u128,
     native_region_query_ns: u128,
     mapped_range_query_ns: u128,
@@ -14617,6 +14618,7 @@ fn map_private_slab_page<D>(
         if let Some(profile) = slot.borrow_mut().as_mut() {
             let total = profile_started.elapsed();
             profile.mapped_pages += 1;
+            profile.native_map_calls += 1;
             profile.rust_setup_ns += total.as_nanos() - mem_map_ptr_elapsed.as_nanos();
             profile.native_region_query_ns += native_region_query_elapsed.as_nanos();
             profile.mapped_range_query_ns += mapped_range_query_elapsed.as_nanos();
@@ -35427,11 +35429,23 @@ mod guest_thread_stack_tests {
             profile.mem_map_ptr_ns as f64 / 1_000_000.0,
             native_regions_before,
             native_regions_after,
-            profile.mapped_pages,
+            profile.native_map_calls,
         );
+        let native_close_started = std::time::Instant::now();
         drop(uc);
+        let native_close = native_close_started.elapsed();
+        let pins_drop_started = std::time::Instant::now();
         drop(guards);
         drop(pins);
+        println!(
+            "OM2_NATIVE_FRESH_MAP_TEARDOWN native_close_ms={:.3} pins_drop_ms={:.3}",
+            native_close.as_secs_f64() * 1000.0,
+            pins_drop_started.elapsed().as_secs_f64() * 1000.0,
+        );
+        assert!(
+            profile.native_map_calls <= 32,
+            "1-MiB block design should map a uniform 32-MiB heap in at most 32 native calls"
+        );
         Ok(())
     }
     #[test]
