@@ -272,6 +272,12 @@ pub struct ThreadBirthKey {
     incarnation: u64,
 }
 
+impl ThreadBirthKey {
+    pub fn thread_id(self) -> u32 {
+        self.thread_id
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ThreadHandleObject {
     thread_id: u32,
@@ -1020,6 +1026,12 @@ impl HandleTable {
         })
     }
 
+    pub fn process_execution_live_by_birth(&self, key: ProcessBirthKey) -> bool {
+        self.processes
+            .get(&key.process_id)
+            .is_some_and(|process| process.incarnation == key.incarnation && process.execution_live)
+    }
+
     fn process_for_alias(&self, alias: &ProcessHandleObject) -> Option<&ProcessObject> {
         self.processes
             .get(&alias.process_id)
@@ -1117,6 +1129,19 @@ impl HandleTable {
         self.thread_birth_key_by_id(key.thread_id) == Some(key)
     }
 
+    /// Snapshot every execution-owned thread for this exact process birth,
+    /// including workers whose final public alias was closed.
+    pub fn live_thread_births_for_owner(&self, owner: ProcessBirthKey) -> Vec<ThreadBirthKey> {
+        self.threads
+            .iter()
+            .filter(|(_, record)| record.execution_live && record.creation_owner == Some(owner))
+            .map(|(&thread_id, record)| ThreadBirthKey {
+                thread_id,
+                incarnation: record.incarnation,
+            })
+            .collect()
+    }
+
     pub fn open_thread(&mut self, thread_id: u32) -> Option<u32> {
         let key = self.thread_birth_key_by_id(thread_id)?;
         self.try_insert(KernelObject::Thread(ThreadHandleObject {
@@ -1145,6 +1170,16 @@ impl HandleTable {
         let aliases = process.aliases.iter().copied().collect();
         self.retire_process_if_unreferenced(process_id);
         Some(aliases)
+    }
+
+    pub fn finish_process_execution_by_birth(
+        &mut self,
+        key: ProcessBirthKey,
+        exit_code: u32,
+    ) -> Option<Vec<u32>> {
+        self.process_execution_live_by_birth(key)
+            .then(|| self.finish_process_execution_by_id(key.process_id, exit_code))
+            .flatten()
     }
 
     pub fn process_signaled_by_id(&self, process_id: u32) -> Option<bool> {
@@ -1366,6 +1401,10 @@ impl HandleTable {
         record.execution_live = false;
         self.retire_thread_if_unreferenced(thread_id);
         true
+    }
+
+    pub fn mark_thread_exited_by_birth(&mut self, key: ThreadBirthKey, exit_code: u32) -> bool {
+        self.contains_thread_birth(key) && self.mark_thread_exited_by_id(key.thread_id, exit_code)
     }
 
     pub fn thread_execution_live_by_id(&self, thread_id: u32) -> bool {

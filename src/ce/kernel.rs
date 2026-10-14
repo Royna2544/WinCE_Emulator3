@@ -26,8 +26,8 @@ use crate::{
             ApiHandleObject, ApiSetObject, CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject,
             FileChangeNotificationObject, FileChangeRecord, FileObject, FindFileObject,
             HandleTable, KernelObject, MAX_SUSPEND_COUNT, MAX_WIN32_PRIORITY_LEVELS,
-            MessageQueueHandleObject, ProcessBirthKey, ThreadObject, ThreadResumeResult,
-            ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
+            MessageQueueHandleObject, ProcessBirthKey, ThreadBirthKey, ThreadObject,
+            ThreadResumeResult, ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
             ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
@@ -811,6 +811,10 @@ pub struct PendingProcessLaunch {
     pub thread_handle: u32,
     pub process_id: u32,
     pub thread_id: u32,
+    /// Present for an original launch; legacy trace/parked reconstruction may
+    /// not be able to recover these immutable identities after alias closure.
+    pub process_birth: Option<ProcessBirthKey>,
+    pub primary_thread_birth: Option<ThreadBirthKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3081,6 +3085,10 @@ impl CeKernel {
             .handles
             .try_create_thread_in_birth(child_birth, thread_id, 0, 0, false)
             .expect("child primary thread birth allocation failed");
+        let primary_thread_birth = self
+            .handles
+            .thread_birth_key_for_handle(thread_handle)
+            .expect("new child primary thread birth");
         let launch = PendingProcessLaunch {
             application,
             command_line,
@@ -3090,6 +3098,8 @@ impl CeKernel {
             thread_handle,
             process_id,
             thread_id,
+            process_birth: Some(child_birth),
+            primary_thread_birth: Some(primary_thread_birth),
         };
         self.pending_process_launches.push(launch.clone());
         self.record_process_trace(ProcessTraceRecord {
@@ -3122,9 +3132,35 @@ impl CeKernel {
         exit_code: u32,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) {
-        // Capture the birth before execution completion can retire its last
-        // directory entry. Queued typed payloads and heap state share it.
-        let exiting_birth = self.handles.process_birth_key(launch.process_id);
+        // An original launch retains its exact birth even after both public
+        // aliases close. Reject a delayed completion after PID/TID reuse
+        // before it can touch windows, VM, or another process's workers.
+        let Some(exiting_birth) = self.handles.process_birth_key(launch.process_id) else {
+            return;
+        };
+        if !self.handles.process_execution_live_by_birth(exiting_birth) {
+            return;
+        }
+        if launch
+            .process_birth
+            .is_some_and(|birth| birth != exiting_birth)
+            || launch.primary_thread_birth.is_some_and(|primary| {
+                self.handles.contains_thread_birth(primary)
+                    && self
+                        .handles
+                        .thread_creation_owner_by_id(primary.thread_id())
+                        != Some(exiting_birth)
+            })
+        {
+            return;
+        }
+        let primary = launch.primary_thread_birth.or_else(|| {
+            self.handles
+                .thread_birth_key_by_id(launch.thread_id)
+                .filter(|key| {
+                    self.handles.thread_creation_owner_by_id(key.thread_id()) == Some(exiting_birth)
+                })
+        });
         let backing_store_targets =
             self.process_window_backing_store_targets(launch.process_id, launch.thread_id);
         self.destroy_process_windows(launch.process_id, launch.thread_id);
@@ -3133,41 +3169,36 @@ impl CeKernel {
         } else {
             self.discard_window_backing_stores(&backing_store_targets);
         }
-        if let Some(owner) = exiting_birth {
-            self.release_message_pointer_payloads_for_owner(owner);
-            self.delivered_typed_payload_messages
-                .retain(|(birth, _, _), _| *birth != owner);
-            self.module_heap_info_guest_ptrs.remove(&owner);
-            self.process_name_guest_ptrs.remove(&owner);
-            self.command_line_guest_ptrs.remove(&owner);
-        }
-        let process_key = self.handles.process_birth_key(launch.process_id);
-        let was_signaled = self.handles.process_signaled_by_id(launch.process_id);
-        if self
-            .handles
-            .finish_process_execution_by_id(launch.process_id, exit_code)
-            .is_some()
-        {
-            if let Some(owner) = exiting_birth {
-                // A retained native mapping pin keeps its page and budget
-                // alive until that owner's checked close; only canonical VM
-                // records are retired here.
-                self.memory.retire_fixed_private_ranges_for_owner(owner);
-                self.memory.retire_heap_state_for_owner(owner);
-            }
-            if was_signaled == Some(false)
-                && let Some(key) = process_key
+        self.release_message_pointer_payloads_for_owner(exiting_birth);
+        self.delivered_typed_payload_messages
+            .retain(|(birth, _, _), _| *birth != exiting_birth);
+        self.module_heap_info_guest_ptrs.remove(&exiting_birth);
+        self.process_name_guest_ptrs.remove(&exiting_birth);
+        self.command_line_guest_ptrs.remove(&exiting_birth);
+        if launch.process_birth == Some(exiting_birth) {
+            let _ = self.complete_process_execution_by_birth(exiting_birth, primary, exit_code);
+        } else {
+            // Legacy trace/parked reconstruction can lack a verifiable launch
+            // birth after alias closure. Preserve its prior primary-only
+            // completion behavior; do not widen an unverified PID lookup into
+            // a sweep of another birth's workers. The native handoff slice
+            // must carry exact keys through these reconstructed paths.
+            let was_signaled = self.handles.process_signaled_by_id(launch.process_id);
+            if self
+                .handles
+                .finish_process_execution_by_id(launch.process_id, exit_code)
+                .is_some()
             {
-                self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(key));
+                self.memory
+                    .retire_fixed_private_ranges_for_owner(exiting_birth);
+                self.memory.retire_heap_state_for_owner(exiting_birth);
+                if was_signaled == Some(false) {
+                    self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(
+                        exiting_birth,
+                    ));
+                }
             }
-        }
-        let thread_key = self.handles.thread_birth_key_by_id(launch.thread_id);
-        if self
-            .handles
-            .mark_thread_exited_by_id(launch.thread_id, exit_code)
-            && let Some(key) = thread_key
-        {
-            self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
+            let _ = self.mark_guest_thread_exited_by_id(launch.thread_id, exit_code);
         }
         self.record_process_trace(ProcessTraceRecord {
             op: "CreateProcessExited",
@@ -3182,6 +3213,46 @@ impl CeKernel {
             error: None,
             detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
         });
+    }
+
+    /// Complete one stopped process CPU's canonical Task and VM lifetime.
+    /// TerminateProcess remains a request; it must not call this while a guest
+    /// or native CPU continuation can still execute for the process.
+    fn complete_process_execution_by_birth(
+        &mut self,
+        owner: ProcessBirthKey,
+        primary: Option<ThreadBirthKey>,
+        exit_code: u32,
+    ) -> bool {
+        if !self.handles.contains_process_birth(owner) {
+            return false;
+        }
+        for thread in self.handles.live_thread_births_for_owner(owner) {
+            let thread_exit_code = if Some(thread) == primary {
+                exit_code
+            } else {
+                0
+            };
+            if !self.mark_guest_thread_exited_by_birth(thread, thread_exit_code) {
+                return false;
+            }
+        }
+        let was_signaled = self.handles.process_signaled_by_id(owner.process_id());
+        if self
+            .handles
+            .finish_process_execution_by_birth(owner, exit_code)
+            .is_none()
+        {
+            return false;
+        }
+        // A native mapping pin keeps its page and budget alive until checked
+        // native owner close; only canonical VM records retire here.
+        self.memory.retire_fixed_private_ranges_for_owner(owner);
+        self.memory.retire_heap_state_for_owner(owner);
+        if was_signaled == Some(false) {
+            self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(owner));
+        }
+        true
     }
 
     pub fn process_window_targets(&self, process_id: u32, thread_id: u32) -> Vec<u32> {
@@ -6631,13 +6702,16 @@ impl CeKernel {
     }
 
     pub fn mark_guest_thread_exited_by_id(&mut self, thread_id: u32, exit_code: u32) -> bool {
-        let key = self.handles.thread_birth_key_by_id(thread_id);
-        let was_live = self.handles.thread_execution_live_by_id(thread_id);
-        let success = self.handles.mark_thread_exited_by_id(thread_id, exit_code);
-        if success
-            && was_live
-            && let Some(key) = key
-        {
+        let Some(key) = self.handles.thread_birth_key_by_id(thread_id) else {
+            return false;
+        };
+        self.mark_guest_thread_exited_by_birth(key, exit_code)
+    }
+
+    fn mark_guest_thread_exited_by_birth(&mut self, key: ThreadBirthKey, exit_code: u32) -> bool {
+        let was_live = self.handles.thread_execution_live_by_id(key.thread_id());
+        let success = self.handles.mark_thread_exited_by_birth(key, exit_code);
+        if success && was_live {
             self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
         }
         success
