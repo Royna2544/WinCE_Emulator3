@@ -376,6 +376,26 @@ fn verified_native_register_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn native_gwe_queue_import_requires_verified_birth(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+) -> bool {
+    module_kind == crate::emulator::imports::ImportModuleKind::Coredll
+        && matches!(
+            ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
+                | Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_WNO_WAIT)
+                | Some(crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W)
+                | Some(crate::ce::coredll_ordinals::ORD_POST_MESSAGE_W)
+                | Some(crate::ce::coredll_ordinals::ORD_POST_THREAD_MESSAGE_W)
+                | Some(crate::ce::coredll_ordinals::ORD_POST_QUIT_MESSAGE)
+                | Some(crate::ce::coredll_ordinals::ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX)
+                | Some(crate::ce::coredll_ordinals::ORD_GET_QUEUE_STATUS)
+                | Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP)
+        )
+}
+
+#[cfg(feature = "unicorn")]
 fn stop_native_opaque_wait_error<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     current_thread: &NativeCurrentThread,
@@ -2528,15 +2548,8 @@ impl UnicornMips {
         let thread_id = self.current_thread_id();
         let visible = kernel.peek_ready_visible_message_w_filtered(thread_id, None, 0, 0);
         let visible_only = visible.is_some();
-        let message = visible.or_else(|| {
-            kernel.gwe.peek_message_filtered(
-                thread_id,
-                None,
-                0,
-                0,
-                crate::ce::gwe::PeekFlags::empty(),
-            )
-        });
+        let message =
+            visible.or_else(|| kernel.peek_ready_message_w_filtered(thread_id, None, 0, 0));
         let Some(message) = message else {
             return false;
         };
@@ -2801,13 +2814,7 @@ impl UnicornMips {
         let message = if visible_only {
             kernel.peek_ready_visible_message_w_filtered(thread_id, None, min_msg, max_msg)
         } else {
-            kernel.gwe.peek_message_filtered(
-                thread_id,
-                None,
-                min_msg,
-                max_msg,
-                crate::ce::gwe::PeekFlags::empty(),
-            )
+            kernel.peek_ready_message_w_filtered(thread_id, None, min_msg, max_msg)
         };
         let Some(message) = message else {
             return false;
@@ -4529,7 +4536,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn thread_has_receiver_work(thread_id: u32, kernel: &CeKernel) -> bool {
         kernel.thread_has_pending_sent_message(thread_id)
-            || kernel.gwe.has_message_filtered(thread_id, None, 0, 0)
+            || kernel.has_message_w_filtered_for_thread(thread_id, None, 0, 0)
     }
 
     #[cfg(feature = "unicorn")]
@@ -6473,7 +6480,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn thread_has_ready_receiver_work(thread_id: u32, kernel: &CeKernel) -> bool {
         kernel.thread_has_pending_sent_message(thread_id)
-            || kernel.gwe.has_message_filtered(thread_id, None, 0, 0)
+            || kernel.has_message_w_filtered_for_thread(thread_id, None, 0, 0)
     }
 
     #[cfg(feature = "unicorn")]
@@ -10624,6 +10631,26 @@ impl UnicornMips {
                     );
                 }
                 let active_thread_id = current_thread_id_hook.get().0;
+                // A native register context belongs to the task incarnation
+                // that supplied it. GWE queue APIs must never reinterpret an
+                // escaped A context as B merely because B reused the TID.
+                if trap.as_ref().is_some_and(|trap| {
+                    native_gwe_queue_import_requires_verified_birth(trap.module_kind, trap.ordinal)
+                }) && verified_native_register_birth(
+                    unsafe { &*kernel_ptr },
+                    &current_thread_id_hook,
+                    active_thread_id,
+                )
+                .is_none()
+                {
+                    *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
+                        format!(
+                            "native GWE import has stale or unverified thread birth for TID {active_thread_id}"
+                        ),
+                    ));
+                    let _ = uc.emu_stop();
+                    return;
+                }
                 if trap.as_ref().is_some_and(|trap| {
                     complete_escaped_get_message_sent_callout(
                         unsafe { &mut *kernel_ptr },
@@ -22342,13 +22369,31 @@ fn try_complete_current_get_message_wait<D>(
     if ready_wait_id != wait_id {
         return false;
     }
-    let Some(message) = kernel.gwe.peek_message_filtered(
-        thread_id,
-        hwnd,
-        min_msg,
-        max_msg,
-        crate::ce::gwe::PeekFlags::empty(),
-    ) else {
+    let owner = kernel
+        .blocked_waiter(wait_id)
+        .and_then(|wait| wait.owner_birth);
+    let candidate = match owner {
+        Some(birth) if kernel.is_live_thread_birth(birth) => {
+            kernel.gwe.peek_message_filtered_for_birth(
+                birth,
+                hwnd,
+                min_msg,
+                max_msg,
+                crate::ce::gwe::PeekFlags::empty(),
+            )
+        }
+        None if kernel.handles.thread_birth_key_by_id(thread_id).is_none() => {
+            kernel.gwe.peek_message_filtered(
+                thread_id,
+                hwnd,
+                min_msg,
+                max_msg,
+                crate::ce::gwe::PeekFlags::empty(),
+            )
+        }
+        _ => None,
+    };
+    let Some(message) = candidate else {
         return false;
     };
     if preflight_unicorn_message_write(uc, sealed_host_write_guard, msg_ptr).is_err()
@@ -25055,9 +25100,9 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
 
     kernel.pump_timers_to_gwe(thread_id);
     let has_input = if input_available {
-        kernel.gwe.has_queue_input(thread_id, wake_mask)
+        kernel.has_queue_input_for_thread(thread_id, wake_mask)
     } else {
-        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
+        kernel.has_new_queue_input_for_thread(thread_id, wake_mask)
     };
     if has_input {
         return false;
@@ -25336,9 +25381,9 @@ fn try_complete_current_msg_wait_timer_wait<D>(
     }
     kernel.pump_timers_to_gwe(thread_id);
     let has_input = if input_available {
-        kernel.gwe.has_queue_input(thread_id, wake_mask)
+        kernel.has_queue_input_for_thread(thread_id, wake_mask)
     } else {
-        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
+        kernel.has_new_queue_input_for_thread(thread_id, wake_mask)
     };
     if !has_input {
         return false;
@@ -25408,9 +25453,9 @@ fn try_wait_and_complete_current_msg_wait_timer_wait<D>(
     }
     kernel.pump_timers_to_gwe(thread_id);
     let has_input = if input_available {
-        kernel.gwe.has_queue_input(thread_id, wake_mask)
+        kernel.has_queue_input_for_thread(thread_id, wake_mask)
     } else {
-        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
+        kernel.has_new_queue_input_for_thread(thread_id, wake_mask)
     };
     if has_input {
         return complete_current_msg_wait_input(
@@ -25442,7 +25487,7 @@ fn complete_current_msg_wait_input<D>(
     use unicorn_engine::RegisterMIPS;
 
     if !input_available {
-        kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
+        kernel.clear_new_queue_input_for_thread(thread_id, wake_mask);
     }
     kernel.threads.set_last_error(thread_id, 0);
     kernel.record_msg_wait_input(count, timeout);
@@ -28001,10 +28046,29 @@ fn blocked_msg_wait_has_input(blocked: &BlockedWaitThread, kernel: &CeKernel) ->
             wake_mask,
             input_available,
         } => {
-            if input_available {
-                kernel.gwe.has_queue_input(blocked.thread_id, wake_mask)
-            } else {
-                kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
+            let owner = kernel
+                .blocked_waiter(blocked.wait_id)
+                .and_then(|wait| wait.owner_birth);
+            match owner {
+                Some(birth) if kernel.is_live_thread_birth(birth) => {
+                    if input_available {
+                        kernel.gwe.has_queue_input_for_birth(birth, wake_mask)
+                    } else {
+                        kernel.gwe.has_new_queue_input_for_birth(birth, wake_mask)
+                    }
+                }
+                None if kernel
+                    .handles
+                    .thread_birth_key_by_id(blocked.thread_id)
+                    .is_none() =>
+                {
+                    if input_available {
+                        kernel.gwe.has_queue_input(blocked.thread_id, wake_mask)
+                    } else {
+                        kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
+                    }
+                }
+                _ => false,
             }
         }
     }
@@ -28015,6 +28079,21 @@ fn scheduler_blocked_msg_wait_has_input(
     blocked: &crate::ce::scheduler::SchedulerBlockedWait,
     kernel: &CeKernel,
 ) -> bool {
+    let owner = match blocked.owner_birth {
+        Some(birth)
+            if birth.thread_id() == blocked.thread_id && kernel.is_live_thread_birth(birth) =>
+        {
+            Some(birth)
+        }
+        None if kernel
+            .handles
+            .thread_birth_key_by_id(blocked.thread_id)
+            .is_none() =>
+        {
+            None
+        }
+        _ => return false,
+    };
     match blocked.kind {
         crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel
         | crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep
@@ -28027,36 +28106,58 @@ fn scheduler_blocked_msg_wait_has_input(
             hwnd,
             min_msg,
             max_msg,
-        } => kernel
-            .gwe
-            .has_message_filtered(blocked.thread_id, hwnd, min_msg, max_msg),
+        } => match owner {
+            Some(birth) => kernel
+                .gwe
+                .has_message_filtered_for_birth(birth, hwnd, min_msg, max_msg),
+            None => kernel
+                .gwe
+                .has_message_filtered(blocked.thread_id, hwnd, min_msg, max_msg),
+        },
         crate::ce::scheduler::SchedulerBlockedWaitKind::MsgWait {
             wake_mask,
             input_available,
-        } => {
-            if input_available {
-                kernel.gwe.has_queue_input(blocked.thread_id, wake_mask)
-            } else {
-                kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
+        } => match owner {
+            Some(birth) if input_available => {
+                kernel.gwe.has_queue_input_for_birth(birth, wake_mask)
             }
-        }
+            Some(birth) => kernel.gwe.has_new_queue_input_for_birth(birth, wake_mask),
+            None if input_available => kernel.gwe.has_queue_input(blocked.thread_id, wake_mask),
+            None => kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask),
+        },
         crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd } => {
             kernel.has_modal_dialog_result(blocked.thread_id, dialog_hwnd)
                 || kernel.thread_has_pending_sent_message(blocked.thread_id)
-                || kernel.gwe.has_message_filtered(
+                || match owner {
+                    Some(birth) => kernel.gwe.has_message_filtered_for_birth(
+                        birth,
+                        None,
+                        crate::ce::gwe::WM_PAINT,
+                        crate::ce::gwe::WM_LBUTTONUP,
+                    ),
+                    None => kernel.gwe.has_message_filtered(
+                        blocked.thread_id,
+                        None,
+                        crate::ce::gwe::WM_PAINT,
+                        crate::ce::gwe::WM_LBUTTONUP,
+                    ),
+                }
+        }
+        crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { mouse_message_max } => {
+            match owner {
+                Some(birth) => kernel.gwe.has_message_filtered_for_birth(
+                    birth,
+                    None,
+                    crate::ce::gwe::WM_PAINT,
+                    mouse_message_max,
+                ),
+                None => kernel.gwe.has_message_filtered(
                     blocked.thread_id,
                     None,
                     crate::ce::gwe::WM_PAINT,
-                    crate::ce::gwe::WM_LBUTTONUP,
-                )
-        }
-        crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { mouse_message_max } => {
-            kernel.gwe.has_message_filtered(
-                blocked.thread_id,
-                None,
-                crate::ce::gwe::WM_PAINT,
-                mouse_message_max,
-            )
+                    mouse_message_max,
+                ),
+            }
         }
     }
 }
@@ -28071,9 +28172,24 @@ fn consume_blocked_msg_wait_input(blocked: &BlockedWaitThread, kernel: &mut CeKe
         return;
     };
     if !input_available {
-        kernel
-            .gwe
-            .clear_new_queue_input(blocked.thread_id, wake_mask);
+        let owner = kernel
+            .blocked_waiter(blocked.wait_id)
+            .and_then(|wait| wait.owner_birth);
+        match owner {
+            Some(birth) if kernel.is_live_thread_birth(birth) => {
+                kernel.gwe.clear_new_queue_input_for_birth(birth, wake_mask)
+            }
+            None if kernel
+                .handles
+                .thread_birth_key_by_id(blocked.thread_id)
+                .is_none() =>
+            {
+                kernel
+                    .gwe
+                    .clear_new_queue_input(blocked.thread_id, wake_mask)
+            }
+            _ => {}
+        }
     }
 }
 
@@ -28085,6 +28201,21 @@ fn scheduler_blocked_wait_is_ready(
     // This predicate is also used by scheduler-only probes that cannot see
     // the saved native frame. Socket probing may accept a connection or clear
     // an error, so reject an obsolete task incarnation first.
+    if matches!(
+        blocked.kind,
+        crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage { .. }
+            | crate::ce::scheduler::SchedulerBlockedWaitKind::MsgWait { .. }
+            | crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { .. }
+            | crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { .. }
+    ) && match blocked.owner_birth {
+        Some(birth) => !kernel.is_live_thread_birth(birth),
+        None => kernel
+            .handles
+            .thread_birth_key_by_id(blocked.thread_id)
+            .is_some(),
+    } {
+        return false;
+    }
     if matches!(
         blocked.kind,
         crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. }
@@ -28133,7 +28264,7 @@ fn scheduler_blocked_wait_is_ready(
             crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { .. } => {
                 kernel.thread_has_modal_dialog_result(blocked.thread_id)
                     || kernel.thread_has_pending_sent_message(blocked.thread_id)
-                    || kernel.gwe.has_message_filtered(
+                    || kernel.has_message_w_filtered_for_thread(
                         blocked.thread_id,
                         None,
                         crate::ce::gwe::WM_PAINT,
@@ -42237,8 +42368,8 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    let Some(message) = kernel.gwe.peek_message_filtered(
-        blocked.thread_id,
+    let Some(message) = kernel.gwe.peek_message_filtered_for_birth(
+        captured_wait_birth,
         blocked.hwnd,
         blocked.min_msg,
         blocked.max_msg,
@@ -80251,6 +80382,52 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn stale_native_caller_cannot_publish_quit_to_reused_thread_birth() -> crate::Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let process_birth = kernel.current_process_birth_key().expect("boot birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_handle)
+            .expect("A birth");
+        let native_caller = super::NativeCurrentThread::new(thread_id, Some(old_birth));
+        assert!(kernel.mark_guest_thread_exited_by_birth(old_birth, 0));
+        assert!(kernel.close_handle(old_handle)?);
+        let new_handle = kernel.handles.try_create_thread_in_birth(
+            process_birth,
+            thread_id,
+            0x0040_4000,
+            0,
+            false,
+        )?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_handle)
+            .expect("B birth");
+        assert_ne!(old_birth, new_birth);
+        assert!(super::native_gwe_queue_import_requires_verified_birth(
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_POST_QUIT_MESSAGE),
+        ));
+        assert!(
+            super::verified_native_register_birth(&kernel, &native_caller, thread_id).is_none()
+        );
+        assert!(!kernel.post_quit_message_for_birth(old_birth, 0xa1));
+        assert_eq!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(new_birth, crate::ce::gwe::QS_POSTMESSAGE),
+            0
+        );
+        assert!(
+            !kernel
+                .gwe
+                .has_message_filtered_for_birth(new_birth, None, 0, 0)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn stale_get_message_wait_does_not_resume_into_reused_thread_birth() -> crate::Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -80348,9 +80525,11 @@ mod unicorn_tests {
                 kernel.timers.tick_count(),
                 |wait, kernel| super::scheduler_blocked_wait_is_ready(wait, kernel),
             ),
-            Some(stale_wait_id),
-            "the stale wait must reach the resume birth gate",
+            None,
+            "B's post must not select A's stale wait",
         );
+        // Directly present the escaped stale native payload as a separate
+        // guard control: selection must not be its only safety boundary.
         assert_eq!(
             current_thread_id.get(),
             (active_thread_id, Some(active_birth))
