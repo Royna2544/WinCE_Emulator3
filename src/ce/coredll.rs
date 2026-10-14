@@ -784,6 +784,19 @@ pub trait CoredllGuestMemory {
         self.ensure_mapped(addr, len)
     }
 
+    /// A native adapter may need the current process's canonical heap slab
+    /// pins when bringing already-committed heap pages into a fresh engine.
+    /// Keeping this borrow shared avoids aliasing the caller's live kernel
+    /// mutation while an allocation is being prepared.
+    fn ensure_heap_mapped_with_kernel(
+        &mut self,
+        _kernel: &CeKernel,
+        addr: u32,
+        len: u32,
+    ) -> Result<()> {
+        self.ensure_heap_mapped(addr, len)
+    }
+
     /// Pointer-mapped native views are published by the checked native
     /// reconcile after this API returns. Raw adapters require an immediate
     /// copy into their test/compatibility guest bytes instead.
@@ -29327,7 +29340,7 @@ fn ce_get_module_heap_info_raw<M: CoredllGuestMemory>(
     }
 
     if memory
-        .ensure_heap_mapped(info_ptr, MODULE_HEAP_INFO_ALLOCATION_SIZE)
+        .ensure_heap_mapped_with_kernel(kernel, info_ptr, MODULE_HEAP_INFO_ALLOCATION_SIZE)
         .is_err()
     {
         if newly_allocated {
@@ -29408,12 +29421,10 @@ fn heap_alloc_raw<M: CoredllGuestMemory>(
     flags: u32,
     bytes: u32,
 ) -> u32 {
-    match allocate_guest_heap(kernel, memory, heap, flags, bytes) {
-        Some(ptr) => ptr,
-        None => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    match allocate_guest_heap_checked(kernel, memory, heap, flags, bytes) {
+        Ok(ptr) => ptr,
+        Err(error) => {
+            kernel.threads.set_last_error(thread_id, error);
             0
         }
     }
@@ -29452,6 +29463,20 @@ pub(crate) fn allocate_guest_heap<M: CoredllGuestMemory>(
     allocate_guest_heap_initialized(kernel, memory, heap, flags, bytes, |_, _| Ok(()))
 }
 
+fn allocate_guest_heap_checked<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    heap: u32,
+    flags: u32,
+    bytes: u32,
+) -> std::result::Result<u32, u32> {
+    let prepared = kernel
+        .memory
+        .prepare_heap_alloc(heap, flags, bytes)
+        .ok_or(ERROR_INVALID_PARAMETER)?;
+    apply_prepared_allocation_checked(kernel, memory, prepared, |_, _| Ok(()))
+}
+
 pub(crate) fn allocate_guest_heap_initialized<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -29480,9 +29505,58 @@ fn apply_prepared_allocation<M: CoredllGuestMemory>(
     prepared: PreparedAllocation,
     initialize: impl FnOnce(&mut M, u32) -> Result<()>,
 ) -> Option<u32> {
+    apply_prepared_allocation_checked(kernel, memory, prepared, initialize).ok()
+}
+
+/// Heap growth becomes canonical before any returned allocation is written or
+/// published. Native pointer-map failures poison the active owner just like
+/// other checked private-VM transactions; detached pins cannot be dropped
+/// while an uncertain native map may still refer to them.
+pub(crate) fn commit_fixed_heap_growth<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+) -> std::result::Result<(), u32> {
+    let owner = kernel
+        .current_process_birth_key()
+        .ok_or(ERROR_INVALID_HANDLE)?;
+    if kernel.memory.fixed_heap_reservation(owner).is_none() {
+        return Ok(());
+    }
+    let high_water = kernel.memory.heap_high_water_mark();
+    let prepared = kernel
+        .memory
+        .prepare_fixed_heap_growth(owner, high_water)
+        .ok_or(ERROR_NOT_ENOUGH_MEMORY)?;
+    if prepared.new_page_pins().is_empty() {
+        return Ok(());
+    }
+    if let Err(err) = memory.apply_prepared_private_vm(kernel, &prepared) {
+        memory.note_private_vm_transaction_failure(err);
+        return Err(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    if kernel.memory.commit_prepared_private_vm(prepared).is_none() {
+        memory.note_private_vm_transaction_failure(Error::Backend(
+            "fixed process heap metadata changed after checked native mapping".to_owned(),
+        ));
+        return Err(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    memory.private_vm_commit_complete(kernel.memory.virtual_generation());
+    Ok(())
+}
+
+fn apply_prepared_allocation_checked<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    prepared: PreparedAllocation,
+    initialize: impl FnOnce(&mut M, u32) -> Result<()>,
+) -> std::result::Result<u32, u32> {
+    if let Err(error) = commit_fixed_heap_growth(kernel, memory) {
+        kernel.memory.abort_allocation(prepared);
+        return Err(error);
+    }
     let allocation = prepared.allocation();
     if memory
-        .ensure_heap_mapped(allocation.ptr, allocation.actual_size)
+        .ensure_heap_mapped_with_kernel(kernel, allocation.ptr, allocation.actual_size)
         .is_err()
         || (allocation.zeroed
             && memory
@@ -29491,9 +29565,12 @@ fn apply_prepared_allocation<M: CoredllGuestMemory>(
         || initialize(memory, allocation.ptr).is_err()
     {
         kernel.memory.abort_allocation(prepared);
-        return None;
+        return Err(ERROR_INVALID_PARAMETER);
     }
-    kernel.memory.commit_allocation(prepared)
+    kernel
+        .memory
+        .commit_allocation(prepared)
+        .ok_or(ERROR_INVALID_PARAMETER)
 }
 
 pub(crate) fn apply_prepared_reallocation<M: CoredllGuestMemory>(
@@ -29505,9 +29582,14 @@ pub(crate) fn apply_prepared_reallocation<M: CoredllGuestMemory>(
     let result = prepared.result().clone();
     let copy_len = prepared.copy_len();
     let zero_range = prepared.zero_range();
+    if let Err(error) = commit_fixed_heap_growth(kernel, memory) {
+        kernel.memory.abort_reallocation(prepared);
+        kernel.threads.set_last_error(thread_id, error);
+        return 0;
+    }
     if (copy_len != 0 || zero_range.is_some())
         && memory
-            .ensure_heap_mapped(result.ptr, result.new_actual_size)
+            .ensure_heap_mapped_with_kernel(kernel, result.ptr, result.new_actual_size)
             .is_err()
     {
         kernel.memory.abort_reallocation(prepared);
@@ -70451,6 +70533,87 @@ mod tests {
             .create_volume_handle_for_guest_root("\\SDMMC Disk")
             .expect("mounted volume handle");
         (kernel, volume)
+    }
+
+    #[test]
+    fn fixed_heap_alloc_charges_before_publish_and_reports_budget_failure() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let heap_base = 0x3000_0000;
+        assert_eq!(
+            kernel.memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ProcessHeapArena,
+                heap_base,
+                0x0100_0000,
+                PAGE_READWRITE,
+            ),
+            Some(heap_base)
+        );
+        kernel.memory.set_private_commit_limit_bytes(0x1000);
+        let mut memory = FailingPrivateVmMemory::default();
+        assert_eq!(
+            heap_alloc_raw(&mut kernel, &mut memory, 1, PROCESS_HEAP_HANDLE, 0, 0x2000),
+            0
+        );
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
+        assert!(kernel.memory.private_page_pins_for(owner).is_empty());
+        assert_eq!(kernel.memory.allocations().count(), 0);
+        assert_eq!(memory.native_actions_attempted, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_heap_alloc_maps_all_pages_before_publish_or_poisons_owner() -> Result<()> {
+        let heap_base = 0x3000_0000;
+        let setup = || -> Result<(CeKernel, crate::ce::object::ProcessBirthKey)> {
+            let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+            let owner = kernel.current_process_birth_key().expect("boot birth");
+            assert_eq!(
+                kernel.memory.reserve_fixed_private_range(
+                    owner,
+                    VirtualAllocationSource::ProcessHeapArena,
+                    heap_base,
+                    0x0100_0000,
+                    PAGE_READWRITE,
+                ),
+                Some(heap_base)
+            );
+            kernel.memory.set_private_commit_limit_bytes(0x2000);
+            Ok((kernel, owner))
+        };
+
+        let (mut kernel, owner) = setup()?;
+        let mut memory = FailingPrivateVmMemory::default();
+        assert_eq!(
+            heap_alloc_raw(&mut kernel, &mut memory, 1, PROCESS_HEAP_HANDLE, 0, 0x2000),
+            heap_base
+        );
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0x2000);
+        assert_eq!(kernel.memory.private_page_pins_for(owner).len(), 2);
+        assert_eq!(kernel.memory.allocations().count(), 1);
+        assert_eq!(memory.native_actions_attempted, 2);
+        assert_eq!(memory.committed_generations.len(), 1);
+
+        let (mut kernel, owner) = setup()?;
+        let mut memory = FailingPrivateVmMemory {
+            fail_alloc_at_pin: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            heap_alloc_raw(&mut kernel, &mut memory, 1, PROCESS_HEAP_HANDLE, 0, 0x2000),
+            0
+        );
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert!(memory.poisoned);
+        assert_eq!(memory.native_actions_attempted, 2);
+        assert_eq!(memory.terminal_failures, 1);
+        assert!(memory.committed_generations.is_empty());
+        assert!(kernel.memory.private_page_pins_for(owner).is_empty());
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
+        assert_eq!(kernel.memory.allocations().count(), 0);
+        Ok(())
     }
 
     #[test]
