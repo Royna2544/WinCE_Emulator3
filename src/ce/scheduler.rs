@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::ce::task_wait::{TaskWaitRecord, TaskWaitStore, TickDeadline};
+use crate::ce::{
+    object::{ProcessBirthKey, ThreadBirthKey},
+    task_wait::{TaskWaitRecord, TaskWaitStore, TickDeadline},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedulerWaitKind {
@@ -94,12 +97,23 @@ pub enum SchedulerBlockedWaitKind {
     },
 }
 
+/// Identity used only to index object wake candidates. Retaining this key does
+/// not pin the object or make a closed public handle valid for acquisition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WaitObjectKey {
+    /// Compatibility key for wait kinds that have not migrated to an object key.
+    Handle(u32),
+    Thread(ThreadBirthKey),
+    Process(ProcessBirthKey),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchedulerBlockedWait {
     pub id: u64,
     pub thread_id: u32,
     pub thread_handle: u32,
     pub wait_handles: Vec<u32>,
+    pub wait_keys: Vec<WaitObjectKey>,
     pub kind: SchedulerBlockedWaitKind,
     pub wait_started_ms: u32,
     pub timeout_ms: u32,
@@ -122,7 +136,7 @@ pub struct Scheduler {
     next_wait_id: u64,
     next_wait_sequence: u64,
     blocked_waits: TaskWaitStore<SchedulerBlockedWait>,
-    wait_queues: BTreeMap<u32, VecDeque<u64>>,
+    wait_queues: BTreeMap<WaitObjectKey, VecDeque<u64>>,
     message_wait_queues: BTreeMap<u32, VecDeque<u64>>,
     serial_read_queues: BTreeMap<u32, VecDeque<u64>>,
     serial_event_queues: BTreeMap<u32, VecDeque<u64>>,
@@ -185,6 +199,39 @@ impl Scheduler {
         wait_started_ms: u32,
         timeout_ms: u32,
     ) -> u64 {
+        let wait_keys = wait_handles
+            .iter()
+            .copied()
+            .map(WaitObjectKey::Handle)
+            .collect();
+        self.register_blocked_wait_with_keys(
+            thread_id,
+            thread_handle,
+            wait_handles,
+            wait_keys,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        )
+    }
+
+    /// Registers an ordered raw wait set alongside its canonical wake keys.
+    /// The keys are an index, not wait-target lifetime references.
+    pub fn register_blocked_wait_with_keys(
+        &mut self,
+        thread_id: u32,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        wait_keys: Vec<WaitObjectKey>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> u64 {
+        assert_eq!(
+            wait_handles.len(),
+            wait_keys.len(),
+            "each raw wait handle must have one ordered wake key"
+        );
         self.next_wait_id = self.next_wait_id.wrapping_add(1).max(1);
         self.next_wait_sequence = self.next_wait_sequence.wrapping_add(1);
         let id = self.next_wait_id;
@@ -193,13 +240,14 @@ impl Scheduler {
             thread_id,
             thread_handle,
             wait_handles,
+            wait_keys,
             kind,
             wait_started_ms,
             timeout_ms,
             sequence: self.next_wait_sequence,
         };
-        for handle in &wait.wait_handles {
-            self.wait_queues.entry(*handle).or_default().push_back(id);
+        for key in &wait.wait_keys {
+            self.wait_queues.entry(*key).or_default().push_back(id);
         }
         if matches!(
             wait.kind,
@@ -242,15 +290,15 @@ impl Scheduler {
 
     pub fn remove_blocked_wait(&mut self, wait_id: u64) -> Option<SchedulerBlockedWait> {
         let wait = self.blocked_waits.remove(&wait_id)?;
-        for handle in &wait.wait_handles {
-            let remove_queue = if let Some(queue) = self.wait_queues.get_mut(handle) {
+        for key in &wait.wait_keys {
+            let remove_queue = if let Some(queue) = self.wait_queues.get_mut(key) {
                 queue.retain(|id| *id != wait_id);
                 queue.is_empty()
             } else {
                 false
             };
             if remove_queue {
-                self.wait_queues.remove(handle);
+                self.wait_queues.remove(key);
             }
         }
         let remove_message_queue =
@@ -326,13 +374,29 @@ impl Scheduler {
 
     pub fn waiter_ids_for_handle(&self, handle: u32) -> Vec<u64> {
         let mut ids = BTreeSet::new();
-        if let Some(queue) = self.wait_queues.get(&handle) {
+        if let Some(queue) = self.wait_queues.get(&WaitObjectKey::Handle(handle)) {
             ids.extend(queue.iter().copied());
         }
         ids.extend(
             self.blocked_waits
                 .values()
                 .filter(|wait| wait.wait_handles.contains(&handle))
+                .map(|wait| wait.id),
+        );
+        ids.into_iter().collect()
+    }
+
+    /// Looks up wake candidates by object identity, including after a
+    /// compatibility index is rebuilt. This does not pin wait targets.
+    pub fn waiter_ids_for_key(&self, key: WaitObjectKey) -> Vec<u64> {
+        let mut ids = BTreeSet::new();
+        if let Some(queue) = self.wait_queues.get(&key) {
+            ids.extend(queue.iter().copied());
+        }
+        ids.extend(
+            self.blocked_waits
+                .values()
+                .filter(|wait| wait.wait_keys.contains(&key))
                 .map(|wait| wait.id),
         );
         ids.into_iter().collect()
