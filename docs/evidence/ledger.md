@@ -1433,12 +1433,46 @@ overwrote the expected-red raw log; its original bytes are gone, so that red
 attempt is historical observation rather than retained log evidence. No full
 release-feature suite is claimed for E-42.
 
-Production image mapping remains RWX with the old copy path. Sealed segmented
-storage, clone isolation, typed native pins, host-write and readback guards,
-native write protection, 200-slice churn, memory-budget treatment and a
-synthetic 56-MiB setup benchmark remain separate gates. No E-42 iNavi run,
-writable-mount operation, timing gain, map readiness or Stage 2 acceptance is
-claimed.
+At E-42, production image mapping still used RWX with the old copy path.
+Sealed segmented storage, clone isolation, typed native pins, host-write and
+readback guards, native write protection, 200-slice churn, memory-budget
+treatment and a synthetic 56-MiB setup benchmark remained separate gates.
+Later E-43 source work changed that mapping path; E-42 itself made no iNavi
+run, writable-mount operation, timing, map-readiness or Stage 2 claim.
+
+## E-43 Sealed main-EXE final-byte source gate (2026-10-14, executed)
+
+The production loader now seals final import- and trampoline-patched main-EXE
+bytes in aligned R/RX runs. One-time rewritten branch pages are eligible;
+IAT thunk pages stay copy-backed, and the stub tail beyond `SizeOfImage` is
+excluded. Generation-qualified native pins and fresh/reused-owner ledger
+checks retain backing identity; focused native-write overlap, guest write-
+protection, patched-branch execution, mutable IAT, file-view and malformed-
+blob controls passed. This is a **source-bound** gate, not a general proof that
+every host write path or memory-mode checkpoint is safe.
+
+An opt-in, read-only production-loader pass over the E-38-manifest-matching
+iNavi EXE plus seven hashed DLLs sealed **1,379 of 2,168** total image pages
+and **1,379 of 1,379** non-writable-section candidates: **5,648,384 B
+(5.386719 MiB)**. Of those, **1,224** contain bytes changed by final loader
+patching. The earlier 155-page result belonged to the superseded byte-
+equality filter. The load-only initial-owner census was **26 mapped blobs,
+36,679,680 B (34.980469 MiB)** including 16 MiB heap-arena and 4 MiB stack
+backing; runtime heap spillover and later DLLs were not observed. No native
+guest execution or writable-mount write occurred in the probe.
+
+On the rechecked source snapshot (`pe_loader.rs` SHA-256
+`ED5D78E2…0F6284`, `unicorn.rs` `FEF83F33…BA4083`), the serial release
+`unicorn,trace,win32-desktop` suite passed **1,761/0/17 ignored** across 17
+result blocks (raw log `A33BE1E6…840A9A`), paired debug no-feature passed
+**1,303/0/13 ignored** across 17 blocks (raw log `6F4AFDE3…FFEF27`), and the
+debug `unicorn,win32-desktop` no-trace check finished. Earlier compile/test
+reds and a libclang-unavailable coverage attempt are diagnostics, not signoff.
+The [E-43 receipt](../../evidence/sealed-main-image-20261014/validation.receipt.md)
+records exact source/input/log hashes, per-blob-name bytes, focused controls,
+and limits. No new iNavi launch, app speed/footprint result, map readiness,
+`PrivatePageBudget` decision, or full Stage 2 acceptance is claimed; the E-38
+single-run approval is spent.
 
 ## Chat-project validation notes (not in this repository)
 

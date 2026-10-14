@@ -17,7 +17,7 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 - Current layout contains CE5-style addresses although the target is CE6. A loader
   address choice is implementation evidence, not a normative CE6 memory-layout contract.
 
-## Stage 2 slice: sealed main-EXE image runs (final-byte gate under validation)
+## Stage 2 slice: sealed main-EXE image runs (source-bound gate passed)
 
 The main EXE now takes a connected loader-to-native path, not just a page
 selector. After main imports and MIPS trampolines are patched,
@@ -63,7 +63,12 @@ records 2 passed / 0 failed with the two profiles ignored by default; full
 and [no-feature](../../evidence/sealed-main-image-20261014/test-full-no-feature-workspace-attempt-01.raw.log)
 workspace runs also passed on that earlier source. The changed-page policy was
 subsequently revised to seal final loader bytes, so these prior suites are not
-final-source signoff. None of this is an iNavi app or writable-mount run.
+final-source signoff. The final-source [E-43 receipt](../../evidence/sealed-main-image-20261014/validation.receipt.md)
+records **1,761/0/17 ignored** across 17 blocks in release with
+`unicorn,trace,win32-desktop`, paired **1,303/0/13 ignored** across 17 blocks
+in debug with no features, and a successful `unicorn,win32-desktop` no-trace
+check. Focused patched-branch, mutable-IAT and native-write overlap controls
+also pass. This is a source-bound gate, not an iNavi app or writable-mount run.
 
 The two opt-in 56-MiB profiles use the same sparse synthetic PE and production
 loader/native setup. Only the section write bit differs: RX selects sealed
@@ -86,6 +91,12 @@ versus 173,776,896 RWX ([RX samples](../../evidence/sealed-main-image-20261014/p
 [RWX samples](../../evidence/sealed-main-image-20261014/profile-56mib-rwx-os-attempt-01.metrics.txt)).
 These are sampled maxima, not kernel-maintained peaks, release-build results
 or iNavi measurements.
+
+A later [frozen E-43 RX setup probe](../../evidence/sealed-main-image-20261014/profile-56mib-rx-pre-heap-stack-attempt-01.raw.log)
+passed 1/0 and recorded 21,049,344 B retained Owned capacity and fresh
+write/readback, with 33.246 ms fresh and 37.971 ms reused setup. It is one
+debug synthetic pre-heap/stack-slab baseline, without a same-source RWX
+control or any app-speed inference.
 
 A read-only production-loader pass over the actual iNavi EXE and seven DLLs
 now seals **1,379 of 2,168** total image pages, all **1,379 of 1,379**
@@ -113,9 +124,9 @@ setup-time, or frame-rate improvement is claimed from this load-only result.
 ROM/XIP physical-budget treatment and `GlobalMemoryStatus` accounting are
 undecided. A guest protection fault is still a native error, not a CE access
 violation. Dynamic DLLs, writable image/heap pages, CE exception translation,
-direct native-write guard coverage and matched iNavi boot/frame timing remain
-open; another writable-mount iNavi run requires fresh approval and adjacent
-backups.
+the exhaustive direct native-write inventory and matched iNavi boot/frame
+timing remain open; another writable-mount iNavi run requires fresh approval
+and adjacent backups.
 
 ## Target transaction and owner
 
