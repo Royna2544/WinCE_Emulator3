@@ -884,11 +884,11 @@ static LONG __fastcall code_gen_buffer_handler(PEXCEPTION_POINTERS ptr, struct u
         uint8_t* right = left + uc->tcg_ctx->initial_buffer_size;
         if (left && base >= left && base < right) {
             // It's our region
-            uint8_t* base_end = base + COMMIT_COUNT * 4096;
-            uint32_t size = COMMIT_COUNT * 4096;
-            if (base_end >= right) {
-                size = base_end - base;
-                // whoops, we are almost run out of memory! Commit all instead
+            size_t size = COMMIT_COUNT * 4096;
+            size_t remaining = (size_t)(right - base);
+            if (size > remaining) {
+                // Clip the final commit to this engine's reserved code arena.
+                size = remaining;
             }
             if (VirtualAlloc(base, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE)) {
                 return EXCEPTION_CONTINUE_EXECUTION;
