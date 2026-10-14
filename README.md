@@ -65,7 +65,17 @@ remote-control HTTP/WebSocket surface.
   `0xC0000005` before a query assertion, was removed, and remains unresolved
   ([E-28 ledger](docs/evidence/ledger.md#e-28-native-count-stop-witness-and-typed-adapter-2026-10-14-executed),
   [nested risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
-- The latest completed bounded iNavi run exited normally at its 330 s cap
+- The latest bounded iNavi run used the preserved E-37 fresh-default EXE after
+  a separate single-run approval and fresh adjacent, SHA-verified ZIP backups.
+  It exited normally at 330.392 s with no watchdog trip. Sampled RSS/private
+  peaks were **430.7/445.0 MiB**; the real splash persisted, with no map.
+  Guest `COM7:` reads transferred 2,262 B of injected raw NMEA and tap down/up
+  reached the iNavi WNDPROC. Neither GPS parsing nor navigation was proven.
+  Busy iNavi slices measured 26.359 run-only MIPS, within the older E-9
+  22–34 MIPS range; overall busy slices across helpers measured 17.120 MIPS.
+  The approval was consumed by this one run
+  ([E-38 analysis](evidence/e37-live-20261014T051228Z/analysis.receipt.md)).
+- An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
   and remained on the genuine splash, not the map. Guest `COM7:` reads
   transferred injected raw NMEA bytes, and tap down/up WNDPROC returns were
   recorded. GPS fix, map readiness and route interaction were not demonstrated.
@@ -81,8 +91,10 @@ remote-control HTTP/WebSocket surface.
   yet proven to have caused this crash
   ([E-32 analysis](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
   A narrow vendored Windows fix subsequently passed isolated real-MIPS native
-  controls and the broad suites; no post-fix app run has tested whether it
-  affects the E-32 failure ([E-33 repair](evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)).
+  controls and the broad suites. The later E-38 fresh-default app run survived
+  this crash horizon, but its different source/owner mode cannot attribute
+  that result to the E-33 fix
+  ([E-33 repair](evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)).
 - Historical comparison, not current acceptance: the persistent-owner 650
   build passed 1,618 tests before a normal app run crashed at 129.108 s with
   `0xC0000005` and about 1.62 GiB RSS. The installed BED2 fallback's later

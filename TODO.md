@@ -7,9 +7,15 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Finish the remaining D-008 families: real native E-20 two-PID same-VA
-   A→B→A byte isolation, shared file views on slabs, and image/heap blobs.
-1. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
+0. Close E-20 real-native two-PID same-VA A→B→A byte isolation for private
+   pages and file views, with precise public/injected-fixture limits, then
+   run full release and no-feature suites from the final source with raw logs.
+1. Close the GMS follow-up as its own source-bound gate: the focused public
+   API test passed 4/0/0 before the test-only setter cleanup; validate the
+   final source in the coordinated full release/no-feature pass.
+2. Finish the remaining D-008 families: shared file views on slabs, then
+   image/heap blobs. Keep native-setup measurements with each source gate.
+3. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
 ## Parallel lanes (never gate the queue above)
