@@ -117,6 +117,15 @@ fn should_repair_native_deadline_jr_import_thunk(
         && !debug_marker_present
 }
 
+#[cfg(all(test, feature = "unicorn"))]
+#[derive(Debug, Clone, Copy)]
+struct NativeMixedJrStopProbe {
+    jr_pc: u32,
+    pause_after_checked_stop: std::time::Duration,
+    service_forced: bool,
+    checked_stop_seen: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
@@ -139,6 +148,8 @@ pub struct UnicornMips {
     last_debug: Option<UnicornDebugSnapshot>,
     last_wall_clock_debug: Option<UnicornDebugSnapshot>,
     last_native_slice_outcome: NativeSliceOutcome,
+    #[cfg(all(test, feature = "unicorn"))]
+    native_mixed_jr_stop_probe: Option<Rc<std::cell::Cell<NativeMixedJrStopProbe>>>,
     // An E18 diagnostic pointer-map failure cannot resume from an older CPU
     // snapshot or silently restart at process entry on a later call.
     private_slab_attempt_poisoned: bool,
@@ -1236,6 +1247,8 @@ impl UnicornMips {
             last_debug: None,
             last_wall_clock_debug: None,
             last_native_slice_outcome: NativeSliceOutcome::NoAttempt,
+            #[cfg(all(test, feature = "unicorn"))]
+            native_mixed_jr_stop_probe: None,
             private_slab_attempt_poisoned: false,
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
@@ -7667,10 +7680,25 @@ impl UnicornMips {
         let native_hook_stop_reason_timeslice_hook = Rc::clone(&native_hook_stop_reason);
         let native_hook_control_error_timeslice_hook = Rc::clone(&native_hook_control_error);
         let framebuffer_tick_error_timeslice_hook = Rc::clone(&framebuffer_tick_error);
+        #[cfg(test)]
+        let native_mixed_jr_stop_probe_timeslice_hook = self.native_mixed_jr_stop_probe.clone();
         pre_entry_try!(uc.add_block_hook(1, 0, move |uc, address, size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
             scheduler_timeslice_counter_hook.set(counter);
             guest_code_bytes_hook.set(guest_code_bytes_hook.get() + u64::from(size));
+            #[cfg(test)]
+            if let Some(probe) = &native_mixed_jr_stop_probe_timeslice_hook {
+                let state = probe.get();
+                if !state.service_forced && address as u32 == state.jr_pc {
+                    probe.set(NativeMixedJrStopProbe {
+                        service_forced: true,
+                        ..state
+                    });
+                    // Test only: enter the existing safe-PC service path at
+                    // this real JR block, without inventing a stop reason.
+                    scheduler_timeslice_pending_hook.set(true);
+                }
+            }
             if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL == 0 {
                 scheduler_timeslice_pending_hook.set(true);
             }
@@ -7804,6 +7832,23 @@ impl UnicornMips {
                         if native_hook_stop_reason_timeslice_hook.get().is_none() {
                             native_hook_stop_reason_timeslice_hook
                                 .set(Some(NativeHookStopReason::VisibleParkedPeerYield));
+                        }
+                        #[cfg(test)]
+                        if let Some(probe) = &native_mixed_jr_stop_probe_timeslice_hook {
+                            let state = probe.get();
+                            if state.service_forced
+                                && !state.checked_stop_seen
+                                && yield_pc == state.jr_pc
+                            {
+                                probe.set(NativeMixedJrStopProbe {
+                                    checked_stop_seen: true,
+                                    ..state
+                                });
+                                // Keep this native callback active after its
+                                // checked stop so Unicorn's own timer, not a
+                                // substituted query, can expire concurrently.
+                                std::thread::sleep(state.pause_after_checked_stop);
+                            }
                         }
                     } else {
                         *native_hook_control_error_timeslice_hook.borrow_mut() = Some(format!(
