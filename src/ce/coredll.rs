@@ -64664,6 +64664,7 @@ pub(crate) struct SendMessageTimeoutBlockState {
     pub send_id: u64,
     pub result_ptr: u32,
     pub timeout_ms: u32,
+    pub flags: u32,
     pub start_ms: u32,
 }
 
@@ -64686,20 +64687,7 @@ pub(crate) fn send_message_timeout_block_prepare(
     let flags = raw_arg(args, 4);
     let timeout_ms = raw_arg(args, 5);
     let result_ptr = raw_arg(args, 6);
-    if timeout_ms == 0 {
-        return None;
-    }
-    if flags & !SMTO_SUPPORTED_CE_FLAGS != 0 {
-        return None;
-    }
-    let target_thread = kernel
-        .gwe
-        .window(hwnd)
-        .filter(|w| !w.destroyed)
-        .map(|w| w.thread_id)?;
-    if target_thread == thread_id {
-        return None;
-    }
+    let target_thread = send_message_timeout_block_target_thread(kernel, thread_id, args)?;
     const CE_HUNG_THRESHOLD_MS: u32 = 5000;
     if flags & SMTO_ABORTIFHUNG != 0
         && kernel.gwe.is_thread_hung(
@@ -64728,8 +64716,27 @@ pub(crate) fn send_message_timeout_block_prepare(
         send_id,
         result_ptr,
         timeout_ms,
+        flags,
         start_ms,
     })
+}
+
+/// Read-only eligibility check for the native parked SendMessageTimeout path.
+/// Nonblocking and same-thread calls must continue through the raw API path.
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
+pub(crate) fn send_message_timeout_block_target_thread(
+    kernel: &CeKernel,
+    thread_id: u32,
+    args: &[u32],
+) -> Option<u32> {
+    if raw_arg(args, 5) == 0 || raw_arg(args, 4) & !SMTO_SUPPORTED_CE_FLAGS != 0 {
+        return None;
+    }
+    kernel
+        .gwe
+        .window(raw_arg(args, 0))
+        .filter(|window| !window.destroyed && window.thread_id != thread_id)
+        .map(|window| window.thread_id)
 }
 
 fn translate_message_raw<M: CoredllGuestMemory>(
