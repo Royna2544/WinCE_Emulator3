@@ -14450,6 +14450,24 @@ fn map_sealed_image_runs<D>(
 #[cfg(feature = "unicorn")]
 type ActivePrivatePageGuards = RefCell<BTreeMap<usize, StablePrivatePageExecutionGuard>>;
 
+// Opt-in test profile only. This records the existing fresh-owner mapper's
+// Rust preflight/setup separately from its raw Unicorn pointer-map call.
+#[cfg(all(test, feature = "unicorn"))]
+#[derive(Clone, Copy, Default)]
+struct NativePrivateMapProfile {
+    mapped_pages: u64,
+    rust_setup_ns: u128,
+    native_region_query_ns: u128,
+    mapped_range_query_ns: u128,
+    mem_map_ptr_ns: u128,
+}
+
+#[cfg(all(test, feature = "unicorn"))]
+thread_local! {
+    static NATIVE_PRIVATE_MAP_PROFILE: RefCell<Option<NativePrivateMapProfile>> =
+        const { RefCell::new(None) };
+}
+
 #[cfg(feature = "unicorn")]
 fn native_page_perms<D>(uc: &unicorn_engine::Unicorn<'_, D>, page: u32) -> Result<Option<u32>> {
     let begin = u64::from(page);
@@ -14482,6 +14500,8 @@ fn map_private_slab_page<D>(
     native_pins: &NativeMappingPins,
     active_guards: Option<&ActivePrivatePageGuards>,
 ) -> Result<()> {
+    #[cfg(test)]
+    let profile_started = std::time::Instant::now();
     let identity = pin.identity();
     let page = identity.page_base();
     if identity.owner() != owner
@@ -14525,7 +14545,11 @@ fn map_private_slab_page<D>(
         host_address: pin.native_ptr() as usize,
         perms: perms.0 as u32,
     };
+    #[cfg(test)]
+    let native_region_query_started = std::time::Instant::now();
     let native_perms = native_page_perms(uc, page)?;
+    #[cfg(test)]
+    let native_region_query_elapsed = native_region_query_started.elapsed();
     if let Some(existing) = mapped.private_pages.get(&page) {
         if *existing != expected || native_perms != Some(expected.perms) {
             return Err(Error::Backend(format!(
@@ -14534,7 +14558,12 @@ fn map_private_slab_page<D>(
         }
         return Ok(());
     }
-    if native_perms.is_some() || is_guest_page_mapped(mapped, page) {
+    #[cfg(test)]
+    let mapped_range_query_started = std::time::Instant::now();
+    let mapped_collision = native_perms.is_none() && is_guest_page_mapped(mapped, page);
+    #[cfg(test)]
+    let mapped_range_query_elapsed = mapped_range_query_started.elapsed();
+    if native_perms.is_some() || mapped_collision {
         return Err(Error::Backend(format!(
             "private slab page 0x{page:08x} collides with an unowned native mapping"
         )));
@@ -14567,17 +14596,33 @@ fn map_private_slab_page<D>(
     // SAFETY: the page is exactly 4 KiB, fixed, writable and page-aligned;
     // `native_pins` retains it for at least the lifetime of this native owner.
     // Active execution is fenced by `active_guards` through emu_start.
-    unsafe {
+    #[cfg(test)]
+    let mem_map_ptr_started = std::time::Instant::now();
+    let native_map_result = unsafe {
         uc.mem_map_ptr(
             u64::from(page),
             STABLE_PRIVATE_PAGE_SIZE as u64,
             perms,
             pin.native_ptr(),
         )
-    }
-    .map_err(|err| Error::Backend(format!("map private slab page 0x{page:08x}: {err:?}")))?;
+    };
+    #[cfg(test)]
+    let mem_map_ptr_elapsed = mem_map_ptr_started.elapsed();
+    native_map_result
+        .map_err(|err| Error::Backend(format!("map private slab page 0x{page:08x}: {err:?}")))?;
     mapped.private_pages.insert(page, expected);
     mapped.ranges.push((page, STABLE_PRIVATE_PAGE_SIZE as u32));
+    #[cfg(test)]
+    NATIVE_PRIVATE_MAP_PROFILE.with(|slot| {
+        if let Some(profile) = slot.borrow_mut().as_mut() {
+            let total = profile_started.elapsed();
+            profile.mapped_pages += 1;
+            profile.rust_setup_ns += total.as_nanos() - mem_map_ptr_elapsed.as_nanos();
+            profile.native_region_query_ns += native_region_query_elapsed.as_nanos();
+            profile.mapped_range_query_ns += mapped_range_query_elapsed.as_nanos();
+            profile.mem_map_ptr_ns += mem_map_ptr_elapsed.as_nanos();
+        }
+    });
     Ok(())
 }
 
@@ -35300,6 +35345,93 @@ mod guest_thread_stack_tests {
             blobs.is_empty(),
             "heap growth never creates a copied RAM blob"
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opt-in 8192-page fresh native owner mapping profile"]
+    fn profile_fixed_heap_8192_pages_on_fresh_native_owner() -> Result<()> {
+        use crate::ce::memory::PROCESS_HEAP_HANDLE;
+
+        const PAGE_COUNT: usize = 8192;
+        const HEAP_BYTES: u32 = (PAGE_COUNT * STABLE_PRIVATE_PAGE_SIZE) as u32;
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
+        let mapped = canonical_heap_test_mapping(&mut kernel)?;
+        let budget_before = kernel.memory.private_commit_available_bytes();
+        let heap_base = kernel
+            .memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, HEAP_BYTES)
+            .expect("32-MiB heap allocation fits fixed reservation");
+        assert_eq!(heap_base, GUEST_HEAP_ARENA_BASE);
+
+        let prepare_started = std::time::Instant::now();
+        let prepared = kernel
+            .memory
+            .prepare_fixed_heap_growth(owner, kernel.memory.heap_high_water_mark(owner))
+            .expect("32-MiB heap growth fits page budget");
+        assert_eq!(prepared.new_page_pins().len(), PAGE_COUNT);
+        assert_eq!(
+            kernel.memory.commit_prepared_private_vm(prepared),
+            Some(heap_base + HEAP_BYTES)
+        );
+        let prepare_and_commit = prepare_started.elapsed();
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget_before - u64::from(HEAP_BYTES)
+        );
+        assert_eq!(kernel.memory.stable_page_pins_for(owner).len(), PAGE_COUNT);
+
+        let fresh_started = std::time::Instant::now();
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let fresh_engine = fresh_started.elapsed();
+        let native_regions_before = uc.mem_regions().unwrap().len();
+        let pins = NativeMappingPins::default();
+        let guards = RefCell::new(BTreeMap::new());
+        let mut mapped = mapped.into_inner();
+        NATIVE_PRIVATE_MAP_PROFILE.with(|slot| {
+            assert!(slot.borrow().is_none(), "profile must start unarmed");
+            *slot.borrow_mut() = Some(NativePrivateMapProfile::default());
+        });
+        let mapping_started = std::time::Instant::now();
+        let mapping_result =
+            map_private_slab_pages(&mut uc, &kernel, &mut mapped, owner, &pins, Some(&guards));
+        let mapping_wall = mapping_started.elapsed();
+        let profile = NATIVE_PRIVATE_MAP_PROFILE.with(|slot| {
+            slot.borrow_mut()
+                .take()
+                .expect("armed native mapping profile")
+        });
+        mapping_result?;
+        assert_eq!(profile.mapped_pages as usize, PAGE_COUNT);
+        assert_eq!(mapped.private_pages.len(), PAGE_COUNT);
+        assert_eq!(pins.private_len(), PAGE_COUNT);
+        let native_regions_after = uc.mem_regions().unwrap().len();
+        let rust_other_ns = profile
+            .rust_setup_ns
+            .saturating_sub(profile.native_region_query_ns)
+            .saturating_sub(profile.mapped_range_query_ns);
+        println!(
+            "OM2_NATIVE_FRESH_MAP_PROFILE pages={PAGE_COUNT} heap_bytes={HEAP_BYTES} \
+             prepare_commit_ms={:.3} fresh_engine_ms={:.3} map_wall_ms={:.3} \
+             rust_setup_ms={:.3} native_regions_query_ms={:.3} mapped_ranges_query_ms={:.3} \
+             rust_other_ms={:.3} mem_map_ptr_ms={:.3} native_regions_before={} \
+             native_regions_after={} native_map_calls={}",
+            prepare_and_commit.as_secs_f64() * 1000.0,
+            fresh_engine.as_secs_f64() * 1000.0,
+            mapping_wall.as_secs_f64() * 1000.0,
+            profile.rust_setup_ns as f64 / 1_000_000.0,
+            profile.native_region_query_ns as f64 / 1_000_000.0,
+            profile.mapped_range_query_ns as f64 / 1_000_000.0,
+            rust_other_ns as f64 / 1_000_000.0,
+            profile.mem_map_ptr_ns as f64 / 1_000_000.0,
+            native_regions_before,
+            native_regions_after,
+            profile.mapped_pages,
+        );
+        drop(uc);
+        drop(guards);
+        drop(pins);
         Ok(())
     }
     #[test]
