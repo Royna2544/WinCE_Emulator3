@@ -7,9 +7,11 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
 - **Native memory performance remains a live-run gate:** a synthetic
   8,192-page (32-MiB) fixed heap originally took 78,689.550 ms to map and
   another 75.753 s to close its fresh owner. Fixed private heap/stack pages
-  now use sparse 1-MiB host blocks and per-page pins/budget; one interim
-  release control mapped the same 8,192 pages in 32 calls and 4.427 ms,
-  closing in 0.398 ms. This is not an iNavi speed, lag or RSS result
+  now use sparse 1-MiB host blocks and per-page pins/budget; the final
+  release control mapped the same 8,192 pages in 32 calls and 5.056 ms,
+  closing in 0.530 ms. The same-binary old-shape control omitted the old
+  end-of-slice readback copy, so no full-slice speed ordering is established.
+  This is not an iNavi speed, lag or RSS result
   ([mapper receipt](evidence/om2-native-map-profile-20261014/validation.receipt.md)).
 - Public shared-view slabs and ordinary private `VirtualAlloc` slabs still
   have independent 4-KiB host pages and one `mem_map_ptr` per mapped page.
@@ -60,9 +62,10 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   [E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md),
   [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
-- The first canonical thread/process alias slice is source-implemented but not
-  finally gated: six Task controls are active and six remain ignored (ledger
-  E-8, E-11, E-26). Thread aliases now share one mutable record and one
+- The first canonical thread/process alias slice passed its frozen-source
+  gates: six Task controls are active and six remain ignored (ledger E-8,
+  E-11, E-26; [receipt](evidence/stage3-alias-20261014/validation.receipt.md)).
+  Thread aliases now share one mutable record and one
   canonical wake index, but creation-process ownership, boot/child primary
   identity, last-public-handle execution, wait pins and clone relineage remain
   open. Process termination can signal a process without completing every
