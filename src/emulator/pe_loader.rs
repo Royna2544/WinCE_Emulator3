@@ -15,7 +15,7 @@ use crate::{
         memory::MemoryPerms,
     },
     error::{Error, Result},
-    pe::PeImage,
+    pe::{PeImage, SectionHeader},
 };
 
 // ── Structs shared between loader and runtime ────────────────────────────────
@@ -359,6 +359,129 @@ pub(crate) fn align_up_4k(size: u32) -> Result<u32> {
         .ok_or_else(|| Error::InvalidArgument("mapping size overflow".to_owned()))
 }
 
+const IMAGE_PAGE_SIZE: u32 = 0x1000;
+const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+const IMAGE_SCN_MEM_READ: u32 = 0x4000_0000;
+const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
+
+/// A complete image page borrowing the final, already-patched loader bytes.
+/// Selection does not allocate or copy a second image buffer.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct ImmutableImagePage<'a> {
+    pub(crate) rva: u32,
+    pub(crate) perms: MemoryPerms,
+    pub(crate) bytes: &'a [u8],
+}
+
+/// Identify pages that may later be sealed and mapped as immutable image bytes.
+/// All ranges are image-relative, half-open `(rva, size)` pairs. A page must
+/// be fully inside exactly one non-writable, readable section, with no header
+/// or patch-range overlap. This only selects candidates; it does not publish
+/// native mappings or change the existing loader's RWX behavior.
+#[allow(dead_code)]
+pub(crate) fn eligible_immutable_image_pages<'a>(
+    size_of_image: u32,
+    size_of_headers: u32,
+    sections: &[SectionHeader],
+    patched_image: &'a [u8],
+    excluded_rva_ranges: &[(u32, u32)],
+) -> Result<Vec<ImmutableImagePage<'a>>> {
+    let image_len = usize::try_from(size_of_image)
+        .map_err(|_| Error::InvalidArgument("image size does not fit host usize".to_owned()))?;
+    if size_of_headers > size_of_image || patched_image.len() < image_len {
+        return Err(Error::InvalidArgument(
+            "immutable image layout exceeds final mapped bytes".to_owned(),
+        ));
+    }
+
+    let mut section_spans = Vec::with_capacity(sections.len());
+    for section in sections {
+        let end = section
+            .virtual_address
+            .checked_add(section.virtual_size.max(section.size_of_raw_data))
+            .ok_or_else(|| Error::InvalidArgument("image section RVA overflow".to_owned()))?;
+        if end > size_of_image {
+            return Err(Error::InvalidArgument(
+                "image section exceeds SizeOfImage".to_owned(),
+            ));
+        }
+        section_spans.push((section.virtual_address, end, section.characteristics));
+    }
+
+    let mut excluded_spans = Vec::with_capacity(excluded_rva_ranges.len());
+    for &(start, size) in excluded_rva_ranges {
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| Error::InvalidArgument("image patch RVA overflow".to_owned()))?;
+        if end > size_of_image {
+            return Err(Error::InvalidArgument(
+                "image patch range exceeds SizeOfImage".to_owned(),
+            ));
+        }
+        if size != 0 {
+            excluded_spans.push((start, end));
+        }
+    }
+
+    let mut pages = Vec::new();
+    for index in 0..size_of_image / IMAGE_PAGE_SIZE {
+        let page_rva = index
+            .checked_mul(IMAGE_PAGE_SIZE)
+            .ok_or_else(|| Error::InvalidArgument("image page RVA overflow".to_owned()))?;
+        let page_end = page_rva
+            .checked_add(IMAGE_PAGE_SIZE)
+            .ok_or_else(|| Error::InvalidArgument("image page end overflow".to_owned()))?;
+        if page_rva < size_of_headers
+            || excluded_spans
+                .iter()
+                .any(|&(start, end)| page_rva < end && start < page_end)
+        {
+            continue;
+        }
+
+        let mut overlapping_sections = 0;
+        let mut perms = None;
+        for &(start, end, characteristics) in &section_spans {
+            if page_rva < end && start < page_end {
+                overlapping_sections += 1;
+                if overlapping_sections > 1 {
+                    perms = None;
+                    break;
+                }
+                if start <= page_rva
+                    && page_end <= end
+                    && characteristics & IMAGE_SCN_MEM_READ != 0
+                    && characteristics & IMAGE_SCN_MEM_WRITE == 0
+                {
+                    let mut selected = MemoryPerms::READ;
+                    if characteristics & IMAGE_SCN_MEM_EXECUTE != 0 {
+                        selected |= MemoryPerms::EXEC;
+                    }
+                    perms = Some(selected);
+                }
+            }
+        }
+        if let Some(perms) = perms {
+            let start = usize::try_from(page_rva).map_err(|_| {
+                Error::InvalidArgument("image page offset does not fit host usize".to_owned())
+            })?;
+            let end = usize::try_from(page_end).map_err(|_| {
+                Error::InvalidArgument("image page end does not fit host usize".to_owned())
+            })?;
+            let bytes = patched_image.get(start..end).ok_or_else(|| {
+                Error::InvalidArgument("immutable image page exceeds final bytes".to_owned())
+            })?;
+            pages.push(ImmutableImagePage {
+                rva: page_rva,
+                perms,
+                bytes,
+            });
+        }
+    }
+    Ok(pages)
+}
+
 pub(crate) fn ranges_overlap(lhs_base: u32, lhs_size: u32, rhs_base: u32, rhs_size: u32) -> bool {
     let lhs_end = lhs_base.saturating_add(lhs_size);
     let rhs_end = rhs_base.saturating_add(rhs_size);
@@ -585,33 +708,38 @@ mod immutable_image_page_tests {
             section(".rdata", 0x3000, 0x1000, SCN_READ),
             section(".data", 0x4000, 0x1000, SCN_READ | SCN_WRITE),
         ];
-        let pages = eligible_immutable_image_pages(
-            0x6000,
-            0x1000,
-            &sections,
-            &patched,
-            &[(0x2001, 4)],
-        )
-        .unwrap();
+        let pages =
+            eligible_immutable_image_pages(0x6000, 0x1000, &sections, &patched, &[(0x2001, 4)])
+                .unwrap();
 
-        assert_eq!(pages.iter().map(|page| page.rva).collect::<Vec<_>>(), [0x1000, 0x3000]);
+        assert_eq!(
+            pages.iter().map(|page| page.rva).collect::<Vec<_>>(),
+            [0x1000, 0x3000]
+        );
         assert_eq!(pages[0].perms, MemoryPerms::READ | MemoryPerms::EXEC);
         assert_eq!(pages[1].perms, MemoryPerms::READ);
         assert_eq!(pages[0].bytes[0x37], 0xe8);
-        assert!(std::ptr::eq(pages[0].bytes.as_ptr(), patched[0x1000..].as_ptr()));
+        assert!(std::ptr::eq(
+            pages[0].bytes.as_ptr(),
+            patched[0x1000..].as_ptr()
+        ));
     }
 
     #[test]
     fn immutable_image_page_uses_characteristics_not_section_names() {
-        let patched = vec![0; 0x4000];
+        let patched = vec![0; 0x5000];
         let sections = [
             section(".text", 0x1000, 0x1000, SCN_READ | SCN_EXECUTE | SCN_WRITE),
             section(".data", 0x2000, 0x1000, SCN_READ | SCN_EXECUTE),
+            section("execute-only", 0x3000, 0x1000, SCN_EXECUTE),
         ];
-        let pages = eligible_immutable_image_pages(0x4000, 0x1000, &sections, &patched, &[])
-            .unwrap();
+        let pages =
+            eligible_immutable_image_pages(0x5000, 0x1000, &sections, &patched, &[]).unwrap();
 
-        assert_eq!(pages.iter().map(|page| page.rva).collect::<Vec<_>>(), [0x2000]);
+        assert_eq!(
+            pages.iter().map(|page| page.rva).collect::<Vec<_>>(),
+            [0x2000]
+        );
         assert_eq!(pages[0].perms, MemoryPerms::READ | MemoryPerms::EXEC);
     }
 
@@ -624,46 +752,75 @@ mod immutable_image_page_tests {
             section("partial", 0x4000, 0x0800, SCN_READ),
             section("complete", 0x5000, 0x1000, SCN_READ),
         ];
-        let pages = eligible_immutable_image_pages(0x7000, 0x1800, &sections, &patched, &[])
-            .unwrap();
+        let pages =
+            eligible_immutable_image_pages(0x7000, 0x1800, &sections, &patched, &[]).unwrap();
 
-        assert_eq!(pages.iter().map(|page| page.rva).collect::<Vec<_>>(), [0x5000]);
+        assert_eq!(
+            pages.iter().map(|page| page.rva).collect::<Vec<_>>(),
+            [0x5000]
+        );
     }
 
     #[test]
     fn immutable_image_page_fails_closed_on_overflow_or_out_of_image_input() {
         let patched = vec![0; 0x3000];
-        assert!(eligible_immutable_image_pages(
+        assert!(
+            eligible_immutable_image_pages(
+                0x3000,
+                0x1000,
+                &[section("overflow", 0xffff_f000, 0x2000, SCN_READ)],
+                &patched,
+                &[],
+            )
+            .is_err()
+        );
+        assert!(
+            eligible_immutable_image_pages(
+                0x3000,
+                0x1000,
+                &[section("out-of-image", 0x2000, 0x2000, SCN_READ)],
+                &patched,
+                &[],
+            )
+            .is_err()
+        );
+        assert!(
+            eligible_immutable_image_pages(
+                0x3000,
+                0x1000,
+                &[section("valid", 0x1000, 0x1000, SCN_READ)],
+                &patched,
+                &[(0xffff_ffff, 2)],
+            )
+            .is_err()
+        );
+        assert!(
+            eligible_immutable_image_pages(
+                0x4000,
+                0x1000,
+                &[section("valid", 0x1000, 0x1000, SCN_READ)],
+                &patched,
+                &[],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn immutable_image_page_ignores_loader_trampoline_tail_past_size_of_image() {
+        let mut patched_with_tail = vec![0; 0x5000];
+        patched_with_tail[0x1004] = 0xa7;
+        patched_with_tail[0x4004] = 0xcc;
+        let pages = eligible_immutable_image_pages(
             0x3000,
             0x1000,
-            &[section("overflow", 0xffff_f000, 0x2000, SCN_READ)],
-            &patched,
+            &[section("code", 0x1000, 0x1000, SCN_READ | SCN_EXECUTE)],
+            &patched_with_tail,
             &[],
         )
-        .is_err());
-        assert!(eligible_immutable_image_pages(
-            0x3000,
-            0x1000,
-            &[section("out-of-image", 0x2000, 0x2000, SCN_READ)],
-            &patched,
-            &[],
-        )
-        .is_err());
-        assert!(eligible_immutable_image_pages(
-            0x3000,
-            0x1000,
-            &[section("valid", 0x1000, 0x1000, SCN_READ)],
-            &patched,
-            &[(0xffff_ffff, 2)],
-        )
-        .is_err());
-        assert!(eligible_immutable_image_pages(
-            0x4000,
-            0x1000,
-            &[section("valid", 0x1000, 0x1000, SCN_READ)],
-            &patched,
-            &[],
-        )
-        .is_err());
+        .unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].rva, 0x1000);
+        assert_eq!(pages[0].bytes[4], 0xa7);
     }
 }
