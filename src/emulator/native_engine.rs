@@ -145,9 +145,11 @@ impl NativeMappingPins {
     }
 
     pub(crate) fn has_image(&self, base: u32, host_address: usize, len: u32) -> bool {
-        self.0.borrow().image_runs.get(&base).is_some_and(|pin| {
-            pin.host_address == host_address && pin.len == len
-        })
+        self.0
+            .borrow()
+            .image_runs
+            .get(&base)
+            .is_some_and(|pin| pin.host_address == host_address && pin.len == len)
     }
 
     pub(crate) fn image_len(&self) -> usize {
@@ -161,9 +163,11 @@ impl NativeMappingPins {
         expected_len: u32,
     ) -> bool {
         let mut pins = self.0.borrow_mut();
-        if !pins.image_runs.get(&base).is_some_and(|pin| {
-            pin.host_address == expected_host_address && pin.len == expected_len
-        }) {
+        if !pins
+            .image_runs
+            .get(&base)
+            .is_some_and(|pin| pin.host_address == expected_host_address && pin.len == expected_len)
+        {
             return false;
         }
         pins.image_runs.remove(&base).is_some()

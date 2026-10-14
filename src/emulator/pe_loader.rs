@@ -1153,4 +1153,179 @@ mod immutable_image_page_tests {
         assert_eq!(cloned[0].0.bytes[0], 0xee);
         assert!(cloned[1].0.bytes.as_mut_owned().is_none());
     }
+
+    /// Read-only, opt-in coverage diagnostic for a real PE. This calls the
+    /// production loader but never constructs a CPU or executes guest code.
+    #[cfg(feature = "unicorn")]
+    #[test]
+    #[ignore = "opt-in read-only real EXE loader coverage"]
+    fn real_main_image_sealed_page_coverage() -> Result<()> {
+        use crate::emulator::dll_search::{
+            emulator_provided_import_module, normalize_module_name, resolve_dll_path,
+        };
+        use std::{collections::BTreeSet, path::PathBuf};
+
+        let exe_path =
+            PathBuf::from(std::env::var_os("WINCE_COVERAGE_EXE").ok_or_else(|| {
+                Error::InvalidArgument("WINCE_COVERAGE_EXE is required".to_owned())
+            })?);
+        let dll_dir =
+            PathBuf::from(std::env::var_os("WINCE_COVERAGE_DLL_DIR").ok_or_else(|| {
+                Error::InvalidArgument("WINCE_COVERAGE_DLL_DIR is required".to_owned())
+            })?);
+        let image = PeImage::inspect(&exe_path)?;
+        let search_dirs = [dll_dir];
+        let mut loaded = Vec::new();
+        let mut seen = BTreeSet::new();
+        for descriptor in &image.imports {
+            let normalized = normalize_module_name(&descriptor.module_name);
+            if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
+                continue;
+            }
+            let path =
+                resolve_dll_path(&descriptor.module_name, None, &search_dirs).ok_or_else(|| {
+                    Error::MissingImportDll {
+                        dll: descriptor.module_name.clone(),
+                    }
+                })?;
+            loaded.push(PeImage::inspect(path)?);
+        }
+        if seen.insert(normalize_module_name("commctrl.dll"))
+            && let Some(path) = resolve_dll_path("commctrl.dll", None, &search_dirs)
+        {
+            loaded.push(PeImage::inspect(path)?);
+        }
+        let parent = exe_path.parent().ok_or_else(|| {
+            Error::InvalidArgument("coverage EXE has no parent directory".to_owned())
+        })?;
+        let mut siblings = std::fs::read_dir(parent)
+            .map_err(|source| Error::Read {
+                path: parent.to_path_buf(),
+                source,
+            })?
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.path())
+                    .map_err(|source| Error::Read {
+                        path: parent.to_path_buf(),
+                        source,
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        siblings.sort();
+        for path in siblings {
+            if !path.is_file()
+                || !path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"))
+            {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    Error::InvalidArgument("coverage DLL filename is not UTF-8".to_owned())
+                })?;
+            let normalized = normalize_module_name(name);
+            if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
+                continue;
+            }
+            loaded.push(PeImage::inspect(path)?);
+        }
+
+        let image_size = image.optional_header.size_of_image;
+        if image_size & (IMAGE_PAGE_SIZE - 1) != 0 {
+            return Err(Error::InvalidArgument(
+                "coverage SizeOfImage is not page-aligned".to_owned(),
+            ));
+        }
+        let total_pages = image_size / IMAGE_PAGE_SIZE;
+        let original = image.mapped_image()?;
+        let candidate_pages = eligible_immutable_image_pages(
+            image_size,
+            image.optional_header.size_of_headers,
+            &image.sections,
+            &original,
+            &[],
+        )?;
+        let non_writable_pages = candidate_pages.len();
+        let result = load_pe_image_with_dlls(&image, &loaded)?;
+        let main_name = format!("image:{}", image.path);
+        let main_blobs: Vec<_> = result
+            .mapped_blobs
+            .iter()
+            .filter(|blob| blob.name == main_name)
+            .collect();
+        let sealed_pages: usize = result
+            .mapped_blobs
+            .iter()
+            .filter(|blob| blob.name == main_name && blob.bytes.sealed_pin().is_some())
+            .map(|blob| blob.bytes.len() / IMAGE_PAGE_SIZE as usize)
+            .sum();
+        let mut excluded_ranges: Vec<(u32, u32)> = image
+            .imports
+            .iter()
+            .flat_map(|descriptor| descriptor.imports.iter().map(|thunk| (thunk.iat_rva, 4)))
+            .collect();
+        excluded_ranges.extend(result.trampoline_jumps.iter().filter_map(|jump| {
+            jump.origin
+                .checked_sub(image.image_base())
+                .filter(|&rva| rva < image_size)
+                .map(|rva| (rva, 8))
+        }));
+        let mut changed_pages = 0usize;
+        let mut unchanged_excluded_pages = 0usize;
+        for page in candidate_pages {
+            let address = image
+                .image_base()
+                .checked_add(page.rva)
+                .ok_or_else(|| Error::Backend("coverage page VA overflow".to_owned()))?;
+            let blob = main_blobs
+                .iter()
+                .find(|blob| {
+                    address >= blob.base
+                        && (address - blob.base) as usize + IMAGE_PAGE_SIZE as usize
+                            <= blob.bytes.len()
+                })
+                .ok_or_else(|| Error::Backend("coverage page has no main blob".to_owned()))?;
+            let offset = (address - blob.base) as usize;
+            if &blob.bytes[offset..offset + IMAGE_PAGE_SIZE as usize] != page.bytes {
+                changed_pages += 1;
+                continue;
+            }
+            if excluded_ranges.iter().any(|&(start, size)| {
+                page.rva < start.saturating_add(size) && start < page.rva + IMAGE_PAGE_SIZE
+            }) {
+                unchanged_excluded_pages += 1;
+            }
+        }
+        if sealed_pages > non_writable_pages || sealed_pages > total_pages as usize {
+            return Err(Error::Backend(
+                "sealed coverage exceeds a denominator".to_owned(),
+            ));
+        }
+        if sealed_pages + changed_pages + unchanged_excluded_pages != non_writable_pages {
+            return Err(Error::Backend(
+                "sealed coverage breakdown mismatch".to_owned(),
+            ));
+        }
+        for dll in &loaded {
+            eprintln!("real_main_image_coverage_dll path={}", dll.path);
+        }
+        eprintln!(
+            "real_main_image_coverage exe={} dlls={} image_bytes={} total_pages={} non_writable_section_pages={} changed_pages={} unchanged_excluded_pages={} sealed_pages={} sealed_mib={:.6}",
+            exe_path.display(),
+            loaded.len(),
+            image_size,
+            total_pages,
+            non_writable_pages,
+            changed_pages,
+            unchanged_excluded_pages,
+            sealed_pages,
+            sealed_pages as f64 * IMAGE_PAGE_SIZE as f64 / (1024.0 * 1024.0),
+        );
+        Ok(())
+    }
 }
