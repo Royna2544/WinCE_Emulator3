@@ -1,10 +1,13 @@
-//! Process-owned native engine boundary (module declaration must be Unicorn-gated).
+//! Native engine boundary (module declaration must be Unicorn-gated).
 //!
-//! The stored engine is hook-free. A lease creates a lifetime-scoped, non-owning
-//! wrapper over its handle. Every run-scoped hook must use the lease's tracked
-//! registration methods; do not escape a raw/cloned wrapper or register through
-//! `DerefMut`. Normal reuse requires checked `finish` and a complete mapping ledger.
-//! Dropping a lease on an early return discards its native engine and metadata.
+//! Fresh-per-slice is the default. A lease owns one hook-free native engine and
+//! creates a lifetime-scoped, non-owning wrapper for run-local callbacks. On
+//! fresh finish or abort, the owning wrapper drops while callback boxes and
+//! backing pins remain alive; only the exact-key CPU snapshot may survive.
+//! The vendored Unicorn 2.1.5 `uc_close` has only successful exits; changing
+//! that source or the Rust wrapper invalidates this close proof (see
+//! `vendor/unicorn-engine-sys/PATCHES.md`). Do not escape a raw/cloned wrapper.
+//! Experimental persistent reuse is an explicit opt-in for Stage 8 only.
 //!
 //! K is the authentic (thread ID, saved scalar CPU context) resume key. P is the
 //! engine's mapping ledger; cloning never copies a live engine or that ledger.
@@ -17,6 +20,7 @@ use std::{
     fmt,
     ops::{Deref, DerefMut},
     rc::Rc,
+    sync::OnceLock,
 };
 use unicorn_engine::{
     Context, UcHookId, Unicorn,
@@ -28,6 +32,12 @@ struct NativeSnapshot<K> {
     cpu: Context,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeEngineLifetime {
+    FreshPerSlice,
+    PersistentExperimental,
+}
+
 struct NativeSlot<K, P> {
     engine: Option<Unicorn<'static, ()>>,
     blank: Option<Rc<Context>>,
@@ -36,7 +46,7 @@ struct NativeSlot<K, P> {
     mapping_pins: Option<NativeMappingPins>,
     leased: bool,
     #[cfg(test)]
-    fail_next_finish_after_hook_cleanup: bool,
+    fail_next_finish_before_publication: bool,
     #[cfg(test)]
     fail_next_count_stop_query_after_native_value: Option<usize>,
 }
@@ -163,6 +173,7 @@ impl<K, P> Drop for NativeSlot<K, P> {
 pub(crate) struct ProcessNativeEngine<K, P = ()> {
     arch: Arch,
     mode: Mode,
+    lifetime: NativeEngineLifetime,
     slot: Rc<RefCell<NativeSlot<K, P>>>,
 }
 
@@ -172,6 +183,7 @@ impl<K, P> fmt::Debug for ProcessNativeEngine<K, P> {
         f.debug_struct("ProcessNativeEngine")
             .field("arch", &self.arch)
             .field("mode", &self.mode)
+            .field("lifetime", &self.lifetime)
             .field("leased", &slot.leased)
             .field("initialized", &slot.engine.is_some())
             .field("has_snapshot", &slot.saved.is_some())
@@ -194,6 +206,7 @@ impl<K, P> Clone for ProcessNativeEngine<K, P> {
         Self {
             arch: self.arch,
             mode: self.mode,
+            lifetime: self.lifetime,
             slot: Rc::new(RefCell::new(NativeSlot {
                 engine: None,
                 blank: None,
@@ -202,7 +215,7 @@ impl<K, P> Clone for ProcessNativeEngine<K, P> {
                 mapping_pins: None,
                 leased: false,
                 #[cfg(test)]
-                fail_next_finish_after_hook_cleanup: false,
+                fail_next_finish_before_publication: false,
                 #[cfg(test)]
                 fail_next_count_stop_query_after_native_value: None,
             })),
@@ -212,9 +225,27 @@ impl<K, P> Clone for ProcessNativeEngine<K, P> {
 
 impl<K, P> ProcessNativeEngine<K, P> {
     pub(crate) fn new(arch: Arch, mode: Mode) -> Self {
+        // Read the Stage 8 experiment switch once for the host process.
+        // Clones and parked CPUs retain their originally selected lifetime.
+        static DEFAULT_LIFETIME: OnceLock<NativeEngineLifetime> = OnceLock::new();
+        let lifetime = *DEFAULT_LIFETIME.get_or_init(|| {
+            if matches!(
+                std::env::var("WINCE_EMU_PERSISTENT_NATIVE_ENGINE"),
+                Ok(value) if value == "1"
+            ) {
+                NativeEngineLifetime::PersistentExperimental
+            } else {
+                NativeEngineLifetime::FreshPerSlice
+            }
+        });
+        Self::with_lifetime(arch, mode, lifetime)
+    }
+
+    pub(crate) fn with_lifetime(arch: Arch, mode: Mode, lifetime: NativeEngineLifetime) -> Self {
         Self {
             arch,
             mode,
+            lifetime,
             slot: Rc::new(RefCell::new(NativeSlot {
                 engine: None,
                 blank: None,
@@ -223,11 +254,16 @@ impl<K, P> ProcessNativeEngine<K, P> {
                 mapping_pins: None,
                 leased: false,
                 #[cfg(test)]
-                fail_next_finish_after_hook_cleanup: false,
+                fail_next_finish_before_publication: false,
                 #[cfg(test)]
                 fail_next_count_stop_query_after_native_value: None,
             })),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_persistent_for_test(arch: Arch, mode: Mode) -> Self {
+        Self::with_lifetime(arch, mode, NativeEngineLifetime::PersistentExperimental)
     }
 
     /// Owns the slot rather than borrowing a field of the enclosing CPU.
@@ -237,6 +273,11 @@ impl<K, P> ProcessNativeEngine<K, P> {
             return Err(uc_error::RESOURCE);
         }
         let reused = slot.engine.is_some();
+        if self.lifetime == NativeEngineLifetime::FreshPerSlice && reused {
+            // A closed owner's ledger/blank context must never be interpreted
+            // as a fresh lease, even if an earlier path violated the policy.
+            return Err(uc_error::RESOURCE);
+        }
         let setup = (|| {
             let (mut owner, blank) = match slot.engine.take() {
                 Some(owner) => (owner, slot.blank.take().ok_or(uc_error::HANDLE)?),
@@ -281,6 +322,7 @@ impl<K, P> ProcessNativeEngine<K, P> {
             slot: Rc::clone(&self.slot),
             hooks: Vec::new(),
             reused,
+            lifetime: self.lifetime,
             closed: false,
         })
     }
@@ -294,13 +336,13 @@ impl<K, P> ProcessNativeEngine<K, P> {
             .map(|engine| engine.get_handle() as usize)
     }
 
-    /// Exercise the checked-finish failure boundary without corrupting an FFI
-    /// hook identifier. The one-shot flag belongs only to this native slot.
+    /// Exercise a finish failure after policy-specific teardown preflight but
+    /// before CPU/ledger publication. This is not a C `uc_close` failure.
     #[cfg(test)]
     pub(crate) fn arm_finish_failure_once_for_test(&self) {
         let mut slot = self.slot.borrow_mut();
         assert!(!slot.leased, "arm only before the native attempt");
-        slot.fail_next_finish_after_hook_cleanup = true;
+        slot.fail_next_finish_before_publication = true;
     }
 
     /// Test only: force the Rust adapter to observe a COUNT_STOP query error
@@ -316,48 +358,6 @@ impl<K, P> ProcessNativeEngine<K, P> {
         );
         slot.fail_next_count_stop_query_after_native_value = Some(expected_native_value);
     }
-
-    /// Observe a completed owner's RAM without creating a diagnostic lease.
-    /// Fresh-by-default engines have already closed and return None.
-    #[cfg(test)]
-    pub(crate) fn idle_owner_bytes_for_test(
-        &self,
-        address: u64,
-        size: usize,
-    ) -> Option<Result<Vec<u8>, uc_error>> {
-        let slot = self.slot.borrow();
-        assert!(!slot.leased, "cannot inspect a live native lease");
-        slot.engine
-            .as_ref()
-            .map(|owner| owner.mem_read_as_vec(address, size))
-    }
-
-    /// Isolate fresh-owner tests without changing the production lifetime.
-    /// A completed lease may retain a portable CPU snapshot, but the next
-    /// lease must derive its blank context and mapping ledger from a new owner.
-    #[cfg(test)]
-    pub(crate) fn close_idle_owner_preserving_snapshot_for_test(&self) {
-        let mut slot = self.slot.borrow_mut();
-        assert!(!slot.leased, "cannot close a live native lease");
-        assert!(
-            slot.saved.is_some(),
-            "no completed CPU snapshot to transfer"
-        );
-        if slot.engine.is_none() {
-            assert!(slot.blank.is_none() && slot.metadata.is_none());
-        }
-        let owner = slot.engine.take();
-        let blank = slot.blank.take();
-        let metadata = slot.metadata.take();
-        let mapping_pins = slot.mapping_pins.take();
-        drop(slot);
-        if let Some(pins) = mapping_pins {
-            quarantine_unchecked_close_pins(pins);
-        }
-        drop(owner);
-        drop(blank);
-        drop(metadata);
-    }
 }
 
 pub(crate) struct NativeEngineLease<'a, K, P> {
@@ -370,6 +370,7 @@ pub(crate) struct NativeEngineLease<'a, K, P> {
     slot: Rc<RefCell<NativeSlot<K, P>>>,
     hooks: Vec<UcHookId>,
     reused: bool,
+    lifetime: NativeEngineLifetime,
     closed: bool,
 }
 
@@ -542,15 +543,14 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
         Ok(false)
     }
 
-    /// Commit reuse only with a complete ledger and successful hook cleanup.
+    /// Commit the exact CPU snapshot only after complete native teardown.
+    /// Persistent experimental owners instead commit reuse and their ledger.
     pub(crate) fn finish(mut self) -> Result<(), uc_error> {
         self.close(true)
     }
 
-    /// Explicit failure boundary for callers that must observe hook-removal
-    /// errors. Unlike `finish`, this never publishes a reusable native owner.
-    /// The upstream wrapper cannot report uc_close status; pointer backing is
-    /// conservatively quarantined on this path, not claimed safely reusable.
+    /// Failure boundary: never publish a reusable owner or CPU snapshot.
+    /// Fresh owners close before releasing callback boxes and backing pins.
     pub(crate) fn abort_close(mut self) -> Result<(), uc_error> {
         self.close(false)
     }
@@ -559,6 +559,63 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
         if self.closed {
             return Ok(());
         }
+        if self.lifetime == NativeEngineLifetime::FreshPerSlice {
+            // `uc_close` in the pinned vendored 2.1.5 C source has only
+            // UC_ERR_OK exits (uc.c:497-570). A fresh owner is unique and
+            // hook-free itself; its nonowning run wrapper retains all Rust
+            // callback Boxes. Do not call remove_hook: that Rust wrapper drops
+            // a Box before its C call, and deletion is unnecessary when the
+            // complete native owner is closing outside emulation.
+            let failure = if commit && self.metadata.is_none() {
+                Some(uc_error::ARG)
+            } else {
+                None
+            };
+            #[cfg(test)]
+            let failure = if commit
+                && failure.is_none()
+                && std::mem::take(&mut self.slot.borrow_mut().fail_next_finish_before_publication)
+            {
+                Some(uc_error::RESOURCE)
+            } else {
+                failure
+            };
+            let owner = self
+                .owner
+                .take()
+                .expect("fresh native lease lost its owner");
+            let callbacks = self
+                .uc
+                .take()
+                .expect("fresh native lease lost its run wrapper");
+            drop(owner); // native hooks/maps are gone before Rust captures or pins
+            drop(callbacks);
+            let mut slot = self.slot.borrow_mut();
+            slot.engine = None;
+            slot.blank = None;
+            slot.saved = if commit && failure.is_none() {
+                self.saved.take()
+            } else {
+                None
+            };
+            slot.metadata = None;
+            slot.mapping_pins = None;
+            slot.leased = false;
+            #[cfg(test)]
+            {
+                slot.fail_next_finish_before_publication = false;
+                slot.fail_next_count_stop_query_after_native_value = None;
+            }
+            self.closed = true;
+            return match failure {
+                Some(err) => Err(err),
+                None => Ok(()),
+            };
+        }
+
+        // Stage 8 persistent opt-in: hooks must be removed before this owner
+        // can be reused. The fresh-default close proof does not accept this
+        // experimental branch as production-safe.
         let mut failure = None;
         while let Some(id) = self.hooks.pop() {
             if let Err(err) = self.uc.as_mut().unwrap().remove_hook(id) {
@@ -573,7 +630,7 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
         if commit && failure.is_none() {
             // Remove real hooks and check the ledger first; then make this
             // owner fail exactly once through the ordinary discard path.
-            if std::mem::take(&mut self.slot.borrow_mut().fail_next_finish_after_hook_cleanup) {
+            if std::mem::take(&mut self.slot.borrow_mut().fail_next_finish_before_publication) {
                 failure = Some(uc_error::RESOURCE);
             }
         }
@@ -604,7 +661,7 @@ impl<'a, K, P> NativeEngineLease<'a, K, P> {
             slot.leased = false;
             #[cfg(test)]
             {
-                slot.fail_next_finish_after_hook_cleanup = false;
+                slot.fail_next_finish_before_publication = false;
                 slot.fail_next_count_stop_query_after_native_value = None;
             }
         }
@@ -653,7 +710,9 @@ mod tests {
     }
 
     fn slot() -> ProcessNativeEngine<Key, Vec<(u64, u64)>> {
-        ProcessNativeEngine::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+        // Retain the old reuse/teardown diagnostics under explicit Stage 8
+        // policy. Production `new` now chooses fresh-per-slice by default.
+        ProcessNativeEngine::new_persistent_for_test(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
     }
 
     fn mapped(lease: &mut NativeEngineLease<'_, Key, Vec<(u64, u64)>>) {
@@ -711,6 +770,31 @@ mod tests {
             slot.identity().is_some(),
             "one-shot failure cannot fire twice"
         );
+    }
+
+    #[test]
+    fn fresh_finish_failure_closes_owner_before_releasing_pins() {
+        let slot: ProcessNativeEngine<Key, Vec<(u64, u64)>> = ProcessNativeEngine::with_lifetime(
+            Arch::MIPS,
+            Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+            NativeEngineLifetime::FreshPerSlice,
+        );
+        let drops = Rc::new(Cell::new(0));
+        slot.arm_finish_failure_once_for_test();
+        let mut lease = slot.lease().unwrap();
+        mapped(&mut lease);
+        lease.mapping_pins().pin(Dropped(Rc::clone(&drops)));
+        lease.add_code_hook(0x1000, 0x1010, |_, _, _| {}).unwrap();
+        lease.emu_start(0x1000, 0x1010, 100_000, 16).unwrap();
+        assert_eq!(lease.finish(), Err(uc_error::RESOURCE));
+        assert_eq!(drops.get(), 1, "closed fresh owner retained a pin");
+        assert!(slot.identity().is_none());
+        let mut replacement = slot.lease().unwrap();
+        assert!(!replacement.reused());
+        assert!(replacement.take_metadata().is_none());
+        mapped(&mut replacement);
+        replacement.finish().unwrap();
+        assert!(slot.identity().is_none());
     }
 
     #[test]
@@ -989,9 +1073,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: ledger E-7, Stage 2 O-P4 fresh owner closure"]
     fn native_context_survives_closed_owner_and_resumes_at_instruction_boundary() {
-        let slot = slot();
+        let slot: ProcessNativeEngine<Key, Vec<(u64, u64)>> = ProcessNativeEngine::with_lifetime(
+            Arch::MIPS,
+            Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+            NativeEngineLifetime::FreshPerSlice,
+        );
         let mut first = slot.lease().unwrap();
         mapped(&mut first);
         first.reg_write(RegisterMIPS::F0, 0x3f80_0000).unwrap();
@@ -1007,16 +1094,8 @@ mod tests {
         first.capture(saved.clone()).unwrap();
         first.finish().unwrap();
 
-        // Until fresh-per-slice is the default, force only this test's idle
-        // owner closed. Keep its immutable CPU snapshot to isolate whether
-        // Unicorn permits Context restore after the source owner is gone.
-        {
-            let mut state = slot.slot.borrow_mut();
-            state.blank = None;
-            state.metadata = None;
-            drop(state.engine.take());
-            assert!(state.saved.is_some());
-        }
+        // Ordinary finish closed the source owner while retaining the exact
+        // CPU snapshot. No test-only owner disposal is allowed here.
         assert!(slot.identity().is_none());
 
         let mut second = slot.lease().unwrap();
@@ -1055,6 +1134,71 @@ mod tests {
             slot.identity().is_none(),
             "Stage 2 default finish must close the fresh native owner"
         );
+    }
+
+    #[test]
+    fn fresh_owner_two_hundred_slices_reclaim_native_maps_and_pins() {
+        struct PinnedPage {
+            bytes: Box<[u8; 0x1000]>,
+            drops: Rc<Cell<usize>>,
+        }
+
+        impl Drop for PinnedPage {
+            fn drop(&mut self) {
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+
+        let slot: ProcessNativeEngine<Key, Vec<(u64, u64)>> = ProcessNativeEngine::with_lifetime(
+            Arch::MIPS,
+            Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+            NativeEngineLifetime::FreshPerSlice,
+        );
+        let drops = Rc::new(Cell::new(0));
+        for cycle in 0..200usize {
+            let mut lease = slot.lease().unwrap();
+            assert!(!lease.reused(), "cycle {cycle} inherited a native owner");
+            assert!(
+                lease.take_metadata().is_none(),
+                "cycle {cycle} inherited a closed owner's map ledger"
+            );
+            lease.mem_map(0x1000, 0x1000, Prot::ALL).unwrap();
+            let mut page = PinnedPage {
+                bytes: Box::new([0; 0x1000]),
+                drops: Rc::clone(&drops),
+            };
+            let ptr = page.bytes.as_mut_ptr();
+            lease.mapping_pins().pin(page);
+            assert_eq!(lease.mapping_pins().len(), 1);
+            // SAFETY: the pointer belongs to a fixed-size Box pinned by this
+            // lease. It remains live through native unmap and owner close.
+            unsafe { lease.mem_map_ptr(0x3000, 0x1000, Prot::ALL, ptr.cast()) }.unwrap();
+            let value = cycle as u32 + 1;
+            let words = [
+                0x2408_0000 | value, // addiu t0, zero, value
+                0x3c09_0000,         // lui t1, 0
+                0x3529_3000,         // ori t1, t1, 0x3000
+                0xad28_0000,         // sw t0, 0(t1)
+            ];
+            let program: Vec<u8> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+            lease.mem_write(0x1000, &program).unwrap();
+            lease.emu_start(0x1000, 0x1010, 100_000, 16).unwrap();
+            assert_eq!(
+                lease.mem_read_as_vec(0x3000, 4).unwrap(),
+                value.to_le_bytes()
+            );
+            lease.mem_unmap(0x3000, 0x1000).unwrap();
+            assert_eq!(
+                drops.get(),
+                cycle,
+                "native backing was dropped before fresh owner closure"
+            );
+            lease.set_metadata(vec![(0x1000, 0x1000)]);
+            lease.finish().unwrap();
+            assert!(slot.identity().is_none(), "cycle {cycle} retained an owner");
+            assert_eq!(drops.get(), cycle + 1, "cycle {cycle} retained a pin");
+        }
+        assert_eq!(slot.clone().lifetime, NativeEngineLifetime::FreshPerSlice);
     }
 
     #[test]

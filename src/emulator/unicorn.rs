@@ -55779,6 +55779,15 @@ mod unicorn_tests {
         Ok(cpu)
     }
 
+    fn phase1_persistent_counter_cpu(seed: u16, name: &str) -> crate::Result<super::UnicornMips> {
+        let mut cpu = phase1_counter_cpu(seed, name)?;
+        cpu.native_engine = super::ProcessNativeEngine::new_persistent_for_test(
+            Arch::MIPS,
+            Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+        );
+        Ok(cpu)
+    }
+
     fn phase1_global_hook_straight_line_cpu(name: &str) -> crate::Result<super::UnicornMips> {
         // One long basic block lets the per-instruction global hook reach its
         // 4096-instruction service point before the amortized block scheduler.
@@ -55977,7 +55986,7 @@ mod unicorn_tests {
     fn phase1_backend_reuses_engine_and_real_ram_across_ordinary_counted_runs() -> crate::Result<()>
     {
         let mut kernel = phase1_kernel("phase1-repeat.exe")?;
-        let mut cpu = phase1_counter_cpu(0x1000, "phase1-repeat.exe")?;
+        let mut cpu = phase1_persistent_counter_cpu(0x1000, "phase1-repeat.exe")?;
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
         assert!(cpu.native_engine_identity_for_test().is_none());
         phase1_run_twenty(&mut cpu, &mut kernel, &mut framebuffer)?;
@@ -55999,7 +56008,7 @@ mod unicorn_tests {
     #[test]
     fn phase1_backend_none_entry_resets_reused_native_registers() -> crate::Result<()> {
         let mut kernel = phase1_kernel("phase1-fresh-entry.exe")?;
-        let mut cpu = phase1_counter_cpu(0x5000, "phase1-fresh-entry.exe")?;
+        let mut cpu = phase1_persistent_counter_cpu(0x5000, "phase1-fresh-entry.exe")?;
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
         phase1_run_twenty(&mut cpu, &mut kernel, &mut framebuffer)?;
         let identity = phase1_engine_id(&cpu);
@@ -56036,7 +56045,7 @@ mod unicorn_tests {
     #[test]
     fn phase1_backend_clone_owns_distinct_engine_context_and_ram() -> crate::Result<()> {
         let mut kernel = phase1_kernel("phase1-clone.exe")?;
-        let mut parent = phase1_counter_cpu(0x2000, "phase1-clone.exe")?;
+        let mut parent = phase1_persistent_counter_cpu(0x2000, "phase1-clone.exe")?;
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
         phase1_run_twenty(&mut parent, &mut kernel, &mut framebuffer)?;
         let parent_engine = phase1_engine_id(&parent);
@@ -56099,7 +56108,7 @@ mod unicorn_tests {
     #[test]
     fn phase1_backend_real_park_rotate_moves_engine_and_same_va_ram_owner() -> crate::Result<()> {
         let mut kernel = phase1_kernel("phase1-parent.exe")?;
-        let mut active = phase1_counter_cpu(0x3000, "phase1-parent.exe")?;
+        let mut active = phase1_persistent_counter_cpu(0x3000, "phase1-parent.exe")?;
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
         phase1_run_twenty(&mut active, &mut kernel, &mut framebuffer)?;
         let parent_state = kernel.current_process_state();
@@ -56118,7 +56127,7 @@ mod unicorn_tests {
             exit_code: crate::ce::kernel::STILL_ACTIVE,
             signaled: false,
         };
-        let mut child = phase1_counter_cpu(0x4000, "phase1-child.exe")?;
+        let mut child = phase1_persistent_counter_cpu(0x4000, "phase1-child.exe")?;
         child.set_initial_thread_id(launch.thread_id);
         kernel.set_current_process_state(child_state);
         kernel.set_process_module_path("\\Test\\phase1-child.exe");
@@ -57247,22 +57256,8 @@ mod unicorn_tests {
             (INITIAL + 1).to_le_bytes(),
             "first guest store must reach canonical private bytes before owner closure"
         );
-        if let Some(bytes) = cpu
-            .native_engine
-            .idle_owner_bytes_for_test(u64::from(private_base), 4)
-        {
-            assert_eq!(
-                bytes.expect("read completed native store before owner closure"),
-                (INITIAL + 1).to_le_bytes(),
-                "the first guest store reached native private RAM"
-            );
-        }
-
-        // The current production policy retains an idle owner. Force only
-        // this completed fixture's next lease to be genuinely fresh. Once
-        // fresh is the default, this helper becomes an idempotent no-op.
-        cpu.native_engine
-            .close_idle_owner_preserving_snapshot_for_test();
+        // The completed slice closed its owner; the next lease must rebuild
+        // native mappings from the canonical private page.
         assert!(cpu.native_engine_identity_for_test().is_none());
 
         cpu.run_until_import_trap_with_framebuffer_limits(&mut kernel, &mut framebuffer, run(1))?;
@@ -57418,10 +57413,8 @@ mod unicorn_tests {
             .expect("read canonical public allocation");
         assert_eq!(canonical, WRITTEN.to_le_bytes());
 
-        // Existing diagnostic close forces a genuinely fresh next owner; a
-        // separate migration gate must still prove checked uc_close failures.
-        cpu.native_engine
-            .close_idle_owner_preserving_snapshot_for_test();
+        // The production lease closed its owner after the guest store. The
+        // next run must map the same canonical private bytes into a new one.
         assert!(cpu.native_engine_identity_for_test().is_none());
         let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
@@ -58858,7 +58851,7 @@ mod unicorn_tests {
     #[test]
     fn native_count_boundary_is_service_without_fabricated_deadline() -> crate::Result<()> {
         let mut kernel = phase1_kernel("phase1-count-classification.exe")?;
-        let mut cpu = phase1_counter_cpu(0x1000, "phase1-count-classification.exe")?;
+        let mut cpu = phase1_persistent_counter_cpu(0x1000, "phase1-count-classification.exe")?;
         let entry = cpu.entry.unwrap();
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
         phase1_run_twenty(&mut cpu, &mut kernel, &mut framebuffer)?;
