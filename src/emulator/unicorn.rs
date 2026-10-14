@@ -24460,10 +24460,9 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     };
     let pulsed_handle = kernel.pulsed_wait_handle(ready_wait_id);
     let blocked = blocked_waits.borrow_mut().remove(index);
-    let _ = kernel.remove_blocked_waiter(blocked.wait_id);
     let message_queue_io = matches!(blocked.kind, BlockedWaitKind::MessageQueueIo { .. });
     let has_ready_handle = !message_queue_io
-        && (pulsed_handle.is_some() || blocked_wait_has_ready_handle(&blocked, kernel));
+        && (pulsed_handle.is_some() || kernel.registered_wait_has_ready_handle(blocked.wait_id));
     let serial_read_ready = blocked_serial_read_ready(&blocked, kernel);
     let serial_comm_event_ready = blocked_serial_comm_event_ready(&blocked, kernel);
     let winsock_read_ready = blocked_winsock_read_ready(&blocked);
@@ -24496,19 +24495,7 @@ fn try_resume_blocked_wait_with_active_pc<D>(
             .map(|index| crate::ce::timer::WAIT_OBJECT_0 + index as u32)
             .unwrap_or(crate::ce::timer::WAIT_OBJECT_0)
     } else if has_ready_handle {
-        if blocked.wait_handles.len() == 1 {
-            kernel.wait_for_single_object_without_scheduler_record(
-                blocked.wait_handles[0],
-                0,
-                blocked.thread_id,
-            )
-        } else {
-            kernel.wait_for_multiple_objects_without_scheduler_record(
-                &blocked.wait_handles,
-                false,
-                blocked.thread_id,
-            )
-        }
+        kernel.wait_for_registered_wait_without_scheduler_record(blocked.wait_id, blocked.thread_id)
     } else if message_input_ready {
         consume_blocked_msg_wait_input(&blocked, kernel);
         crate::ce::timer::WAIT_OBJECT_0 + blocked.wait_handles.len() as u32
@@ -24547,6 +24534,9 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     } else {
         crate::ce::timer::WAIT_TIMEOUT
     };
+    // Acquiring a closed public alias through its registered task birth needs
+    // the wait pin to remain live until the result has been selected.
+    let _ = kernel.remove_blocked_waiter(blocked.wait_id);
     kernel.record_wait_event_trace(
         "ResumeBlockedWait",
         pulsed_handle.or_else(|| {
@@ -24940,10 +24930,7 @@ fn blocked_wait_has_ready_handle(blocked: &BlockedWaitThread, kernel: &CeKernel)
     if kernel.pulsed_wait_handle(blocked.wait_id).is_some() {
         return true;
     }
-    blocked
-        .wait_handles
-        .iter()
-        .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+    kernel.registered_wait_has_ready_handle(blocked.wait_id)
 }
 
 #[cfg(feature = "unicorn")]
@@ -25305,10 +25292,7 @@ fn scheduler_blocked_wait_has_ready_handle(
     if kernel.pulsed_wait_handle(blocked.id).is_some() {
         return true;
     }
-    blocked
-        .wait_handles
-        .iter()
-        .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+    kernel.registered_wait_has_ready_handle(blocked.id)
 }
 
 #[cfg(feature = "unicorn")]
@@ -30830,6 +30814,92 @@ mod wait_scheduler_tests {
         );
         assert!(blocked_waits.borrow().is_empty());
         assert!(kernel.blocked_waiter(wait_id).is_none());
+    }
+
+    #[test]
+    fn native_resume_uses_registered_thread_birth_after_both_aliases_close() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let (source, target_thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let alias = kernel
+            .duplicate_handle(source, kernel.current_process_id(), false)
+            .unwrap();
+        let target_birth = kernel.handles.thread_birth_key_for_handle(source).unwrap();
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let ready_thread_id = 6;
+        let ready_thread_handle = 0x106;
+        let ready_return_pc = 0x5555_0000_u32;
+        let wait_id = kernel.register_blocked_waiter(
+            ready_thread_id,
+            ready_thread_handle,
+            vec![alias],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(
+            kernel
+                .handles
+                .wait_target_pin_count(crate::ce::object::TaskWaitPin::Thread(target_birth)),
+            Some(1)
+        );
+        assert!(kernel.close_handle(alias).unwrap());
+        assert!(kernel.close_handle(source).unwrap());
+        assert_eq!(kernel.is_wait_ready(alias, ready_thread_id), None);
+        assert!(kernel.mark_guest_thread_exited_by_id(target_thread_id, 0x5678));
+        assert!(kernel.registered_wait_has_ready_handle(wait_id));
+
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id,
+            thread_id: ready_thread_id,
+            thread_handle: ready_thread_handle,
+            wait_handles: vec![alias],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: super::MipsGuestContext::zero(),
+            return_pc: ready_return_pc,
+        }]));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((active_thread_id, 0x101))));
+
+        assert!(super::try_resume_blocked_wait_with_active_pc(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            None,
+            active_thread_id,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            None,
+            &running_thread,
+            Some(0x3333_0000),
+            true,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            WAIT_OBJECT_0
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            ready_return_pc
+        );
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(!kernel.handles.contains_thread_birth(target_birth));
+        assert_eq!(
+            kernel
+                .handles
+                .wait_target_pin_count(crate::ce::object::TaskWaitPin::Thread(target_birth)),
+            None
+        );
     }
 
     #[test]
