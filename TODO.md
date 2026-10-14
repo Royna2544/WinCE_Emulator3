@@ -19,8 +19,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    semantics. Implement CE-compatible caller wait/timeout behavior, a safe
    old-MIPS direct-kernel real-handle continuation, and root-process
    real-handle completion. Then complete unpinned intra-slice worker lineage,
-   aliasless Sleep-suspend and stale intra-slice TID continuation, and generic
-   parked-wait continuation. O-K3 execution and registered Thread/Process
+   aliasless Sleep-suspend, and generic parked-wait continuation. The bounded
+   stale-TID/native-stamp [source gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
+   birth-verifies pending thread returns, suspended thread contexts, native
+   slice-end staging, and the GetMessage compatibility bridge. Sleep/object
+   blocked-wait resume still restores registers and then marks the current-thread
+   provenance tracker unverified, so a following native slice may reject; finish
+   that handoff before claiming caller parity. O-K3 execution and registered Thread/Process
    wait-target pins passed a bounded source gate
    ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); opaque
    non-task wait slots remain compatibility-only and unpinned. The subsequent

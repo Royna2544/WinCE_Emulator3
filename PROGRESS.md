@@ -4,6 +4,24 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 stale-TID continuation and native-stamp source slice
+
+- Pending guest-thread returns and suspended guest contexts now retain the
+  thread birth captured with their MIPS registers. A retired A continuation
+  cannot restore A's registers or stack into a new B with the same numeric
+  TID. One shared native-current-thread cell carries `(TID, verified birth)`;
+  slice-end context staging uses the birth captured at the native stop and
+  rejects stale or unverified provenance. The GetMessage compatibility bridge
+  verifies its stored wait-owner birth and any active context it parks before
+  consuming a message or restoring registers. Three A→B controls were expected
+  red and are now green; a normal switch records zero unexpected rejections.
+  The bounded [source gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
+  passed 1,395/0/3 ignored no-feature and 1,887/0/9 ignored release tests,
+  plus desktop no-trace and all-tests compile checks. A matching release
+  EXE/PDB pair is hash-preserved with the receipt. Sleep/object blocked-wait
+  resume still marks its restored register provenance unverified; other
+  blocked payload families, full Stage 3 and live-app behavior remain open.
+
 ## 2026-10-15 Stage 3 prepared task-wait transaction
 
 - Native Thread/Process object-wait paths now prepare all ordered targets before
@@ -50,8 +68,8 @@ references for historical reconstruction.
   Final broad gates passed no-feature 1,390/0/3 ignored and release
   Unicorn/trace/desktop 1,874/0/9 ignored, with the desktop no-trace check
   green; a matching release EXE/PDB pair was preserved in the receipt folder.
-  Aliasless Sleep-suspend, stale intra-slice TID continuation, full Stage 3
-  and live-app behavior remain unaccepted.
+  At that checkpoint, aliasless Sleep-suspend, stale intra-slice TID
+  continuation, full Stage 3 and live-app behavior remained unaccepted.
 
 ## 2026-10-15 Stage 3 TerminateProcess source slice
 
