@@ -4,246 +4,81 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-15 Stage 3 native parked SendMessageTimeout birth source slice
+## 2026-10-15 Stage 3 source gates
 
-- For eligible cross-thread nonzero-timeout `BlockedSendMessageTimeout` calls, the
-  native producer checks captured thread birth and process lease before send
-  preparation. Re-entry and resume verify the exact scheduler/native/GWE pair
-  before readiness, result consumption, guest writes or register restoration;
-  stale retirement abandons only the exact GWE send ID. The bounded
-  [receipt](evidence/stage3-smt-birth-20261015/validation.receipt.md) captured
-  HEAD `d57382227f99bcf46f3b306bf9db33508ef50740` plus the exact
-  [source patch](evidence/stage3-smt-birth-20261015/source-at-seal.patch)
-  (SHA-256 `20A8831A2097252B4DB494BC74E3547ED92797389552DD0FE70535E18C579A7B`);
-  concurrent commits incorporated that same source at final HEAD
-  `7533b528df0d1485099065a95ea9166ea814a19e`. Clean full
-  [release a02](evidence/stage3-smt-birth-20261015/release-a02.raw.log)
-  passed 1,929/0/9 ignored and full
-  [no-feature a01](evidence/stage3-smt-birth-20261015/nofeature-a01.raw.log)
-  passed 1,402/0/3 ignored. Release a01 had green tests but a nonzero wrapper
-  exit after HEAD moved, so it is not the passing gate. The release EXE/PDB
-  pair is SHA-preserved in the receipt. When the single native SMT slot is
-  occupied, an eligible call may still use the raw fallback; global GWE expiry
-  can be misclassified as ready/success; receiver-side delivery and
-  `DestroyWindow` completed-result writes, full Stage 3 and live-app behavior
-  remain open.
+Each gate is bounded; none is full Stage 3 or live-app acceptance. Newest
+first. Totals are passed/failed/ignored for release
+`unicorn,trace,win32-desktop`, then no-feature. Each receipt holds the sealed
+HEAD and patch, raw logs and EXE/PDB hashes. The per-slice text before this
+condense is at `git show d4263dde:PROGRESS.md`.
 
-## 2026-10-15 Stage 3 native guest-exit birth source slice
-
-- Native `ExitThread` now verifies the live captured `NativeCurrentThread`
-  birth and process-lease birth before choosing a pending worker return or
-  running worker, consuming continuation/stack state, or marking exit; kernel
-  dispatch uses exact `ThreadBirthKey`. The guest return-stub's
-  no-exit-candidate fallback checks native birth and owner before wait/timer
-  work. The bounded
-  [receipt](evidence/stage3-native-exit-birth-20261015/validation.receipt.md)
-  seals HEAD `24eec859058900005e43e471b185cd422ed53ec0` plus the exact
-  [source patch](evidence/stage3-native-exit-birth-20261015/source-at-seal.patch)
-  (SHA-256 `A2D8B529EC2D12F03F2A762A388350D51B2718923662C913FF49356DEAC0C30B`).
-  Full [release a01](evidence/stage3-native-exit-birth-20261015/release-a01.raw.log)
-  passed 1,923/0/9 ignored; full
-  [no-feature a01](evidence/stage3-native-exit-birth-20261015/nofeature-a01.raw.log)
-  passed 1,399/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
-  receipt. The guest return-stub hook was not exercised end-to-end: its
-  no-exit-candidate gate has only a helper-level control. Pending-return KData
-  PID writes still use the mutable selected process, not the captured lease
-  PID. The later bounded native SMT gate above does not cover raw fallback or
-  full timeout semantics; receiver-side delivery, full Stage 3 and live-app
-  behavior remain open.
-
-## 2026-10-15 Stage 3 kernel sender-exit cleanup source slice
-
-- On the first successful exit of an exact live `ThreadBirthKey`, `CeKernel`
-  removes that birth's blocked waits and queued GWE sends; active sends detach
-  their sender so the receiver can finish, while other senders' queued work
-  stays intact. The public handle wrapper dispatches through the handle's
-  exact birth. The bounded
-  [receipt](evidence/stage3-send-exit-20261015/validation.receipt.md) seals
-  HEAD `264ac5ce504c91fc8763225a222c1e71c99dc45b` plus the exact
-  [source patch](evidence/stage3-send-exit-20261015/source-at-seal.patch)
-  (SHA-256 `95C04DD4F4117A73D7F34AEBC7F18CF8497EEB6797348AF4E491A29288FEE546`).
-  Full [release a01](evidence/stage3-send-exit-20261015/release-a01.raw.log)
-  passed 1,920/0/9 ignored; full
-  [no-feature a01](evidence/stage3-send-exit-20261015/nofeature-a01.raw.log)
-  passed 1,399/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
-  receipt. The later bounded native exit and SMT gates above cover their named
-  paths only; receiver-side delivery, broader GWE lifecycle, full Stage 3 and
-  live-app behavior remain unaccepted.
-
-## 2026-10-15 Stage 3 parked SendMessage birth source slice
-
-- Native cross-process `BlockedWaitKind::SendMessage` now verifies captured
-  sender birth before queueing, checks the registered scheduler/native pair
-  before publication, and rejects stale active or parked waits before taking
-  results or restoring registers. A normal resume stamps the verified birth.
-  The bounded [receipt](evidence/stage3-send-birth-20261015/validation.receipt.md)
-  seals Git HEAD `442688ae0c81670f4b27b11613f9a6bae07c0ebe` plus an exact
-  `git diff --binary` [patch](evidence/stage3-send-birth-20261015/source-at-seal.patch)
-  (SHA-256 `C2A0796DACF4FA43381C9D85EAFE876A1FDD404511B174273845045AAFB9FDF8`),
-  not a later moving checkout. On that source, full
-  [release attempt a02](evidence/stage3-send-birth-20261015/release-a02.raw.log)
-  passed 1,916/0/9 ignored and full
-  [no-feature attempt a02](evidence/stage3-send-birth-20261015/nofeature-a02.raw.log)
-  passed 1,395/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
-  receipt. Later bounded sender-exit and native SMT slices above cover separate
-  named boundaries, not receiver-side delivery, full Stage 3 or live-app
-  acceptance.
-
-## 2026-10-15 Stage 3 parked serial birth source slice
-
-- Native parked SerialRead/SerialCommEvent paths verify the birth owning
-  captured MIPS registers before host serial RX polling or wait publication.
-  Resume checks the exact scheduler/native pair and live owner before serial
-  wake or timeout completion, host RX consumption, guest output or register
-  restoration; a valid continuation stamps verified birth. The finite
-  SerialRead inline timeout rechecks after host sleep. Peer review closed a
-  stale-deadline scheduler probe and prevented a failed native register write
-  from stamping a verified birth. The
-  focused wait-scheduler suite passed 127/0. On the frozen
-  `src/emulator/unicorn.rs` SHA-256
-  `220E95A32A8166E46AF7E4DC13E25E24BCCC545749108D8AA7575A5B4D4968DE`,
-  full release attempt `a02` passed 1,908/0/9 ignored and no-feature attempt
-  `a02` passed 1,395/0/3 ignored. The retained raw
-  [release log](evidence/stage3-serial-birth-20261015/release-a02.raw.log)
-  hashes to `80DDCEEF80E62882C16F4B61976FCAD4BCE51E096E037EBDAA24DCA3414DC23D`;
-  the [no-feature log](evidence/stage3-serial-birth-20261015/nofeature-a02.raw.log)
-  hashes to `DE6B2BFC7BE00EB506858FF8AB512B41F1844018401F98C7ED9532C89640648E`.
-  The final build and test-target, no-trace desktop, Unicorn-only and all-target
-  feature checks passed; a matching EXE/PDB pair is SHA-preserved in the
-  [source-gate receipt](evidence/stage3-serial-birth-20261015/validation.receipt.md).
-  Raw synchronous/nonblocking/overlapped serial paths and opaque non-task
-  pins remain open. This serial result does not establish the separate
-  SendMessage gate above, full Stage 3 or live-app acceptance.
-
-## 2026-10-15 Stage 3 parked queue/socket birth source slice
-
-- Native parked MessageQueueIo and WinsockRead paths now verify the birth owning
-  captured MIPS registers before wait publication or host socket
-  connect/readiness work. The finite queue inline timeout rechecks birth before
-  timer delivery and raw replay. A stale exact scheduler/native pair is
-  quarantined before queue/socket wake consumption or register restoration;
-  ordinary resume stamps the verified birth. Five new stale-birth controls and
-  the focused 120/0 scheduler suite passed. The bounded
-  [source gate](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
-  passed 1,901/0/9 ignored release and 1,395/0/3 ignored no-feature tests,
-  Unicorn-only/no-trace/all-target checks, retains hashed raw attempts for both
-  full suites, and preserves the matching EXE/PDB pair. Raw
-  synchronous/nonblocking queue/socket paths, opaque non-task pins,
-  serial/SendMessage, full Stage 3 and live-app behavior remain unaccepted.
-
-## 2026-10-15 Stage 3 parked MsgWait birth source slice
-
-- Native parked `MsgWaitForMultipleObjectsEx` now verifies the birth owning
-  captured MIPS registers before timer pumping, inline completion or wait
-  publication. Resume rejects a stale exact wait before preselection timer
-  pumping, message-edge acknowledgement, handle wake acquisition or register
-  restoration; a normal resume stamps the verified owner birth. Five new
-  controls cover stale publication, inline timeout, input wake, due-timer
-  delivery and normal verified resume. The bounded
-  [source gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
-  recorded 1,896/0/9 ignored release and 1,395/0/3 ignored no-feature tests,
-  no-trace/all-target checks, and preserves the matching EXE/PDB pair. An
-  [evidence audit](evidence/stage3-msgwait-birth-20261015/validation.receipt.md#evidence-audit--2026-10-15)
-  found that raw full-suite logs were not retained for this exact source hash;
-  the reported tallies are not independently raw-log verified. Raw
-  synchronous MsgWait paths, other parked payloads, full Stage 3 and live-app
-  behavior remain unaccepted.
-
-## 2026-10-15 Stage 3 parked Sleep/object-wait birth source slice
-
-- Native bounded Sleep and single/multiple-object waits now verify the birth
-  that owns captured MIPS registers before publishing a parked wait. Ready
-  Sleep/object waits verify the paired scheduler record and live owner birth
-  before acquiring a wake or restoring registers. A stale A→B TID reuse
-  cannot consume B's event token or restore A's registers; the exact stale
-  subscription is retired, and an ordinary ready wait carries verified birth
-  into the next native slice. Four expected-red regressions turned green. The
-  bounded [source gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
-  passed 1,395/0/3 ignored no-feature and 1,891/0/9 ignored release tests;
-  the matching EXE/PDB pair is hash-preserved. Other parked-wait families,
-  aliasless Sleep-suspend, full Stage 3 and live-app behavior remain open.
-
-## 2026-10-15 Stage 3 stale-TID continuation and native-stamp source slice
-
-- Pending guest-thread returns and suspended guest contexts now retain the
-  thread birth captured with their MIPS registers. A retired A continuation
-  cannot restore A's registers or stack into a new B with the same numeric
-  TID. One shared native-current-thread cell carries `(TID, verified birth)`;
-  slice-end context staging uses the birth captured at the native stop and
-  rejects stale or unverified provenance. The GetMessage compatibility bridge
-  verifies its stored wait-owner birth and any active context it parks before
-  consuming a message or restoring registers. Three A→B controls were expected
-  red and are now green; a normal switch records zero unexpected rejections.
-  The bounded [source gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
-  passed 1,395/0/3 ignored no-feature and 1,887/0/9 ignored release tests,
-  plus desktop no-trace and all-tests compile checks. A matching release
-  EXE/PDB pair is hash-preserved with the receipt. A later bounded Sleep/object
-  wait gate above covers those parked paths; other blocked payload families,
-  full Stage 3 and live-app behavior remain open.
-
-## 2026-10-15 Stage 3 prepared task-wait transaction
-
-- Native Thread/Process object-wait paths now prepare all ordered targets before
-  changing pending-callout or prior-wait state, then publish one scheduler wait.
-  The unpublished guard holds exact-birth pins and releases every acquired slot,
-  including duplicates, if preparation or handoff does not publish. Invalid or
-  stale targets return `WAIT_FAILED`/`ERROR_INVALID_HANDLE`; pin-count
-  exhaustion returns `WAIT_FAILED`/`ERROR_NOT_ENOUGH_MEMORY` without a host
-  panic, new wait, or loss of the old pending/blocked state. Focused kernel and
-  native failure/retry controls cover those boundaries. Non-object scheduler
-  subscriptions now use an explicit opaque, unpinned compatibility path, so
-  coincidentally equal socket/message tokens do not acquire task pins. This
-  bounded [source gate](evidence/stage3-waitprep-20261015/validation.receipt.md)
-  passed 1,395/0/3 ignored no-feature tests, 1,883/0/9 ignored release tests,
-  and the no-trace compile check. It does not establish complete CE wait
-  semantics, full Stage 3, or live-app behavior.
-
-## 2026-10-15 Stage 3 CE WaitAny raw-error source slice
-
-- The raw `WaitForMultipleObjects` wrapper now preserves the kernel's
-  `WAIT_FAILED` last-error classification instead of overwriting it with
-  `ERROR_INVALID_HANDLE`. Its public invalid-parameter forms were already
-  prechecked, so that overwrite was latent for currently reachable calls.
-  A CE6-source-backed raw control covers `fWaitAll`, bad pointers, invalid and
-  closed handles, zero-timeout polling, and ordered WaitAny selection. The
-  bounded source gate passed no-feature 1,391/0/3 ignored and release
-  Unicorn/trace/desktop 1,875/0/9 ignored; the desktop no-trace check passed
-  ([receipt](evidence/stage3-wait-20261015/validation.receipt.md)). This does
-  not establish native or CE caller wait/timeout parity, Stage 3 completion,
-  or live-app acceptance.
-
-## 2026-10-15 Stage 3 O-K3 execution and wait pins source slice
-
-- Canonical Thread/Process task records now retain execution-live state after
-  final public-alias closure and checked, birth-qualified references for
-  registered object waits. Ordered task wait slots acquire pins before wait
-  publication; partial preparation rolls back, and completion, timeout or
-  cancellation releases each acquired pin once. A completed aliasless target
-  retires after its last wait reference releases. The two historical E-11
-  last-public-handle and wait-pin controls are active and green; the bounded
-  source gate is recorded in the
-  [receipt](evidence/stage3-pins-20261015/validation.receipt.md). Opaque
-  non-task wait slots and duplicated native wait payloads are not pinned.
-  Final broad gates passed no-feature 1,390/0/3 ignored and release
-  Unicorn/trace/desktop 1,874/0/9 ignored, with the desktop no-trace check
-  green; a matching release EXE/PDB pair was preserved in the receipt folder.
-  At that checkpoint, aliasless Sleep-suspend, stale intra-slice TID
-  continuation, full Stage 3 and live-app behavior remained unaccepted.
-
-## 2026-10-15 Stage 3 TerminateProcess source slice
-
-- Focused source controls now cover an owned active child's request at run
-  preflight, its in-slice self-call import stop, and requested parked or pending
-  children. They also check exact-birth completion before process-wait signal,
-  native CPU sealing before another attempt, and failure rather than unsafe
-  resume for an old-MIPS direct-kernel real-handle call. The desktop loop has
-  a completed-owner maintenance lane so a sealed child is not requeued during
-  host/input handoff. Frozen-source broad gates passed: no-feature
-  1,375/0/5 ignored and release Unicorn/trace/desktop 1,858/0/11 ignored;
-  the desktop no-trace check also passed
-  ([receipt](evidence/stage3-terminate-20261015/validation.receipt.md)).
-  This is not CE caller wait/timeout semantics, root-process real-handle
-  completion, full Stage 3, or live-app acceptance.
+- Native parked SendMessageTimeout
+  ([receipt](evidence/stage3-smt-birth-20261015/validation.receipt.md)):
+  eligible cross-thread nonzero-timeout producer, re-entry and resume check
+  captured birth/lease and the exact scheduler/native/GWE pair; stale cleanup
+  abandons only the exact send ID. 1,929/0/9 (a02; a01 was green but its
+  wrapper exited 1 after HEAD moved) and 1,402/0/3. Sealed at `d5738222` plus
+  patch; committed unchanged as `7533b528`.
+- Native guest exit
+  ([receipt](evidence/stage3-native-exit-birth-20261015/validation.receipt.md)):
+  `ExitThread` and the return-stub no-exit-candidate fallback check captured
+  birth and process lease first. 1,923/0/9 and 1,399/0/3.
+- Kernel sender exit
+  ([receipt](evidence/stage3-send-exit-20261015/validation.receipt.md)): the
+  first exit of an exact live birth removes its waits and queued sends; active
+  sends detach the sender. 1,920/0/9 and 1,399/0/3.
+- Parked SendMessage
+  ([receipt](evidence/stage3-send-birth-20261015/validation.receipt.md)):
+  cross-process native send checks sender birth before queueing and the exact
+  pair before results or registers. 1,916/0/9 and 1,395/0/3 (both a02).
+- Parked serial
+  ([receipt](evidence/stage3-serial-birth-20261015/validation.receipt.md)):
+  SerialRead/SerialCommEvent birth is checked before host RX polling,
+  publication and completion. 1,908/0/9 and 1,395/0/3 (both a02), tested
+  against a frozen `unicorn.rs` hash rather than a sealed HEAD plus patch.
+- Parked queue/socket
+  ([receipt](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)):
+  MessageQueueIo/WinsockRead birth is checked before publication and host
+  socket work. 1,901/0/9 and 1,395/0/3.
+- Parked MsgWait
+  ([receipt](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)):
+  birth is checked before timer pumping, inline completion and publication.
+  Recorded 1,896/0/9 and 1,395/0/3, not raw-log verified (no raw logs kept).
+- Parked Sleep/object wait
+  ([receipt](evidence/stage3-parked-wait-20261015/validation.receipt.md)):
+  stale A-to-B TID reuse cannot consume B's wake or restore A's registers.
+  1,891/0/9 and 1,395/0/3.
+- Stale-TID continuation and native stamp
+  ([receipt](evidence/stage3-stale-tid-20261015/validation.receipt.md)):
+  pending returns, suspended contexts, slice-end staging and the GetMessage
+  bridge carry the captured birth in one `(TID, birth)` native cell.
+  1,887/0/9 and 1,395/0/3.
+- Prepared task wait
+  ([receipt](evidence/stage3-waitprep-20261015/validation.receipt.md)): all
+  targets are pinned before any mutation, then one publication or a full
+  rollback; pin exhaustion returns `WAIT_FAILED`/`ERROR_NOT_ENOUGH_MEMORY`;
+  opaque tokens stay unpinned. 1,883/0/9 and 1,395/0/3.
+- CE WaitAny raw error
+  ([receipt](evidence/stage3-wait-20261015/validation.receipt.md)): raw
+  `WaitForMultipleObjects` keeps the kernel's last error, with CE6
+  `schedule.c` controls. 1,875/0/9 and 1,391/0/3.
+- O-K3 execution and wait pins
+  ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)): task
+  records stay execution-live after the last alias closes, and registered
+  waits hold birth-checked pins; the E-11 controls are green. 1,874/0/9 and
+  1,390/0/3.
+- TerminateProcess
+  ([receipt](evidence/stage3-terminate-20261015/validation.receipt.md)): owned
+  children terminate at preflight, at a self-call stop, and when parked or
+  pending; exact-birth completion precedes the process-wait signal; an old-MIPS
+  direct-kernel real-handle call fails instead of resuming unsafely.
+  1,858/0/11 and 1,375/0/5.
+- Still open across these gates: the occupied-SMT-slot raw fallback, global
+  expiry read as ready, receiver-side `DestroyWindow` result writes, an
+  end-to-end return-stub control, KData PID from mutable process selection,
+  raw queue/socket/serial/MsgWait paths, aliasless Sleep-suspend, opaque
+  non-task pins, caller wait parity and root-process real-handle completion
+  (`TODO.md`, `KNOWN_BUGS.md`).
 
 ## 2026-10-14 Stage 2 source gates E-30 to E-44 and O-M2
 
