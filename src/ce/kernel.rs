@@ -3113,9 +3113,12 @@ impl CeKernel {
             self.process_name_guest_ptrs.remove(&owner);
             self.command_line_guest_ptrs.remove(&owner);
         }
-        if let Some(aliases) = self
+        let process_key = self.handles.process_birth_key(launch.process_id);
+        let was_signaled = self.handles.process_signaled_by_id(launch.process_id);
+        if self
             .handles
             .finish_process_execution_by_id(launch.process_id, exit_code)
+            .is_some()
         {
             if let Some(owner) = exiting_birth {
                 // A retained native mapping pin keeps its page and budget
@@ -3124,8 +3127,10 @@ impl CeKernel {
                 self.memory.retire_fixed_private_ranges_for_owner(owner);
                 self.memory.retire_heap_state_for_owner(owner);
             }
-            for alias in aliases {
-                self.queue_object_wake_candidates(alias);
+            if was_signaled == Some(false)
+                && let Some(key) = process_key
+            {
+                self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(key));
             }
         }
         let thread_key = self.handles.thread_birth_key_by_id(launch.thread_id);
@@ -6553,8 +6558,12 @@ impl CeKernel {
 
     pub fn mark_guest_thread_exited_by_id(&mut self, thread_id: u32, exit_code: u32) -> bool {
         let key = self.handles.thread_birth_key_by_id(thread_id);
+        let was_live = self.handles.thread_execution_live_by_id(thread_id);
         let success = self.handles.mark_thread_exited_by_id(thread_id, exit_code);
-        if success && let Some(key) = key {
+        if success
+            && was_live
+            && let Some(key) = key
+        {
             self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
         }
         success
@@ -6721,28 +6730,40 @@ impl CeKernel {
             self.destroy_process_windows(self.current_process_id, 0);
             self.current_process_exit_code = exit_code;
             self.current_process_signaled = true;
-            if let Some(aliases) = self
+            let process_key = self.handles.process_birth_key(self.current_process_id);
+            let was_signaled = self.handles.process_signaled_by_id(self.current_process_id);
+            if self
                 .handles
                 .request_process_termination_by_id(self.current_process_id, exit_code)
+                .is_some()
             {
-                for alias in aliases {
-                    self.queue_object_wake_candidates(alias);
+                if was_signaled == Some(false)
+                    && let Some(key) = process_key
+                {
+                    self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(key));
                 }
             }
-            self.queue_object_wake_candidates(handle);
+            if process_key.is_none() {
+                self.queue_object_wake_candidates(handle);
+            }
             return true;
         }
         let Some(process_id) = self.handles.process_id(handle) else {
             return false;
         };
-        let Some(aliases) = self
+        let process_key = self.handles.process_birth_key(process_id);
+        let was_signaled = self.handles.process_signaled_by_id(process_id);
+        if self
             .handles
             .request_process_termination_by_id(process_id, exit_code)
-        else {
+            .is_none()
+        {
             return false;
-        };
-        for alias in aliases {
-            self.queue_object_wake_candidates(alias);
+        }
+        if was_signaled == Some(false)
+            && let Some(key) = process_key
+        {
+            self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(key));
         }
         true
     }

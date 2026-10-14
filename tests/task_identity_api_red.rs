@@ -4,10 +4,10 @@
 use wince_emulation_v3::{
     Result,
     ce::{
-        coredll::{CoredllDispatch, CoredllExportTable, CoredllValue},
+        coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_CREATE_THREAD, ORD_EXIT_THREAD, ORD_GET_PROCESS_ID_OF_THREAD, ORD_OPEN_PROCESS,
-            ORD_OPEN_THREAD,
+            ORD_CREATE_THREAD, ORD_DUPLICATE_HANDLE, ORD_EXIT_THREAD, ORD_GET_PROCESS_ID_OF_THREAD,
+            ORD_OPEN_PROCESS, ORD_OPEN_THREAD,
         },
         kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CeKernel},
     },
@@ -73,6 +73,11 @@ fn failed_create_thread_output_does_not_publish_a_live_birth() -> Result<()> {
     ));
     assert_eq!(kernel.handles.thread_birth_key_by_id(unpublished_tid), None);
     assert_eq!(kernel.open_thread_handle(unpublished_tid), None);
+    let (_, next_tid) = kernel.create_guest_thread(0x9abc, 0, false);
+    assert_eq!(
+        next_tid, unpublished_tid,
+        "failed CreateThread must not mint a TID before output preflight"
+    );
     Ok(())
 }
 
@@ -157,6 +162,106 @@ fn open_process_current_pid_returns_distinct_closable_aliases_with_shared_exit()
         Some(process_id),
         "closing explicit aliases must not close the current-process pseudo-handle"
     );
+    Ok(())
+}
+
+#[test]
+fn duplicate_thread_accepts_real_open_process_target_alias() -> Result<()> {
+    const DUPLICATE_SAME_ACCESS: u32 = 0x0000_0002;
+
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let (source, tid) = kernel.create_guest_thread(0x1234, 0, false);
+    let mut memory = TestGuestMemory::default();
+    let table = CoredllExportTable::default();
+    let current_pid = kernel.current_process_id();
+    let target_process = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        1,
+        ORD_OPEN_PROCESS,
+        [0, 0, current_pid],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        result => panic!("OpenProcess(current PID) returned {result:?}"),
+    };
+    assert_ne!(target_process, 0);
+    assert_ne!(target_process, CE_CURRENT_PROCESS_PSEUDO_HANDLE);
+
+    let output_ptr = 0x6000;
+    memory.map_words(output_ptr, 1);
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        1,
+        ORD_DUPLICATE_HANDLE,
+        [
+            CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            source,
+            target_process,
+            output_ptr,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        ],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let duplicate = memory.read_u32(output_ptr)?;
+    assert_ne!(duplicate, source);
+    assert_eq!(kernel.guest_thread_id(duplicate), Some(tid));
+    assert!(kernel.close_handle(source)?);
+    assert_eq!(kernel.guest_thread_id(duplicate), Some(tid));
+    assert!(kernel.close_handle(duplicate)?);
+    assert!(kernel.close_handle(target_process)?);
+    Ok(())
+}
+
+#[test]
+fn duplicate_thread_rejects_invalid_source_process_without_alias_publication() -> Result<()> {
+    const DUPLICATE_SAME_ACCESS: u32 = 0x0000_0002;
+
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let (source, tid) = kernel.create_guest_thread(0x1234, 0, false);
+    let mut memory = TestGuestMemory::default();
+    let output_ptr = 0x6000;
+    let sentinel = 0xabba_1234;
+    memory.map_words(output_ptr, 1);
+    memory.write_word(output_ptr, sentinel);
+    let before_handles = kernel.handles.len();
+    let result = CoredllExportTable::default().dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        1,
+        ORD_DUPLICATE_HANDLE,
+        [
+            0xdead_beef,
+            source,
+            CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            output_ptr,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        ],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(output_ptr)?, sentinel);
+    assert_eq!(kernel.handles.len(), before_handles);
+    assert_eq!(kernel.guest_thread_handle_by_id(tid), Some(source));
+    assert_eq!(kernel.guest_thread_id(source), Some(tid));
     Ok(())
 }
 

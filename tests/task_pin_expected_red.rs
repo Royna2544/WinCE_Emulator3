@@ -113,6 +113,51 @@ fn thread_exit_through_one_alias_indexes_waiter_on_another_alias() -> Result<()>
 }
 
 #[test]
+fn thread_exit_by_id_wakes_surviving_alias_after_source_close() -> Result<()> {
+    let mut kernel = boot()?;
+    let (source, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+    let alias = kernel.duplicate_handle(source, kernel.current_process_id(), false)?;
+    let wait_id = kernel.register_blocked_waiter(
+        1,
+        0,
+        vec![alias],
+        SchedulerBlockedWaitKind::Kernel,
+        0,
+        INFINITE,
+    );
+    assert!(kernel.close_handle(source)?);
+    assert_eq!(kernel.guest_thread_id(source), None);
+    assert_eq!(kernel.guest_thread_id(alias), Some(thread_id));
+    let before = kernel.scheduler.stats().object_wake_candidate_count;
+
+    assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x5678));
+    assert_eq!(
+        kernel.scheduler.stats().object_wake_candidate_count,
+        before + 1,
+        "exit by TID must enqueue the waiter registered on the surviving alias"
+    );
+    assert_eq!(kernel.is_wait_ready(alias, 1), Some(true));
+    assert_eq!(kernel.guest_thread_exit_code(alias), Some(0x5678));
+    assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x9999));
+    assert_eq!(
+        kernel.scheduler.stats().object_wake_candidate_count,
+        before + 1,
+        "a repeated exit must not enqueue the same waiter again"
+    );
+    assert_eq!(
+        kernel.guest_thread_exit_code(alias),
+        Some(0x5678),
+        "a repeated exit must preserve the first exit code"
+    );
+
+    // Release the wait record before final close; E11 wait-target pins are a later gate.
+    assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+    assert!(kernel.close_handle(alias)?);
+    assert_eq!(kernel.open_thread_handle(thread_id), None);
+    Ok(())
+}
+
+#[test]
 #[ignore = "expected red: registered wait needs canonical target pin after alias close"]
 fn closed_thread_alias_wait_keeps_an_exited_target_pinned() -> Result<()> {
     let mut kernel = boot()?;

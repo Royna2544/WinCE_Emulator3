@@ -142,6 +142,20 @@ impl CoredllGuestMemory for TestGuestMemory {
         }
     }
 
+    fn validate_writable_u32(&self, addr: u32) -> Result<()> {
+        if self.words.contains_key(&addr)
+            || addr
+                .checked_add(3)
+                .is_some_and(|end| is_test_heap_address(addr) && is_test_heap_address(end))
+        {
+            Ok(())
+        } else {
+            Err(Error::InvalidArgument(format!(
+                "unwritable test word 0x{addr:08x}"
+            )))
+        }
+    }
+
     fn read_u16(&self, addr: u32) -> Result<u16> {
         if let Some(halfword) = self.halfwords.get(&addr).copied() {
             Ok(halfword)

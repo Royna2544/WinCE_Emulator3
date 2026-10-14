@@ -31341,11 +31341,26 @@ fn create_thread_raw<M: CoredllGuestMemory>(
     let parameter = raw_arg(args, 3);
     let suspended = create_flags & CREATE_SUSPENDED != 0;
     let thread_id_ptr = raw_arg(args, 5);
+    // Validate the complete guest output slot before allocating a TID or
+    // publishing the worker birth. The native adapter checks guest write
+    // permissions even though the subsequent host write can bypass them.
+    if thread_id_ptr != 0
+        && (memory.prepare_host_write(kernel, thread_id_ptr, 4).is_err()
+            || memory.validate_writable_u32(thread_id_ptr).is_err())
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     let (handle, created_thread_id) =
         kernel.create_guest_thread(start_address, parameter, suspended);
     if !write_optional_count(kernel, memory, thread_id, thread_id_ptr, created_thread_id) {
         let discarded = kernel.discard_unpublished_guest_thread(handle, created_thread_id);
-        debug_assert!(discarded, "failed CreateThread must discard its unpublished birth");
+        debug_assert!(
+            discarded,
+            "failed CreateThread must discard its unpublished birth"
+        );
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);

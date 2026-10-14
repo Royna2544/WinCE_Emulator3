@@ -1250,11 +1250,20 @@ impl HandleTable {
         let Some(record) = self.threads.get_mut(&thread_id) else {
             return false;
         };
+        if !record.execution_live {
+            return true;
+        }
         record.object.exit_code = exit_code;
         record.object.signaled = true;
         record.execution_live = false;
         self.retire_thread_if_unreferenced(thread_id);
         true
+    }
+
+    pub fn thread_execution_live_by_id(&self, thread_id: u32) -> bool {
+        self.threads
+            .get(&thread_id)
+            .is_some_and(|record| record.execution_live)
     }
 
     pub fn thread_id(&self, handle: u32) -> Option<u32> {
