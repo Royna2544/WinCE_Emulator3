@@ -6780,10 +6780,10 @@ impl CeKernel {
     }
 
     pub fn mark_guest_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {
-        let Some(thread_id) = self.handles.thread_id(handle) else {
+        let Some(key) = self.handles.thread_birth_key_for_handle(handle) else {
             return false;
         };
-        self.mark_guest_thread_exited_by_id(thread_id, exit_code)
+        self.mark_guest_thread_exited_by_birth(key, exit_code)
     }
 
     pub fn mark_guest_thread_exited_by_id(&mut self, thread_id: u32, exit_code: u32) -> bool {
@@ -6793,7 +6793,7 @@ impl CeKernel {
         self.mark_guest_thread_exited_by_birth(key, exit_code)
     }
 
-    fn mark_guest_thread_exited_by_birth(&mut self, key: ThreadBirthKey, exit_code: u32) -> bool {
+    pub(crate) fn mark_guest_thread_exited_by_birth(&mut self, key: ThreadBirthKey, exit_code: u32) -> bool {
         if !self.handles.contains_thread_birth(key) {
             return false;
         }
@@ -11930,6 +11930,78 @@ mod tests {
     }
 
     #[test]
+    fn exiting_sender_preserves_other_senders_queued_send() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (sender_a_handle, sender_a_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let (_, sender_b_tid) = kernel.create_guest_thread(0x402000, 0, false);
+        let (_, receiver_tid) = kernel.create_guest_thread(0x403000, 0, false);
+        let hwnd = kernel.gwe.create_window(receiver_tid, "target", "");
+        let active_a = kernel
+            .begin_cross_thread_send_message_w(
+                sender_a_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 60,
+                1,
+                2,
+                None,
+            )
+            .expect("A's active send");
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_tid, active_a)
+        );
+        let queued_a = kernel
+            .begin_cross_thread_send_message_w(
+                sender_a_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 61,
+                1,
+                2,
+                None,
+            )
+            .expect("A's queued send");
+        let queued_b = kernel
+            .begin_cross_thread_send_message_w(
+                sender_b_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 62,
+                1,
+                2,
+                None,
+            )
+            .expect("B's queued send");
+
+        assert!(kernel.mark_guest_thread_exited(sender_a_handle, 0x73));
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(active_a)
+                .and_then(|sent| sent.sender_thread_id),
+            None
+        );
+        assert!(kernel.gwe.sent_message(queued_a).is_none());
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(queued_b)
+                .and_then(|sent| sent.sender_thread_id),
+            Some(sender_b_tid)
+        );
+        assert!(kernel.gwe.has_pending_sent_message_for_thread(receiver_tid));
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(active_a)
+        );
+        assert_eq!(
+            kernel.complete_active_sent_message(receiver_tid, 0x1234),
+            Some(active_a)
+        );
+        assert!(kernel.gwe.sent_message(active_a).is_none());
+        assert!(kernel.gwe.sent_message(queued_b).is_some());
+    }
+
+    #[test]
     fn stale_sender_birth_cannot_cancel_reused_tid_send() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let (old_sender, sender_tid) = kernel.create_guest_thread(0x401000, 0, false);
@@ -11938,6 +12010,13 @@ mod tests {
             .thread_birth_key_for_handle(old_sender)
             .expect("old sender birth");
         assert!(kernel.mark_guest_thread_exited(old_sender, 0));
+        assert!(
+            kernel
+                .handles
+                .try_create_thread(sender_tid, 0x403000, 0, false)
+                .is_err()
+        );
+        assert!(kernel.handles.contains_thread_birth(old_birth));
         assert!(kernel.close_handle(old_sender)?);
         assert!(!kernel.handles.contains_thread_birth(old_birth));
 
@@ -11968,6 +12047,7 @@ mod tests {
             crate::ce::timer::INFINITE,
         );
 
+        assert!(!kernel.mark_guest_thread_exited(old_sender, 0x99));
         assert!(!kernel.mark_guest_thread_exited_by_birth(old_birth, 0x99));
         assert!(kernel.handles.thread_execution_live_by_id(sender_tid));
         assert_eq!(
