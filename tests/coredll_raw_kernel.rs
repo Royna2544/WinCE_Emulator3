@@ -5320,7 +5320,8 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
-    let thread_id = 7;
+    // CreateThread in this integration fixture needs a real creator birth.
+    let thread_id = 1;
     let word = 0x1000;
     let critical_section = 0x2000;
     memory.write_word(word, 41);

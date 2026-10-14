@@ -1740,6 +1740,52 @@ mod alias_tests {
     use super::*;
 
     #[test]
+    fn creation_owner_is_frozen_across_aliases_and_exit() {
+        let mut table = HandleTable::default();
+        table.register_boot_process(1);
+        let boot_birth = table.process_birth_key(1).unwrap();
+        table.register_boot_thread(1, boot_birth).unwrap();
+        assert_eq!(table.thread_handle_by_id(1), None);
+        assert_eq!(table.live_thread_creation_owner_by_id(1), Some(boot_birth));
+
+        let original = table
+            .try_create_thread_in_birth(boot_birth, 2, 0x1000, 0, false)
+            .unwrap();
+        let alias = table.open_thread(2).unwrap();
+        assert_eq!(
+            table.thread_creation_owner_for_handle(alias),
+            Some(boot_birth)
+        );
+        table.close(original).unwrap();
+        assert_eq!(
+            table.thread_creation_owner_for_handle(alias),
+            Some(boot_birth)
+        );
+        assert!(table.mark_thread_exited_by_id(2, 7));
+        assert_eq!(table.live_thread_creation_owner_by_id(2), None);
+        assert_eq!(
+            table.thread_creation_owner_for_handle(alias),
+            Some(boot_birth)
+        );
+    }
+
+    #[test]
+    fn retained_exited_process_birth_cannot_create_workers() {
+        let mut table = HandleTable::default();
+        let process_handle = table.create_process(9);
+        let birth = table.process_birth_key_for_handle(process_handle).unwrap();
+        assert!(table.process_birth_can_create_threads(birth));
+        table.finish_process_execution_by_id(9, 0).unwrap();
+        assert!(table.contains_process_birth(birth));
+        assert!(!table.process_birth_can_create_threads(birth));
+        assert!(matches!(
+            table.try_create_thread_in_birth(birth, 10, 0, 0, false),
+            Err(Error::InvalidArgument(_))
+        ));
+        assert!(table.thread_birth_key_by_id(10).is_none());
+    }
+
+    #[test]
     fn unpublished_thread_rollback_removes_its_live_birth() {
         let mut table = HandleTable::default();
         let handle = table.create_thread(7, 0x1000, 0, false);
