@@ -4,6 +4,21 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 parked MsgWait birth source slice
+
+- Native parked `MsgWaitForMultipleObjectsEx` now verifies the birth owning
+  captured MIPS registers before timer pumping, inline completion or wait
+  publication. Resume rejects a stale exact wait before preselection timer
+  pumping, message-edge acknowledgement, handle wake acquisition or register
+  restoration; a normal resume stamps the verified owner birth. Five new
+  controls cover stale publication, inline timeout, input wake, due-timer
+  delivery and normal verified resume. The bounded
+  [source gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
+  passed 1,896/0/9 ignored release and 1,395/0/3 ignored no-feature tests,
+  no-trace/all-target checks, and preserves the matching EXE/PDB pair. Raw
+  synchronous MsgWait paths, other parked payloads, full Stage 3 and live-app
+  behavior remain unaccepted.
+
 ## 2026-10-15 Stage 3 parked Sleep/object-wait birth source slice
 
 - Native bounded Sleep and single/multiple-object waits now verify the birth

@@ -25,8 +25,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    slice-end staging, and the GetMessage compatibility bridge. The later bounded
    [Sleep/object parked-wait gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
    verifies native register ownership before publication and wake consumption,
-   then stamps the resumed birth. Next migrate MsgWait, serial, Winsock,
-   message-queue I/O and SendMessage blocked payloads; do not treat this as
+   then stamps the resumed birth. The separate bounded
+   [parked MsgWait gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
+   verifies captured birth before timer pumping/publication and the paired
+   live owner before input or handle wake consumption. Next migrate
+   message-queue I/O/Winsock, serial and SendMessage blocked payloads; do not treat this as
    generic parked-wait closure or caller parity. O-K3 execution and registered Thread/Process
    wait-target pins passed a bounded source gate
    ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); opaque

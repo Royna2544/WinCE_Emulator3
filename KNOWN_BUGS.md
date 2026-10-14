@@ -97,9 +97,12 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   slice-end staging and the GetMessage compatibility bridge. A later bounded
   [Sleep/object parked-wait source gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
   rejects stale wait-owner births before wake consumption and stamps verified
-  resume provenance. Boot-main
+  resume provenance. The later bounded
+  [parked MsgWait source gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
+  rejects stale native frames before timer pumping or message-edge consumption;
+  synchronous raw MsgWait paths remain outside that gate. Boot-main
   enumeration, aliasless Sleep-suspend, unpinned-worker lineage (currently
-  fails closed), MsgWait/serial/Winsock/message-queue I/O/SendMessage and other
+  fails closed), serial/Winsock/message-queue I/O/SendMessage and other
   parked-wait continuation, clone relineage, complete GMS reclamation and
   live-app behavior remain open. None of these
   bounded source gates is full Stage 3 acceptance.
