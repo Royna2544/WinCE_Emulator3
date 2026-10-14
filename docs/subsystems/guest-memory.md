@@ -235,9 +235,13 @@ so neither number is a controlled app-speed or RSS comparison.
 
 Plan: lazily reserve aligned **1-MiB host blocks** per `(process birth,
 allocation incarnation, guest block base)`; physically commit only guest-
-committed 4-KiB pages. Keep the existing `PrivatePageIdentity` and one exact
+committed 4-KiB private **heap/stack** pages. Shared-view pins from
+`stable_page_pins_for` keep their separate canonical backing and must not be
+rehomed or grouped with private blocks. Keep the existing `PrivatePageIdentity` and one exact
 page charge/pin/guard per committed page; a reserved hole has no guest-RAM
-charge. Native mapping groups only contiguous committed pages of one block
+charge. Current independent 4-KiB host allocations cannot be grouped: page
+pins need a block reference plus offset. Native mapping groups only contiguous
+committed pages of one block
 with identical permissions into one `mem_map_ptr` run, while the VM remains
 the sole byte authority under A4. Split a run at a later native collision so
 earlier pages map and stay pinned as today's page-ordered failure control
@@ -251,8 +255,10 @@ Checkpoint clone must allocate independent blocks, copy committed pages only,
 and never share a mutable host pointer; full machine relineage stays separate.
 An expected-red counter test should see 8,192 native map calls now and at
 most 32 for a fully committed, uniform-permission 32-MiB heap after the
-1-MiB design, with cold-hole, mid-run collision, same-VA birth, clone and
-failed-unmap controls before any source gate or live claim.
+1-MiB design, while also checking 8,192 page records/pins and the full
+32-MiB budget charge with no copy fallback. Cold-hole, mid-run collision,
+same-VA birth, clone and failed-unmap controls precede any source gate or
+live claim.
 
 ## Target authority and permitted interfaces
 
