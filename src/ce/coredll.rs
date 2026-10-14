@@ -784,6 +784,13 @@ pub trait CoredllGuestMemory {
         self.ensure_mapped(addr, len)
     }
 
+    /// Pointer-mapped native views are published by the checked native
+    /// reconcile after this API returns. Raw adapters require an immediate
+    /// copy into their test/compatibility guest bytes instead.
+    fn native_shared_view_owner(&self) -> Option<crate::ce::object::ProcessBirthKey> {
+        None
+    }
+
     /// Apply the exact detached private-VM proposal to the active native
     /// owner before MemorySystem or the guest observes its returned pointer.
     /// Adapters without a native owner must opt in explicitly; silently
@@ -29832,6 +29839,20 @@ fn virtual_protect_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
+    if end.is_some_and(|end| {
+        kernel.memory.virtual_allocations_for(owner).any(|allocation| {
+            allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
+                && u64::from(address) < u64::from(allocation.base) + u64::from(allocation.size)
+                && u64::from(end) > u64::from(allocation.base)
+        })
+    }) {
+        // A pointer-mapped shared page needs a checked native mem_protect
+        // transaction. Do not report legacy success without changing it.
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
     // A private reservation owned by another process is not a legacy
     // protectable region in this process, even when a global host map happens
     // to expose the same guest VA. Match Free/Query/IsBadPtr owner isolation.
@@ -29895,7 +29916,7 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
     let page_base = addr & !0xfff;
     // Stable private reservations expose the exact queried 4-KiB page state;
     // a 64-KiB reservation is not itself 64 KiB of committed native memory.
-    let (base_address, allocation_base, allocation_protect, state, protect, region_size) =
+    let (base_address, allocation_base, allocation_protect, state, protect, region_size, kind) =
         if let Some(private) = kernel.memory.private_vm_query(owner, addr) {
             (
                 private.region_base,
@@ -29908,6 +29929,21 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
                 },
                 private.page_protect.unwrap_or(0),
                 private.region_size,
+                0x20000u32,
+            )
+        } else if let Some(shared) = kernel.memory.shared_view_query(owner, addr) {
+            (
+                shared.region_base,
+                shared.allocation_base,
+                shared.allocation_protect,
+                if shared.page_protect.is_some() {
+                    MEM_COMMIT_FLAG
+                } else {
+                    MEM_RESERVE_FLAG
+                },
+                shared.page_protect.unwrap_or(0),
+                shared.region_size,
+                0x40000u32,
             )
         } else if let Some(allocation) = kernel
             .memory
@@ -29921,9 +29957,10 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
                 MEM_COMMIT_FLAG,
                 allocation.protect,
                 allocation.size,
+                0x20000u32,
             )
         } else {
-            (page_base, 0, 0, MEM_FREE_FLAG, PAGE_NOACCESS, 0x1000)
+            (page_base, 0, 0, MEM_FREE_FLAG, PAGE_NOACCESS, 0x1000, 0)
         };
     let writes = [
         (buf_ptr, base_address),           // BaseAddress
@@ -29932,7 +29969,7 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
         (buf_ptr + 12, region_size),       // RegionSize
         (buf_ptr + 16, state),             // State
         (buf_ptr + 20, protect),           // Protect
-        (buf_ptr + 24, 0x20000u32),        // Type = MEM_PRIVATE
+        (buf_ptr + 24, kind),              // Type = MEM_PRIVATE/MEM_MAPPED
     ];
     // A malformed output range must not leave a partially written MBI, and
     // native adapters must check actual page permissions, not host access.
@@ -30185,10 +30222,6 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
     offset_low: u32,
     bytes_to_map: u32,
 ) -> u32 {
-    const MEM_COMMIT: u32 = 0x0000_1000;
-    const MEM_RESERVE: u32 = 0x0000_2000;
-    const PAGE_READWRITE: u32 = 0x04;
-
     if offset_high != 0 {
         kernel
             .threads
@@ -30201,6 +30234,14 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
+    if mapping.views.iter().any(|view| view.process_birth.is_none()) {
+        // A legacy DIB view owns copy-backed bytes for this object. Mixing a
+        // public pointer-mapped view into it would create dual authorities.
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     if offset_low >= mapping.size {
         kernel
             .threads
@@ -30235,38 +30276,53 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
             }
         }
     } else {
-        let start = offset_low as usize;
-        let end = start.saturating_add(size as usize).min(mapping.data.len());
-        let mut bytes = if start < mapping.data.len() {
-            mapping.data[start..end].to_vec()
-        } else {
-            Vec::new()
-        };
-        bytes.resize(size as usize, 0);
-        bytes
+        // Anonymous public mappings start zeroed. The Vec belongs only to
+        // the unmigrated DIB/legacy path, never to a public slab view.
+        vec![0; size as usize]
     };
-    let mapping_bytes = initial_bytes.clone();
     let Some(owner) = kernel.current_process_birth_key() else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
+    if memory.native_shared_view_owner().is_some_and(|native| native != owner) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
     let Some(base) = kernel.memory.allocate_shared_view(
         owner,
         mapping_handle,
         offset_low,
         size,
         protect,
-        &mapping_bytes,
+        &initial_bytes,
     ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
         return 0;
     };
-    // Native reconciliation after the import maps this canonical page by
-    // pointer. An unmapped guest VA cannot be seeded safely here.
+    // Native reconciliation maps this canonical page by pointer after the
+    // import. A raw adapter has no native owner and needs its immediate seed.
+    if memory.native_shared_view_owner().is_none() {
+        let mut canonical = vec![0; size as usize];
+        if !kernel
+            .memory
+            .shared_mapping_read(mapping_handle, offset_low, &mut canonical)
+            || memory.ensure_mapped(base, size).is_err()
+            || memory.write_bytes(base, &canonical).is_err()
+        {
+            let _ = kernel.memory.release_shared_view(owner, base);
+            kernel.memory.forget_shared_mapping(mapping_handle);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        }
+    }
     let process_id = kernel.current_process_id();
     let Ok(mapping) = kernel.handles.file_mapping_mut(mapping_handle) else {
         kernel
@@ -30274,12 +30330,8 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    let start = offset_low as usize;
-    let end = start.saturating_add(mapping_bytes.len());
-    if end > mapping.data.len() {
-        mapping.data.resize(end, 0);
-    }
-    mapping.data[start..end].copy_from_slice(&mapping_bytes);
+    // data remains the DIB/legacy compatibility store only. Public view
+    // reads and writes above are exclusively from stable_shared_pages.
     mapping.views.push(FileMappingView {
         base,
         size,
@@ -30349,6 +30401,12 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return None;
     };
+    if memory.native_shared_view_owner().is_some_and(|native| native != owner) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return None;
+    }
     if let Some((handle, mapping, view)) = kernel.handles.file_mapping_view_for_birth(owner, base)
     {
         if !kernel.memory.virtual_allocation(owner, base).is_some_and(|allocation| {
@@ -30361,37 +30419,49 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
             return None;
         }
         let file_id = mapping.file_id;
+        let views = mapping.views.clone();
         let count = bytes_to_commit.unwrap_or(view.size).min(view.size);
-        let bytes = read_guest_bytes(kernel, memory, thread_id, base, count)?;
-        // A native hook reads the pointer-mapped canonical page through uc;
-        // its host guard is active, so no second host write is legal. A raw
-        // non-native memory adapter instead commits its copied guest bytes.
-        if !kernel.memory.shared_mapping_write(handle, view.offset, &bytes)
-            && !kernel
+        let mut bytes = read_guest_bytes(kernel, memory, thread_id, base, count)?;
+        if memory.native_shared_view_owner().is_some() {
+            // The owner-qualified native ledger maps this exact shared slab
+            // into uc. Host access is fenced during the import, so uc's
+            // checked guest read above is the canonical hook-time read.
+            if !kernel
                 .memory
                 .shared_mapping_native_active(handle, view.offset, bytes.len())
-        {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-            return None;
-        }
-        let (views, data) = {
-            let Ok(mapping) = kernel.handles.file_mapping_mut(handle) else {
+            {
                 kernel
                     .threads
-                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
                 return None;
-            };
-            let start = view.offset as usize;
-            let end = start.saturating_add(bytes.len());
-            if end > mapping.data.len() {
-                mapping.data.resize(end, 0);
             }
-            mapping.data[start..end].copy_from_slice(&bytes);
-            (mapping.views.clone(), mapping.data.clone())
-        };
-        sync_file_mapping_views_to_guest(memory, base, Some(owner), &views, &data);
+        } else {
+            // A raw adapter has its own copied guest bytes. Commit the
+            // changed prefix, then read back from the canonical page.
+            if !kernel.memory.shared_mapping_write(handle, view.offset, &bytes)
+                || !kernel
+                    .memory
+                    .shared_mapping_read(handle, view.offset, &mut bytes)
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return None;
+            }
+            if !sync_shared_mapping_views_to_guest(
+                memory,
+                base,
+                owner,
+                view.offset,
+                &views,
+                &bytes,
+            ) {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return None;
+            }
+        }
         return Some((file_id, view, bytes));
     }
     let Some((mapping, view)) = kernel.handles.file_mapping_view(base) else {
@@ -30431,6 +30501,40 @@ fn commit_file_mapping_view_from_guest<M: CoredllGuestMemory>(
     };
     sync_file_mapping_views_to_guest(memory, base, None, &views, &data);
     Some((file_id, view, bytes))
+}
+
+fn sync_shared_mapping_views_to_guest<M: CoredllGuestMemory>(
+    memory: &mut M,
+    source_base: u32,
+    owner: crate::ce::object::ProcessBirthKey,
+    source_offset: u32,
+    views: &[FileMappingView],
+    bytes: &[u8],
+) -> bool {
+    let source_end = u64::from(source_offset) + bytes.len() as u64;
+    for view in views
+        .iter()
+        .copied()
+        .filter(|view| view.process_birth == Some(owner) && view.base != source_base)
+    {
+        let begin = u64::from(view.offset).max(u64::from(source_offset));
+        let end = (u64::from(view.offset) + u64::from(view.size)).min(source_end);
+        if begin >= end {
+            continue;
+        }
+        let source_start = (begin - u64::from(source_offset)) as usize;
+        let dest_start = (begin - u64::from(view.offset)) as u32;
+        if memory
+            .write_bytes(
+                view.base.wrapping_add(dest_start),
+                &bytes[source_start..source_start + (end - begin) as usize],
+            )
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn sync_file_mapping_views_to_guest<M: CoredllGuestMemory>(
@@ -50487,6 +50591,12 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_HANDLE);
                 return 0;
             };
+            if kernel.memory.has_shared_mapping(section) {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            }
             (mapping.size, mapping.file_id, mapping.data.clone())
         };
         let Some(section_end) = offset.checked_add(byte_count) else {

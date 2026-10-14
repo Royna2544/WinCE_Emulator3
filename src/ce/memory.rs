@@ -1747,6 +1747,10 @@ impl MemorySystem {
         self.shared_mapping_transfer(handle, offset, out, false)
     }
 
+    pub fn has_shared_mapping(&self, handle: u32) -> bool {
+        self.stable_shared_pages.keys().any(|(mapped, _)| *mapped == handle)
+    }
+
     pub fn shared_mapping_write(&self, handle: u32, offset: u32, bytes: &[u8]) -> bool {
         let mut bytes = bytes.to_vec();
         self.shared_mapping_transfer(handle, offset, &mut bytes, true)
@@ -1759,6 +1763,25 @@ impl MemorySystem {
         bytes: &mut [u8],
         write: bool,
     ) -> bool {
+        let Some(end) = (offset as usize).checked_add(bytes.len()) else {
+            return false;
+        };
+        if end > u32::MAX as usize + 1 {
+            return false;
+        }
+        let mut check = offset as usize;
+        while check < end {
+            let page_offset = (check & !(STABLE_PRIVATE_PAGE_SIZE - 1)) as u32;
+            if !self
+                .stable_shared_pages
+                .get(&(handle, page_offset))
+                .is_some_and(|page| page.native_execution_guards.get() == 0)
+            {
+                return false;
+            }
+            check = (check & !(STABLE_PRIVATE_PAGE_SIZE - 1))
+                .saturating_add(STABLE_PRIVATE_PAGE_SIZE);
+        }
         let mut copied = 0;
         while copied < bytes.len() {
             let Some(current) = usize::try_from(offset)
@@ -1955,6 +1978,37 @@ impl MemorySystem {
             .private_committed_pages
             .get(&region_base)
             .copied();
+        let allocation_end = allocation.base.checked_add(allocation.size)?;
+        let mut region_end = region_base;
+        while region_end < allocation_end
+            && allocation.private_committed_pages.get(&region_end).copied() == page_protect
+        {
+            region_end = region_end.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?;
+        }
+        Some(PrivateVmPageQuery {
+            allocation_base: allocation.base,
+            allocation_protect: allocation.protect,
+            region_base,
+            region_size: region_end.checked_sub(region_base)?,
+            page_protect,
+        })
+    }
+
+    pub fn shared_view_query(
+        &self,
+        owner: ProcessBirthKey,
+        address: u32,
+    ) -> Option<PrivateVmPageQuery> {
+        let allocation = self.virtual_allocations_for(owner).find(|allocation| {
+            allocation.backing == VirtualAllocationBacking::StableSharedViewSlab
+                && address >= allocation.base
+                && allocation
+                    .base
+                    .checked_add(allocation.size)
+                    .is_some_and(|end| address < end)
+        })?;
+        let region_base = align_down(address, STABLE_PRIVATE_PAGE_SIZE as u32);
+        let page_protect = allocation.private_committed_pages.get(&region_base).copied();
         let allocation_end = allocation.base.checked_add(allocation.size)?;
         let mut region_end = region_base;
         while region_end < allocation_end
@@ -2216,10 +2270,11 @@ impl MemorySystem {
         let Some(end) = ptr.checked_add(size) else {
             return true;
         };
-        // A local committed private range remains valid even if a foreign
-        // process independently owns the same guest VA.
+        // A local committed owner-qualified range remains valid even if a
+        // foreign process independently owns the same guest VA.
         if self.virtual_allocations_for(owner).any(|allocation| {
-            allocation.source.is_private()
+            (allocation.source.is_private()
+                || allocation.backing == VirtualAllocationBacking::StableSharedViewSlab)
                 && allocation_contains_committed_range(allocation, ptr, end)
         }) {
             return false;
@@ -2370,7 +2425,7 @@ fn allocation_contains_committed_range(allocation: &VirtualAllocation, ptr: u32,
     {
         return false;
     }
-    if allocation.backing != VirtualAllocationBacking::StablePrivateSlab {
+    if allocation.backing == VirtualAllocationBacking::LegacySeed {
         return true;
     }
     let mut page = align_down(ptr, STABLE_PRIVATE_PAGE_SIZE as u32);
