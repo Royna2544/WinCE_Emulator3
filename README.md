@@ -18,11 +18,12 @@ remote-control HTTP/WebSocket surface.
   private-VM native same-VA A→B→A isolation is validated. D-008 public
   shared-view named A→B→A and same-mapping alias controls pass focused tests
   and both frozen-source broad suites. One sealed task/frame-qualified run
-  outcome, remaining image/heap backing, Stage 2 and the Stage 3 task
-  migration remain open. After E-42's historical selector-only gate, the main
-  EXE loader now seals final patched R/RX bytes and retains mutable runs
-  copy-backed. Its E-43 source-bound gate passes, while full Stage 2/live
-  acceptance remains open. Persistent-owner architecture is deferred to Stage 8.
+  outcome, remaining writable-image/DLL/heap-spillover backing, Stage 2 and
+  Stage 3 task migration remain open. After E-42's historical selector-only
+  gate, the main EXE loader now seals final patched R/RX bytes and retains
+  mutable runs copy-backed. Its E-43 source-bound gate passes. E-44 separately source-gated
+  the initial heap/stack fixed slabs; full Stage 2/live acceptance remains
+  open. Persistent-owner architecture is deferred to Stage 8.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
@@ -85,9 +86,11 @@ remote-control HTTP/WebSocket surface.
   source gate tests those separately. On the E-20 combined
   final source, full release passed **1,742/0/14 ignored** and no-feature
   **1,296/0/13 ignored**; the four public GMS tests passed in both. GMS now
-  includes boot-reserved RAM in its stable-private-page budget, but heap,
-  image and legacy views are not charged. These are source gates, not another
-  app run
+  includes boot-reserved RAM in its stable-private-page budget. At that E-39
+  gate the initial heap, image and legacy views were not charged; E-44 later
+  added committed initial heap/stack slabs to the stable-page budget, while
+  image, spillover and legacy views remain outside it. These are source gates,
+  not another app run
   ([E-20 receipt](evidence/e20-native-same-va-20261014/validation.receipt.md),
   [GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
 - D-008 first public maps now use one canonical, budget-charged shared page
@@ -107,7 +110,7 @@ remote-control HTTP/WebSocket surface.
   manually, not by the actual loader. No sealed storage, native page mapping,
   host-write guard, 56-MiB benchmark or app run is claimed
   ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
-- A later read-only production-loader probe seals **1,379/2,168** iNavi main-
+- At E-43, a read-only production-loader probe sealed **1,379/2,168** iNavi main-
   image pages (**5.386719 MiB**), including **1,224** pages whose final bytes
   were changed by one-time loader patching. All 1,379 non-writable-section
   candidates seal. The initial per-owner mapped-blob inventory is
@@ -120,6 +123,18 @@ remote-control HTTP/WebSocket surface.
   focused native-write overlap tests and a no-trace check also passed.
   Exhaustive host-write audit, budget accounting, app speed/memory, and map
   readiness remain open ([E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md)).
+- E-44 replaced the initial 16-MiB heap and 4-MiB stack owner blobs with
+  owner-qualified fixed slabs and passed formatted-source release
+  **1,785/0/17 ignored**, paired debug no-feature **1,321/0/13 ignored**,
+  and a no-trace check. A synthetic 56-MiB RX control reduced owned blob
+  capacity/fresh writes/readback by **20,971,520 B (20 MiB)**; a same-mode
+  debug control passed, but single samples and slab reservation outside the
+  setup timer do not establish a speed or host-RSS gain. An exact blocked
+  serial/NMEA path test passed across two untouched stack pages and a fresh
+  owner. Unconverted direct-import cold-stack outputs can still fail closed;
+  stale different-birth rejection was not independently tested. There was no
+  E-44 iNavi run or map-readiness result
+  ([E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md)).
 - An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
   and remained on the genuine splash, not the map. Guest `COM7:` reads
   transferred injected raw NMEA bytes, and tap down/up WNDPROC returns were

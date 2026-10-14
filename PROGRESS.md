@@ -4,35 +4,40 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-14 E-44 Fixed Heap/Stack Slabs (validation pending)
+## 2026-10-14 E-44 Fixed Heap/Stack Slab Source Gate
 
-- The in-progress source reserves the initial 16-MiB `ProcessHeapArena` and
+- The source reserves the initial 16-MiB `ProcessHeapArena` and
   4-MiB `ThreadStack` as owner-qualified fixed ranges in `virtual_allocations`
   instead of adding `ram:ce-heap-arena` and `ram:guest-stack` owner blobs.
   Heap pages commit at allocation; stack pages commit lazily on a native fault.
   Native mappings retain their backing pins through the checked owner/unmap
   lifetime. Queued payload delivery checks fixed-slab overlap and permits its
   prepared heap path, rather than silently writing a stale copied blob.
-- This is an implementation inventory, **not** an E-44 source gate. Frozen
-  source hashes and integrated test results are pending. An audited startup
-  boundary routes registry, time, geometry, find-data and module/path outputs
-  through guarded hooks with whole-span preflight. Unconverted direct-import
-  outputs can still fail closed on an untouched stack page; this is not a
-  claim that all host writes are covered. The global heap cursor and ownerless
-  allocation metadata still need O-M2 ownership work; heap spillover remains
-  copy-backed. There has been no E-44 iNavi run, RSS, speed, or map-readiness
-  measurement.
+- On the formatted six-file source snapshot, the serial release
+  `unicorn,trace,win32-desktop` all-target suite passed **1,785/0/17 ignored**
+  across 17 result blocks, paired debug no-feature passed **1,321/0/13
+  ignored** across 17, and the debug `unicorn,win32-desktop` no-trace check
+  passed. The first release run's **803/28/4** was diagnostic: 24 outdated
+  heap/stack/budget fixtures and four wait fixtures without birth context
+  were repaired, not production guards weakened. An audited startup boundary
+  routes registry, time, geometry, find-data and module/path outputs through
+  guarded hooks with whole-span preflight. Unconverted direct-import outputs
+  can still fail closed on an untouched stack page; full host-write coverage
+  is not claimed ([E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md)).
 - A bounded synthetic 56-MiB sealed-RX profile passed **1/1** in release after
   fixed-slab setup. Its owned blob capacity, fresh blob writes, and fresh/reused
   readback were each **77,824 B**, versus **21,049,344 B** owned capacity,
   fresh writes and readback in the E-43 pre-slab debug control: a **20,971,520 B
-  (20 MiB)** logical reduction for those fields. Fixed-slab reservation is
-  outside the timed setup section; the profiles differ in build mode and each
-  has one sample, so their timing is not a speed result. A separate exact-path
-  blocked serial/NMEA test passed **1/1**, writing two previously untouched
-  stack pages and surviving a fresh owner. Stale different-birth behavior was
-  not independently tested. These focused results do not close the pending
-  E-44 full gate ([provisional receipt](evidence/heap-stack-20261014/validation.receipt.md)).
+  (20 MiB)** logical reduction for those fields. A same-mode post-slab debug
+  control also passed **1/1** with the same 77,824-B fields. Its single setup
+  samples were 16.740/25.249 ms fresh/reused versus old debug 33.246/37.971
+  ms, but fixed-slab reservation is outside the timed setup section; no speed
+  or host-RSS gain follows. A separate exact-path blocked serial/NMEA test
+  passed **1/1**, writing two previously untouched stack pages and surviving
+  a fresh owner. Stale different-birth behavior was not independently tested.
+  The global heap cursor and ownerless allocation metadata remain O-M2 work,
+  heap spillover remains copy-backed, and there was no E-44 iNavi run, RSS or
+  map-readiness measurement.
 
 ## 2026-10-14 E-43 Final-Byte Main-Image Source Gate
 

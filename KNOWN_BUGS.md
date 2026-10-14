@@ -52,10 +52,11 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   ([D-008 receipt](evidence/d008-shared-view-20261014/validation.receipt.md)).
 - GMS's boot-reserved physical RAM and stable private-page commit use one
   budget, with four public controls passing both E-39 broad suites. Only
-  stable private pages and D-008 stable shared-view pages charge this budget;
-  the E-44 initial heap/stack slab budget treatment is not yet source-gated,
-  while image, spillover and legacy-view memory do not reduce reported
-  available physical memory. It is not a complete guest-memory census
+  stable private pages, D-008 stable shared-view pages, and E-44's committed
+  fixed heap/stack slabs enter the source-gated accounting path. Persistent
+  native pin budget release is deferred until checked owner closure, while
+  image, spillover and legacy-view memory are not charged by this budget.
+  It is not a complete guest-memory census
   ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
 - The new main-EXE sealed R/RX path does not cover mutable image pages,
   preloaded or runtime DLLs, trap pages, heap spillover, or stack/heap slabs.
@@ -64,7 +65,7 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   (5.386719 MiB), including 1,224 with final patched bytes, and counted
   36,679,680 B (34.980469 MiB) in the initial owner's mapped blobs. E-44
   source now replaces those initial heap/stack blobs with owner-qualified
-  fixed slabs, but its native safety and broad gates are pending. Heap
+  fixed slabs; its paired source-bound broad gates pass. Heap
   spillover remains copy-backed. The native pins must remain retained through
   checked owner/unmap closure; persistent-pin budget release is deferred until
   that closure. Exhaustive host-write inventory, memory-mode checkpoint
@@ -77,14 +78,14 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   follow-up only if an approved live run encounters that bypass. The exact-path
   blocked serial/NMEA focused control passes across two untouched stack pages
   and a fresh owner, but stale different-birth rejection has not been
-  independently tested and the E-44 full source gate is pending. The synthetic
-  56-MiB RX profile reduced owned blob capacity/fresh writes/readback by
-  20,971,520 B against its pre-slab control; this is a logical blob-byte result,
-  not host RSS or app speed (debug versus release, one sample each, and slab
-  reservation outside the timed setup section).
+  independently tested. The synthetic 56-MiB RX release and debug profiles
+  reduced owned blob capacity/fresh writes/readback by 20,971,520 B against
+  the pre-slab debug control; this is a logical blob-byte result, not host RSS
+  or app speed (one sample per mode and slab reservation outside timed setup).
   The earlier 155-page original-byte filter result is historical; no new app
   memory, speed, or map-readiness gain has been measured
-  ([E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
+  ([E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md),
+  [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
 - Canonical Task/alias ownership is absent: 12 expected-red Task controls live
   in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are

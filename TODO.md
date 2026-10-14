@@ -7,32 +7,27 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Finish the E-44 fixed initial heap/stack slab gate: frozen-source broad
-   suites and focused clone, native ownership, host-write, readback and
-   accounting controls. Check whole-span preflight for the guarded startup
-   output families and keep unconverted direct-import cold-stack outputs
-   fail-closed. Test a stale different-birth case independently of the passing
-   exact-path blocked serial/NMEA fresh-owner case. Preserve writable semantics
-   and process/thread isolation; no speed or RSS inference follows from the
-   synthetic profile or E-43's load-only blob census.
-1. O-M2: move the global heap cursor and ownerless allocation metadata to
+0. O-M2: move the global heap cursor and ownerless allocation metadata to
    birth-qualified authority before Stage 3. Prove foreign `HeapFree`/
    `HeapSize` rejection and prevent one birth's allocation high-water from
    charging another; retain the monotonic-OOM-hole and safe-reuse controls.
-2. Migrate copy-backed heap spillover, writable image sections and DLLs as
+1. Migrate copy-backed heap spillover, writable image sections and DLLs as
    separate per-birth ownership slices, each with focused controls and memory
    accounting. Finish the direct native-write/restore/rebinding inventory,
    and decide/document `PrivatePageBudget` treatment before live acceptance.
    Matched iNavi timing requires a separate run approval and fresh adjacent
    mount backups.
-3. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
+2. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
 ## Parallel lanes (never gate the queue above)
 
-- E-43's final-byte main-image **source** gate passed, but full host-write
-  inventory, memory-mode checkpoint relineage, and live app behavior remain
-  open ([receipt](evidence/sealed-main-image-20261014/validation.receipt.md)).
+- E-43's sealed main-image and E-44's fixed initial heap/stack **source**
+  gates passed; full host-write inventory, an independent stale different-
+  birth stack control, memory-mode checkpoint relineage, pin-budget treatment
+  and live app behavior remain open
+  ([E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
+  [E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md)).
 - If a later approved live run reaches a direct-import cold-stack bypass,
   consider per-thread/slot 128-KiB committed low-water tracked by slot, with
   contiguous `[page(SP), slot_top)` commit. The current shared sparse
