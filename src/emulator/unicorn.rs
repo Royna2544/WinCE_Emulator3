@@ -56580,6 +56580,7 @@ mod unicorn_tests {
         // slices below still execute real guest MIPS on their own native CPU.
         let mut kernel = phase1_kernel("same-va-parent.exe")?;
         let parent_state = kernel.current_process_state();
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
         let parent_mapping =
             kernel
                 .handles
@@ -56597,6 +56598,11 @@ mod unicorn_tests {
                 .iter()
                 .any(|queued| queued.process_id == launch.process_id)
         );
+        let child_birth = kernel
+            .handles
+            .process_birth_key(launch.process_id)
+            .expect("queued child birth");
+        assert_ne!(parent_birth, child_birth);
         for (handle, process_id, initial) in [
             (parent_mapping, 1, PARENT_BYTES),
             (child_mapping, launch.process_id, CHILD_BYTES),
@@ -56632,6 +56638,11 @@ mod unicorn_tests {
             let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
             let mut cpu = super::UnicornMips::new()?;
             cpu.load_pe_image(&image)?;
+            cpu.native_engine = super::ProcessNativeEngine::with_lifetime(
+                Arch::MIPS,
+                Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+                crate::emulator::native_engine::NativeEngineLifetime::FreshPerSlice,
+            );
             Ok(cpu)
         };
         let mut parent = make_reader_writer("same-va-parent.exe")?;
@@ -56645,11 +56656,14 @@ mod unicorn_tests {
             live_pump: false,
         };
 
-        parent.run_until_import_trap_with_framebuffer_limits(
+        let a_first = parent.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             limits,
-        )?;
+        );
+        a_first.result?;
+        assert_eq!(a_first.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(a_first.report.end_process_birth(), Some(parent_birth));
         assert_eq!(
             parent.last_native_slice_outcome(),
             super::NativeSliceOutcome::CountLimit
@@ -56679,11 +56693,14 @@ mod unicorn_tests {
         });
         kernel.set_process_module_path("\\Test\\same-va-child.exe");
         kernel.set_process_module_host_path(std::path::PathBuf::from("same-va-child.exe"));
-        child.run_until_import_trap_with_framebuffer_limits(
+        let b = child.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             limits,
-        )?;
+        );
+        b.result?;
+        assert_eq!(b.report.start_process_birth(), Some(child_birth));
+        assert_eq!(b.report.end_process_birth(), Some(child_birth));
         assert_eq!(
             child.last_native_slice_outcome(),
             super::NativeSliceOutcome::CountLimit
@@ -56730,14 +56747,17 @@ mod unicorn_tests {
         kernel.set_current_process_state(parent_state);
         kernel.set_process_module_path("\\Test\\same-va-parent.exe");
         kernel.set_process_module_host_path(std::path::PathBuf::from("same-va-parent.exe"));
-        parent.run_until_import_trap_with_framebuffer_limits(
+        let a_second = parent.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
                 instruction_limit: 3,
                 ..limits
             },
-        )?;
+        );
+        a_second.result?;
+        assert_eq!(a_second.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(a_second.report.end_process_birth(), Some(parent_birth));
         assert_eq!(
             parent.last_native_slice_outcome(),
             super::NativeSliceOutcome::CountLimit
