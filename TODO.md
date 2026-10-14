@@ -15,7 +15,7 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    mount backups.
 1. Continue the user-authorized Stage 3 scheduler migration. The bounded
    child-exit sweep and owned-child `TerminateProcess` execution-stop handshake
-   have source controls; finish their frozen-source broad gate before extending
+   passed their separate frozen-source broad gates; continue the remaining
    semantics. Implement CE-compatible caller wait/timeout behavior, a safe
    old-MIPS direct-kernel real-handle continuation, and root-process
    real-handle completion. Then complete unpinned intra-slice worker lineage,

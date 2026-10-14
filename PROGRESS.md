@@ -12,9 +12,12 @@ references for historical reconstruction.
   native CPU sealing before another attempt, and failure rather than unsafe
   resume for an old-MIPS direct-kernel real-handle call. The desktop loop has
   a completed-owner maintenance lane so a sealed child is not requeued during
-  host/input handoff. Frozen-source broad validation is still pending; this is
-  not CE caller wait/timeout semantics, root-process real-handle completion,
-  full Stage 3, or live-app acceptance.
+  host/input handoff. Frozen-source broad gates passed: no-feature
+  1,375/0/5 ignored and release Unicorn/trace/desktop 1,858/0/11 ignored;
+  the desktop no-trace check also passed
+  ([receipt](evidence/stage3-terminate-20261015/validation.receipt.md)).
+  This is not CE caller wait/timeout semantics, root-process real-handle
+  completion, full Stage 3, or live-app acceptance.
 
 ## 2026-10-14 Stage 2 source gates E-30 to E-44 and O-M2
 
