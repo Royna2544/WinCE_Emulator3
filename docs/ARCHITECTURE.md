@@ -48,9 +48,13 @@ and no-feature 1,297/0/13 ignored, each across 17 result blocks
 ([D008 receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)).
 This proves isolation at a shared VA selected by the emulator's per-owner
 cursor, not CE same-VA placement semantics or guest `CreateProcessW` handoff.
-Distinct public mappings at one VA, remaining image/heap backing, machine
-checkpoint relineage and live-app behavior remain unproved. A4 below remains
-the shared ownership contract, not a declaration that all consumers migrated.
+E-44 then source-gated fixed initial heap/stack slabs; O-M2 source-gated a
+birth-qualified 256-MiB sparse heap window and removed copied spillover
+([receipt](../evidence/om2-heap-20261014/validation.receipt.md)). Distinct
+public mappings at one VA, writable image/DLL backing, safe heap address
+reuse, machine checkpoint relineage and live-app behavior remain unproved.
+A4 below remains the shared ownership contract, not a declaration that all
+consumers migrated.
 
 ## A1. Machine authority
 

@@ -8,22 +8,23 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 - [memory.rs](../../src/ce/memory.rs) holds allocation/virtual metadata; emulator
   [memory.rs](../../src/emulator/memory.rs) defines region layout and permissions.
 - [pe_loader.rs](../../src/emulator/pe_loader.rs) creates mapped blobs. Native mapping,
-  fixed heap/stack slabs, spillover, shared-view synchronization and byte
+  fixed heap/stack slabs, shared-view synchronization and byte
   adapters live in
   [unicorn.rs](../../src/emulator/unicorn.rs); [native_engine.rs](../../src/emulator/native_engine.rs)
   now uses a fresh native owner per slice by default and retains persistent
   reuse only as a Stage 8 opt-in; it is not a replacement memory authority.
 - Checked guest-backed raw/native initial/reallocation paths establish bytes before
   publication; metadata-only helpers still exist. Logical zero reserves one physical byte.
-- Failed prepared candidates leave monotonic holes. The global heap cursor and
-  ownerless allocation metadata can cross-charge births or admit foreign
-  `HeapFree`/`HeapSize`; existing heap free does not prove address reuse,
-  immutable reserved extent or ABA protection. O-M2 must settle ownership
-  before Stage 3.
-- Four host-queued typed reservations materialize at delivery. Immediate guest-pointer
-  publication must not bypass writable native backing or initialized payload bytes.
-- Persisted spillover can mirror a global high-water mark into multiple CPU images;
-  live heap metadata, blob capacity, native backing and host RSS are different measures.
+- Failed prepared candidates leave birth-local monotonic holes. O-M2 keys heap
+  high-water, handles and allocation metadata by process birth, rejecting
+  foreign `HeapFree`/`HeapSize`; heap free still does not establish address
+  reuse, immutable reservation extent or ABA protection.
+- Four host-queued typed reservations materialize at delivery under the
+  recipient birth. Retrieval alone does not retire a payload before dispatch;
+  immediate guest-pointer publication must not bypass writable native backing
+  or initialized bytes.
+- O-M2 removed copied heap spillover. Live heap metadata, committed slab pages,
+  native backing and host RSS remain different measures.
 
 ### E-22 metadata-only authority slice (2026-10-14)
 
@@ -165,20 +166,11 @@ import outputs can still
 fail closed on a cold, untouched stack page; the shared sparse `ThreadStack`
 has no per-thread/slot low-water state. Only if an approved live run reaches
 that bypass should a per-thread/slot 128-KiB committed low-water be considered,
-tracked by slot and committing `[page(SP), slot_top)` contiguously. The global
-heap cursor and ownerless allocation metadata need O-M2 birth-qualified
-authority before Stage 3. Heap spillover remains copy-backed; writable image
-sections and DLLs are separate later ownership slices. No E-44 iNavi, host
-RSS, speed or map-readiness result exists.
-
-### O-M2 reviewed ownership gate (2026-10-14; proposed, not implemented)
-- Contract/owner: `ProcessBirthKey` owns each heap handle, monotonic cursor, `(birth, VA)` block, prepared token and queued typed payload; raw APIs capture the current birth, while host payloads capture the recipient window's birth.
-- Window: enlarge the fixed `0x30000000` process-heap reservation to 256 MiB, ending at `0x40000000` below the `0x50000000` VirtualAlloc floor; commit only crossed 4-KiB pages and remove the global copied spillover path in the same migration.
-- Evidence: E-38 iNavi reached 31,546,846 B live heap (`evidence/e37-live-20261014T051228Z/app.stdout.raw.txt:13132`), so a 16-MiB fail-closed cap is invalid; local CE6 `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\LMEM\heap.c` and `rheap.cpp` set `ERROR_INVALID_PARAMETER` for invalid HeapFree/HeapSize.
-- Interface/lifetime: owner-qualified Heap/Local/CRT, pointer probes, Toolhelp and native fixed growth; GWE payload key is `(recipient birth, VA)` and is retired on retrieval/dispatch, discarded window messages and exact-birth exit; dynamic heap handles reject foreign births.
-- Publication/failure: validate birth and destination before map/write; charge and map the selected owner's pages before metadata/pointer publication; aborted writes keep owner-local monotonic holes; window-top OOM returns NULL/`ERROR_NOT_ENOUGH_MEMORY` without charging or publishing; stale native owners stay fenced.
-- Expected-red controls: same-VA A/B allocation and independent page charge; foreign-only free/size/validate with CE errors; aborted tokens and PID reuse; same-VA queued payload delivery/teardown; growth through 16 MiB to 32 MiB then top-boundary OOM; stale A-born serial completion under B before RX poll or stack write.
-- Gate/order: migrate fixed heap, allocation/handle/payload owners and remove spillover as one connected change, then add the stale-serial A/B regression; exact nonzero tests and paired all-target suites precede a source receipt. No live iNavi run without fresh separate approval and verified mount ZIPs.
+tracked by slot and committing `[page(SP), slot_top)` contiguously. At E-44,
+the global heap cursor and ownerless allocation metadata still needed
+birth-qualified authority, and heap spillover remained copy-backed. Writable
+image sections and DLLs were separate later slices. No E-44 iNavi, host RSS,
+speed or map-readiness result exists.
 
 Additional bounded controls passed under that source gate. A release synthetic
 56-MiB sealed-RX setup profile passed 1/1 with 77,824 B owned blob capacity,
@@ -193,6 +185,43 @@ debug profile also passed 1/1 with the same 77,824-B fields; its fresh/reused
 setup samples were 16.740/25.249 ms versus old debug 33.246/37.971 ms, but
 one sample each and out-of-timer slab reservation prohibit a speed claim
 ([E-44 receipt](../../evidence/heap-stack-20261014/validation.receipt.md)).
+
+### O-M2 per-birth heap source gate (2026-10-14, executed)
+
+Each `ProcessBirthKey` now owns its heap cursor, handles, `(birth, VA)` blocks,
+prepared candidates and typed queued payloads. The fixed process-heap window
+is `[0x30000000, 0x40000000)`: a 256-MiB sparse reservation below the
+`0x50000000` `VirtualAlloc` floor. Only crossed 4-KiB pages commit; the global
+copied heap-spillover path is removed. E-38 iNavi had reached 31,546,846 B
+live heap (`evidence/e37-live-20261014T051228Z/app.stdout.raw.txt:13132`),
+already beyond the E-44 16-MiB initial arena.
+
+Raw Heap/Local/CRT and pointer probes use the selected process birth; host
+message payloads capture the recipient window's birth. Known typed payloads
+remain owner-qualified across Get/Peek retrieval until dispatch or exact
+window/process teardown. B may use its own block at the same numeric VA, but
+cannot query or mutate A's block; a VA allocated only in A is rejected in B.
+Invalid `HeapFree`/`HeapSize` use
+`ERROR_INVALID_PARAMETER`, matching the local CE6 `heap.c`/`rheap.cpp`
+reference. Preflight validates the output destination before heap growth and
+pointer publication. Growth past the top returns NULL with
+`ERROR_NOT_ENOUGH_MEMORY` without a page charge; failed prepared allocations
+may retain birth-local monotonic holes. A stale serial/NMEA completion under
+another birth is fenced before RX consumption or stack writes.
+
+The `ORD_REMOTE_HEAP_*` dispatches still skip their target-process argument
+and delegate under the selected birth (`coredll.rs:5881-5911`); remote-target
+heap semantics are not covered by this gate. `GetClipboardDataAlloc` reads a
+globally stored clipboard handle but sizes it under the current birth
+(`coredll.rs:20301-20304`), so cross-birth clipboard transfer is likewise
+not established.
+
+The serial release `unicorn,trace,win32-desktop` all-target suite, paired debug
+no-feature all-target suite, and Unicorn/desktop no-trace check passed. Exact
+focused controls, counts, hashes and logs are in the
+[O-M2 receipt](../../evidence/om2-heap-20261014/validation.receipt.md).
+This is a source gate: no O-M2 live iNavi run, host-RSS/speed gain, map
+readiness, general heap address reuse or full Stage 2 acceptance follows.
 
 ## Target authority and permitted interfaces
 
@@ -353,9 +382,9 @@ retain their canonical page, and a foreign public view never overwrites
 private RAM at the same VA. A raw adapter's copied aliases are a separate
 boundary: failed propagation may leave canonical and prior guest-byte
 effects, which must be reported rather than rolled back by assertion. These
-requirements, full clone relineage, and remaining writable image, DLL and
-spillover migration keep O-M1 and Stage 2 open after the D008 and E-44
-source gates.
+requirements, full clone relineage, and remaining writable image/DLL
+migration keep O-M1 and Stage 2 open after the D008, E-44 and O-M2 source
+gates.
 
 ## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
@@ -370,9 +399,9 @@ slabs referenced by all corresponding views, including closed-handle live
 views. Ordinary private pages do not use per-slice `initial_bytes` copy-in or
 copy-back after migration. Public views now use stable shared pages. At this
 O-M1 decision, legacy DIB/injected views and image/heap blobs retained copy
-boundaries; E-43 later sealed the final-byte main-image R/RX family, and
-E-44 later source-gated initial heap/stack slabs. Do not silently mix both
-authorities for one backing.
+boundaries; E-43 later sealed the final-byte main-image R/RX family, E-44
+source-gated initial heap/stack slabs, and O-M2 removed copied heap
+spillover. Do not silently mix both authorities for one backing.
 
 This choice is supported, not proved in production, by the explicitly selected
 ignored `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner`
@@ -482,8 +511,8 @@ that use and its failures before matching CE behavior in the emulator.
   derived clones of `CeKernel`/`HandleTable`/`MemorySystem` cannot safely
   relineage a partial checkpoint. A source-machine key is stale in the clone.
   Shared aliases within that clone refer to one clone-local backing; no
-  mutable slab is shared with the original. Remaining writable-image, DLL,
-  heap-spillover and legacy file-view copy paths remain explicit until their
+  mutable slab is shared with the original. Remaining writable-image, DLL
+  and legacy file-view copy paths remain explicit until their
   separate migration.
 - At slice completion, stage the CPU snapshot and all outgoing bytes from any
   unmigrated copy-based family, check every sync and the source-bound owner
@@ -557,9 +586,10 @@ A D008 live-app run has not occurred. The remaining connected gates are:
    private/view collision. The focused same-file named-reopen, same-slice alias,
    DIB transition and low-budget controls must stay green. E-43 sealed the
    final-byte main-image R/RX family; E-44 source-gated the initial heap/stack
-   slabs. Migrate the remaining copy-backed spillover, writable image
-   and DLL families without leaving a second writable copy for any migrated
-   family. Resolve O-M2 heap ownership before Stage 3.
+   slabs; O-M2 then birth-qualified the fixed heap and removed copied
+   spillover. Migrate the remaining writable image and DLL families without
+   leaving a second writable copy for any migrated family. Safe heap address
+   reuse, full clone lineage and Stage 2 acceptance remain separate gates.
 4. Treat O-P4's fresh-default code/test result as complete only for its
    pinned-source boundary; persistent reuse stays an explicit Stage 8 opt-in.
    A bounded read/write iNavi run requires **fresh human approval** and fresh
@@ -584,8 +614,9 @@ the selected O-M1 target or Stage 2 completion.
 - Record mapping generations, allocation/frame incarnations, permission changes and
   checked failures under `SnapshotEpoch`; retain bounded events, not huge history dumps.
 - Preserve current zero-size, ZERO, non-ZERO, grow-prefix/tail and failure-injection tests.
-- Add same-VA private isolation, shared visibility, sparse spillover and external parked
-  edits; a two-slice guest-written private `VirtualAlloc` byte round-trip; stale
+- Add same-VA private isolation, shared visibility, sparse owner-local heap
+  growth and external parked edits; a two-slice guest-written private
+  `VirtualAlloc` byte round-trip; stale
   token/frame rejection; partial protect/unmap/remap; clone/checkpoint tests.
 - Exercise native reads after publication and fresh/reused engine reconciliation, not
   metadata-only assertions. Long lifecycle controls must include post-owner-close sampling.

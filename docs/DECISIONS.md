@@ -38,8 +38,11 @@ named-reopen view and in-slice alias controls have focused passes, as do the
 legacy DIB-to-public migration controls; its final frozen-source broad gates
 passed release 1,744/0/14 ignored and no-feature 1,297/0/13 ignored across
 17 result blocks each ([D008 receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)).
-Neither those source controls nor E-38's splash-only live run closes the
-remaining image/heap, clone-lineage or full Stage 2 gates.
+E-43 sealed immutable main-EXE pages, E-44 source-gated fixed initial
+heap/stack slabs, and O-M2 source-gated per-birth heap authority without
+copied spillover ([receipt](../evidence/om2-heap-20261014/validation.receipt.md)).
+Neither those source controls nor E-38's splash-only live run closes writable
+image/DLL, safe heap reuse, clone-lineage or full Stage 2 gates.
 
 ## Open questions by owner page
 
@@ -127,8 +130,8 @@ remaining image/heap, clone-lineage or full Stage 2 gates.
 
 | ID | Question | Page | Status |
 | --- | --- | --- | --- |
-| O-M1 | D-008 selects one address-stable byte authority per migrated page. E25 validated the test-only private slab, E35 the public private family, O-P4 the fresh-owner teardown, and E-39 real native public-private/injected-view A→B→A same-VA bytes. D008's public named-reopen shared pages and in-slice aliases passed focused and frozen-source broad gates ([receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)). Its first public view migrates the whole legacy mapping into pages charged to the private-page budget or fails without retiring Legacy; `MappingBacking::Slab` drops the old Vec. File-backed pages seed lazily; raw guest adapters remain copies whose failed alias propagation can leave already-committed canonical/guest bytes. Image/heap backing, full owner/clone lineage, native failure breadth, live readiness and Stage 2 acceptance remain open. No memory or speed gain follows from these controls. See [memory: O-M1 backing decision](subsystems/guest-memory.md). | [memory](subsystems/guest-memory.md) | private/fresh-owner and D008 source gates passed; broader O-M1/Stage 2 open |
-| O-M2 | Authoritative reservation extent and allocation incarnation before any heap reuse. | [memory](subsystems/guest-memory.md) | open |
+| O-M1 | D-008 selects one address-stable byte authority per migrated page. E25 validated the test-only private slab, E35 the public private family, O-P4 the fresh-owner teardown, and E-39 real native public-private/injected-view A→B→A same-VA bytes. D008's public named-reopen shared pages and in-slice aliases passed focused and frozen-source broad gates ([receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)). Its first public view migrates the whole legacy mapping into pages charged to the private-page budget or fails without retiring Legacy; `MappingBacking::Slab` drops the old Vec. File-backed pages seed lazily; raw guest adapters remain copies whose failed alias propagation can leave already-committed canonical/guest bytes. E-43 sealed immutable main-EXE pages, E-44 migrated initial heap/stack slabs and O-M2 removed copied heap spillover. Writable image/DLL backing, full owner/clone lineage, native failure breadth, live readiness and Stage 2 acceptance remain open. No memory or speed gain follows from these controls. See [memory: O-M1 backing decision](subsystems/guest-memory.md). | [memory](subsystems/guest-memory.md) | private/fresh-owner, D008 and O-M2 heap source gates passed; broader O-M1/Stage 2 open |
+| O-M2 | Per-birth heap cursor, `(birth, VA)` blocks, handles and typed payloads are source-gated inside a sparse fixed window, with copied spillover removed ([receipt](../evidence/om2-heap-20261014/validation.receipt.md)). Authoritative original reservation extent and allocation incarnation are still prerequisites to any safe address reuse; monotonic holes are retained. | [memory](subsystems/guest-memory.md) | ownership source gate passed; safe reuse open |
 | O-P1 | Explicit stop classification (count / yield / deadline / error / debugger). E-34 preserves a checked JR continuation when a typed peer yield and native deadline coincide. Report sealing and failure-path controls remain separate hardening. | [CPU](subsystems/cpu-engine.md) | classification closed (E-34); hardening open (Stage 2/5) |
 | O-P2 | Stable hook rebinding for persistent engines. | [CPU](subsystems/cpu-engine.md) | deferred (Stage 8) |
 | O-P3 | Native translation-arena budget and commit-tail handler proof. | [CPU](subsystems/cpu-engine.md) | deferred (Stage 8) |

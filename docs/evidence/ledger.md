@@ -1511,6 +1511,45 @@ No E-44 live iNavi run, writable-mount write, host RSS, map readiness or
 full Stage 2 acceptance follows. O-M2 global heap metadata, spillover,
 writable image/DLL backing and pin-budget lifetime remain separate work.
 
+## O-M2 Per-birth heap source gate (2026-10-14, executed)
+
+O-M2 replaced the global heap cursor and ownerless allocation metadata with
+`ProcessBirthKey`-qualified cursor, handles, `(birth, VA)` blocks and prepared
+allocations. Typed queued payloads capture the recipient window's birth. The
+fixed process-heap reservation is now `[0x30000000, 0x40000000)` (256 MiB),
+with 4-KiB pages committed only as touched; the copied-spillover path is
+removed. Birth-local monotonic holes remain after failed prepared allocations.
+
+On the exact 12-file source/test hashes in the [O-M2 receipt](../../evidence/om2-heap-20261014/validation.receipt.md), the serial release
+`unicorn,trace,win32-desktop` all-target gate passed **1,803/0/17 ignored**
+across 16 result blocks ([raw log](../../evidence/om2-heap-20261014/release-unicorn-trace-desktop-attempt-07.raw.log),
+SHA-256 `1B54366E4E894A448B71D86FE98BA3AAE44CD8F99BAF8550FB9ACAB75356B5D2`).
+The paired debug no-feature all-target gate passed **1,341/0/13 ignored**
+across 16 blocks ([raw log](../../evidence/om2-heap-20261014/debug-no-default-attempt-02.raw.log),
+SHA-256 `DF1317C9D1AC85CBC9AA7E37D0F449BE4217C2159F276D5CC631F07DB87A2E1B`).
+The Unicorn/desktop no-trace check passed ([raw log](../../evidence/om2-heap-20261014/check-unicorn-desktop-no-trace-attempt-02.raw.log),
+SHA-256 `4780471D9C6B47D295B037CFBE834011706637A9FEAEE81C23B3D0F591F04AB3`);
+scoped Rust formatting and `git diff --check` passed. Earlier numbered
+compile/fixture failures and the final test-only rerun lineage are preserved
+with SHA-256 hashes in the receipt; only attempts 07/02/02 sign off the final
+snapshot.
+
+The broad tests cover same-VA A/B ownership, foreign-only heap rejection,
+>32-MiB native MIPS growth, top-boundary OOM without charge, queued typed
+payload retention/cleanup, and stale A-born serial/NMEA completion under B
+without RX or stack mutation. The same-VA raw text-pointer fixture checks
+that A's size and bytes persist while B owns its own allocation at that
+numeric VA. A valid but impossible in-place realloc reports
+`ERROR_NOT_ENOUGH_MEMORY`, matching local CE6 `rheap.cpp:1947-1963`.
+
+This is source-only. Safe heap address reuse needs original footprint and
+incarnation checks; `ORD_REMOTE_HEAP_*` target routing and cross-birth
+clipboard handle ownership remain open. Writable image/DLL backing, full
+clone relineage, direct cold-stack imports, checked pin-budget closure,
+Stage 3 and a freshly approved bounded live run remain separate. No O-M2
+iNavi launch, host RSS, busy-slice MIPS, map readiness or speed gain is
+established.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
