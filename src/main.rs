@@ -370,6 +370,13 @@ fn run_cpu_loop(
             // on a wait, message, or remote input that becomes ready later.
             // Keep servicing those host events without ever running the
             // completed native owner again.
+            // Requested parked-child exits must also be completed here:
+            // blocked descendants are not runnable, so switching alone would
+            // leave their process waits unsignaled indefinitely.
+            cpu.prune_exited_and_active_processes_from_parked_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            );
             if let Some(thread_id) = cpu.parked_timer_fallback_thread_id() {
                 kernel.pump_timers_to_gwe(thread_id);
             }
@@ -406,6 +413,11 @@ fn run_cpu_loop(
             kernel,
             Some(desktop.framebuffer_mut()),
         );
+        // Pruning may itself complete and seal the selected child. Re-enter
+        // the completed-owner maintenance lane before any native attempt.
+        if cpu.active_process_execution_completed() {
+            continue;
+        }
         if remote_server_has_pending_control(kernel) {
             let pending_remote_target = blocked_remote_input_target(cpu, kernel);
             let pending_remote_drained =
@@ -872,6 +884,12 @@ fn run_cpu_loop(
                 print_unicorn_stop(snapshot);
             }
             break;
+        }
+        if cpu.active_process_execution_completed() {
+            // A native self-termination may have sealed this CPU during the
+            // slice. Let the completion lane retire it before any rotation
+            // can park an inert context behind a closed process handle.
+            continue;
         }
         if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
             reported_blocked_message_wait = false;
