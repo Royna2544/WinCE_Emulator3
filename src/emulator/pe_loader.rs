@@ -940,6 +940,8 @@ fn collect_resource_strings(
 mod immutable_image_page_tests {
     use super::*;
     use crate::pe::SectionHeader;
+    #[cfg(feature = "unicorn")]
+    use crate::pe::{ImportBy, ImportDescriptor, ImportThunk};
 
     const SCN_EXECUTE: u32 = 0x2000_0000;
     const SCN_READ: u32 = 0x4000_0000;
@@ -1130,6 +1132,121 @@ mod immutable_image_page_tests {
         assert_eq!(runs[0].0.bytes[0], 0);
         assert_eq!(cloned[0].0.bytes[0], 0xee);
         assert!(cloned[1].0.bytes.as_mut_owned().is_none());
+    }
+
+    #[cfg(feature = "unicorn")]
+    #[test]
+    fn loader_keeps_patched_rx_page_copy_backed_when_iat_shares_it() -> Result<()> {
+        const ENTRY: u32 = 0x0040_1000;
+        const SOURCE_BRANCH: u32 = 0x5060_0003; // beqzl v1,zero,+3
+        const PATCHED_JUMP: u32 = 0x0810_0800; // j 0x0040_2000
+        const IAT_RVA: u32 = 0x1020;
+
+        fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+            bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+
+        fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let mut bytes = vec![0; 0x400];
+        bytes[..2].copy_from_slice(b"MZ");
+        put_u32(&mut bytes, 0x3c, 0x80);
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        let coff = 0x84;
+        put_u16(&mut bytes, coff, 0x0166); // MIPS R4000
+        put_u16(&mut bytes, coff + 2, 1); // one section
+        put_u16(&mut bytes, coff + 16, 0x00e0);
+        put_u16(&mut bytes, coff + 18, 0x0102);
+        let optional = 0x98;
+        put_u16(&mut bytes, optional, 0x010b); // PE32
+        put_u32(&mut bytes, optional + 4, 0x200); // SizeOfCode
+        put_u32(&mut bytes, optional + 16, 0x1000); // entry RVA
+        put_u32(&mut bytes, optional + 20, 0x1000); // BaseOfCode
+        put_u32(&mut bytes, optional + 28, 0x0040_0000); // ImageBase
+        put_u32(&mut bytes, optional + 32, 0x1000); // SectionAlignment
+        put_u32(&mut bytes, optional + 36, 0x200); // FileAlignment
+        put_u32(&mut bytes, optional + 56, 0x2000); // SizeOfImage
+        put_u32(&mut bytes, optional + 60, 0x200); // SizeOfHeaders
+        put_u16(&mut bytes, optional + 68, 9); // Windows CE subsystem
+        put_u32(&mut bytes, optional + 72, 0x10000); // stack reserve
+        put_u32(&mut bytes, optional + 76, 0x1000); // stack commit
+        put_u32(&mut bytes, optional + 80, 0x10000); // heap reserve
+        put_u32(&mut bytes, optional + 84, 0x1000); // heap commit
+        put_u32(&mut bytes, optional + 92, 16); // directory count
+        let section = 0x178;
+        bytes[section..section + 8].copy_from_slice(b".text\0\0\0");
+        put_u32(&mut bytes, section + 8, 0x1000); // full RX page
+        put_u32(&mut bytes, section + 12, 0x1000);
+        put_u32(&mut bytes, section + 16, 0x200);
+        put_u32(&mut bytes, section + 20, 0x200);
+        put_u32(&mut bytes, section + 36, SCN_READ | SCN_EXECUTE | 0x20);
+        put_u32(&mut bytes, 0x200, SOURCE_BRANCH);
+        put_u32(&mut bytes, 0x204, 0x2442_0001); // addiu v0,v0,1
+
+        let image = PeImage::parse_bytes("patched-branch-with-iat.exe", &bytes)?;
+        let control = load_pe_image_with_dlls(&image, &[])?;
+        let sealed_entry = control
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.base == ENTRY)
+            .expect("RX entry page without IAT is mapped");
+        assert!(sealed_entry.bytes.sealed_pin().is_some());
+        assert_eq!(&sealed_entry.bytes[..4], &PATCHED_JUMP.to_le_bytes());
+
+        // The very same executable page gains one writable import thunk.
+        // Both patches run first; page-level IAT exclusion must win at seal time.
+        let mut imported = image.clone();
+        imported.imports.push(ImportDescriptor {
+            module_name: "coredll.dll".to_owned(),
+            original_first_thunk: IAT_RVA,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0,
+            first_thunk: IAT_RVA,
+            imports: vec![ImportThunk {
+                thunk_rva: IAT_RVA,
+                iat_rva: IAT_RVA,
+                import: ImportBy::Name {
+                    hint: 0,
+                    name: "CreateFileW".to_owned(),
+                },
+            }],
+        });
+        let result = load_pe_image_with_dlls(&imported, &[])?;
+        assert_eq!(result.import_traps.len(), 1);
+        let image_name = format!("image:{}", imported.path);
+        let entry_blob = result
+            .mapped_blobs
+            .iter()
+            .find(|blob| {
+                blob.name == image_name
+                    && blob.base <= ENTRY
+                    && u64::from(ENTRY - blob.base) + 0x24 <= blob.bytes.len() as u64
+            })
+            .expect("patched entry and IAT share one mapped blob");
+        assert!(entry_blob.bytes.sealed_pin().is_none());
+        let entry_offset = (ENTRY - entry_blob.base) as usize;
+        assert_eq!(
+            &entry_blob.bytes[entry_offset..entry_offset + 4],
+            &PATCHED_JUMP.to_le_bytes()
+        );
+        assert_eq!(
+            &entry_blob.bytes[entry_offset + 4..entry_offset + 8],
+            &0u32.to_le_bytes()
+        );
+        assert_eq!(
+            &entry_blob.bytes[entry_offset + 0x20..entry_offset + 0x24],
+            &IMPORT_TRAP_BASE.to_le_bytes()
+        );
+        assert!(
+            result
+                .trampoline_jumps
+                .iter()
+                .any(|jump| jump.origin == ENTRY && jump.stub == 0x0040_2000)
+        );
+        Ok(())
     }
 
     /// Read-only, opt-in coverage diagnostic for a real PE. This calls the

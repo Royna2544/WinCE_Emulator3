@@ -46,9 +46,9 @@ use crate::{
             GUEST_HEAP_ARENA_BASE, GUEST_HEAP_ARENA_SIZE, MappedBlob, MappedResource,
             MappedResourceString, PeLoadResult, RESERVED_IMPORT_TRAP_STUB_BYTES,
             SYS_HANDLE_CURRENT_PROCESS, SYS_HANDLE_CURRENT_THREAD, USER_KDATA_PAGE_BASE,
-            USER_KDATA_PAGE_SIZE, align_up_4k,
-            choose_dll_load_base, loaded_module_info, range_contains, ranges_overlap,
-            refresh_import_trap_page_blob, user_kdata_handle_address,
+            USER_KDATA_PAGE_SIZE, align_up_4k, choose_dll_load_base, loaded_module_info,
+            range_contains, ranges_overlap, refresh_import_trap_page_blob,
+            user_kdata_handle_address,
         },
         types::*,
     },
@@ -1283,9 +1283,11 @@ impl SealedHostWriteGuard {
         ] {
             guard
                 .check_write(u64::from(base), size as usize)
-                .map_err(|err| Error::Backend(format!(
-                    "sealed main image overlaps fixed {label} page: {err}"
-                )))?;
+                .map_err(|err| {
+                    Error::Backend(format!(
+                        "sealed main image overlaps fixed {label} page: {err}"
+                    ))
+                })?;
         }
         Ok(guard)
     }
@@ -54207,12 +54209,8 @@ mod unicorn_tests {
         let before = backing.to_vec();
         let occupied = super::runtime_occupied_ranges(&cpu.memory, &cpu.mapped_blobs);
         let mut next_dll_base = super::RUNTIME_DLL_LOAD_BASE;
-        let chosen = super::choose_dll_load_base(
-            sealed.base,
-            0x1000,
-            &occupied,
-            &mut next_dll_base,
-        )?;
+        let chosen =
+            super::choose_dll_load_base(sealed.base, 0x1000, &occupied, &mut next_dll_base)?;
         assert!(!super::ranges_overlap(
             chosen,
             0x1000,
@@ -57239,6 +57237,70 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn malformed_owned_blob_cannot_partially_overwrite_sealed_image() -> crate::Result<()> {
+        const WRITABLE_PREFIX_SIZE: usize = 0x11000;
+        let cpu = sealed_spinner_cpu()?;
+        let sealed = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.bytes.sealed_pin().is_some())
+            .expect("synthetic main image has a sealed run");
+        let backing = sealed.bytes.sealed_pin().unwrap();
+        let pointer = backing.as_ptr();
+        let before = backing.to_vec();
+        // The first 64-KiB sync chunk is fully writable. Without the
+        // whole-blob preflight it would change before the later chunk hits
+        // the sealed image.
+        let prefix_base = sealed.base - WRITABLE_PREFIX_SIZE as u32;
+        let kernel = phase1_kernel("sealed-spinner.exe")?;
+        let expected = super::expected_sealed_image_runs(
+            &cpu.mapped_blobs,
+            &cpu.memory,
+            kernel.current_process_birth_key(),
+        )?;
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(
+            u64::from(prefix_base),
+            WRITABLE_PREFIX_SIZE as u64,
+            Prot::ALL,
+        )
+        .unwrap();
+        uc.mem_write(u64::from(prefix_base), &[0x5a; WRITABLE_PREFIX_SIZE])
+            .unwrap();
+        let pins = super::NativeMappingPins::default();
+        let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+        super::map_sealed_image_runs(&mut uc, &cpu.mapped_blobs, &mut mapped, &expected, &pins)?;
+
+        let mut blobs = vec![sealed.clone()];
+        blobs.push(MappedBlob {
+            name: "ram:malformed-overlap".to_owned(),
+            base: prefix_base,
+            bytes: vec![0xcc; WRITABLE_PREFIX_SIZE + 0x1000].into(),
+        });
+        let guard = super::SealedHostWriteGuard::from_mapped_blobs(&blobs)?;
+        let err = sync_persisted_blobs_to_native(&mut uc, &blobs, false, &guard)
+            .expect_err("whole malformed blob must be rejected before its writable prefix");
+        assert!(format!("{err}").contains("overlaps sealed image"));
+        assert!(guard.poison_error().is_some());
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(prefix_base), WRITABLE_PREFIX_SIZE)
+                .unwrap(),
+            vec![0x5a; WRITABLE_PREFIX_SIZE]
+        );
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(sealed.base), before.len())
+                .unwrap(),
+            before
+        );
+        assert_eq!(backing.as_ptr(), pointer);
+        assert_eq!(&backing[..], &before);
+        drop(uc); // Native owner must die before its raw-pointer pin.
+        drop(mapped);
+        drop(pins);
+        Ok(())
+    }
+
+    #[test]
     fn persistent_native_memory_requires_complete_backing_for_blob_sync() {
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(0x1000, 0x1000, Prot::ALL).unwrap();
@@ -58548,6 +58610,98 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn legacy_vm_seed_and_fault_repair_reject_sealed_image_overlap_without_mutation()
+    -> crate::Result<()> {
+        let cpu = sealed_spinner_cpu()?;
+        let sealed = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.bytes.sealed_pin().is_some())
+            .expect("synthetic main image has a sealed run");
+        let backing = sealed.bytes.sealed_pin().unwrap();
+        let pointer = backing.as_ptr();
+        let before = backing.to_vec();
+        let mut kernel = phase1_kernel("sealed-vm-overlap.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let image_base = cpu.entry_image_base.expect("loaded image base");
+        let allocation_base = kernel
+            .memory
+            .virtual_alloc(
+                owner,
+                crate::ce::memory::VirtualAllocationSource::FileViewLegacy,
+                image_base,
+                0x3000,
+                0x3000,
+                0x04,
+            )
+            .expect("synthetic legacy VM reservation");
+        assert_eq!(allocation_base, image_base);
+        assert!(kernel.memory.set_virtual_initial_bytes(
+            owner,
+            allocation_base,
+            vec![0x5a; 0x3000],
+        ));
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let native_pins = super::NativeMappingPins::default();
+        let active_guards = RefCell::new(BTreeMap::new());
+        let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+        let expected =
+            super::expected_sealed_image_runs(&cpu.mapped_blobs, &cpu.memory, Some(owner))?;
+        super::map_sealed_image_runs(
+            &mut uc,
+            &cpu.mapped_blobs,
+            &mut mapped,
+            &expected,
+            &native_pins,
+        )?;
+        let native_before = uc
+            .mem_read_as_vec(u64::from(sealed.base), backing.len())
+            .unwrap();
+        let mut blobs = cpu.mapped_blobs.clone();
+        let err = super::map_kernel_memory_allocations_for_owner(
+            &mut uc,
+            &kernel,
+            &mut mapped,
+            &mut blobs,
+            Some(owner),
+            Some(&native_pins),
+            Some(&active_guards),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("virtual allocation range"));
+        assert!(format!("{err}").contains("overlaps sealed main image"));
+        assert!(mapped.virtual_pages.is_empty());
+
+        let ranges_before_repair = mapped.ranges.clone();
+        let err = super::repair_missing_virtual_page_for_fault(
+            &mut uc,
+            &kernel,
+            &mut mapped,
+            sealed.base,
+            Some(owner),
+            &native_pins,
+            &active_guards,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("virtual allocation fault repair range"));
+        assert!(format!("{err}").contains("overlaps sealed main image"));
+        assert_eq!(mapped.ranges, ranges_before_repair);
+        assert!(mapped.virtual_pages.is_empty());
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(sealed.base), backing.len())
+                .unwrap(),
+            native_before
+        );
+        assert_eq!(backing.as_ptr(), pointer);
+        assert_eq!(&backing[..], &before);
+        drop(uc); // Native owner must die before its raw-pointer pin.
+        drop(mapped);
+        drop(native_pins);
+        Ok(())
+    }
+
+    #[test]
     fn public_file_view_survives_untouched_second_fresh_slice() -> crate::Result<()> {
         const INITIAL: u32 = 0x1122_3344;
         let mut kernel = phase1_kernel("fresh-public-view.exe")?;
@@ -59078,6 +59232,82 @@ mod unicorn_tests {
             .read_bytes(0, &mut canonical)
             .expect("canonical read");
         assert_eq!(canonical, [1, 2, 3, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn native_file_view_rejects_partial_sealed_image_overlap_in_both_directions()
+    -> crate::Result<()> {
+        let cpu = sealed_spinner_cpu()?;
+        let sealed = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.bytes.sealed_pin().is_some())
+            .expect("synthetic main image has a sealed run");
+        let backing = sealed.bytes.sealed_pin().unwrap();
+        let pointer = backing.as_ptr();
+        let before = backing.to_vec();
+        let view_base = sealed.base - 2;
+        let mut kernel = phase1_kernel("sealed-view-overlap.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let handle = kernel.handles.create_file_mapping(None, 4, 4, None);
+        let mapping = kernel.handles.file_mapping_mut(handle)?;
+        mapping.legacy_data_mut().unwrap()[..4].copy_from_slice(&[5, 6, 7, 8]);
+        mapping.views.push(crate::ce::object::FileMappingView {
+            base: view_base,
+            size: 4,
+            offset: 0,
+            process_id: owner.process_id(),
+            process_birth: None,
+        });
+        let expected =
+            super::expected_sealed_image_runs(&cpu.mapped_blobs, &cpu.memory, Some(owner))?;
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(u64::from(sealed.base - 0x1000), 0x1000, Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(view_base), &[9, 10]).unwrap();
+        let pins = super::NativeMappingPins::default();
+        let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+        super::map_sealed_image_runs(&mut uc, &cpu.mapped_blobs, &mut mapped, &expected, &pins)?;
+        let guard = super::SealedHostWriteGuard::from_mapped_blobs(&cpu.mapped_blobs)?;
+
+        let to_err = super::sync_file_mapping_views_to_unicorn_guarded(
+            &mut uc,
+            &kernel,
+            owner.process_id(),
+            &guard,
+        )
+        .expect_err("incoming view must reject overlap before native mutation");
+        assert!(format!("{to_err}").contains("file view"));
+        assert!(format!("{to_err}").contains("overlaps sealed image"));
+        let from_err = super::sync_file_mapping_views_from_unicorn_guarded(
+            &mut uc,
+            &mut kernel,
+            owner.process_id(),
+            &guard,
+        )
+        .expect_err("outgoing view must reject overlap before canonical mutation");
+        assert!(format!("{from_err}").contains("file view"));
+        assert!(format!("{from_err}").contains("overlaps sealed image"));
+
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(view_base), 2).unwrap(),
+            vec![9, 10]
+        );
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(sealed.base), before.len())
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            &kernel.handles.file_mapping(handle)?.legacy_data().unwrap()[..4],
+            &[5, 6, 7, 8]
+        );
+        assert_eq!(backing.as_ptr(), pointer);
+        assert_eq!(&backing[..], &before);
+        drop(uc); // Native owner must die before its raw-pointer pin.
+        drop(mapped);
+        drop(pins);
         Ok(())
     }
 
