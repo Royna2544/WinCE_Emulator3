@@ -195,6 +195,7 @@ struct SharedViewBinding {
 }
 
 pub const STABLE_PRIVATE_PAGE_SIZE: usize = 0x1000;
+const FIXED_PRIVATE_BLOCK_SIZE: usize = 0x10_0000;
 /// Physical RAM reported by the target device's `sources/SYSTEM.TXT`.
 /// One runtime setting may override this; the same budget drives private
 /// committed pages and the GlobalMemoryStatus physical-memory fields.
@@ -271,11 +272,104 @@ impl PrivatePageBudget {
     }
 }
 
-/// The only owner of private page bytes. The page itself is allocated with a
-/// checked, 4-KiB-aligned request; the small Rc wrapper never moves it. Raw
-/// native and bounded host access are fenced by execution guards.
+/// One 1-MiB host VA reservation for fixed heap/stack pages. Only committed
+/// 4-KiB guest pages acquire host RAM; the reserved gaps remain inaccessible.
+/// Every live page and native pin keeps its exact block alive.
+struct HostPrivateBlock {
+    base: NonNull<u8>,
+}
+
+impl HostPrivateBlock {
+    #[cfg(windows)]
+    fn reserve() -> Option<Rc<Self>> {
+        // SAFETY: null asks Windows to choose a fresh 1-MiB reservation.
+        let base = unsafe {
+            host_virtual_alloc(std::ptr::null_mut(), FIXED_PRIVATE_BLOCK_SIZE, 0x2000, 0x01)
+        };
+        Some(Rc::new(Self {
+            base: NonNull::new(base.cast())?,
+        }))
+    }
+
+    #[cfg(not(windows))]
+    fn reserve() -> Option<Rc<Self>> {
+        None
+    }
+
+    #[cfg(windows)]
+    fn commit_page(&self, offset: usize) -> Option<NonNull<u8>> {
+        if offset >= FIXED_PRIVATE_BLOCK_SIZE || offset % STABLE_PRIVATE_PAGE_SIZE != 0 {
+            return None;
+        }
+        // SAFETY: the checked offset is wholly inside this live reservation.
+        let wanted = unsafe { self.base.as_ptr().add(offset) };
+        // SAFETY: MEM_COMMIT of one previously reserved page returns its exact
+        // address or null. The block is retained by the resulting page.
+        let actual = unsafe {
+            host_virtual_alloc(wanted.cast(), STABLE_PRIVATE_PAGE_SIZE, 0x1000, 0x04)
+        };
+        (actual.cast::<u8>() == wanted).then_some(NonNull::new(actual.cast())?)
+    }
+
+    #[cfg(not(windows))]
+    fn commit_page(&self, _offset: usize) -> Option<NonNull<u8>> {
+        None
+    }
+
+    #[cfg(windows)]
+    fn decommit_page(&self, offset: usize) -> bool {
+        // SAFETY: every stored offset came from commit_page, and this block
+        // remains reserved until its last strong reference drops.
+        let address = unsafe { self.base.as_ptr().add(offset) };
+        unsafe { host_virtual_free(address.cast(), STABLE_PRIVATE_PAGE_SIZE, 0x4000) != 0 }
+    }
+
+    #[cfg(not(windows))]
+    fn decommit_page(&self, _offset: usize) -> bool {
+        false
+    }
+}
+
+impl Drop for HostPrivateBlock {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        {
+            // SAFETY: MEM_RELEASE takes the original reservation base and a
+            // zero size. No page or native pin remains at the last Rc drop.
+            let _ = unsafe { host_virtual_free(self.base.as_ptr().cast(), 0, 0x8000) };
+        }
+    }
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    #[link_name = "VirtualAlloc"]
+    fn host_virtual_alloc(
+        address: *mut c_void,
+        size: usize,
+        allocation_type: u32,
+        protect: u32,
+    ) -> *mut c_void;
+    #[link_name = "VirtualFree"]
+    fn host_virtual_free(address: *mut c_void, size: usize, free_type: u32) -> i32;
+}
+
+enum PrivatePageStorage {
+    Independent,
+    HostBlock {
+        block: Rc<HostPrivateBlock>,
+        offset: usize,
+    },
+}
+
+/// The only owner of private page bytes. Ordinary private and shared-view
+/// pages keep separate 4-KiB allocations; fixed heap/stack pages may occupy
+/// a committed offset in a reserved 1-MiB block. The Rc wrapper never moves.
+/// Raw native and bounded host access are fenced by execution guards.
 struct StablePrivatePage {
     bytes: NonNull<u8>,
+    storage: PrivatePageStorage,
     native_execution_guards: Cell<u32>,
     allow_nested_native: bool,
     budget: Rc<PrivatePageBudget>,
@@ -314,6 +408,7 @@ impl StablePrivatePage {
         };
         Some(Self {
             bytes,
+            storage: PrivatePageStorage::Independent,
             native_execution_guards: Cell::new(0),
             allow_nested_native: false,
             budget: Rc::clone(budget),
@@ -326,7 +421,37 @@ impl StablePrivatePage {
         Some(page)
     }
 
-    fn deep_copy(&self, budget: &Rc<PrivatePageBudget>) -> Self {
+    fn zeroed_in_block(
+        budget: &Rc<PrivatePageBudget>,
+        block: &Rc<HostPrivateBlock>,
+        offset: usize,
+    ) -> Option<Self> {
+        let charged = budget
+            .used_bytes
+            .get()
+            .checked_add(STABLE_PRIVATE_PAGE_SIZE as u64)?;
+        if budget.available_bytes() < STABLE_PRIVATE_PAGE_SIZE as u64 {
+            return None;
+        }
+        let bytes = block.commit_page(offset)?;
+        budget.used_bytes.set(charged);
+        Some(Self {
+            bytes,
+            storage: PrivatePageStorage::HostBlock {
+                block: Rc::clone(block),
+                offset,
+            },
+            native_execution_guards: Cell::new(0),
+            allow_nested_native: false,
+            budget: Rc::clone(budget),
+        })
+    }
+
+    fn deep_copy(
+        &self,
+        budget: &Rc<PrivatePageBudget>,
+        cloned_blocks: &mut BTreeMap<usize, Rc<HostPrivateBlock>>,
+    ) -> Self {
         // MemorySystem::Clone cannot return Result. Refuse to copy while the
         // native engine might be writing; a supported checkpoint operation
         // remains separately gated until machine-wide relineage exists.
@@ -334,10 +459,24 @@ impl StablePrivatePage {
             self.native_execution_guards.get() == 0,
             "cannot clone stable private bytes during native execution"
         );
-        let copy = if self.allow_nested_native {
-            Self::zeroed_shared(budget)
-        } else {
-            Self::zeroed(budget)
+        let copy = match &self.storage {
+            PrivatePageStorage::Independent if self.allow_nested_native => {
+                Self::zeroed_shared(budget)
+            }
+            PrivatePageStorage::Independent => Self::zeroed(budget),
+            PrivatePageStorage::HostBlock { block, offset } => {
+                let key = block.base.as_ptr() as usize;
+                let new_block = match cloned_blocks.get(&key) {
+                    Some(block) => Rc::clone(block),
+                    None => {
+                        let block = HostPrivateBlock::reserve()
+                            .expect("cannot reserve cloned fixed private block");
+                        cloned_blocks.insert(key, Rc::clone(&block));
+                        block
+                    }
+                };
+                Self::zeroed_in_block(budget, &new_block, *offset)
+            }
         }
         .expect("cannot clone stable page after host allocation failure");
         // SAFETY: the guard above excludes native execution, all host byte
@@ -355,11 +494,24 @@ impl StablePrivatePage {
 
 impl Drop for StablePrivatePage {
     fn drop(&mut self) {
-        let layout = Layout::from_size_align(STABLE_PRIVATE_PAGE_SIZE, STABLE_PRIVATE_PAGE_SIZE)
-            .expect("fixed private page layout");
-        // SAFETY: `bytes` came from `alloc_zeroed(layout)` exactly once and
-        // all raw users must retain a strong pin through checked native unmap.
-        unsafe { dealloc(self.bytes.as_ptr(), layout) };
+        match &self.storage {
+            PrivatePageStorage::Independent => {
+                let layout =
+                    Layout::from_size_align(STABLE_PRIVATE_PAGE_SIZE, STABLE_PRIVATE_PAGE_SIZE)
+                        .expect("fixed private page layout");
+                // SAFETY: independent bytes came from alloc_zeroed exactly
+                // once and native users retain a pin through checked unmap.
+                unsafe { dealloc(self.bytes.as_ptr(), layout) };
+            }
+            PrivatePageStorage::HostBlock { block, offset } => {
+                if !block.decommit_page(*offset) {
+                    // Host decommit did not establish release. Keep the whole
+                    // reservation and this physical-page charge quarantined.
+                    std::mem::forget(Rc::clone(block));
+                    return;
+                }
+            }
+        }
         self.budget.used_bytes.set(
             self.budget
                 .used_bytes
@@ -388,6 +540,36 @@ impl StablePrivatePagePin {
     /// fence host access while native execution may write through the pointer.
     pub fn native_ptr(&self) -> *mut c_void {
         self.page.bytes.as_ptr().cast::<c_void>()
+    }
+
+    /// Only fixed heap/stack pages use block storage. Shared-view aliases
+    /// deliberately retain their independent canonical page ownership.
+    pub fn is_host_block_backed(&self) -> bool {
+        matches!(self.page.storage, PrivatePageStorage::HostBlock { .. })
+    }
+
+    pub fn contiguous_in_same_host_block(&self, next: &Self) -> bool {
+        match (&self.page.storage, &next.page.storage) {
+            (
+                PrivatePageStorage::HostBlock {
+                    block: left,
+                    offset: left_offset,
+                },
+                PrivatePageStorage::HostBlock {
+                    block: right,
+                    offset: right_offset,
+                },
+            ) => {
+                Rc::ptr_eq(left, right)
+                    && left_offset.checked_add(STABLE_PRIVATE_PAGE_SIZE) == Some(*right_offset)
+                    && self.identity.owner == next.identity.owner
+                    && self.identity.allocation_base == next.identity.allocation_base
+                    && self.identity.allocation_incarnation == next.identity.allocation_incarnation
+                    && self.identity.page_base.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)
+                        == Some(next.identity.page_base)
+            }
+            _ => false,
+        }
     }
 
     pub fn read_bytes(
@@ -634,6 +816,7 @@ impl Clone for MemorySystem {
             self.private_page_budget.limit_bytes.get(),
             self.private_page_budget.boot_reserved_bytes.get(),
         ));
+        let mut cloned_blocks = BTreeMap::new();
         Self {
             instance: Rc::new(()),
             process_heap: self.process_heap,
@@ -654,12 +837,22 @@ impl Clone for MemorySystem {
             stable_private_pages: self
                 .stable_private_pages
                 .iter()
-                .map(|(identity, page)| (*identity, Rc::new(page.deep_copy(&private_page_budget))))
+                .map(|(identity, page)| {
+                    (
+                        *identity,
+                        Rc::new(page.deep_copy(&private_page_budget, &mut cloned_blocks)),
+                    )
+                })
                 .collect(),
             stable_shared_pages: self
                 .stable_shared_pages
                 .iter()
-                .map(|(identity, page)| (*identity, Rc::new(page.deep_copy(&private_page_budget))))
+                .map(|(identity, page)| {
+                    (
+                        *identity,
+                        Rc::new(page.deep_copy(&private_page_budget, &mut cloned_blocks)),
+                    )
+                })
                 .collect(),
             shared_view_bindings: self.shared_view_bindings.clone(),
             private_page_budget,
@@ -1174,6 +1367,55 @@ impl MemorySystem {
         Some(result)
     }
 
+    fn new_fixed_private_page(
+        &self,
+        identity: PrivatePageIdentity,
+        local_blocks: &mut BTreeMap<u32, Rc<HostPrivateBlock>>,
+    ) -> Option<Rc<StablePrivatePage>> {
+        #[cfg(not(windows))]
+        {
+            let _ = (identity, local_blocks);
+            return Some(Rc::new(StablePrivatePage::zeroed(
+                &self.private_page_budget,
+            )?));
+        }
+        #[cfg(windows)]
+        {
+            let block_base = identity.page_base & !(FIXED_PRIVATE_BLOCK_SIZE as u32 - 1);
+            let block = if let Some(block) = local_blocks.get(&block_base) {
+                Rc::clone(block)
+            } else {
+                let first = PrivatePageIdentity {
+                    page_base: block_base,
+                    ..identity
+                };
+                let last = PrivatePageIdentity {
+                    page_base: block_base.checked_add(FIXED_PRIVATE_BLOCK_SIZE as u32)?,
+                    ..identity
+                };
+                let existing = self
+                    .stable_private_pages
+                    .range(first..last)
+                    .find_map(|(_, page)| match &page.storage {
+                        PrivatePageStorage::HostBlock { block, .. } => Some(Rc::clone(block)),
+                        PrivatePageStorage::Independent => None,
+                    });
+                let block = match existing {
+                    Some(block) => block,
+                    None => HostPrivateBlock::reserve()?,
+                };
+                local_blocks.insert(block_base, Rc::clone(&block));
+                block
+            };
+            let offset = (identity.page_base - block_base) as usize;
+            Some(Rc::new(StablePrivatePage::zeroed_in_block(
+                &self.private_page_budget,
+                &block,
+                offset,
+            )?))
+        }
+    }
+
     /// Prepare every page of one host-accessed span in a fixed stack
     /// reservation. The entire span must belong to this process birth and
     /// reservation; neither a bad tail nor a short budget publishes any new
@@ -1225,18 +1467,20 @@ impl MemorySystem {
         }
         let mut new_page_pins = Vec::new();
         new_page_pins.try_reserve_exact(missing_count).ok()?;
+        let mut local_blocks = BTreeMap::new();
         let mut proposed = original.clone();
         let mut page = first_page;
         loop {
             if !original.private_committed_pages.contains_key(&page) {
+                let identity = PrivatePageIdentity {
+                    owner,
+                    allocation_base: original.base,
+                    allocation_incarnation: original.incarnation,
+                    page_base: page,
+                };
                 new_page_pins.push(StablePrivatePagePin {
-                    identity: PrivatePageIdentity {
-                        owner,
-                        allocation_base: original.base,
-                        allocation_incarnation: original.incarnation,
-                        page_base: page,
-                    },
-                    page: Rc::new(StablePrivatePage::zeroed(&self.private_page_budget)?),
+                    identity,
+                    page: self.new_fixed_private_page(identity, &mut local_blocks)?,
                 });
                 proposed
                     .private_committed_pages
@@ -1335,18 +1579,20 @@ impl MemorySystem {
         }
         let mut new_page_pins = Vec::new();
         new_page_pins.try_reserve_exact(new_count).ok()?;
+        let mut local_blocks = BTreeMap::new();
         let original = original.clone();
         let mut proposed = original.clone();
         let mut page_base = first_missing;
         while page_base < commit_end {
+            let identity = PrivatePageIdentity {
+                owner,
+                allocation_base: original.base,
+                allocation_incarnation: original.incarnation,
+                page_base,
+            };
             new_page_pins.push(StablePrivatePagePin {
-                identity: PrivatePageIdentity {
-                    owner,
-                    allocation_base: original.base,
-                    allocation_incarnation: original.incarnation,
-                    page_base,
-                },
-                page: Rc::new(StablePrivatePage::zeroed(&self.private_page_budget)?),
+                identity,
+                page: self.new_fixed_private_page(identity, &mut local_blocks)?,
             });
             proposed
                 .private_committed_pages
