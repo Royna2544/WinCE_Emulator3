@@ -12,6 +12,16 @@ first. Totals are passed/failed/ignored for release
 HEAD and patch, raw logs and EXE/PDB hashes. The per-slice text before this
 condense is at `git show d4263dde:PROGRESS.md`.
 
+- HWND-less thread-timer birth ownership
+  ([receipt](evidence/stage3-thread-timer-birth-20261015/validation.receipt.md)):
+  raw/native Set/Kill now carry the captured exact caller birth; timer keys,
+  due publication, GWE queue/wake and pending clear use exact birth and a
+  checked timer instance. A's queued and later-due timers cannot reach B
+  after TID reuse; synthetic/older same-ID messages cannot clear B's pending
+  bit. Mixed window/thread ordering remains tested. The expected-red a01 and
+  test-only compile-error a05 are preserved; sealed release passed
+  1,960/0/9 and no-feature 1,424/0/3 across 18 blocks each. Window timers,
+  other numeric producers, clock policy and live acceptance remain open.
 - Thread-directed GWE post/quit birth ownership
   ([receipt](evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md)):
   `PostThreadMessageW`, `PostMessageW(hwnd=0)` and self `PostQuitMessage`
