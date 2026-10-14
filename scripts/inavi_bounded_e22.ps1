@@ -1,7 +1,7 @@
 #requires -Version 7.0
 <#
-E-22 bounded mounted iNavi run. Invoke from PowerShell 7; do not run in parallel
-with another emulator. This O-P4 comparison launches the exact preserved
+E-37 bounded mounted iNavi run. Invoke from PowerShell 7; do not run in parallel
+with another emulator. This E-37 comparison launches the exact preserved
 release executable, checks the user-approved original-mount backups, and
 retains all output under evidence/.
 
@@ -87,11 +87,11 @@ function Assert-NoReparseMounts([object[]]$Backups) {
 }
 
 function Test-OriginalMountPreflight([string]$Repository) {
-    # Current-state archives verified by evidence/pre-live-mount-backup-20261014T040655Z/manifest.json.
+    # Current-state archives verified by evidence/pre-live-mount-backup-20261014T050927Z/manifest.json.
     $backups = @(
-        @{ Source = 'D:\INAVI_Emulator\INAVI'; Archive = 'D:\INAVI_Emulator\INAVI-pre-live-20261014T040655Z.zip'; Hash = '63B2A0AED678FC54F58732EBF2FBB03F79FFF8C8EC40FEA3BA777956E4312EEE' },
-        @{ Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Archive = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash-pre-live-20261014T040655Z.zip'; Hash = 'F69A2476957F0DEF064BC529B320FB1828AAADCA9C1983473768FCCB7D38FC76' },
-        @{ Source = 'D:\INAVI_Emulator\EmulatorRoot'; Archive = 'D:\INAVI_Emulator\EmulatorRoot-pre-live-20261014T040655Z.zip'; Hash = 'E5C2061FA64E62D4DB4CCE226138D455475B5D0D377266080BE05F8C42740FFA' }
+        @{ Source = 'D:\INAVI_Emulator\INAVI'; Archive = 'D:\INAVI_Emulator\INAVI-pre-live-20261014T050927Z.zip'; Hash = '4766C2E3241028902DEF32B85173165F4CB34528396399E9149E669497C02AF4' },
+        @{ Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Archive = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash-pre-live-20261014T050927Z.zip'; Hash = '932D43E82BDC045EEEB677EB82835072A31283943E2F375EDAD0383194FEA357' },
+        @{ Source = 'D:\INAVI_Emulator\EmulatorRoot'; Archive = 'D:\INAVI_Emulator\EmulatorRoot-pre-live-20261014T050927Z.zip'; Hash = '37FE8D921BDFA022F3F3CF3149C388608C191A65B6E547FCABD34E06C4238F0B' }
     )
     foreach ($item in $backups) {
         if (-not (Test-Path -LiteralPath $item.Source -PathType Container)) {
@@ -180,10 +180,10 @@ function Compare-MountedInventories([string]$BeforePath, [string]$AfterPath, [st
 }
 
 function Assert-WorkerDirectory([string]$Directory) {
-    $prefix = 'D:\GitHub\Wince_emulation_v3\evidence\e22-live-'
+    $prefix = 'D:\GitHub\Wince_emulation_v3\evidence\e37-live-'
     $resolved = [System.IO.Path]::GetFullPath($Directory)
     if (-not $resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Worker evidence directory is outside E-22: $resolved"
+        throw "Worker evidence directory is outside E-37: $resolved"
     }
     if (-not (Test-Path -LiteralPath $resolved -PathType Container)) {
         throw "Worker evidence directory is missing: $resolved"
@@ -192,7 +192,7 @@ function Assert-WorkerDirectory([string]$Directory) {
 
 function Assert-RemoteEndpointAvailable {
     # A stale emulator must not supply the observer's t0 or receive these POSTs.
-    $other = @(Get-Process -Name 'wince_emulation_v3', 'wince_emulation_v3-op4' -ErrorAction SilentlyContinue)
+    $other = @(Get-Process -Name 'wince_emulation_v3', 'wince_emulation_v3-op4', 'wince_emulation_v3-e37' -ErrorAction SilentlyContinue)
     if ($other.Count -ne 0) {
         throw "Another wince_emulation_v3 process is running (PID(s): $($other.Id -join ', '))."
     }
@@ -516,7 +516,7 @@ if ($experiments.Count -gt 0) { throw "Unset WINCE_EMU_* experiment variables be
 $env:RUST_LOG = 'warn,ce.slice_profile=debug'
 
 $tag = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
-$runDirectory = Join-Path $repository "evidence\e22-live-$tag"
+$runDirectory = Join-Path $repository "evidence\e37-live-$tag"
 if (Test-Path -LiteralPath $runDirectory) { throw "Evidence path already exists: $runDirectory" }
 [void][System.IO.Directory]::CreateDirectory($runDirectory)
 $previousDirectory = Get-Location
@@ -524,15 +524,19 @@ $observerJob = $null; $monitorProcess = $null; $appDescriptor = $null; $client =
 $endedByScript = $null; $driveError = $null; $exitCode = $null; $exitStatus = 1
 try {
     Set-Location -LiteralPath $repository
-    $exe = Join-Path $repository 'evidence\op4-fresh-default-20261014\wince_emulation_v3-op4.exe'
-    $pdb = Join-Path $repository 'evidence\op4-fresh-default-20261014\wince_emulation_v3-op4.pdb'
-    Test-ExpectedHash $exe '4C9EC2744FDEFBCAEDF4CA7D1D1ACC13CBC53D273C86AD4B4E57841B332D4E02'
-    Test-ExpectedHash $pdb '05CF4A294F9BB9FBF0732AF6904D059F093E41B2AEB8FD3F5FDA41C9B29BF4D6'
+    $exe = Join-Path $repository 'evidence\op4-fresh-view-readback-20261014\wince_emulation_v3-e37.exe'
+    $pdb = Join-Path $repository 'evidence\op4-fresh-view-readback-20261014\wince_emulation_v3-e37.pdb'
+    Test-ExpectedHash $exe '7A55C049D2BBD0110D30D587BBB1877BA80C50CEE1D33E453434C0366A871A1A'
+    Test-ExpectedHash $pdb '959D508F8694E3DD232281B79A7A46610EA87BDFB08542D916ABDF36ED06BEB4'
     $manifest = @{
         runTag = $tag; createdUtc = [DateTime]::UtcNow.ToString('O'); repository = $repository
         executable = $exe; executableSha256 = Get-Sha256 $exe
         pdb = $pdb; pdbSha256 = Get-Sha256 $pdb
-        executableProvenanceReceipt = Join-Path $repository 'evidence\op4-fresh-default-20261014\validation.receipt.md'
+        executableProvenanceReceipt = Join-Path $repository 'evidence\op4-fresh-view-readback-20261014\validation.receipt.md'
+        backupProvenanceManifest = Join-Path $repository 'evidence\pre-live-mount-backup-20261014T050927Z\manifest.json'
+        approvalQuestionId = 'call_93cb71e3f4dc432c84262f0a340f3091'
+        approvalAnswer = 'Yes—back up and run once'
+        earlierConsumedApprovalQuestionId = 'call_bf29d00a922d453992feac6a62e5e56e'
         app = 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe'; appSha256 = Get-Sha256 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe'
         scriptSha256 = Get-Sha256 $PSCommandPath
         registrySha256 = Get-Sha256 (Join-Path $repository 'registry.reg')
@@ -550,7 +554,7 @@ try {
     Assert-RemoteEndpointAvailable
     # The observer is GET-only. The detached monitor, not this driver, owns
     # the app launch and enforces the 390-second/2-GiB bounds if this driver dies.
-    $observerJob = Start-Job -Name "e22-observer-$tag" -ScriptBlock {
+    $observerJob = Start-Job -Name "e37-observer-$tag" -ScriptBlock {
         param($scriptPath, $directory)
         & $scriptPath -ObserverWorker -RunDirectory $directory
     } -ArgumentList $PSCommandPath, $runDirectory
