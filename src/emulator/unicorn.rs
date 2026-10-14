@@ -6425,6 +6425,8 @@ impl UnicornMips {
                     kernel,
                     &mut persisted_kernel_mappings,
                     owner,
+                    &native_mapping_pins,
+                    None,
                 )?;
             } else if !persisted_kernel_mappings.private_pages.is_empty() {
                 return Err(Error::Backend(
@@ -13757,10 +13759,7 @@ fn map_private_slab_page<D>(
             "private slab page 0x{page:08x} collides with an unowned native mapping"
         )));
     }
-    // The lease owns a strong pin before entering the raw pointer-map FFI.
-    // If mapping fails, its abort/drop path quarantines that pin until the
-    // unchecked upstream uc_close cannot leave a dangling host pointer.
-    native_pins.pin(pin.clone());
+    let mut inserted_guard = false;
     if let Some(guards) = active_guards {
         let mut guards = guards.borrow_mut();
         if !guards.contains_key(&identity) {
@@ -13768,7 +13767,22 @@ fn map_private_slab_page<D>(
                 Error::Backend(format!("fence private slab 0x{page:08x}: {err:?}"))
             })?;
             guards.insert(identity, guard);
+            inserted_guard = true;
         }
+    }
+    // The lease owns a strong pin before entering the raw pointer-map FFI.
+    // If mapping fails, its abort/drop path quarantines that pin until the
+    // unchecked upstream uc_close cannot leave a dangling host pointer.
+    if !native_pins.pin_private(identity, pin.native_ptr() as usize, pin.clone()) {
+        if inserted_guard {
+            active_guards
+                .expect("new guard came from active registry")
+                .borrow_mut()
+                .remove(&identity);
+        }
+        return Err(Error::Backend(format!(
+            "private slab page 0x{page:08x} already has a native pin"
+        )));
     }
     // SAFETY: the page is exactly 4 KiB, fixed, writable and page-aligned;
     // `native_pins` retains it for at least the lifetime of this native owner.
@@ -13835,11 +13849,21 @@ fn map_prepared_private_slab_page<D>(
     // Keep a lease-owned strong pin before the raw pointer crosses the FFI.
     // An uncertain map failure poisons the attempt; the pin is quarantined
     // with that native owner rather than dropped with the detached token.
-    native_pins.pin(pin.clone());
     let guard = pin.begin_native_execution().map_err(|err| {
         Error::Backend(format!("fence prepared private slab 0x{page:08x}: {err:?}"))
     })?;
+    if active_guards.borrow().contains_key(&identity) {
+        return Err(Error::Backend(format!(
+            "prepared private slab 0x{page:08x} already has an active guard"
+        )));
+    }
     active_guards.borrow_mut().insert(identity, guard);
+    if !native_pins.pin_private(identity, pin.native_ptr() as usize, pin.clone()) {
+        active_guards.borrow_mut().remove(&identity);
+        return Err(Error::Backend(format!(
+            "prepared private slab page 0x{page:08x} already has a native pin"
+        )));
+    }
     // SAFETY: this exact aligned 4-KiB page is pinned through the native
     // owner, and active_guards fences host access while emu_start resumes.
     unsafe {
@@ -13877,6 +13901,8 @@ fn reclaim_stale_private_slab_pages<D>(
     kernel: &CeKernel,
     mapped: &mut KernelMemoryMappings,
     owner: crate::ce::object::ProcessBirthKey,
+    native_pins: &NativeMappingPins,
+    active_guards: Option<&ActivePrivatePageGuards>,
 ) -> Result<()> {
     for (page, recorded) in mapped.private_pages.clone() {
         if recorded.identity.owner() != owner {
@@ -13898,6 +13924,14 @@ fn reclaim_stale_private_slab_pages<D>(
                     "unmap stale private slab page 0x{page:08x}: {err:?}"
                 ))
             })?;
+        if let Some(guards) = active_guards {
+            guards.borrow_mut().remove(&recorded.identity);
+        }
+        if !native_pins.release_private_after_unmap(recorded.identity, recorded.host_address) {
+            return Err(Error::Backend(format!(
+                "checked unmap of private slab 0x{page:08x} has no matching native pin"
+            )));
+        }
         mapped.private_pages.remove(&page);
         remove_mapped_guest_page(mapped, page);
     }
@@ -13937,7 +13971,17 @@ fn map_kernel_memory_allocations_for_owner<D>(
     if mapped.virtual_generation != kernel.memory.virtual_generation() {
         reclaim_stale_virtual_memory_pages(uc, kernel, mapped, owner)?;
         if let Some(owner) = owner {
-            reclaim_stale_private_slab_pages(uc, kernel, mapped, owner)?;
+            let native_pins = native_pins.ok_or_else(|| {
+                Error::Backend("private slab reclamation has no native pin registry".to_owned())
+            })?;
+            reclaim_stale_private_slab_pages(
+                uc,
+                kernel,
+                mapped,
+                owner,
+                native_pins,
+                active_guards,
+            )?;
         }
         let allocations: Vec<_> = match owner {
             Some(owner) => kernel
@@ -50049,6 +50093,67 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
         self.private_vm_mapping = Some(mapping);
         self
     }
+
+    fn reconcile_private_vm_mapping(&mut self, kernel: &CeKernel) -> Result<()> {
+        let mapping = self.private_vm_mapping.ok_or_else(|| {
+            Error::Unsupported("private VM has no captured native mapping context".to_owned())
+        })?;
+        let heap = self.heap_mapping.ok_or_else(|| {
+            Error::Unsupported("private VM has no native blob mapping context".to_owned())
+        })?;
+        if !std::ptr::eq(mapping.mapped, heap.mapped) {
+            return Err(Error::Backend(
+                "private VM and heap mapping ledgers differ".to_owned(),
+            ));
+        }
+        let mut mapped = mapping.mapped.borrow_mut();
+        if mapped.heap_generation != kernel.memory.heap_generation()
+            || mapped.virtual_generation != kernel.memory.virtual_generation()
+        {
+            // The first import begins with an unsynchronized ledger. Reconcile
+            // all pre-existing mappings before the detached private token has
+            // any native side effect; afterward the token is the only change.
+            // SAFETY: this pointer belongs to the live, sequential import
+            // adapter, as in ensure_heap_mapped below.
+            let blobs = unsafe { &mut *heap.mapped_blobs };
+            map_kernel_memory_allocations_for_owner(
+                self.uc,
+                kernel,
+                &mut mapped,
+                blobs,
+                Some(mapping.owner),
+                Some(mapping.native_pins),
+                Some(mapping.active_guards),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn validate_private_host_access(&self, addr: u32, len: usize, required: u32) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+        let end = u64::from(addr)
+            .checked_add(u64::try_from(len).map_err(|_| {
+                Error::InvalidArgument("guest access length overflows address space".to_owned())
+            })?)
+            .filter(|end| *end <= u64::from(u32::MAX) + 1)
+            .ok_or_else(|| Error::InvalidArgument("guest access range wraps VA".to_owned()))?;
+        let Some(mapping) = self.private_vm_mapping else {
+            return Ok(());
+        };
+        let first_page = addr & !0xfff;
+        let last_page = ((end - 1) as u32) & !0xfff;
+        let mapped = mapping.mapped.borrow();
+        for (page, record) in mapped.private_pages.range(first_page..=last_page) {
+            if record.identity.owner() != mapping.owner || record.perms & required != required {
+                return Err(Error::InvalidArgument(format!(
+                    "guest access at private page 0x{page:08x} violates native protection"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -50071,6 +50176,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                 mapping.owner.process_id()
             )));
         }
+        self.reconcile_private_vm_mapping(kernel)?;
         let mut mapped = mapping.mapped.borrow_mut();
         if mapped.heap_generation != kernel.memory.heap_generation()
             || mapped.virtual_generation != kernel.memory.virtual_generation()
@@ -50136,6 +50242,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                 mapping.owner.process_id()
             )));
         }
+        self.reconcile_private_vm_mapping(kernel)?;
         let mut mapped = mapping.mapped.borrow_mut();
         if mapped.heap_generation != kernel.memory.heap_generation()
             || mapped.virtual_generation != kernel.memory.virtual_generation()
@@ -50177,6 +50284,15 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                         .map_err(|err| {
                             Error::Backend(format!("unmap private VM page 0x{page:08x}: {err:?}"))
                         })?;
+                    mapping.active_guards.borrow_mut().remove(&identity);
+                    if !mapping
+                        .native_pins
+                        .release_private_after_unmap(identity, pin.native_ptr() as usize)
+                    {
+                        return Err(Error::Backend(format!(
+                            "checked private VM unmap 0x{page:08x} has no matching native pin"
+                        )));
+                    }
                     mapped.private_pages.remove(&page);
                     remove_mapped_guest_page(&mut mapped, page);
                 }
@@ -50226,6 +50342,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn validate_writable_u32(&self, addr: u32) -> Result<()> {
+        self.validate_private_host_access(addr, 4, unicorn_engine::Prot::WRITE.0 as u32)?;
         let end = addr.checked_add(4).ok_or_else(|| {
             Error::InvalidArgument("VirtualProtect output pointer wraps guest VA".to_owned())
         })?;
@@ -50264,6 +50381,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn read_u8(&self, addr: u32) -> Result<u8> {
+        self.validate_private_host_access(addr, 1, unicorn_engine::Prot::READ.0 as u32)?;
         let mut bytes = [0; 1];
         self.uc
             .mem_read(u64::from(addr), &mut bytes)
@@ -50272,6 +50390,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+        self.validate_private_host_access(addr, 1, unicorn_engine::Prot::WRITE.0 as u32)?;
         self.uc
             .mem_write(u64::from(addr), &[value])
             .map_err(|err| Error::Backend(format!("write_u8 0x{addr:08x}: {err:?}")))?;
@@ -50279,6 +50398,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn read_u32(&self, addr: u32) -> Result<u32> {
+        self.validate_private_host_access(addr, 4, unicorn_engine::Prot::READ.0 as u32)?;
         let mut bytes = [0; 4];
         self.uc
             .mem_read(u64::from(addr), &mut bytes)
@@ -50287,13 +50407,29 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+        self.validate_private_host_access(addr, 4, unicorn_engine::Prot::WRITE.0 as u32)?;
         self.uc
             .mem_write(u64::from(addr), &value.to_le_bytes())
             .map_err(|err| Error::Backend(format!("write_u32 0x{addr:08x}: {err:?}")))?;
         Ok(())
     }
 
+    fn write_prevalidated_vm_protect_result_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+        // COREDLL checked the old-protect slot while it was still writable.
+        // The slot may itself have become read-only in this same transaction;
+        // Unicorn's host write is the narrow post-commit publication step.
+        self.uc
+            .mem_write(u64::from(addr), &value.to_le_bytes())
+            .map_err(|err| {
+                Error::Backend(format!(
+                    "write prevalidated VirtualProtect result 0x{addr:08x}: {err:?}"
+                ))
+            })?;
+        Ok(())
+    }
+
     fn read_u16(&self, addr: u32) -> Result<u16> {
+        self.validate_private_host_access(addr, 2, unicorn_engine::Prot::READ.0 as u32)?;
         let mut bytes = [0; 2];
         self.uc
             .mem_read(u64::from(addr), &mut bytes)
@@ -50302,6 +50438,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+        self.validate_private_host_access(addr, 2, unicorn_engine::Prot::WRITE.0 as u32)?;
         self.uc
             .mem_write(u64::from(addr), &value.to_le_bytes())
             .map_err(|err| Error::Backend(format!("write_u16 0x{addr:08x}: {err:?}")))?;
@@ -50309,6 +50446,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn read_bytes(&self, addr: u32, out: &mut [u8]) -> Result<()> {
+        self.validate_private_host_access(addr, out.len(), unicorn_engine::Prot::READ.0 as u32)?;
         self.uc
             .mem_read(u64::from(addr), out)
             .map_err(|err| Error::Backend(format!("read_bytes 0x{addr:08x}: {err:?}")))?;
@@ -50316,6 +50454,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
+        self.validate_private_host_access(addr, bytes.len(), unicorn_engine::Prot::WRITE.0 as u32)?;
         self.uc
             .mem_write(u64::from(addr), bytes)
             .map_err(|err| Error::Backend(format!("write_bytes 0x{addr:08x}: {err:?}")))?;

@@ -4242,6 +4242,95 @@ fn ce_module_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wince_emulation_v3::ce::memory::{MEM_COMMIT, MEM_RESERVE, VirtualAllocationSource};
+
+    fn kernel_with_committed_private_slab() -> CeKernel {
+        let config = RuntimeConfig::load_default().expect("checkpoint test config loads");
+        let mut kernel = CeKernel::boot(config);
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let prepared = kernel
+            .memory
+            .prepare_private_vm(
+                owner,
+                VirtualAllocationSource::Private,
+                0,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                4,
+            )
+            .expect("prepare a committed private slab");
+        assert_ne!(kernel.memory.commit_prepared_private_vm(prepared), None);
+        assert!(kernel.memory.has_stable_private_slabs());
+        kernel
+    }
+
+    #[test]
+    fn monitor_checkpoint_save_rejects_slab_backed_private_vm() {
+        let kernel = kernel_with_committed_private_slab();
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let before = kernel.memory.virtual_allocations_for(owner).count();
+        let cpu = UnicornMips::new().expect("checkpoint CPU initializes");
+        let framebuffer = VirtualFramebuffer::default();
+
+        let result = try_monitor_checkpoint_save("slab".to_owned(), &cpu, &kernel, &framebuffer);
+        assert!(matches!(
+            result,
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("machine-level checkpoint relineage")
+        ));
+        assert_eq!(kernel.memory.virtual_allocations_for(owner).count(), before);
+        assert!(kernel.memory.has_stable_private_slabs());
+    }
+
+    #[test]
+    fn monitor_checkpoint_restore_rejects_slab_backed_source_or_destination() {
+        let clean = CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let cpu = UnicornMips::new().expect("checkpoint CPU initializes");
+        let framebuffer = VirtualFramebuffer::default();
+        let clean_checkpoint =
+            try_monitor_checkpoint_save("clean".to_owned(), &cpu, &clean, &framebuffer)
+                .expect("clean checkpoint saves");
+
+        let destination = kernel_with_committed_private_slab();
+        let destination_owner = destination
+            .current_process_birth_key()
+            .expect("destination process birth");
+        let destination_allocations = destination
+            .memory
+            .virtual_allocations_for(destination_owner)
+            .count();
+        assert!(matches!(
+            try_monitor_checkpoint_restore(&clean_checkpoint, &destination),
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("machine-level checkpoint relineage")
+        ));
+        assert_eq!(
+            destination
+                .memory
+                .virtual_allocations_for(destination_owner)
+                .count(),
+            destination_allocations
+        );
+
+        // A saved snapshot from an older path must also fail before it can be
+        // restored, even when the destination is still clean.
+        let slab_checkpoint = MonitorCheckpoint {
+            name: "pre-guard slab snapshot".to_owned(),
+            cpu: cpu.clone(),
+            kernel: destination,
+            framebuffer: framebuffer.clone(),
+        };
+        assert!(matches!(
+            try_monitor_checkpoint_restore(&slab_checkpoint, &clean),
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("machine-level checkpoint relineage")
+        ));
+        assert!(!clean.memory.has_stable_private_slabs());
+    }
 
     #[test]
     fn requested_pc_stop_requires_matching_fresh_stop_and_retained_context() {

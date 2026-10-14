@@ -9,9 +9,11 @@
 //! K is the authentic (thread ID, saved scalar CPU context) resume key. P is the
 //! engine's mapping ledger; cloning never copies a live engine or that ledger.
 
+use crate::ce::memory::PrivatePageIdentity;
 use std::{
     any::Any,
     cell::RefCell,
+    collections::BTreeMap,
     fmt,
     ops::{Deref, DerefMut},
     rc::Rc,
@@ -43,16 +45,70 @@ struct NativeSlot<K, P> {
 /// mapping metadata transferred to hook-local state during a run. A pending
 /// pointer map is pinned before entering Unicorn; even an early error keeps
 /// its storage alive until the owner has been discarded.
+#[derive(Default)]
+struct NativePinSet {
+    generic: Vec<Rc<dyn Any>>,
+    private_pages: BTreeMap<PrivatePageIdentity, PrivateNativePin>,
+}
+
+struct PrivateNativePin {
+    host_address: usize,
+    _backing: Rc<dyn Any>,
+}
+
 #[derive(Clone, Default)]
-pub(crate) struct NativeMappingPins(Rc<RefCell<Vec<Rc<dyn Any>>>>);
+pub(crate) struct NativeMappingPins(Rc<RefCell<NativePinSet>>);
 
 impl NativeMappingPins {
     pub(crate) fn pin<T: 'static>(&self, backing: T) {
-        self.0.borrow_mut().push(Rc::new(backing));
+        self.0.borrow_mut().generic.push(Rc::new(backing));
+    }
+
+    /// Pin a raw-pointer page before handing it to Unicorn. The exact page
+    /// identity is retired only after checked native unmap succeeds.
+    pub(crate) fn pin_private<T: 'static>(
+        &self,
+        identity: PrivatePageIdentity,
+        host_address: usize,
+        backing: T,
+    ) -> bool {
+        let mut pins = self.0.borrow_mut();
+        if pins.private_pages.contains_key(&identity) {
+            return false;
+        }
+        pins.private_pages.insert(
+            identity,
+            PrivateNativePin {
+                host_address,
+                _backing: Rc::new(backing),
+            },
+        );
+        true
+    }
+
+    pub(crate) fn release_private_after_unmap(
+        &self,
+        identity: PrivatePageIdentity,
+        expected_host_address: usize,
+    ) -> bool {
+        let mut pins = self.0.borrow_mut();
+        if !pins
+            .private_pages
+            .get(&identity)
+            .is_some_and(|pin| pin.host_address == expected_host_address)
+        {
+            return false;
+        }
+        pins.private_pages.remove(&identity).is_some()
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.0.borrow().len()
+        let pins = self.0.borrow();
+        pins.generic.len() + pins.private_pages.len()
+    }
+
+    pub(crate) fn private_len(&self) -> usize {
+        self.0.borrow().private_pages.len()
     }
 }
 
