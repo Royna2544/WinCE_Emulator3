@@ -1681,7 +1681,7 @@ impl MemorySystem {
                 .map(|bytes| (bytes, page_offset as usize))
                 .or_else(|| {
                     (page_offset >= offset && page_offset < offset.saturating_add(mapped_size))
-                        .then_some((initial_bytes, (page_offset - offset) as usize))
+                        .then(|| (initial_bytes, (page_offset - offset) as usize))
                 });
             let (seed, start) = source.unwrap_or((&[][..], 0));
             let end = start
