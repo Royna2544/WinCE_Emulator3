@@ -6530,7 +6530,7 @@ fn handle_table_create_mutex_with_status_suspend_resume_by_id_and_file_mappings_
         assert_eq!(view.base, 0x5000_0000);
         assert_eq!(view.size, 0x1000);
         // Can mutate through the returned reference.
-        mapping.data.push(0xAB);
+        mapping.legacy_data_mut().unwrap().push(0xAB);
     }
     // file_mapping_by_view_mut with unknown base → None.
     assert!(table.file_mapping_by_view_mut(0xDEAD_0000).is_none());

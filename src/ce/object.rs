@@ -177,9 +177,48 @@ pub struct FileMappingObject {
     pub size: u32,
     pub protect: u32,
     pub file_id: Option<u32>,
-    pub data: Vec<u8>,
+    backing: MappingBacking,
     pub views: Vec<FileMappingView>,
     pub closed: bool,
+}
+
+/// A mapping has exactly one byte authority. Legacy DIB/injected views use
+/// copied bytes; public pointer-mapped views use MemorySystem's stable slab.
+#[derive(Debug, Clone)]
+pub enum MappingBacking {
+    Legacy(Vec<u8>),
+    Slab,
+}
+
+impl FileMappingObject {
+    pub fn legacy_data(&self) -> Option<&[u8]> {
+        match &self.backing {
+            MappingBacking::Legacy(data) => Some(data),
+            MappingBacking::Slab => None,
+        }
+    }
+
+    pub fn legacy_data_mut(&mut self) -> Option<&mut Vec<u8>> {
+        match &mut self.backing {
+            MappingBacking::Legacy(data) => Some(data),
+            MappingBacking::Slab => None,
+        }
+    }
+
+    pub fn is_slab(&self) -> bool {
+        matches!(self.backing, MappingBacking::Slab)
+    }
+
+    /// Call only after the first public view's canonical pages have passed
+    /// preflight. Dropping the legacy Vec is irreversible; no live legacy view
+    /// may still depend on it.
+    pub fn transition_to_slab(&mut self) -> bool {
+        if !matches!(self.backing, MappingBacking::Legacy(_)) || !self.views.is_empty() {
+            return false;
+        }
+        self.backing = MappingBacking::Slab;
+        true
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -676,11 +715,11 @@ impl HandleTable {
             size,
             protect,
             file_id,
-            data: if file_id.is_some() {
+            backing: MappingBacking::Legacy(if file_id.is_some() {
                 Vec::new()
             } else {
                 vec![0; size as usize]
-            },
+            }),
             views: Vec::new(),
             closed: false,
         }))
