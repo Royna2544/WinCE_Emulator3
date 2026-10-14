@@ -1,8 +1,9 @@
 #requires -Version 7.0
 <#
 E-22 bounded mounted iNavi run. Invoke from PowerShell 7; do not run in parallel
-with another emulator. This script builds in the sole D: checkout, checks the
-user-approved original-mount backups, and retains all output under evidence/.
+with another emulator. This O-P4 comparison launches the exact preserved
+release executable, checks the user-approved original-mount backups, and
+retains all output under evidence/.
 
 The NMEA stream is a NEW diagnostic input, not a replay of the older GPS run:
 16 one-Hz RMC/GGA/VTG bursts at 37.5 N, 127.25 E, altitude 42 m, speed 0.
@@ -86,11 +87,11 @@ function Assert-NoReparseMounts([object[]]$Backups) {
 }
 
 function Test-OriginalMountPreflight([string]$Repository) {
-    # Current-state archives verified by evidence/pre-live-mount-backup-20261013T210234Z/manifest.json.
+    # Current-state archives verified by evidence/pre-live-mount-backup-20261014T040655Z/manifest.json.
     $backups = @(
-        @{ Source = 'D:\INAVI_Emulator\INAVI'; Archive = 'D:\INAVI_Emulator\INAVI-pre-live-20261013T210234Z.zip'; Hash = 'A21B352E06366A4E36A6A1F631EBCA2173F28633C327B8DFAD756771DBB7368C' },
-        @{ Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Archive = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash-pre-live-20261013T210234Z.zip'; Hash = 'BA5A0E21A175779C733824EE7755A49E7BBD692AE5F95AEC139E388F5E148427' },
-        @{ Source = 'D:\INAVI_Emulator\EmulatorRoot'; Archive = 'D:\INAVI_Emulator\EmulatorRoot-pre-live-20261013T210234Z.zip'; Hash = 'B3B9FD3C165D0DD6F379339743E6AB541B9C4B905A0D792ED11571D6C4BB54CA' }
+        @{ Source = 'D:\INAVI_Emulator\INAVI'; Archive = 'D:\INAVI_Emulator\INAVI-pre-live-20261014T040655Z.zip'; Hash = '63B2A0AED678FC54F58732EBF2FBB03F79FFF8C8EC40FEA3BA777956E4312EEE' },
+        @{ Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Archive = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash-pre-live-20261014T040655Z.zip'; Hash = 'F69A2476957F0DEF064BC529B320FB1828AAADCA9C1983473768FCCB7D38FC76' },
+        @{ Source = 'D:\INAVI_Emulator\EmulatorRoot'; Archive = 'D:\INAVI_Emulator\EmulatorRoot-pre-live-20261014T040655Z.zip'; Hash = 'E5C2061FA64E62D4DB4CCE226138D455475B5D0D377266080BE05F8C42740FFA' }
     )
     foreach ($item in $backups) {
         if (-not (Test-Path -LiteralPath $item.Source -PathType Container)) {
@@ -191,7 +192,7 @@ function Assert-WorkerDirectory([string]$Directory) {
 
 function Assert-RemoteEndpointAvailable {
     # A stale emulator must not supply the observer's t0 or receive these POSTs.
-    $other = @(Get-Process -Name 'wince_emulation_v3' -ErrorAction SilentlyContinue)
+    $other = @(Get-Process -Name 'wince_emulation_v3', 'wince_emulation_v3-op4' -ErrorAction SilentlyContinue)
     if ($other.Count -ne 0) {
         throw "Another wince_emulation_v3 process is running (PID(s): $($other.Id -join ', '))."
     }
@@ -509,40 +510,36 @@ if ($MonitorWorker) { Invoke-Monitor $RunDirectory $MaxWorkingSetMiB; return }
 $repository = Split-Path -Parent $PSScriptRoot
 if ($repository -ne 'D:\GitHub\Wince_emulation_v3') { throw "Unexpected checkout: $repository" }
 $backups = Test-OriginalMountPreflight $repository
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { throw 'cargo is unavailable.' }
-if (-not (Test-Path -LiteralPath 'C:\Program Files\doxygen\bin' -PathType Container)) { throw 'LIBCLANG_PATH is unavailable.' }
 $experiments = @(Get-ChildItem Env:WINCE_EMU_* -ErrorAction SilentlyContinue)
 if ($experiments.Count -gt 0) { throw "Unset WINCE_EMU_* experiment variables before a matched run: $($experiments.Name -join ', ')" }
+# Capture the fresh-owner slice cost and guest MIPS for this one-run comparison.
+$env:RUST_LOG = 'warn,ce.slice_profile=debug'
 
 $tag = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
 $runDirectory = Join-Path $repository "evidence\e22-live-$tag"
 if (Test-Path -LiteralPath $runDirectory) { throw "Evidence path already exists: $runDirectory" }
 [void][System.IO.Directory]::CreateDirectory($runDirectory)
-$env:LIBCLANG_PATH = 'C:\Program Files\doxygen\bin'
 $previousDirectory = Get-Location
 $observerJob = $null; $monitorProcess = $null; $appDescriptor = $null; $client = $null
 $endedByScript = $null; $driveError = $null; $exitCode = $null; $exitStatus = 1
 try {
     Set-Location -LiteralPath $repository
-    $targetTriple = 'x86_64-pc-windows-msvc'
-    $env:CARGO_TARGET_DIR = Join-Path $repository 'target'
-    $buildStartedUtc = [DateTime]::UtcNow.ToString('O')
-    & cargo build -j 1 --release --target $targetTriple --features unicorn,trace,win32-desktop *> (Join-Path $runDirectory 'build.raw.txt')
-    if ($LASTEXITCODE -ne 0) { throw "Release build failed: exit $LASTEXITCODE" }
-    # A build can take minutes; do not trust only the earlier mount/marker check.
-    $backups = Test-OriginalMountPreflight $repository
-    $exe = Join-Path $env:CARGO_TARGET_DIR "$targetTriple\release\wince_emulation_v3.exe"
-    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Release executable is missing: $exe" }
+    $exe = Join-Path $repository 'evidence\op4-fresh-default-20261014\wince_emulation_v3-op4.exe'
+    $pdb = Join-Path $repository 'evidence\op4-fresh-default-20261014\wince_emulation_v3-op4.pdb'
+    Test-ExpectedHash $exe '4C9EC2744FDEFBCAEDF4CA7D1D1ACC13CBC53D273C86AD4B4E57841B332D4E02'
+    Test-ExpectedHash $pdb '05CF4A294F9BB9FBF0732AF6904D059F093E41B2AEB8FD3F5FDA41C9B29BF4D6'
     $manifest = @{
         runTag = $tag; createdUtc = [DateTime]::UtcNow.ToString('O'); repository = $repository
         executable = $exe; executableSha256 = Get-Sha256 $exe
-        cargoTargetDirectory = $env:CARGO_TARGET_DIR; cargoTargetTriple = $targetTriple; buildStartedUtc = $buildStartedUtc
+        pdb = $pdb; pdbSha256 = Get-Sha256 $pdb
+        executableProvenanceReceipt = Join-Path $repository 'evidence\op4-fresh-default-20261014\validation.receipt.md'
         app = 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe'; appSha256 = Get-Sha256 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe'
         scriptSha256 = Get-Sha256 $PSCommandPath
         registrySha256 = Get-Sha256 (Join-Path $repository 'registry.reg')
         devicesSha256 = Get-Sha256 (Join-Path $repository 'serial_devices.json')
         mountsSha256 = Get-Sha256 (Join-Path $repository 'mounts.toml')
         backups = $backups; originalWritableMounts = $true
+        logFilter = $env:RUST_LOG
         runSeconds = 330; instructionLimit = 1000000; remoteUrl = 'http://192.168.0.39:8765'
         observerSeconds = 420; watchdogSeconds = 390; memorySampleSeconds = 2
         nmeaAssumption = 'NEW, not matched: 16 1-Hz RMC/GGA/VTG bursts at 37.5N 127.25E, altitude 42m, zero speed, from input-ready+93s'
@@ -584,7 +581,7 @@ try {
         '--cpu-wall-clock-limit-ms', '330000', '--cpu-instruction-limit', '1000000',
         '--framebuffer-dump', $ppm
     )
-    # The full archive/config/hash preflight ran after build. Recheck junctions
+    # The full archive/config/hash preflight ran before setup. Recheck junctions
     # immediately before launch without consuming the observer's 420 s window
     # rehashing multi-GB ZIPs. This cannot prevent a concurrent later change.
     Assert-NoReparseMounts $backups
