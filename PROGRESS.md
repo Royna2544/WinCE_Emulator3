@@ -12,6 +12,12 @@ first. Totals are passed/failed/ignored for release
 HEAD and patch, raw logs and EXE/PDB hashes. The per-slice text before this
 condense is at `git show d4263dde:PROGRESS.md`.
 
+- Occupied native SendMessageTimeout slot
+  ([receipt](evidence/stage3-smt-occupied-20261015/validation.receipt.md)):
+  an eligible second sender now stops with a backend error before raw
+  dispatch can return or retain a result pointer. Real MIPS import-hook and
+  compatibility controls passed; release 1,932/0/9 and no-feature
+  1,402/0/3. Concurrent A+B task-owned frames remain open.
 - Native parked SendMessageTimeout
   ([receipt](evidence/stage3-smt-birth-20261015/validation.receipt.md)):
   eligible cross-thread nonzero-timeout producer, re-entry and resume check
@@ -73,7 +79,7 @@ condense is at `git show d4263dde:PROGRESS.md`.
   pending; exact-birth completion precedes the process-wait signal; an old-MIPS
   direct-kernel real-handle call fails instead of resuming unsafely.
   1,858/0/11 and 1,375/0/5.
-- Still open across these gates: the occupied-SMT-slot raw fallback, global
+- Still open across these gates: concurrent task-owned SMT frames, global
   expiry read as ready, receiver-side `DestroyWindow` result writes, an
   end-to-end return-stub control, KData PID from mutable process selection,
   raw queue/socket/serial/MsgWait paths, aliasless Sleep-suspend, opaque

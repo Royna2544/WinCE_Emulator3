@@ -46,8 +46,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    the captured lease, not mutable process selection. The bounded
    [native SMT gate](evidence/stage3-smt-birth-20261015/validation.receipt.md)
    checks eligible parked producer/re-entry/resume birth and exact wait/send
-   pairing, with exact-ID GWE abandon. Close the occupied-slot raw fallback,
-   global expiry-as-ready ambiguity, and receiver-side `DestroyWindow`
+   pairing, with exact-ID GWE abandon. The bounded
+   [occupied-slot safety gate](evidence/stage3-smt-occupied-20261015/validation.receipt.md)
+   now stops a second eligible sender with a backend error; implement
+   task-owned concurrent SMT frames, close global expiry-as-ready ambiguity,
+   and gate receiver-side `DestroyWindow`
    completed-result writes before claiming full SMT semantics. Receiver-side
    delivery, broader GWE lifecycle, and other blocked payloads remain
    separate. Raw synchronous/nonblocking

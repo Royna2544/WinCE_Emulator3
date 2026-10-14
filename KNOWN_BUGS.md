@@ -79,10 +79,12 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     queue/socket and serial (including overlapped) paths have no birth guard.
   - The guest return-stub hook has no end-to-end control, and pending-return
     KData PID follows mutable process selection, not the captured lease.
-  - SendMessageTimeout: an occupied native slot can still take the raw path
-    until the occupied-slot gate lands; global expiry can read as
-    ready/success; receiver-side `DestroyWindow` result writes, delivery and
-    the broader GWE send lifecycle are ungated.
+  - SendMessageTimeout global expiry can read as ready/success; receiver-side
+    `DestroyWindow` result writes, delivery and the broader GWE send lifecycle
+    are ungated.
+  - Live-run risk: a second concurrent cross-thread SendMessageTimeout now
+    stops with an explicit backend error until task-owned SMT frames exist
+    ([receipt](evidence/stage3-smt-occupied-20261015/validation.receipt.md)).
   - Aliasless Sleep-suspend, unpinned-worker lineage (fails closed), other
     parked-wait continuation, clone relineage, complete GMS reclamation and
     live-app behavior.
