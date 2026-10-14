@@ -161,15 +161,19 @@ close only their named gates, not Stage 2 or live acceptance.
   verifies the current `(TID, birth)` at native slice-end staging, and
   birth-verifies the GetMessage compatibility bridge before resuming. Stale
   same-TID A→B reuse fails closed without restoring A's state into B.
+  The later bounded [Sleep/object parked-wait source gate](../evidence/stage3-parked-wait-20261015/validation.receipt.md)
+  verifies captured register ownership before publication, pairs the native
+  payload with its live scheduler wait before wake consumption, retires only
+  an invalid exact wait ID, and carries verified birth into a normal resumed
+  slice.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE
   caller wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
   aliasless Sleep-suspend and generic parked-wait continuation remain open.
-  Sleep/object blocked-wait resume still restores registers and then marks the
-  current-thread provenance tracker unverified, so a following native slice
-  may reject; other blocked-wait families have not been migrated by this gate.
+  MsgWait, serial, Winsock, message-queue I/O, SendMessage and other blocked
+  payload families have not been migrated by the Sleep/object gate.
   These bounded source slices are not full Stage 3 or live-app acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19

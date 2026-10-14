@@ -156,8 +156,11 @@ Thread/Process wait pins
 non-task wait slots remain unpinned. The bounded
 [stale-TID/native-stamp gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
 birth-verifies pending returns, suspended contexts, native slice-end staging,
-and the GetMessage bridge; aliasless Sleep-suspend and generic parked-wait
-provenance remain open. These slices do not complete the
+and the GetMessage bridge. The bounded
+[Sleep/object parked-wait gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
+verifies captured wait-owner birth before publication and wake consumption;
+aliasless Sleep-suspend and other parked-wait families remain open. These
+slices do not complete the
 machine-owned Task/continuation/scheduler core, Stage 3, or live-app
 acceptance. See `PROGRESS.md` and `docs/PLAN.md` for current gates.
 
