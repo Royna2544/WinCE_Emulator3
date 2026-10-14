@@ -28,6 +28,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    separates fallible target pinning from native pending/old-wait mutation and
    scheduler publication; keep synchronous finite inline timeout paths and remaining native
    wait payload lifetimes in scope before declaring caller wait parity. The
+   41 integration-test calls to the legacy `register_blocked_waiter` helper
+   still need migration to prepared or opaque registration before that public
+   compatibility entry can become test-support-only. The
    historical E-8/E-11/E-26 reds remain the acceptance baseline, not a reason
    to treat the design as parked. Full Stage 3 and live behavior remain
    unaccepted.
