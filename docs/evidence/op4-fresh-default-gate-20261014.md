@@ -13,9 +13,16 @@ opt-in, sampled once for the host process; absent or other values use fresh.
 ## Exact source proof and its limit
 
 The proof is specific to the locked `unicorn-engine` / vendored
-`unicorn-engine-sys` **2.1.5** source, not an upstream API promise:
+`unicorn-engine-sys` **2.1.5** source, not an upstream API promise.
+`vendor/unicorn-engine-sys/build.rs` must unconditionally compile this
+vendored C through CMake for a static link. Its former `pkg-config` branch
+could link an unrelated installed Unicorn >= 2, and `dynamic_linkage` could
+load an unaudited same-named DLL at runtime, voiding the close proof even
+with exact crate versions. That system-library branch is removed and the
+optional dynamic feature is rejected at build time. The registry Rust wrapper
+remains pinned by the root manifest and lockfile. Source checks:
 
-- `vendor/unicorn-engine-sys/uc.c:497-570` has two `uc_close` exits. An
+- `vendor/unicorn-engine-sys/uc.c:497-574` has two `uc_close` exits. An
   uninitialized handle is freed and returns `UC_ERR_OK`; an initialized handle
   tears down translations, CPU, mappings, hooks and the engine, then returns
   `UC_ERR_OK`. It has no recoverable error return on this source. A native
@@ -42,11 +49,11 @@ The proof is specific to the locked `unicorn-engine` / vendored
   hooks first. Let native close happen while the nonowning wrapper still holds
   every callback box.
 
-Before any dependency or vendor-source upgrade, re-audit these exact
-statements and the wrapper's ownership/drop behavior. Pin the wrapper version
-in the manifest as well as the lockfile. If `uc_close` gains an error path or
-the proof fails, stop this gate: a consuming checked-close API and owned
-callback-referent quarantine would need a separate design. The broader
+Before any dependency, vendor-source, or native-linkage change, re-audit these
+exact statements and the wrapper's ownership/drop behavior. If `uc_close`
+gains an error path or the proof fails, stop this gate: a consuming
+checked-close API and owned callback-referent quarantine would need a
+separate design. The broader
 [guest-memory O-P4 plan](../subsystems/guest-memory.md) describes that general
 case and must be reconciled with this narrower source-bound exception when
 implementation lands.
