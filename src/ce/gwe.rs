@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::ce::object::ProcessBirthKey;
+use crate::ce::object::{ProcessBirthKey, ThreadBirthKey};
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +324,41 @@ pub struct Message {
     pub typed_payload_owner: Option<ProcessBirthKey>,
 }
 
+/// Delivery ownership is attached to a queued entry, not to the public MSG
+/// payload. Numeric/window producers remain an explicit compatibility path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum QueueDeliveryOwner {
+    Unscoped,
+    LegacyUnknown,
+    Birth(ThreadBirthKey),
+}
+
+impl QueueDeliveryOwner {
+    fn visible_to_birth(self, birth: ThreadBirthKey) -> bool {
+        matches!(self, Self::Unscoped) || self == Self::Birth(birth)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct QueuedMessage {
+    message: Message,
+    owner: QueueDeliveryOwner,
+}
+
+impl std::ops::Deref for QueuedMessage {
+    type Target = Message;
+
+    fn deref(&self) -> &Self::Target {
+        &self.message
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReadyTimestamp {
+    sequence: u64,
+    time_ms: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowPos {
     pub hwnd: u32,
@@ -397,6 +432,7 @@ pub struct SentMessage {
 struct QuitState {
     exit_code: u32,
     time_ms: u32,
+    sequence: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -902,7 +938,7 @@ pub struct Gwe {
     class_names_by_atom: BTreeMap<u16, String>,
     windows: BTreeMap<u32, Window>,
     z_order: Vec<u32>,
-    queues: BTreeMap<u32, VecDeque<Message>>,
+    queues: BTreeMap<u32, VecDeque<QueuedMessage>>,
     sent_queues: BTreeMap<u32, VecDeque<u64>>,
     sent_messages: BTreeMap<u64, SentMessage>,
     active_sent_stack_by_thread: BTreeMap<u32, Vec<u64>>,
@@ -922,10 +958,11 @@ pub struct Gwe {
     send_depth_by_thread: BTreeMap<u32, u32>,
     last_message_source_by_thread: BTreeMap<u32, u32>,
     last_message_pos_by_thread: BTreeMap<u32, u32>,
-    ready_timestamp_by_thread: BTreeMap<u32, u32>,
+    ready_timestamp_by_owner: BTreeMap<(u32, QueueDeliveryOwner), ReadyTimestamp>,
+    next_queue_sequence: u64,
     last_dispatch_ms_by_thread: BTreeMap<u32, u32>,
-    changed_queue_status_by_thread: BTreeMap<u32, u32>,
-    quit_by_thread: BTreeMap<u32, QuitState>,
+    changed_queue_status_by_owner: BTreeMap<(u32, QueueDeliveryOwner), u32>,
+    quit_by_owner: BTreeMap<(u32, QueueDeliveryOwner), QuitState>,
     hot_keys: BTreeMap<(u32, u32, u32), HotKeyRegistration>,
     key_state: [u16; 256],
     async_key_down: [bool; 256],
@@ -1037,10 +1074,11 @@ impl Default for Gwe {
             send_depth_by_thread: BTreeMap::new(),
             last_message_source_by_thread: BTreeMap::new(),
             last_message_pos_by_thread: BTreeMap::new(),
-            ready_timestamp_by_thread: BTreeMap::new(),
+            ready_timestamp_by_owner: BTreeMap::new(),
+            next_queue_sequence: 1,
             last_dispatch_ms_by_thread: BTreeMap::new(),
-            changed_queue_status_by_thread: BTreeMap::new(),
-            quit_by_thread: BTreeMap::new(),
+            changed_queue_status_by_owner: BTreeMap::new(),
+            quit_by_owner: BTreeMap::new(),
             hot_keys: BTreeMap::new(),
             key_state: [0; 256],
             async_key_down: [false; 256],
@@ -1868,7 +1906,7 @@ impl Gwe {
             queue.retain(|message| {
                 let keep = message.hwnd == 0 || !targets.contains(&message.hwnd);
                 if !keep && message.typed_payload_owner.is_some() {
-                    discarded_host_payload_messages.push(message.clone());
+                    discarded_host_payload_messages.push(message.message.clone());
                 }
                 keep
             });
@@ -3509,7 +3547,30 @@ impl Gwe {
         true
     }
 
-    pub fn post_message(&mut self, thread_id: u32, mut message: Message) {
+    pub fn post_message(&mut self, thread_id: u32, message: Message) {
+        self.post_message_with_owner(thread_id, QueueDeliveryOwner::Unscoped, message);
+    }
+
+    /// The caller must first verify that this exact birth is still live.
+    pub fn post_thread_message_for_birth(&mut self, birth: ThreadBirthKey, message: Message) {
+        self.post_message_with_owner(
+            birth.thread_id(),
+            QueueDeliveryOwner::Birth(birth),
+            message,
+        );
+    }
+
+    /// Numeric-only test/compatibility fixtures, never a production fallback.
+    pub fn post_thread_message_legacy_unknown(&mut self, thread_id: u32, message: Message) {
+        self.post_message_with_owner(thread_id, QueueDeliveryOwner::LegacyUnknown, message);
+    }
+
+    fn post_message_with_owner(
+        &mut self,
+        thread_id: u32,
+        owner: QueueDeliveryOwner,
+        mut message: Message,
+    ) {
         if message.source == MSGSRC_UNKNOWN {
             message.source = MSGSRC_SOFTWARE_POST;
         }
@@ -3533,9 +3594,12 @@ impl Gwe {
         self.update_key_state_for_message(message.msg, message.wparam);
         let status_bit = queue_status_bit_for_message(message.msg);
         let ready_time = message.time_ms;
-        self.queues.entry(thread_id).or_default().push_back(message);
-        self.ready_timestamp_by_thread.insert(thread_id, ready_time);
-        self.mark_queue_status_changed(thread_id, status_bit);
+        self.queues
+            .entry(thread_id)
+            .or_default()
+            .push_back(QueuedMessage { message, owner });
+        self.record_queue_ready_timestamp(thread_id, owner, ready_time);
+        self.mark_queue_status_changed_for_owner(thread_id, owner, status_bit);
     }
 
     /// Drain up to `max` pending GWES pen points (4x-resolution screen
@@ -3653,8 +3717,11 @@ impl Gwe {
         let queue = self.sent_queues.entry(receiver_thread_id).or_default();
         queue.push_back(id);
         let queue_depth = queue.len();
-        self.ready_timestamp_by_thread
-            .insert(receiver_thread_id, ready_time);
+        self.record_queue_ready_timestamp(
+            receiver_thread_id,
+            QueueDeliveryOwner::Unscoped,
+            ready_time,
+        );
         self.mark_queue_status_changed(receiver_thread_id, QS_SENDMESSAGE);
         self.stats.send_transaction_count = self.stats.send_transaction_count.saturating_add(1);
         self.stats.max_sent_queue_depth = self.stats.max_sent_queue_depth.max(queue_depth);
@@ -4916,6 +4983,18 @@ impl Gwe {
     }
 
     pub fn get_message_queue_ready_time_stamp(&self, thread_id: u32, hwnd: u32) -> u32 {
+        self.queue_ready_timestamp(thread_id, hwnd, None)
+    }
+
+    pub fn get_message_queue_ready_time_stamp_for_birth(
+        &self,
+        birth: ThreadBirthKey,
+        hwnd: u32,
+    ) -> u32 {
+        self.queue_ready_timestamp(birth.thread_id(), hwnd, Some(birth))
+    }
+
+    fn queue_ready_timestamp(&self, thread_id: u32, hwnd: u32, birth: Option<ThreadBirthKey>) -> u32 {
         let queue_thread = if hwnd != 0 {
             self.window(hwnd)
                 .filter(|window| !window.destroyed)
@@ -4924,37 +5003,54 @@ impl Gwe {
         } else {
             thread_id
         };
-        self.ready_timestamp_by_thread
-            .get(&queue_thread)
-            .copied()
+        self.ready_timestamp_by_owner
+            .iter()
+            .filter(|((candidate_thread, owner), _)| {
+                *candidate_thread == queue_thread
+                    && birth.is_none_or(|birth| owner.visible_to_birth(birth))
+            })
+            .map(|(_, ready)| *ready)
+            .max_by_key(|ready| ready.sequence)
+            .map(|ready| ready.time_ms)
             .unwrap_or(0)
     }
 
     pub fn get_queue_status(&mut self, thread_id: u32, flags: u32) -> u32 {
-        let current = self.queue_status_bits(thread_id) & flags;
-        let changed_for_flags = self
-            .changed_queue_status_by_thread
-            .get(&thread_id)
-            .copied()
-            .unwrap_or(0)
-            & flags;
-        if let Some(changed) = self.changed_queue_status_by_thread.get_mut(&thread_id) {
-            *changed &= !flags;
-            if *changed == 0 {
-                self.changed_queue_status_by_thread.remove(&thread_id);
-            }
-        }
-        (current << 16) | changed_for_flags
+        self.get_queue_status_for_reader(thread_id, None, flags)
+    }
+
+    pub fn get_queue_status_for_birth(&mut self, birth: ThreadBirthKey, flags: u32) -> u32 {
+        self.get_queue_status_for_reader(birth.thread_id(), Some(birth), flags)
+    }
+
+    fn get_queue_status_for_reader(
+        &mut self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        flags: u32,
+    ) -> u32 {
+        let current = self.queue_status_bits_for_reader(thread_id, birth) & flags;
+        let changed = self.changed_queue_status_bits_for_reader(thread_id, birth) & flags;
+        self.clear_new_queue_input_for_reader(thread_id, birth, flags);
+        (current << 16) | changed
     }
 
     pub fn peek_queue_status(&self, thread_id: u32, flags: u32) -> u32 {
-        let current = self.queue_status_bits(thread_id) & flags;
-        let changed = self
-            .changed_queue_status_by_thread
-            .get(&thread_id)
-            .copied()
-            .unwrap_or(0)
-            & flags;
+        self.peek_queue_status_for_reader(thread_id, None, flags)
+    }
+
+    pub fn peek_queue_status_for_birth(&self, birth: ThreadBirthKey, flags: u32) -> u32 {
+        self.peek_queue_status_for_reader(birth.thread_id(), Some(birth), flags)
+    }
+
+    fn peek_queue_status_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        flags: u32,
+    ) -> u32 {
+        let current = self.queue_status_bits_for_reader(thread_id, birth) & flags;
+        let changed = self.changed_queue_status_bits_for_reader(thread_id, birth) & flags;
         (current << 16) | changed
     }
 
@@ -4976,7 +5072,9 @@ impl Gwe {
     pub fn queue_snapshot(&self) -> Vec<(u32, Vec<Message>)> {
         self.queues
             .iter()
-            .map(|(thread_id, queue)| (*thread_id, queue.iter().cloned().collect()))
+            .map(|(thread_id, queue)| {
+                (*thread_id, queue.iter().map(|entry| entry.message.clone()).collect())
+            })
             .collect()
     }
 
@@ -5031,26 +5129,57 @@ impl Gwe {
     }
 
     pub fn has_queue_input(&self, thread_id: u32, flags: u32) -> bool {
-        self.queue_status_bits(thread_id) & flags != 0
+        self.queue_status_bits_for_reader(thread_id, None) & flags != 0
+    }
+
+    pub fn has_queue_input_for_birth(&self, birth: ThreadBirthKey, flags: u32) -> bool {
+        self.queue_status_bits_for_reader(birth.thread_id(), Some(birth)) & flags != 0
     }
 
     pub fn has_new_queue_input(&self, thread_id: u32, flags: u32) -> bool {
-        self.changed_queue_status_by_thread
-            .get(&thread_id)
-            .copied()
-            .unwrap_or(0)
-            & flags
-            != 0
+        self.changed_queue_status_bits_for_reader(thread_id, None) & flags != 0
+    }
+
+    pub fn has_new_queue_input_for_birth(&self, birth: ThreadBirthKey, flags: u32) -> bool {
+        self.changed_queue_status_bits_for_reader(birth.thread_id(), Some(birth)) & flags != 0
     }
 
     pub fn clear_new_queue_input(&mut self, thread_id: u32, flags: u32) {
-        let Some(changed) = self.changed_queue_status_by_thread.get_mut(&thread_id) else {
-            return;
-        };
-        *changed &= !flags;
-        if *changed == 0 {
-            self.changed_queue_status_by_thread.remove(&thread_id);
-        }
+        self.clear_new_queue_input_for_reader(thread_id, None, flags);
+    }
+
+    pub fn clear_new_queue_input_for_birth(&mut self, birth: ThreadBirthKey, flags: u32) {
+        self.clear_new_queue_input_for_reader(birth.thread_id(), Some(birth), flags);
+    }
+
+    fn changed_queue_status_bits_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+    ) -> u32 {
+        self.changed_queue_status_by_owner
+            .iter()
+            .filter(|((candidate_thread, owner), _)| {
+                *candidate_thread == thread_id
+                    && birth.is_none_or(|birth| owner.visible_to_birth(birth))
+            })
+            .fold(0, |bits, (_, changed)| bits | *changed)
+    }
+
+    fn clear_new_queue_input_for_reader(
+        &mut self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        flags: u32,
+    ) {
+        self.changed_queue_status_by_owner.retain(|(candidate_thread, owner), changed| {
+            if *candidate_thread == thread_id
+                && birth.is_none_or(|birth| owner.visible_to_birth(birth))
+            {
+                *changed &= !flags;
+            }
+            *changed != 0
+        });
     }
 
     pub fn get_message(&mut self, thread_id: u32) -> Option<Message> {
@@ -5068,6 +5197,33 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> bool {
+        self.has_message_filtered_for_reader(thread_id, None, hwnd, min_msg, max_msg)
+    }
+
+    pub fn has_message_filtered_for_birth(
+        &self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
+        self.has_message_filtered_for_reader(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+        )
+    }
+
+    fn has_message_filtered_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
         self.sent_queues.get(&thread_id).is_some_and(|queue| {
             queue.iter().any(|id| {
                 self.sent_messages
@@ -5075,10 +5231,11 @@ impl Gwe {
                     .is_some_and(|sent| message_matches(&sent.message, hwnd, min_msg, max_msg))
             })
         }) || self.queues.get(&thread_id).is_some_and(|queue| {
-            queue
-                .iter()
-                .any(|message| message_matches(message, hwnd, min_msg, max_msg))
-        }) || self.quit_message(thread_id).is_some()
+            queue.iter().any(|entry| {
+                birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
+                    && message_matches(entry, hwnd, min_msg, max_msg)
+            })
+        }) || self.quit_message_for_reader(thread_id, birth).is_some()
             || self
                 .synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
                 .is_some()
@@ -5152,7 +5309,7 @@ impl Gwe {
             queue.iter().find_map(|message| {
                 (message_matches(message, hwnd, min_msg, max_msg)
                     && self.message_targets_visible_window(message))
-                .then(|| message.clone())
+                .then(|| message.message.clone())
             })
         }) {
             return Some(message);
@@ -5168,10 +5325,61 @@ impl Gwe {
     }
 
     pub fn post_quit_message(&mut self, thread_id: u32, exit_code: u32, time_ms: u32) {
-        self.quit_by_thread
-            .insert(thread_id, QuitState { exit_code, time_ms });
-        self.ready_timestamp_by_thread.insert(thread_id, time_ms);
-        self.mark_queue_status_changed(thread_id, QS_POSTMESSAGE);
+        self.post_quit_message_with_owner(
+            thread_id,
+            QueueDeliveryOwner::Unscoped,
+            exit_code,
+            time_ms,
+        );
+    }
+
+    /// The caller must first verify that this exact birth is still live.
+    pub fn post_quit_message_for_birth(
+        &mut self,
+        birth: ThreadBirthKey,
+        exit_code: u32,
+        time_ms: u32,
+    ) {
+        self.post_quit_message_with_owner(
+            birth.thread_id(),
+            QueueDeliveryOwner::Birth(birth),
+            exit_code,
+            time_ms,
+        );
+    }
+
+    /// Numeric-only test/compatibility fixtures, never a production fallback.
+    pub fn post_quit_message_legacy_unknown(
+        &mut self,
+        thread_id: u32,
+        exit_code: u32,
+        time_ms: u32,
+    ) {
+        self.post_quit_message_with_owner(
+            thread_id,
+            QueueDeliveryOwner::LegacyUnknown,
+            exit_code,
+            time_ms,
+        );
+    }
+
+    fn post_quit_message_with_owner(
+        &mut self,
+        thread_id: u32,
+        owner: QueueDeliveryOwner,
+        exit_code: u32,
+        time_ms: u32,
+    ) {
+        let sequence = self.record_queue_ready_timestamp(thread_id, owner, time_ms);
+        self.quit_by_owner.insert(
+            (thread_id, owner),
+            QuitState {
+                exit_code,
+                time_ms,
+                sequence,
+            },
+        );
+        self.mark_queue_status_changed_for_owner(thread_id, owner, QS_POSTMESSAGE);
     }
 
     pub fn get_message_filtered(
@@ -5181,13 +5389,40 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
+        self.get_message_filtered_for_reader(thread_id, None, hwnd, min_msg, max_msg)
+    }
+
+    pub fn get_message_filtered_for_birth(
+        &mut self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.get_message_filtered_for_reader(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+        )
+    }
+
+    fn get_message_filtered_for_reader(
+        &mut self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
         if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
-        if let Some(message) = self.take_matching_message(thread_id, hwnd, min_msg, max_msg) {
+        if let Some(message) = self.take_matching_message(thread_id, birth, hwnd, min_msg, max_msg) {
             return Some(message);
         }
-        if let Some(message) = self.take_quit_message(thread_id) {
+        if let Some(message) = self.take_quit_message_for_reader(thread_id, birth) {
             return Some(message);
         }
         let message = self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)?;
@@ -5256,6 +5491,36 @@ impl Gwe {
         max_msg: u32,
         flags: PeekFlags,
     ) -> Option<Message> {
+        self.peek_message_filtered_for_reader(thread_id, None, hwnd, min_msg, max_msg, flags)
+    }
+
+    pub fn peek_message_filtered_for_birth(
+        &mut self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        flags: PeekFlags,
+    ) -> Option<Message> {
+        self.peek_message_filtered_for_reader(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+            flags,
+        )
+    }
+
+    fn peek_message_filtered_for_reader(
+        &mut self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        flags: PeekFlags,
+    ) -> Option<Message> {
         if let Some(message) =
             self.peek_matching_sent_message(thread_id, hwnd, min_msg, max_msg, flags)
         {
@@ -5264,10 +5529,13 @@ impl Gwe {
         if let Some(queue) = self.queues.get_mut(&thread_id) {
             if let Some(index) = queue
                 .iter()
-                .position(|message| message_matches(message, hwnd, min_msg, max_msg))
+                .position(|entry| {
+                    birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
+                        && message_matches(entry, hwnd, min_msg, max_msg)
+                })
             {
                 return if flags.contains(PeekFlags::REMOVE) {
-                    let message = queue.remove(index);
+                    let message = queue.remove(index).map(|entry| entry.message);
                     if let Some(message) = message.as_ref() {
                         let source = message.source;
                         self.last_message_source_by_thread.insert(thread_id, source);
@@ -5275,15 +5543,15 @@ impl Gwe {
                     }
                     message
                 } else {
-                    queue.get(index).cloned()
+                    queue.get(index).map(|entry| entry.message.clone())
                 };
             }
         }
         if flags.contains(PeekFlags::REMOVE) {
-            if let Some(message) = self.take_quit_message(thread_id) {
+            if let Some(message) = self.take_quit_message_for_reader(thread_id, birth) {
                 return Some(message);
             }
-        } else if let Some(message) = self.quit_message(thread_id) {
+        } else if let Some(message) = self.quit_message_for_reader(thread_id, birth) {
             return Some(message);
         }
         self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
@@ -5397,15 +5665,17 @@ impl Gwe {
     fn take_matching_message(
         &mut self,
         thread_id: u32,
+        birth: Option<ThreadBirthKey>,
         hwnd: Option<u32>,
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
         let queue = self.queues.get_mut(&thread_id)?;
-        let index = queue
-            .iter()
-            .position(|message| message_matches(message, hwnd, min_msg, max_msg))?;
-        let message = queue.remove(index)?;
+        let index = queue.iter().position(|entry| {
+            birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
+                && message_matches(entry, hwnd, min_msg, max_msg)
+        })?;
+        let message = queue.remove(index)?.message;
         self.last_message_source_by_thread
             .insert(thread_id, message.source);
         self.record_last_message_pos(thread_id, &message);
@@ -5427,7 +5697,7 @@ impl Gwe {
             })?
         };
         let queue = self.queues.get_mut(&thread_id)?;
-        let message = queue.remove(index)?;
+        let message = queue.remove(index)?.message;
         self.last_message_source_by_thread
             .insert(thread_id, message.source);
         self.record_last_message_pos(thread_id, &message);
@@ -5545,7 +5815,7 @@ impl Gwe {
         })
     }
 
-    fn queue_status_bits(&self, thread_id: u32) -> u32 {
+    fn queue_status_bits_for_reader(&self, thread_id: u32, birth: Option<ThreadBirthKey>) -> u32 {
         let mut status = 0;
         if self.in_send_message(thread_id)
             || self
@@ -5556,11 +5826,13 @@ impl Gwe {
             status |= QS_SENDMESSAGE;
         }
         if let Some(queue) = self.queues.get(&thread_id) {
-            for message in queue {
-                status |= queue_status_bit_for_message(message.msg);
+            for entry in queue {
+                if birth.is_none_or(|birth| entry.owner.visible_to_birth(birth)) {
+                    status |= queue_status_bit_for_message(entry.msg);
+                }
             }
         }
-        if self.quit_by_thread.contains_key(&thread_id) {
+        if self.quit_key_for_reader(thread_id, birth).is_some() {
             status |= QS_POSTMESSAGE;
         }
         if self.windows.values().any(|window| {
@@ -5574,21 +5846,47 @@ impl Gwe {
         status
     }
 
-    fn take_quit_message(&mut self, thread_id: u32) -> Option<Message> {
-        let message = self.quit_message(thread_id)?;
-        self.quit_by_thread.remove(&thread_id);
+    fn take_quit_message_for_reader(
+        &mut self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+    ) -> Option<Message> {
+        let key = self.quit_key_for_reader(thread_id, birth)?;
+        let state = self.quit_by_owner.remove(&key)?;
+        let message = Message::new(0, WM_QUIT, state.exit_code, 0, state.time_ms)
+            .with_source(MSGSRC_SOFTWARE_POST);
         self.last_message_source_by_thread
             .insert(thread_id, message.source);
         self.record_last_message_pos(thread_id, &message);
         Some(message)
     }
 
-    fn quit_message(&self, thread_id: u32) -> Option<Message> {
-        let state = self.quit_by_thread.get(&thread_id)?;
+    fn quit_message_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+    ) -> Option<Message> {
+        let key = self.quit_key_for_reader(thread_id, birth)?;
+        let state = self.quit_by_owner.get(&key)?;
         Some(
             Message::new(0, WM_QUIT, state.exit_code, 0, state.time_ms)
                 .with_source(MSGSRC_SOFTWARE_POST),
         )
+    }
+
+    fn quit_key_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+    ) -> Option<(u32, QueueDeliveryOwner)> {
+        self.quit_by_owner
+            .iter()
+            .filter(|((candidate_thread, owner), _)| {
+                *candidate_thread == thread_id
+                    && birth.is_none_or(|birth| owner.visible_to_birth(birth))
+            })
+            .min_by_key(|(_, state)| state.sequence)
+            .map(|(key, _)| *key)
     }
 
     fn record_last_message_pos(&mut self, thread_id: u32, message: &Message) {
@@ -5599,13 +5897,61 @@ impl Gwe {
     }
 
     fn mark_queue_status_changed(&mut self, thread_id: u32, bits: u32) {
+        self.mark_queue_status_changed_for_owner(thread_id, QueueDeliveryOwner::Unscoped, bits);
+    }
+
+    fn mark_queue_status_changed_for_owner(
+        &mut self,
+        thread_id: u32,
+        owner: QueueDeliveryOwner,
+        bits: u32,
+    ) {
         if bits == 0 {
             return;
         }
         *self
-            .changed_queue_status_by_thread
-            .entry(thread_id)
+            .changed_queue_status_by_owner
+            .entry((thread_id, owner))
             .or_default() |= bits;
+    }
+
+    fn record_queue_ready_timestamp(
+        &mut self,
+        thread_id: u32,
+        owner: QueueDeliveryOwner,
+        time_ms: u32,
+    ) -> u64 {
+        let sequence = self.next_queue_sequence;
+        self.next_queue_sequence = sequence
+            .checked_add(1)
+            .expect("GWES queue sequence exhausted");
+        self.ready_timestamp_by_owner
+            .insert((thread_id, owner), ReadyTimestamp { sequence, time_ms });
+        sequence
+    }
+
+    /// Retire only work owned by the exited incarnation; window/numeric and
+    /// explicitly unknown compatibility entries remain in the same FIFO.
+    pub fn retire_thread_birth(&mut self, birth: ThreadBirthKey) {
+        let thread_id = birth.thread_id();
+        let mut discarded = Vec::new();
+        self.queues.retain(|candidate_thread, queue| {
+            if *candidate_thread == thread_id {
+                queue.retain(|entry| {
+                    let keep = entry.owner != QueueDeliveryOwner::Birth(birth);
+                    if !keep && entry.typed_payload_owner.is_some() {
+                        discarded.push(entry.message.clone());
+                    }
+                    keep
+                });
+            }
+            !queue.is_empty()
+        });
+        self.discarded_host_payload_messages.extend(discarded);
+        let key = (thread_id, QueueDeliveryOwner::Birth(birth));
+        self.quit_by_owner.remove(&key);
+        self.changed_queue_status_by_owner.remove(&key);
+        self.ready_timestamp_by_owner.remove(&key);
     }
 
     fn parent_to_screen_rect(&self, parent: Option<u32>, rect: Rect) -> Rect {
