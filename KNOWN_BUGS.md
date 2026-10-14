@@ -62,15 +62,19 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   [E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md),
   [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
-- The first canonical thread/process alias slice passed its frozen-source
-  gates: six Task controls are active and six remain ignored (ledger E-8,
-  E-11, E-26; [receipt](evidence/stage3-alias-20261014/validation.receipt.md)).
-  Thread aliases now share one mutable record and one
-  canonical wake index, but creation-process ownership, boot/child primary
-  identity, last-public-handle execution, wait pins and clone relineage remain
-  open. Process termination can signal a process without completing every
-  worker; a parked child can be dropped on a request-only exit path before
-  canonical cleanup. Whole-process GMS reclamation is not established.
+- The canonical thread/process alias and bounded creation-owner slices passed
+  their source gates: eight named Task controls are active and four remain
+  ignored (ledger E-8, E-11, E-26;
+  [alias receipt](evidence/stage3-alias-20261014/validation.receipt.md),
+  [owner receipt](evidence/stage3-owner-20261014/validation.receipt.md)).
+  Thread aliases share one mutable record and canonical wake index. Production
+  thread births retain a checked ProcessBirthKey, including aliasless boot TID
+  1 and child primary, and registered Toolhelp/GetProcessIdOfThread read it.
+  Boot-main enumeration, durable child-primary identity, last-public-handle
+  execution, wait pins and clone relineage remain open. Process termination
+  can signal a process without completing every worker; a parked child can be
+  dropped on a request-only exit path before canonical cleanup. Whole-process
+  GMS reclamation and live-app behavior are not established.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
   (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been
