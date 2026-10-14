@@ -3094,10 +3094,19 @@ impl CeKernel {
         } else {
             self.discard_window_backing_stores(&backing_store_targets);
         }
+        // Completion may retire the last birth-directory entry immediately.
+        // Keep its exact incarnation for the fixed heap/stack VM cleanup.
+        let exiting_birth = self.handles.process_birth_key(launch.process_id);
         if let Some(aliases) = self
             .handles
             .finish_process_execution_by_id(launch.process_id, exit_code)
         {
+            if let Some(owner) = exiting_birth {
+                // A retained native mapping pin keeps its page and budget
+                // alive until that owner's checked close; only canonical VM
+                // records are retired here.
+                self.memory.retire_fixed_private_ranges_for_owner(owner);
+            }
             for alias in aliases {
                 self.queue_object_wake_candidates(alias);
             }
@@ -10954,6 +10963,64 @@ mod tests {
         kernel.mark_process_launch_exited(&launch, 0);
         assert_eq!(kernel.current_process_birth_key(), None);
         assert!(!kernel.handles.contains_process_birth(child));
+        Ok(())
+    }
+
+    #[test]
+    fn child_exit_retires_fixed_stack_pages_and_budget_across_fifty_births() -> Result<()> {
+        const STACK_BASE: u32 = 0x7100_0000;
+        const STACK_SIZE: u32 = 0x2000;
+        const PAGE_SIZE: u64 = 0x1000;
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let baseline = kernel.memory.private_commit_used_bytes();
+
+        for cycle in 0..50 {
+            let launch =
+                kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
+            let owner = kernel
+                .handles
+                .process_birth_key(launch.process_id)
+                .expect("queued child has an execution birth");
+            assert_eq!(
+                kernel.memory.reserve_fixed_private_range(
+                    owner,
+                    crate::ce::memory::VirtualAllocationSource::ThreadStack,
+                    STACK_BASE,
+                    STACK_SIZE,
+                    0x04,
+                ),
+                Some(STACK_BASE),
+                "cycle {cycle} should reserve only its own stack"
+            );
+            let prepared = kernel
+                .memory
+                .prepare_fixed_private_page(owner, STACK_BASE + 4)
+                .expect("first stack touch should prepare one page");
+            assert_eq!(
+                kernel.memory.commit_prepared_private_vm(prepared),
+                Some(STACK_BASE)
+            );
+            assert_eq!(
+                kernel.memory.private_commit_used_bytes(),
+                baseline + PAGE_SIZE
+            );
+
+            kernel.mark_process_launch_exited(&launch, 0);
+            assert!(
+                kernel
+                    .memory
+                    .virtual_allocation(owner, STACK_BASE)
+                    .is_none()
+            );
+            assert!(kernel.memory.private_page_pin(owner, STACK_BASE).is_none());
+            assert_eq!(
+                kernel.memory.private_commit_used_bytes(),
+                baseline,
+                "cycle {cycle} must release the completed birth's canonical page"
+            );
+            assert!(kernel.close_handle(launch.process_handle)?);
+            assert!(kernel.close_handle(launch.thread_handle)?);
+        }
         Ok(())
     }
 
