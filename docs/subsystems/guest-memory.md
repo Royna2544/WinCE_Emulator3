@@ -168,6 +168,17 @@ authority before Stage 3. Heap spillover remains copy-backed; writable image
 sections and DLLs are separate later ownership slices. No E-44 iNavi, host
 RSS, speed or map-readiness result exists.
 
+Two bounded controls now pass without closing that gate. A release synthetic
+56-MiB sealed-RX setup profile passed 1/1 with 77,824 B owned blob capacity,
+fresh blob writes and fresh/reused readback, compared with 21,049,344 B for
+those fields in the E-43 pre-slab debug control: 20,971,520 B (20 MiB) fewer
+logical blob bytes. Slab reservation lies outside the timed setup section;
+single samples in different build modes cannot support a speed or RSS claim.
+An exact-path blocked serial/NMEA control passed 1/1 after writing two
+untouched stack pages and surviving a fresh native owner. It does not
+independently prove stale different-birth rejection. The frozen-source full
+gates are still pending ([provisional receipt](../../evidence/heap-stack-20261014/validation.receipt.md)).
+
 ## Target authority and permitted interfaces
 
 - `CeMachine` owns mutation sequencing; each `AddressSpace` owns its process's
