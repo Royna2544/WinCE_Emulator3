@@ -212,14 +212,17 @@ close only their named gates, not Stage 2 or live acceptance.
   This is not concurrent A+B support. Global expiry may be misreported as
   ready/success, and receiver-side `DestroyWindow` result writes and broader
   GWE lifecycle remain separate.
-  The next proposed structural Stage 3 gate is the exact-birth wait-owner
-  migration in [tasks-scheduler](subsystems/tasks-scheduler.md): one wait store,
-  fallible publication and exact-birth cancellation, including the broad
-  modal sweep and modal-button GetMessage removal. Numeric message wake hints
-  remain unsafe across TID reuse until a later GWE producer-birth gate.
-  Opaque non-task subscriptions have an explicit unpinned compatibility path;
-  duplicated native wait payloads remain unpinned, while synchronous finite
-  inline timeout paths are outside the published-wait pin transaction. CE
+  The bounded exact-birth wait-owner
+  [source gate](../evidence/stage3-wait-owner-20261015/validation.receipt.md)
+  passed release 1,947/0/9 and no-feature 1,414/0/3 across 18 blocks each.
+  One wait store now distinguishes exact birth from explicit legacy unknown;
+  production publication is fallible, late failure is terminal, and exact
+  exit/modal-HWND cleanup does not sweep a reused TID. A failed a01 attempt
+  remains preserved. Numeric GWE message hints, native continuation payloads,
+  wait-ID wrap/reuse and live modal behavior remain later gates
+  ([tasks-scheduler](subsystems/tasks-scheduler.md)). Opaque non-task targets
+  remain unpinned, while synchronous finite inline timeout paths are outside
+  the published-wait pin transaction. CE
   caller wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
   aliasless Sleep-suspend and generic parked-wait continuation remain open.

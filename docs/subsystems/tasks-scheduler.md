@@ -13,59 +13,18 @@ In scope: authentic task birth/exit, runnable state, explicit suspension, waits,
 - [ThreadSystem](../../src/ce/thread.rs) owns TLS, LastError, kernel-mode flags and globally allocated numeric TIDs; it is not a task state manager.
 - [HandleTable](../../src/ce/object.rs) stores ThreadObject values with entry/parameter, priority, suspend count and exit/signaled fields, but no creation PID/incarnation.
 - Its public-handle allocator advances unchecked; ThreadSystem TID and Kernel child PID allocators saturate. Checked incarnation alone cannot prevent an exhausted public handle number from colliding with an existing alias.
-- [CeKernel](../../src/ce/kernel.rs) has separate priority/suspend fallback and quantum maps. Boot PID1/TID1 has no public ThreadObject. Child primary lookup can depend on pending launches or a bounded diagnostic trace; Toolhelp can attribute existing workers to the selected process.
+- [CeKernel](../../src/ce/kernel.rs) has separate priority/suspend fallback and quantum maps. Boot PID1/TID1 has an aliasless canonical birth, not a public ThreadObject. Child primary lookup can depend on pending launches or a bounded diagnostic trace; Toolhelp can attribute existing workers to the selected process.
 - DuplicateHandle clones mutable ThreadObject state by value, so aliases can disagree. Thirteen controls cover alias/creator/primary identity, clone coherence, `OpenThread` reusing a public handle, `GetProcessIdOfThread` reporting the selected PID, final-public-handle lifetime, alias-indexed wake and registered-wait target retention. The older private-mirror runs are [E-8/E-11](../evidence/ledger.md); the current D-source focused [E-26](../evidence/ledger.md) default runs report one active pass and twelve ignored, while explicit ignored runs fail all twelve at intended assertions. They are a Stage 3 red baseline, not production Task migration.
-- [Scheduler](../../src/ce/scheduler.rs) now stores compatibility waits through [TaskWaitStore](../../src/ce/task_wait.rs). It preserves multiple same-TID frames, global wait-ID order and existing subscriptions/selection/unsigned deadline behavior; TID is still a compatibility key.
+- [Scheduler](../../src/ce/scheduler.rs) stores waits through one [TaskWaitStore](../../src/ce/task_wait.rs), keyed by exact `Birth(ThreadBirthKey)` or explicit `LegacyUnknownTid(u32)` compatibility owner. It preserves multiple frames, global wait-ID order and existing subscriptions/selection/unsigned deadline behavior; wait IDs are locators, not a second authority.
 - [UnicornMips](../../src/emulator/unicorn.rs) owns numerous pending return, blocked wait/GetMessage/modal/send/clipboard, suspended context and parked process records. SuspendedGuestThread slot/queue often contains **ready displaced contexts**, not explicit SuspendThread state.
 - Persistent process engines are an experiment (ledger E-2) deferred to Stage 8; Task migration proceeds on the fresh-engine lifetime ([D-003](../DECISIONS.md)). Exact-scalar-key native snapshots are an initial migration, not full per-task native contexts.
 
-### Next bounded wait-owner gate (design, not implemented)
+### Bounded exact-birth wait-owner gate (source-tested)
 
-Re-key the one authoritative `TaskWaitStore` from numeric TID to
-`Birth(ThreadBirthKey) | LegacyUnknownTid(u32)`; the wait-ID map remains only a
-locator. The wait record's TID must equal its birth's TID. Preserve global
-wait-ID order, duplicate frames, deadlines and independent mutable clones.
-Known-birth exit cancellation uses the exact birth bucket; an unknown legacy
-wait is never promoted to a later task that reuses its TID.
-Only explicit legacy fixture/compatibility entries may construct
-`LegacyUnknownTid`; production producers require a verified live birth and
-must not publish unknown. Before re-keying, audit every non-test compatibility
-caller and move all 20 native opaque registrations to one fallible production
-API that accepts a captured `ThreadBirthKey` and revalidates it at insertion.
-Popup menu, clipboard render and receiver-context SendMessage first need a
-native-birth preflight before they mutate state. An unavailable/stale birth or
-late publish rejection is a terminal backend failure, never a guest timeout or
-wait failure; already-created sends require exact-ID rollback. Unknown records
-retire by exact wait ID or explicit legacy cleanup, not canonical task exit;
-a no-leak control must end with an empty store. Shrink the compatibility lane
-through the 41-call legacy test migration. Numeric message hints remain open.
-
-`PreparedTaskWait` must revalidate its captured live birth immediately before
-publication; stale publication fails without a record or wake index and its
-guard releases each acquired target pin. The seven native single/multiple/
-MsgWait publish sites preflight before old-state mutation and propagate an
-unexpected late failure as a terminal backend error, not guest `WAIT_FAILED`
-or a fabricated resume. Remove the broad numeric-TID sweep after modal
-process completion; exact process/thread exit and the modal wait ID already
-retire its owned waits. Modal-button GetMessage cancellation must select the
-requested dialog HWND (or exact modal wait ID), check its exact live birth,
-and match each cancelled wait's owner birth (unknown-only fixture compatibility).
-Opaque producers migrate their scheduler registrations in this gate; their
-native continuation payloads remain a separate birth-authority boundary.
-
-Expected-red controls: prepared A→exit/TID-reused B→publish, unknown-A versus
-B exit then explicit no-leak cleanup, exact A cancellation with duplicate pins/pending wake,
-modal completion and modal-button cancellation preserving B, opaque producer
-birth rejection/rollback, and a native late-publication terminal error.
-Preserve order/clone/deadline controls. Production MessageBox currently
-returns synchronously on first entry, so modal fixture controls do not prove
-a live modal continuation.
-Numeric-TID message queues remain derived wake hints: B's edge can still queue
-A or unknown, though native consumption has separate exact-birth guards.
-Same-TID GetMessage wake/delivery needs a later GWE producer-birth migration;
-this slice does not claim it. Wait-ID wrap/reuse, checkpoint relineage and full
-O-T1/O-T3 TaskDirectory/frame decisions remain open. Review this connected
-contract before source edits; do not add a second registry or engine policy.
+One `TaskWaitStore` keys `Birth(ThreadBirthKey) | LegacyUnknownTid(u32)`; unknown is explicit fixture/compatibility ownership and wait IDs are only locators.
+Production opaque/prepared publication checks captured live birth and rejects late failure as terminal `Backend`; exact exit and dialog-HWND cleanup preserve waits owned by a reused TID.
+Controls include `scheduler_cancels_only_exact_birth_and_keeps_legacy_unknown_separate`, `prepared_wait_rejects_reused_owner_birth_and_releases_duplicate_pins`, and `opaque_wait_late_birth_rejection_is_terminal_without_guest_return_or_b_wait`; [receipt](../../evidence/stage3-wait-owner-20261015/validation.receipt.md): a02 release 1,947/0/9, no-feature 1,414/0/3; failed a01 retained.
+No live-app acceptance: numeric GWE wake hints, native continuation payloads/pins, wait-ID wrap/reuse, checkpoint relineage, live modal behavior and full O-T1/O-T3 TaskDirectory/frame decisions remain open.
 
 ## Target ownership and state
 
