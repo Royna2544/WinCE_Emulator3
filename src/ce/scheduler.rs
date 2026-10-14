@@ -592,6 +592,28 @@ impl Scheduler {
         queued
     }
 
+    /// Thread-directed input is owned by one incarnation. The numeric index
+    /// remains a lookup hint; it cannot authorize waking a reused TID's old
+    /// wait or an explicit legacy-unknown fixture wait.
+    pub fn queue_message_wake_candidates_for_birth(
+        &mut self,
+        owner_birth: ThreadBirthKey,
+    ) -> usize {
+        self.stats.message_input_signal_count += 1;
+        let wait_ids = self
+            .message_waiter_ids_for_thread(owner_birth.thread_id())
+            .into_iter()
+            .filter(|id| {
+                self.blocked_waits
+                    .get(id)
+                    .is_some_and(|wait| wait.owner_birth == Some(owner_birth))
+            })
+            .collect::<Vec<_>>();
+        let queued = self.enqueue_pending_wake_ids(wait_ids);
+        self.stats.message_input_wake_candidate_count += queued as u64;
+        queued
+    }
+
     pub fn queue_serial_read_wake_candidates(&mut self, handle: u32) -> usize {
         self.stats.serial_read_signal_count += 1;
         let wait_ids = self.serial_read_waiter_ids_for_handle(handle);
@@ -636,6 +658,26 @@ impl Scheduler {
         &self,
         active_thread_id: u32,
         now_ms: u32,
+        is_ready: impl FnMut(&SchedulerBlockedWait) -> bool,
+        thread_priority: impl FnMut(u32) -> i32,
+    ) -> Option<u64> {
+        self.select_ready_blocked_wait_id_with_eligibility(
+            active_thread_id,
+            now_ms,
+            |_| true,
+            is_ready,
+            thread_priority,
+        )
+    }
+
+    /// Check task ownership before either input readiness or timeout can
+    /// select a wait. A readiness-only guard cannot exclude an expired stale
+    /// wait because timeout is an independent selection reason.
+    pub fn select_ready_blocked_wait_id_with_eligibility(
+        &self,
+        active_thread_id: u32,
+        now_ms: u32,
+        mut is_eligible: impl FnMut(&SchedulerBlockedWait) -> bool,
         mut is_ready: impl FnMut(&SchedulerBlockedWait) -> bool,
         mut thread_priority: impl FnMut(u32) -> i32,
     ) -> Option<u64> {
@@ -645,6 +687,7 @@ impl Scheduler {
             .filter_map(|wait_id| self.blocked_waits.get(wait_id))
             .filter(|wait| {
                 wait.thread_id != active_thread_id
+                    && is_eligible(wait)
                     && (is_ready(wait) || blocked_wait_timed_out(wait, now_ms))
             })
             .min_by_key(|wait| (thread_priority(wait.thread_id), wait.sequence))
@@ -657,6 +700,7 @@ impl Scheduler {
             .values()
             .filter(|wait| {
                 wait.thread_id != active_thread_id
+                    && is_eligible(wait)
                     && (is_ready(wait) || blocked_wait_timed_out(wait, now_ms))
             })
             .min_by_key(|wait| (thread_priority(wait.thread_id), wait.sequence))
@@ -737,6 +781,52 @@ mod tests {
         assert_eq!(scheduler.blocked_wait(legacy).unwrap().owner_birth, None);
         assert_eq!(scheduler.waiter_ids_for_birth(birth), [exact]);
         assert_eq!(scheduler.waiter_ids_for_thread(birth.thread_id()), [legacy]);
+    }
+
+    #[test]
+    fn thread_directed_message_wakes_only_its_exact_birth() {
+        let (old, new) = reused_thread_births(7);
+        let mut scheduler = Scheduler::default();
+        let old_id = register_birth_wait(
+            &mut scheduler,
+            old,
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+        );
+        let new_id = register_birth_wait(
+            &mut scheduler,
+            new,
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+        );
+        let unknown_id = scheduler.register_legacy_blocked_wait_with_keys_and_pins(
+            7,
+            0,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            100,
+            25,
+        );
+
+        assert_eq!(scheduler.queue_message_wake_candidates_for_birth(new), 1);
+        assert_eq!(
+            scheduler.pending_wake_ids.iter().copied().collect::<Vec<_>>(),
+            [new_id]
+        );
+        assert_eq!(scheduler.blocked_wait(old_id).unwrap().owner_birth, Some(old));
+        assert_eq!(scheduler.blocked_wait(unknown_id).unwrap().owner_birth, None);
     }
 
     #[test]
