@@ -187,8 +187,14 @@ close only their named gates, not Stage 2 or live acceptance.
   scheduler/native pair before result consumption, and stamps a verified birth
   on normal resume. The gate seals the tested Git HEAD plus binary patch and
   passed full release 1,916/0/9 ignored and no-feature 1,395/0/3 ignored
-  tests. Ordinary `BlockedSendMessageTimeout`, receiver-side delivery, and
-  standalone `ExitThread` cleanup of queued sends remain separate.
+  tests. The separate bounded
+  [kernel sender-exit source gate](../evidence/stage3-send-exit-20261015/validation.receipt.md)
+  removes exact-birth queued sends and detaches active sends on the first
+  successful live thread exit, preserving other senders' queued work. Its
+  tested HEAD plus patch passed full release 1,920/0/9 ignored and no-feature
+  1,399/0/3 ignored tests. Native `ExitThread` callout/return-stub birth checks,
+  ordinary `BlockedSendMessageTimeout`, receiver-side delivery and broader GWE
+  lifecycle remain separate.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE

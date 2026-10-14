@@ -170,12 +170,16 @@ polling or wait publication and before paired wake/timeout completion. The
 bounded [parked SendMessage gate](evidence/stage3-send-birth-20261015/validation.receipt.md)
 checks native sender birth before queueing and the exact scheduler/native pair
 before result consumption or register restoration; its tested source is sealed
-by a Git HEAD and binary patch. Raw synchronous/nonblocking/overlapped serial
-paths, raw queue/socket and MsgWait fallbacks, aliasless Sleep-suspend,
-`BlockedSendMessageTimeout`, standalone `ExitThread` queued-send cleanup, and
-other parked-wait families remain open. These slices do not complete the
-machine-owned Task/continuation/scheduler core, Stage 3, or live-app
-acceptance. See `PROGRESS.md` and `docs/PLAN.md` for current gates.
+by a Git HEAD and binary patch. The separate bounded
+[kernel sender-exit gate](evidence/stage3-send-exit-20261015/validation.receipt.md)
+removes queued sends for an exact verified exiting birth and detaches active
+sends on its first successful live exit. Raw synchronous/nonblocking/overlapped
+serial paths, raw queue/socket and MsgWait fallbacks, aliasless Sleep-suspend,
+native `ExitThread` callout/return-stub birth checks, `BlockedSendMessageTimeout`,
+receiver-side delivery, and other parked-wait families remain open. These
+slices do not complete the machine-owned Task/continuation/scheduler core,
+Stage 3, or live-app acceptance. See `PROGRESS.md` and `docs/PLAN.md` for
+current gates.
 
 The scheduler, message delivery, and CPU slicing are the weak spine. Measured
 facts an agent must not re-derive or contradict (numbers and run conditions in
