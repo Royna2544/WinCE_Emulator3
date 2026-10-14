@@ -33954,6 +33954,7 @@ mod guest_thread_stack_tests {
             signaled: false,
         });
         let owner = kernel.current_process_birth_key().expect("fixture birth");
+        let _fixed_heap = canonical_heap_test_mapping(&mut kernel)?;
         let heap = kernel.memory.get_process_heap();
         kernel.memory.heap_alloc(owner, heap, 0, 0x1000).unwrap();
         let receiver = if orphan { 1 } else { 4 };
@@ -34159,6 +34160,7 @@ mod guest_thread_stack_tests {
     fn direct_visible_message_payload_windowpos_matches_raw_and_mips_reads() -> Result<()> {
         for orphan in [false, true] {
             let (mut kernel, mut cpu, receiver, message) = direct_payload_fixture(orphan, 0xff0)?;
+            let blob_count = cpu.mapped_blobs.len();
             let expected = raw_get_peek_payload_bytes(&kernel, receiver, &message, 28)?;
             kernel.threads.set_last_error(receiver, 0x7755);
             assert!(prepare_direct_payload(&mut cpu, &mut kernel, orphan));
@@ -34185,7 +34187,12 @@ mod guest_thread_stack_tests {
                     )
                     .is_none()
             );
-            assert!(cpu.mapped_blobs.is_empty());
+            assert_eq!(cpu.mapped_blobs.len(), blob_count);
+            assert!(
+                cpu.mapped_blobs
+                    .iter()
+                    .all(|blob| !blob.name.starts_with("ram:"))
+            );
             assert_eq!(
                 mips_read_direct_payload(&cpu, &kernel, &[0x8ce2_0008, 0x8ce3_0010, 0x8ce8_0018])?,
                 (
@@ -35250,7 +35257,9 @@ mod guest_thread_stack_tests {
         );
         assert_eq!(
             kernel.memory.private_commit_available_bytes(),
-            budget_before - u64::from(THIRTY_TWO_MIB)
+            budget_before
+                .checked_sub(u64::from(THIRTY_TWO_MIB))
+                .expect("budget covers growth")
         );
         assert!(
             blobs.is_empty(),
