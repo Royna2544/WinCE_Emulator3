@@ -17,43 +17,43 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 - Current layout contains CE5-style addresses although the target is CE6. A loader
   address choice is implementation evidence, not a normative CE6 memory-layout contract.
 
-## Stage 2 slice: sealed main-EXE image runs (synthetic gate passed)
+## Stage 2 slice: sealed main-EXE image runs (final-byte gate under validation)
 
 The main EXE now takes a connected loader-to-native path, not just a page
 selector. After main imports and MIPS trampolines are patched,
 `final_main_image_runs` in [pe_loader.rs](../../src/emulator/pe_loader.rs)
-compares against the original mapped image, excludes all changed pages and
-patch ranges, then consumes the final Vec into page-aligned `MappedBlob` runs.
-`eligible_immutable_image_pages` chooses only complete pages inside one
-readable, non-writable section; headers, mixed/partial pages and IAT/data or
-trampoline changes stay copy-backed. Adjacent eligible pages with the same R
-or RX guest protection become one sealed run. This first slice covers the main
-EXE only: preloaded and runtime DLLs, trap pages, mutable image pages, heap and
-stack remain copy-backed. The fallback image runs remain RWX, so this change
-does not assert a complete PE protection model.
+consumes those **final** bytes into page-aligned `MappedBlob` runs. One-time
+loader branch rewrites are sealed as executable bytes; they are not future
+writes. `eligible_immutable_image_pages` chooses only complete pages inside
+one readable, non-writable section; headers, mixed/partial pages and IAT thunk
+pages stay copy-backed. Trampoline stub tails beyond `SizeOfImage` are not
+eligible. Adjacent eligible pages with the same R or RX guest protection
+become one sealed run. This slice covers the main EXE only: preloaded and
+runtime DLLs, trap pages, mutable image pages, heap and stack remain
+copy-backed. The fallback image runs remain RWX, so this change does not
+assert a complete PE protection model.
 
 `SealedImageBytes` and `BlobBytes` in
 [pe_loader.rs](../../src/emulator/pe_loader.rs) retain one aligned host-RW
 allocation per sealed run with no Rust mutable accessor. The original mapped
-image is a temporary comparison witness, not retained beside the final runs.
-It does, however, coexist transiently with the patched image; partitioning
-also allocates sealed runs while consuming that image. Peak loader memory
-therefore still needs direct measurement. Unicorn requires the host pointer to
-remain writable (`vendor/unicorn-engine-sys/include/unicorn/unicorn.h:1162-1164`);
+image used for occupancy planning is dropped before the final patched image
+is built; partitioning allocates sealed runs while consuming that final image.
+Peak loader memory still needs direct measurement. Unicorn requires the host
+pointer to remain writable (`vendor/unicorn-engine-sys/include/unicorn/unicorn.h:1162-1164`);
 only the guest mapping is R or RX. Host `uc_mem_write` can bypass guest
 protection (`vendor/unicorn-engine-sys/uc.c:965-993`), so complete host-write
 guard coverage remains a separate acceptance check.
 
 | Path | Current source behavior and remaining gate |
 | --- | --- |
-| Final patch and publication ([pe_loader.rs](../../src/emulator/pe_loader.rs): `load_pe_image_with_dlls`, `final_main_image_runs`, `partition_main_image_runs`) | A changed byte disqualifies its whole page; sealed and mutable runs replace the retained full-image blob. Section selection is by flags, not names. |
+| Final patch and publication ([pe_loader.rs](../../src/emulator/pe_loader.rs): `load_pe_image_with_dlls`, `final_main_image_runs`, `partition_main_image_runs`) | Final loader-patched branch bytes may be sealed. IAT thunk pages remain mutable; sealed and mutable runs replace the retained full-image blob. Section selection is by flags, not names. |
 | Fresh/reused native owner ([unicorn.rs](../../src/emulator/unicorn.rs): `expected_sealed_image_runs`, `reconcile_persistent_native_memory_with_private`, `map_sealed_image_runs`; [native_engine.rs](../../src/emulator/native_engine.rs): `NativeMappingPins::pin_image`) | Exact process birth, image generation, base, extent, host pointer and permissions are recorded. Fresh owners pin before one `mem_map_ptr` per run; reused owners reject ledger/pin/protection drift. Reconciliation excludes sealed pages from ordinary `mem_map`. Native close/pin failure gates still require validation. |
 | Copy-in and readback ([unicorn.rs](../../src/emulator/unicorn.rs): `sync_persisted_blobs_to_native`, `sync_mapped_blobs_from_unicorn`) | Both skip sealed runs; mutable blobs still take checked copy/readback paths. The synthetic gate must verify bytes and actual call counts, not infer savings from logical `blob_mb`. |
 | Host writes and VM views ([unicorn.rs](../../src/emulator/unicorn.rs): `SealedHostWriteGuard`, `UnicornGuestMemory`, `sync_file_mapping_views_to_unicorn_guarded`) | Guarded writes reject sealed-range overlap, but the full set of direct and callback write sites is under audit. Do not treat guest RX alone as host-write protection. |
 | Code readers and clone ([unicorn.rs](../../src/emulator/unicorn.rs): `MappedCodeIndex`, `cached_fast_start_indirect_transfer_sites`; [pe_loader.rs](../../src/emulator/pe_loader.rs): `BlobBytes::clone`) | Code readers use run pointers and the indirect-site cache includes sealed generation; clones share sealed `Rc` storage while Owned runs clone independently. Cross-run reads and generation churn remain regression gates. |
 | Checkpoint ([main.rs](../../src/main.rs): `try_monitor_checkpoint_save`, `try_monitor_checkpoint_restore`) | Monitor save/restore explicitly returns `Unsupported` for sealed images until machine-memory restoration is proven. CPU-only native Context remains the precondition; memory-mode native snapshots need a separate identity/COW gate. |
 
-The synthetic `sealed_main_image_*` tests in
+The first synthetic `sealed_main_image_*` tests in
 [unicorn.rs](../../src/emulator/unicorn.rs) now pass with production loader
 selection, native pointer mapping, two owners, guest `WRITE_PROT`, a bounded
 real MIPS slice and 200 fresh pin cycles. The focused
@@ -61,8 +61,9 @@ real MIPS slice and 200 fresh pin cycles. The focused
 records 2 passed / 0 failed with the two profiles ignored by default; full
 [Unicorn](../../evidence/sealed-main-image-20261014/test-full-unicorn-workspace-attempt-01.raw.log)
 and [no-feature](../../evidence/sealed-main-image-20261014/test-full-no-feature-workspace-attempt-01.raw.log)
-workspace runs also passed. This is a synthetic source gate, not an iNavi app
-or writable-mount run.
+workspace runs also passed on that earlier source. The changed-page policy was
+subsequently revised to seal final loader bytes, so these prior suites are not
+final-source signoff. None of this is an iNavi app or writable-mount run.
 
 The two opt-in 56-MiB profiles use the same sparse synthetic PE and production
 loader/native setup. Only the section write bit differs: RX selects sealed
@@ -87,20 +88,34 @@ These are sampled maxima, not kernel-maintained peaks, release-build results
 or iNavi measurements.
 
 A read-only production-loader pass over the actual iNavi EXE and seven DLLs
-selected only 155 sealed pages of 2,168 total image pages (155 of 1,379
-non-writable-section pages), or 0.605469 MiB
-([coverage log](../../evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-02.raw.log)).
-The final-byte comparison excluded 1,224 changed candidate pages; no
-unchanged eligible page was excluded. The 0.605469 MiB is only about 1.1% of
-the older E38 PID-1 55.8-MiB logical `blob_mb` figure, an upper-bound
-comparison across different evidence, **not** an observed app memory or speed
-gain. The change also does not justify relaxing changed-page exclusion.
+now seals **1,379 of 2,168** total image pages, all **1,379 of 1,379**
+non-writable-section candidates: **5,648,384 B (5.386719 MiB)**
+([opt-in coverage and blob log](../../evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-06.raw.log)).
+Of those sealed pages, **1,224** contain final bytes changed by loader
+patching; the other 155 match the original mapping. The earlier 155-page,
+0.605469-MiB [result](../../evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-02.raw.log)
+is historical evidence for the superseded byte-equality filter, not current
+coverage. The probe constructed only an owner-side
+memory/blob plan; it did not create a native CPU, execute guest instructions,
+or launch iNavi.
+
+The same load-only probe accounts for one initial owner's **26 mapped blobs,
+36,679,680 B (34.980469 MiB)**. That includes the 16-MiB `ram:ce-heap-arena`
+and 4-MiB `ram:guest-stack` backing, seven preloaded DLL images and their
+trampolines, the main image runs, and small trap/KData blobs. The main image
+has 13,344,768 B of retained runs, including the 5,648,384 B sealed above.
+Initial `ram:heap-spillover` is zero; later spillover and runtime-loaded DLLs
+cannot be inferred without guest execution. E-38's PID-1 mean `blob_mb` of
+55.78 MiB is an older live profile of integer-truncated per-slice totals,
+not an exact byte census or a matched performance comparison. No app memory,
+setup-time, or frame-rate improvement is claimed from this load-only result.
 
 ROM/XIP physical-budget treatment and `GlobalMemoryStatus` accounting are
 undecided. A guest protection fault is still a native error, not a CE access
 violation. Dynamic DLLs, writable image/heap pages, CE exception translation,
-full host-write coverage and matched iNavi boot/frame timing remain open;
-another writable-mount iNavi run requires fresh approval and adjacent backups.
+direct native-write guard coverage and matched iNavi boot/frame timing remain
+open; another writable-mount iNavi run requires fresh approval and adjacent
+backups.
 
 ## Target transaction and owner
 
