@@ -1214,6 +1214,92 @@ impl MappedCodeBlobRef {
     }
 }
 
+/// Host writes are not constrained by Unicorn's guest R/RX permissions. Keep
+/// the published sealed image ranges separate from the writable blob paths,
+/// and reject a complete write before Unicorn can change any shared byte.
+#[cfg(feature = "unicorn")]
+#[derive(Clone, Default)]
+struct SealedHostWriteGuard {
+    /// Sorted, disjoint guest half-open ranges for this module generation.
+    ranges: Rc<Vec<(u64, u64)>>,
+    /// A callback may discard a write error. Such a violation still poisons
+    /// the native attempt so it cannot be reported as a successful slice.
+    violation: Rc<RefCell<Option<String>>>,
+}
+
+#[cfg(feature = "unicorn")]
+impl SealedHostWriteGuard {
+    fn from_mapped_blobs(blobs: &[MappedBlob]) -> Result<Self> {
+        let mut ranges = Vec::new();
+        for blob in blobs {
+            if blob.bytes.sealed_pin().is_none() {
+                continue;
+            }
+            let end = u64::from(blob.base)
+                .checked_add(blob.bytes.len() as u64)
+                .filter(|end| *end <= u64::from(u32::MAX) + 1)
+                .ok_or_else(|| Error::InvalidArgument("sealed image range wraps VA".to_owned()))?;
+            if end != u64::from(blob.base) {
+                ranges.push((u64::from(blob.base), end));
+            }
+        }
+        ranges.sort_unstable();
+        for pair in ranges.windows(2) {
+            if pair[0].1 > pair[1].0 {
+                return Err(Error::Backend(
+                    "overlapping sealed image ranges in native owner".to_owned(),
+                ));
+            }
+        }
+        Ok(Self {
+            ranges: Rc::new(ranges),
+            violation: Rc::new(RefCell::new(None)),
+        })
+    }
+
+    fn check_write(&self, address: u64, len: usize) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+        let end = address
+            .checked_add(u64::try_from(len).map_err(|_| {
+                Error::InvalidArgument("host write length overflows VA".to_owned())
+            })?)
+            .filter(|end| *end <= u64::from(u32::MAX) + 1)
+            .ok_or_else(|| Error::InvalidArgument("host write wraps guest VA".to_owned()))?;
+        let index = self.ranges.partition_point(|(_, range_end)| *range_end <= address);
+        if let Some(&(sealed_start, sealed_end)) = self.ranges.get(index)
+            && sealed_start < end
+        {
+            let message = format!(
+                "host write 0x{address:08x}..0x{end:08x} overlaps sealed image 0x{sealed_start:08x}..0x{sealed_end:08x}"
+            );
+            self.violation.borrow_mut().get_or_insert_with(|| message.clone());
+            return Err(Error::Backend(message));
+        }
+        Ok(())
+    }
+
+    fn poison_error(&self) -> Option<Error> {
+        self.violation
+            .borrow()
+            .as_ref()
+            .map(|message| Error::Backend(message.clone()))
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn checked_host_write<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    guard: &SealedHostWriteGuard,
+    address: u64,
+    bytes: &[u8],
+) -> Result<()> {
+    guard.check_write(address, bytes.len())?;
+    uc.mem_write(address, bytes)
+        .map_err(|err| Error::Backend(format!("native host write 0x{address:08x}: {err:?}")))
+}
+
 #[cfg(feature = "unicorn")]
 fn mapped_blob_is_static_code(blob: &MappedBlob) -> bool {
     blob.name.starts_with("image:")
@@ -6383,8 +6469,18 @@ impl UnicornMips {
         // Capture once, before any import can create the first public slab.
         // A later selected-PID change must not retarget this native attempt.
         let native_owner_birth = kernel.current_process_birth_key();
-        let diagnostic_private =
-            native_owner_birth.is_some() || kernel.memory.has_stable_private_slabs();
+        let has_sealed_image = self
+            .mapped_blobs
+            .iter()
+            .any(|blob| blob.bytes.sealed_pin().is_some());
+        let diagnostic_private = native_owner_birth.is_some()
+            || kernel.memory.has_stable_private_slabs()
+            || has_sealed_image;
+        if has_sealed_image && native_owner_birth.is_none() {
+            return Err(Error::Backend(
+                "sealed main image has no live process birth".to_owned(),
+            ));
+        }
         if kernel.memory.has_stable_private_slabs() && native_owner_birth.is_none() {
             return Err(Error::Backend(format!(
                 "private slab native attempt has no live process birth for pid {native_owner_pid}"
@@ -6409,10 +6505,26 @@ impl UnicornMips {
             .map_err(|err| Error::Backend(format!("lease process CPU engine: {err:?}")))?;
         let native_engine_reused = uc.reused();
         let native_mapping_pins = uc.mapping_pins();
-        let mut persisted_kernel_mappings = uc
-            .take_metadata()
+        let prior_mapping_metadata = uc.take_metadata();
+        if native_engine_reused && prior_mapping_metadata.is_none() {
+            return Err(Error::Backend(
+                "reused native owner has no mapping ledger".to_owned(),
+            ));
+        }
+        let mut persisted_kernel_mappings = prior_mapping_metadata
             .unwrap_or_else(|| KernelMemoryMappings::new(&self.mapped_blobs));
         let setup_result = (|| -> Result<u64> {
+            let expected_image_runs = expected_sealed_image_runs(
+                &self.mapped_blobs,
+                &self.memory,
+                native_owner_birth,
+            )?;
+            if native_engine_reused && (persisted_kernel_mappings.sealed_image_runs != expected_image_runs
+                || native_mapping_pins.image_len() != expected_image_runs.len()) {
+                return Err(Error::Backend(
+                    "reused native owner has a different sealed-image lineage".to_owned(),
+                ));
+            }
             reclaim_stale_virtual_memory_pages(
                 &mut uc,
                 kernel,
@@ -6439,6 +6551,14 @@ impl UnicornMips {
                 &self.mapped_blobs,
                 &persisted_kernel_mappings.virtual_pages,
                 &persisted_kernel_mappings.private_pages,
+                &expected_image_runs,
+            )?;
+            map_sealed_image_runs(
+                &mut uc,
+                &self.mapped_blobs,
+                &mut persisted_kernel_mappings,
+                &expected_image_runs,
+                &native_mapping_pins,
             )?;
             if let Some(owner) = native_owner_birth {
                 map_private_slab_pages(
@@ -13626,6 +13746,16 @@ struct NativePrivatePageRecord {
 }
 
 #[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeSealedImageRunRecord {
+    owner: crate::ce::object::ProcessBirthKey,
+    base: u32,
+    len: u32,
+    host_address: usize,
+    perms: u32,
+}
+
+#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone)]
 struct KernelMemoryMappings {
     ranges: Vec<(u32, u32)>,
@@ -13633,6 +13763,7 @@ struct KernelMemoryMappings {
     // Observed pointer mappings only. The native lease separately retains
     // strong page pins before FFI and across all metadata transfers.
     private_pages: BTreeMap<u32, NativePrivatePageRecord>,
+    sealed_image_runs: BTreeMap<u32, NativeSealedImageRunRecord>,
     heap_spill_cursor: u32,
     heap_generation: u64,
     virtual_generation: u64,
@@ -13667,11 +13798,134 @@ impl KernelMemoryMappings {
             ranges,
             virtual_pages: HashSet::new(),
             private_pages: BTreeMap::new(),
+            sealed_image_runs: BTreeMap::new(),
             heap_spill_cursor,
             heap_generation: u64::MAX,
             virtual_generation: u64::MAX,
         }
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn expected_sealed_image_runs(
+    blobs: &[MappedBlob],
+    memory: &MemoryMap,
+    owner: Option<crate::ce::object::ProcessBirthKey>,
+) -> Result<BTreeMap<u32, NativeSealedImageRunRecord>> {
+    let mut runs = BTreeMap::new();
+    for blob in blobs {
+        let Some(backing) = blob.bytes.sealed_pin() else {
+            continue;
+        };
+        let owner = owner.ok_or_else(|| {
+            Error::Backend("sealed main image has no process birth".to_owned())
+        })?;
+        let len = u32::try_from(backing.len())
+            .map_err(|_| Error::Backend("sealed image run exceeds u32".to_owned()))?;
+        if !blob.name.starts_with("image:")
+            || len == 0
+            || blob.base & 0xfff != 0
+            || len & 0xfff != 0
+            || backing.as_ptr() as usize & 0xfff != 0
+            || blob.bytes.len() != backing.len()
+        {
+            return Err(Error::Backend(format!(
+                "invalid sealed image run at 0x{:08x}", blob.base
+            )));
+        }
+        let region = memory.region_containing(blob.base).ok_or_else(|| {
+            Error::Backend(format!("sealed image run 0x{:08x} has no memory region", blob.base))
+        })?;
+        if !memory.contains_range(blob.base, len)
+            || !region.perms.contains(MemoryPerms::READ)
+            || region.perms.contains(MemoryPerms::WRITE)
+        {
+            return Err(Error::Backend(format!(
+                "sealed image run 0x{:08x} is not wholly guest read-only",
+                blob.base
+            )));
+        }
+        let record = NativeSealedImageRunRecord {
+            owner,
+            base: blob.base,
+            len,
+            host_address: backing.as_ptr() as usize,
+            perms: unicorn_perms(region.perms).0 as u32,
+        };
+        if runs.insert(blob.base, record).is_some() {
+            return Err(Error::Backend(format!(
+                "duplicate sealed image run at 0x{:08x}", blob.base
+            )));
+        }
+    }
+    Ok(runs)
+}
+
+#[cfg(feature = "unicorn")]
+fn map_sealed_image_runs<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    blobs: &[MappedBlob],
+    mapped: &mut KernelMemoryMappings,
+    expected: &BTreeMap<u32, NativeSealedImageRunRecord>,
+    native_pins: &NativeMappingPins,
+) -> Result<()> {
+    for blob in blobs {
+        let Some(backing) = blob.bytes.sealed_pin() else {
+            continue;
+        };
+        let record = *expected.get(&blob.base).ok_or_else(|| {
+            Error::Backend(format!("sealed image run 0x{:08x} lost its identity", blob.base))
+        })?;
+        if let Some(existing) = mapped.sealed_image_runs.get(&blob.base) {
+            if *existing != record
+                || !native_pins.has_image(record.base, record.host_address, record.len)
+            {
+                return Err(Error::Backend(format!(
+                    "sealed image run 0x{:08x} differs from native owner ledger",
+                    blob.base
+                )));
+            }
+            for page in (blob.base..blob.base + record.len).step_by(0x1000) {
+                if native_page_perms(uc, page)? != Some(record.perms) {
+                    return Err(Error::Backend(format!(
+                        "sealed image page 0x{page:08x} changed native protection"
+                    )));
+                }
+            }
+            continue;
+        }
+        for page in (blob.base..blob.base + record.len).step_by(0x1000) {
+            if native_page_perms(uc, page)?.is_some() || is_guest_page_mapped(mapped, page) {
+                return Err(Error::Backend(format!(
+                    "sealed image page 0x{page:08x} collides with an unowned mapping"
+                )));
+            }
+        }
+        if !native_pins.pin_image(record.base, record.host_address, record.len, backing.clone()) {
+            return Err(Error::Backend(format!(
+                "sealed image run 0x{:08x} already has a native pin", blob.base
+            )));
+        }
+        // SAFETY: backing is host-RW, page-aligned and retained by this exact
+        // native owner before its pointer enters Unicorn. Rust exposes it as
+        // immutable; guest permissions are R/RX only.
+        unsafe {
+            uc.mem_map_ptr(
+                u64::from(record.base),
+                u64::from(record.len),
+                unicorn_perms(MemoryPerms::from_bits_truncate(record.perms as u8)),
+                backing.as_ptr(),
+            )
+        }
+        .map_err(|err| {
+            Error::Backend(format!(
+                "pointer-map sealed image run 0x{:08x}: {err:?}", blob.base
+            ))
+        })?;
+        mapped.sealed_image_runs.insert(blob.base, record);
+        mapped.ranges.push((blob.base, record.len));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "unicorn")]
@@ -32021,6 +32275,7 @@ fn prepare_native_message_pointer_payload<D>(
             heap_mapping: Some(mapping),
             private_vm_mapping: None,
             private_vm_applied_generation: None,
+            sealed_host_write_guard: SealedHostWriteGuard::default(),
             #[cfg(test)]
             fail_next_private_unmap_for_test: false,
         };
@@ -50141,6 +50396,7 @@ struct UnicornGuestMemory<'a, 'uc, D> {
     heap_mapping: Option<UnicornHeapMapping<'a>>,
     private_vm_mapping: Option<UnicornPrivateVmMapping<'a>>,
     private_vm_applied_generation: Option<u64>,
+    sealed_host_write_guard: SealedHostWriteGuard,
     #[cfg(test)]
     fail_next_private_unmap_for_test: bool,
 }
@@ -50170,6 +50426,7 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
             heap_mapping: None,
             private_vm_mapping: None,
             private_vm_applied_generation: None,
+            sealed_host_write_guard: SealedHostWriteGuard::default(),
             #[cfg(test)]
             fail_next_private_unmap_for_test: false,
         }
@@ -50188,6 +50445,7 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
             }),
             private_vm_mapping: None,
             private_vm_applied_generation: None,
+            sealed_host_write_guard: SealedHostWriteGuard::default(),
             #[cfg(test)]
             fail_next_private_unmap_for_test: false,
         }
@@ -50195,6 +50453,11 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
 
     fn with_private_vm_mapping(mut self, mapping: UnicornPrivateVmMapping<'a>) -> Self {
         self.private_vm_mapping = Some(mapping);
+        self
+    }
+
+    fn with_sealed_host_write_guard(mut self, guard: &SealedHostWriteGuard) -> Self {
+        self.sealed_host_write_guard = guard.clone();
         self
     }
 

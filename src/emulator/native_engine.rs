@@ -59,10 +59,17 @@ struct NativeSlot<K, P> {
 struct NativePinSet {
     generic: Vec<Rc<dyn Any>>,
     private_pages: BTreeMap<PrivatePageIdentity, PrivateNativePin>,
+    image_runs: BTreeMap<u32, ImageNativePin>,
 }
 
 struct PrivateNativePin {
     host_address: usize,
+    _backing: Rc<dyn Any>,
+}
+
+struct ImageNativePin {
+    host_address: usize,
+    len: u32,
     _backing: Rc<dyn Any>,
 }
 
@@ -112,9 +119,59 @@ impl NativeMappingPins {
         pins.private_pages.remove(&identity).is_some()
     }
 
+    /// Retain one exact sealed image run before its pointer enters Unicorn.
+    /// Reused owners validate this same pointer and extent against their
+    /// mapping ledger; a pin is retired only after a checked native unmap.
+    pub(crate) fn pin_image<T: 'static>(
+        &self,
+        base: u32,
+        host_address: usize,
+        len: u32,
+        backing: T,
+    ) -> bool {
+        let mut pins = self.0.borrow_mut();
+        if pins.image_runs.contains_key(&base) {
+            return false;
+        }
+        pins.image_runs.insert(
+            base,
+            ImageNativePin {
+                host_address,
+                len,
+                _backing: Rc::new(backing),
+            },
+        );
+        true
+    }
+
+    pub(crate) fn has_image(&self, base: u32, host_address: usize, len: u32) -> bool {
+        self.0.borrow().image_runs.get(&base).is_some_and(|pin| {
+            pin.host_address == host_address && pin.len == len
+        })
+    }
+
+    pub(crate) fn image_len(&self) -> usize {
+        self.0.borrow().image_runs.len()
+    }
+
+    pub(crate) fn release_image_after_unmap(
+        &self,
+        base: u32,
+        expected_host_address: usize,
+        expected_len: u32,
+    ) -> bool {
+        let mut pins = self.0.borrow_mut();
+        if !pins.image_runs.get(&base).is_some_and(|pin| {
+            pin.host_address == expected_host_address && pin.len == expected_len
+        }) {
+            return false;
+        }
+        pins.image_runs.remove(&base).is_some()
+    }
+
     pub(crate) fn len(&self) -> usize {
         let pins = self.0.borrow();
-        pins.generic.len() + pins.private_pages.len()
+        pins.generic.len() + pins.private_pages.len() + pins.image_runs.len()
     }
 
     pub(crate) fn private_len(&self) -> usize {
