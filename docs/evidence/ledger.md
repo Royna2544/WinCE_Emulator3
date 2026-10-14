@@ -1358,6 +1358,24 @@ The same broad source includes four passing public `GlobalMemoryStatus` tests,
 but that change has a separate gate. The [E-20 native receipt](../../evidence/e20-native-same-va-20261014/validation.receipt.md)
 binds the exact commands, source/test-executable/log hashes and limits.
 
+## E-40 GlobalMemoryStatus private-page budget (2026-10-14, executed)
+
+The device-dump defaults now drive `GlobalMemoryStatus`, while one
+boot-reserved private-page budget governs both reported available physical
+bytes and public `VirtualAlloc` commit admission. Four focused public API
+controls passed **4/0/0**: exact defaults, guest-RAM overrides, private-page
+delta/release, and a small-budget exhaustion/recovery path. After the
+test-only setter gate, all four also passed in the combined-source full
+release (**1,742/0/14 ignored**) and no-feature (**1,296/0/13 ignored**)
+suites recorded at E-39. This is a source gate, not a new iNavi launch.
+
+Only stable private pages are charged today; heap, image and legacy file-view
+backing do not yet reduce reported available physical memory. The
+[GMS receipt](../../evidence/gms-device-report-20261014/validation.receipt.md)
+records commands, hashes, the separate E-20 source present at broad gate,
+and this accounting limit. Shared-view and image/heap migration must either
+charge the same budget or explicitly justify a different accounting rule.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
