@@ -14,11 +14,11 @@ Object lifetime and wait completion are separate from runnable eligibility. An e
 
 ThreadObject stores TID/start/parameter/priority/suspend/exit/signaled data by value. Kernel duplicate_handle uses clone for ThreadObject, so aliases can disagree; thread_handle_by_id selects a surviving value, not a canonical task owner. Creation PID/incarnation is absent. Separate Kernel main-thread fallback maps can disagree with later real handles. Closing a handle removes its value; existing blocked continuations mostly retain numeric handles.
 
-The same clone-by-value problem affects every object kind that is not a file, find, volume or notification handle. `CeKernel::duplicate_handle` (`src/ce/kernel.rs:6377-6421`) hands the cloned value to its `other => other` arm. A duplicated event, mutex, semaphore or file mapping therefore becomes an independent copy. Signalling the copy, or mapping a view through it, does not reach the source. CE's HNDLDuplicate (`handle.c` 774–829) instead points the new handle at the same PHDATA. This is Stage 3 object authority, so it should be fixed together with the Task controls rather than inside D-008. Until then, a cross-process shared-view test should use a named `CreateFileMappingW` reopen as its public route: `HandleTable::create_file_mapping` (`src/ce/object.rs:654-681`) returns the existing object's handle.
+The same clone-by-value problem affects every object kind that is not a file, find, volume or notification handle. `CeKernel::duplicate_handle` (`src/ce/kernel.rs:6410-6453`) hands the cloned value to its `other => other` arm. A duplicated event, mutex, semaphore or file mapping therefore becomes an independent copy. Signalling the copy, or mapping a view through it, does not reach the source. CE's HNDLDuplicate (`handle.c` 775–829) instead points the new handle at the same PHDATA. The reviewed first alias slice below covers thread/process handles only; generic Event/Mutex/Semaphore/FileMapping aliasing is an explicitly open following slice, not a D-008 memory shortcut. Until then, a cross-process shared-view test should use a named `CreateFileMappingW` reopen as its public route: `HandleTable::create_file_mapping` (`src/ce/object.rs:696-725`) returns the existing object's handle.
 
 `HandleTable::insert` increments the global public handle number without checked exhaustion. Child launch completion currently signals by the original public process/thread handles, so closure before exit can strand canonical completion even after thread aliases are repaired. A durable child ProcessIdentity and primary TaskKey are required, while process-worker termination policy remains open.
 
-Other object types have individual conventions: process aliases receive some shared-by-ID updates, file duplication uses file-system bookkeeping, and mapped views use canonical mapping data with process ownership. These exceptions do not establish a universal alias/lifetime model. Current global handle numbers and virtual-allocation metadata do not enforce CE6 per-process handle-table/address-space isolation.
+Other object types have individual conventions: process aliases receive some shared-by-ID updates, file duplication uses file-system bookkeeping, and mapped views use canonical mapping data with process ownership. `OpenThread` currently returns the original handle (`src/ce/coredll.rs:2575-2586`); `OpenProcess(current PID)` returns a pseudo-handle (`src/ce/kernel.rs:6622-6627`). Named Event/Mapping CloseHandle can return success without removing a public handle (`:6351-6387`), duplicated file/find contexts have separate cursors (`src/ce/file.rs:1514-1530,1571-1582`), and shared mapping pages are still keyed by a public handle (`src/ce/memory.rs:2196-2215`). These exceptions do not establish a universal alias/lifetime model. Current global handle numbers and virtual-allocation metadata do not enforce CE6 per-process handle-table/address-space isolation.
 
 Task-owned compatibility wait storage is implemented, but numeric handle arrays plus duplicated native wait payloads are not pinned canonical object references. Toolhelp/diagnostic inference is not authoritative ownership.
 
@@ -33,9 +33,9 @@ Canonical records explicitly track:
 - Wait-frame references while a registered FrameIdentity pins a wait target.
 - Any distinct object-specific references (views, callbacks, asynchronous I/O) required by its actual API contract.
 
-These are retirement conditions, not a proposed immortal per-TID cache. The last public alias closing cannot kill a running task or invalidate a target already pinned by a wait. After execution and all dependent references end, retirement releases canonical state. Incarnation/generation checks reject stale references if IDs/storage are reused. Checkpoint clones preserve alias relationships **within** each independent machine clone, without sharing mutable records between clones.
+These are retirement conditions, not a proposed immortal per-TID cache. The last public alias closing cannot kill a running task or invalidate a target already pinned by a wait. After execution and all dependent references end, retirement releases canonical state. Incarnation/generation checks reject stale references if IDs/storage are reused. Checkpoint clones must preserve alias relationships **within** each independent machine clone, without sharing mutable records between clones. Passing the first slice's `CeKernel::clone` alias-coherence test does not establish machine/checkpoint relineage or A2 clone acceptance; that remains open.
 
-O-K3 pin/retirement representation is a **first-cut Stage 3 gate**: an active or queued task persists with no public alias, and a terminal signaled target persists while an alias or registered wait owns it. A wait must complete through its pinned canonical reference after its public alias closes; re-resolving the raw handle at each poll is insufficient. Cancellation and partial preparation release only the references actually acquired, exactly once. The concrete representation remains open.
+O-K3 pin/retirement representation is a **first accepted Stage 3 gate**: an active or queued task persists with no public alias, and a terminal signaled target persists while an alias or registered wait owns it. A wait must complete through its pinned canonical reference after its public alias closes; re-resolving the raw handle at each poll is insufficient. Cancellation and partial preparation release only the references actually acquired, exactly once. The proposed thread/process alias slice is an entry milestone, not that accepted gate: its E-11 last-public-handle and wait-pin controls remain expected red. No last-public-alias retirement policy can be inferred from the alias-only implementation.
 
 Birth is transactional at the API publication boundary. Failed thread-ID/output initialization retires an unpublished creation candidate; ordinary CloseHandle on an established live thread is not that operation. Boot main registration must exist even when no public thread handle is created. Child primary ownership survives pending-launch drain; worker identity records authentic creation ownership.
 
@@ -46,7 +46,7 @@ Proposed logical responsibilities, not final signatures:
 - Validate source/target process and pseudo handles; resolve a public handle to a canonical typed object reference.
 - Duplicate a reference to the same object; never clone mutable thread state. Source/target process ownership and checked public handle allocation are part of the alias boundary. DUPLICATE_CLOSE_SOURCE semantics and error handling must follow primary CE evidence even on failure.
 - Pin all wait targets before publishing a wait frame. Partial validation failure releases only pins acquired during preparation.
-- Register ordered wait-set references and deadline under FrameIdentity. Derived object/message/serial/send indexes identify frames, not owners.
+- Register ordered wait-set references and deadline under FrameIdentity. Derive object-wake indexes from checked canonical object keys, never alias-number fan-out; message/serial/send indexes retain their own typed compatibility keys. Indexes identify frames, not owners.
 - Complete one frame exactly once, consume only the selected object's real acquisition effect and invalidate old generations/subscriptions.
 - Release frame pins on completion, cancellation, task/process exit or failed preparation. Canonical thread exit queues wake candidates for every relevant public alias/reference.
 - Serve snapshots and API getters from canonical state with SnapshotEpoch/provenance, not arbitrary first alias or current-process guesses.
@@ -58,6 +58,7 @@ Unknown/mismatched type, stale incarnation, invalid process ownership, unreadabl
 Primary local source: `C:/WINCE600/PRIVATE/WINCEOS/COREOS/NK/KERNEL`.
 
 - `handle.c` HNDLDuplicate 774–829 allocates a destination handle referring to the same PHDATA and increments handle references. NKDuplicateHandle 840–891 validates process handles/options/output and closes the source under `DUPLICATE_CLOSE_SOURCE` when the source process is valid even if validation, duplication or output copy fails. Freeze emulator failure cases before deciding O-K4.
+- `thread.c` NKOpenThread 1018–1033 and `process.c` NKOpenProcess 1515–1533 duplicate the kernel thread/process object into the active process's handle table; the latter explicitly permits an exited but still referenced process. `OpenProcess(current PID)` is a new closable alias, not GetCurrentProcess's pseudo-handle.
 - `thread.c` InitThreadStruct 272 clears reused thread storage while sleeper/synchronization references can remain. Identity/frame generations are required; copied scalar equality alone does not prove incarnation.
 - `schedule.c` NKWaitForMultipleObjects 644–656 rejects WaitAll, zero and excessive counts for this CE6 kernel. Do not import desktop-Windows WaitAll semantics.
 - Its 660–684 path locks each waitable PHDATA before DoWaitForObjects and unlocks afterward. A wait pins canonical object lifetime, not a mutable lookup of a public handle on every poll.
@@ -77,6 +78,16 @@ Initial task canonicalization touches:
 
 Do not migrate only Kernel wrappers while direct HandleTable readiness still reads obsolete mutable copies. Keep typed public snapshots separate from authoritative internal records. The existing raw/general object APIs and direct unit fixtures require a documented compatibility path when creation owner is unknown; do not fabricate a PID.
 
+## First handle-alias entry slice (proposed, not implemented)
+
+This is the reviewed **thread/process** source slice, not generic object authority or full Stage 3. Keep the existing canonical process-birth directory (`src/ce/object.rs:728-842`) as the one process owner. In HandleTable, give each new thread record a checked, non-reused identity; public thread handles reference that record rather than copying mutable priority, suspend, start, exit and signaled fields. The existing direct HandleTable getters, by-ID methods, snapshots, wait-readiness methods and Kernel/native completion consumers must resolve the same record (`src/ce/object.rs:1050-1174`; `src/ce/kernel.rs:3116-3135,6529-6543,7200-7212`). No second Kernel Task state is allowed. Legacy fixtures with unknown creation owner remain explicitly unknown.
+
+`DuplicateHandle`, `OpenThread` and `OpenProcess` issue checked new public numbers referring to the existing typed identity. Preflight source type, source/target process birth and handle capacity before publication; a failed allocation publishes neither an alias nor cloned state. Keep GetCurrentProcess pseudo semantics separate from a real `OpenProcess(current PID)` alias. Migrate the old raw assertion in `tests/coredll_raw_kernel.rs:6704-6717` deliberately and preserve the child process alias/exit controls in `src/ce/kernel.rs:11310-11412`. Closing one public reference must not mutate a sibling. The successful `DUPLICATE_CLOSE_SOURCE` control remains active, but CE's source-close-on-failure rule (`handle.c:880-883`) needs null/bad-output, failed-allocation and invalid-source-process controls before O-K4 can be accepted. A raw output-copy failure must remove a newly created destination alias; it must not leave a phantom reference.
+
+For object waits, derive a typed canonical Thread/Process wake key at the Kernel-to-Scheduler registration boundary (`src/ce/kernel.rs:7290-7330,7388-7391`; `src/ce/scheduler.rs:97-130,179-305,327-339`). Preserve ordered public handles for API reporting and the existing GetMessage/Sleep/Serial/Winsock/SendMessage/modal compatibility queues; do not invent an object identity for them. Wake by canonical key, not by scanning sibling alias numbers. This **index** change alone neither pins a target nor authorizes post-close acquisition. O-K3 must later preflight and pin ordered wait targets, release each acquired pin on completion/cancellation/failure, and make exit/retirement independent of public aliases. The first slice must not claim last-public-handle survival or a completed wait after alias closure.
+
+Deep-copy mutable thread records on `CeKernel::clone` while preserving sibling aliases inside that clone; never share mutable `Rc`/`Arc` state across clones. This proves only the local test's alias graph, not machine/checkpoint birth-key relineage. Leave generic `other => other` duplication and named-object/file/find/mapping/view lifetime behavior explicitly open for a following connected object slice. A source-gate failure calls for a reviewed code rollback with logs and source hashes preserved; this plan gives no permission for a live app run.
+
 ## Test gates and pending decisions
 
 Eight actual-Kernel controls and two raw-API controls (ledger E-8), plus three
@@ -84,7 +95,39 @@ later last-public-handle/alias-wake/wait-pin controls (E-11), form the
 expected-red baseline: one close-source preservation pass and twelve failures.
 Alias wake-index and clone tail assertions in the earlier controls were not
 reached after preceding failures. This is a baseline, not kernel-object
-acceptance.
+acceptance. The first alias slice must activate and turn green these six in
+the same source change:
+
+| Control | First-slice evidence |
+| --- | --- |
+| `open_thread_returns_independent_alias_to_same_live_task` | A distinct public `OpenThread` alias |
+| `task_ownership_thread_aliases_share_ce_priority` | One mutable priority |
+| `task_ownership_thread_aliases_share_suspend_count` | One suspend/start state |
+| `task_ownership_thread_aliases_share_exit_and_wait_signal` | One exit state and canonical wake key |
+| `thread_exit_through_one_alias_indexes_waiter_on_another_alias` | Canonical-key wake index |
+| `task_ownership_cloned_kernel_does_not_share_mutable_thread_state` | Independent clone-local alias graph |
+
+Leave these six ignored with the stated missing contract, rather than
+unignoring them as an incidental consequence of alias coherence:
+
+| Control | Still missing |
+| --- | --- |
+| `get_process_id_of_thread_reports_immutable_creation_owner` | Raw API creation ProcessBirthKey |
+| `task_ownership_pid_is_creation_owner_not_selected_process` | Worker/Toolhelp creation ownership |
+| `task_ownership_boot_main_is_retained_without_a_public_thread_handle` | Boot execution record without alias |
+| `task_ownership_primary_identity_outlives_launch_queue_and_trace_ring` | Durable child primary identity and completion |
+| `live_task_survives_closing_its_final_public_handle` | Execution pin and retirement |
+| `closed_thread_alias_wait_keeps_an_exited_target_pinned` | Wait pin and post-close acquisition |
+
+Preserve the active `task_ownership_duplicate_close_source_keeps_thread_alive`
+success-path control. Add process current-PID alias/pseudo separation,
+sibling-close, checked exhaustion/no-publication and stale-key controls, then
+run focused active controls, raw Kernel/subsystem suites, release/no-default
+all-targets and desktop no-trace checks on the same hashed source. Record
+ignored counts, failures and immutable logs in a receipt. Even a green first
+slice does not establish O-K3, generic object aliasing, full Stage 3, CE
+scheduling, checkpoint lineage, native last-public-handle execution or live
+app responsiveness.
 
 Before implementation acceptance:
 

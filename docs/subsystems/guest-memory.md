@@ -223,6 +223,13 @@ focused controls, counts, hashes and logs are in the
 This is a source gate: no O-M2 live iNavi run, host-RSS/speed gain, map
 readiness, general heap address reuse or full Stage 2 acceptance follows.
 
+Next mapper cost gate (plan only): measure the 8,192-page fresh-owner heap map
+before optimizing it; O-M2's 158.59-s release library block is not isolated
+mapper time. If scans dominate, use a call-local native/range collision index
+for prepared growth and fresh-owner remap, never a new VM owner or cross-slice
+cache. Preserve page-order failure, exact birth/pin checks, checked unmap and
+quarantine; require counter controls, paired source gates and separate live proof.
+
 ## Target authority and permitted interfaces
 
 - `CeMachine` owns mutation sequencing; each `AddressSpace` owns its process's
