@@ -8622,6 +8622,87 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
 }
 
 #[test]
+fn coredll_raw_wait_for_multiple_objects_preserves_ce_errors_and_wait_any_order() -> Result<()> {
+    fn raw_wait(
+        table: &CoredllExportTable,
+        kernel: &mut CeKernel,
+        memory: &mut TestGuestMemory,
+        args: [u32; 4],
+    ) -> u32 {
+        match table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            1,
+            ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            args,
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(value),
+                ..
+            } => value,
+            other => panic!("expected raw WaitForMultipleObjects result, got {other:?}"),
+        }
+    }
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let first = kernel.create_event_w(None, true, false);
+    let second = kernel.create_event_w(None, true, false);
+    let handles_ptr = 0x6000;
+    memory.map_words(handles_ptr, 2);
+    memory.write_word(handles_ptr, first);
+    memory.write_word(handles_ptr + 4, second);
+
+    kernel.threads.set_last_error(1, 0x1234_5678);
+    assert_eq!(
+        raw_wait(&table, &mut kernel, &mut memory, [2, handles_ptr, 1, 0]),
+        WAIT_FAILED
+    );
+    assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_PARAMETER);
+
+    kernel.threads.set_last_error(1, 0x1234_5678);
+    assert_eq!(
+        raw_wait(&table, &mut kernel, &mut memory, [2, 0x7000, 0, 0]),
+        WAIT_FAILED
+    );
+    assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_PARAMETER);
+
+    assert_eq!(
+        raw_wait(&table, &mut kernel, &mut memory, [2, handles_ptr, 0, 0]),
+        WAIT_TIMEOUT
+    );
+    assert_eq!(kernel.threads.get_last_error(1), 0);
+    assert!(kernel.set_event(second));
+    assert_eq!(
+        raw_wait(&table, &mut kernel, &mut memory, [2, handles_ptr, 0, 0]),
+        WAIT_OBJECT_0 + 1
+    );
+    assert!(kernel.set_event(first));
+    assert_eq!(
+        raw_wait(&table, &mut kernel, &mut memory, [2, handles_ptr, 0, 0]),
+        WAIT_OBJECT_0
+    );
+
+    assert!(kernel.close_handle(second)?);
+    kernel.threads.set_last_error(1, 0x1234_5678);
+    assert_eq!(
+        raw_wait(&table, &mut kernel, &mut memory, [2, handles_ptr, 0, 0]),
+        WAIT_FAILED
+    );
+    assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_HANDLE);
+    memory.write_word(handles_ptr + 4, 0xdead_beef);
+    kernel.threads.set_last_error(1, 0x1234_5678);
+    assert_eq!(
+        raw_wait(&table, &mut kernel, &mut memory, [2, handles_ptr, 0, 0]),
+        WAIT_FAILED
+    );
+    assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_HANDLE);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_primary_thread_and_process_dying_follow_ce_loader_state() -> Result<()> {
     fn call_bool(
         table: &CoredllExportTable,

@@ -29153,11 +29153,9 @@ fn wait_for_multiple_objects_raw<M: CoredllGuestMemory>(
     }
 
     let result = kernel.wait_for_multiple_objects(&handles, wait_all, timeout_ms, thread_id);
-    if result == crate::ce::timer::WAIT_FAILED {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-    } else {
+    // The kernel distinguishes invalid parameters from invalid handles.
+    // Keep its last-error classification when the wait fails.
+    if result != crate::ce::timer::WAIT_FAILED {
         kernel.threads.set_last_error(thread_id, 0);
     }
     result
