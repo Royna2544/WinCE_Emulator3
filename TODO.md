@@ -208,10 +208,11 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
      those only after focused marker/typed-disagreement and post-query/tail
      failure controls; marker presence is not a typed stop witness, and
      removing both reads alone does not close O-P1. The first JR-repair
-     predicate has an executed expected-red pure control, now ignored in the
-     normal suite; a separate unconditional post-run JR repair also needs a
+     predicate has an [executed expected-red pure control](evidence/e31-native-deadline-jr-repair-20261014/expected-red.receipt.md),
+     now ignored in the normal suite; a separate unconditional post-run JR repair also needs a
      real-MIPS mixed timeout/typed-peer-yield PC test before either path's
-     policy can be changed safely.
+     policy can be changed safely. E-31's [final-source validation](evidence/e31-native-deadline-jr-repair-20261014/validation.receipt.md)
+     remains diagnostic-only.
   2b. The E-12 repaired-PC scalar-fallback loss is fixed for its deterministic
      fresh-owner control: expected red before the change, then focused green
      with F0-F31/FCSR plus HI/LO/PC, guest FPU readback, and checked FCSR

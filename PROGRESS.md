@@ -4,6 +4,20 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-31 O-P1 JR-Repair Red Baseline
+
+- The first native-deadline JR-thunk repair predicate was extracted with
+  unchanged production behavior. A pure typed-peer-yield/deadline control
+  failed at its intended marker-based decision and is now ignored pending a
+  genuine real-MIPS mixed-stop PC fixture. The second unconditional JR
+  repair and historical debug-snapshot policy still need separate controls;
+  O-P1 is **not closed**. The final source passed release **1,691/0/17
+  ignored**, no-feature **1,265/0/14 ignored**, both no-trace checks, format
+  and diff checks. The executable was rebuilt, but no app run occurred.
+  [Expected red](evidence/e31-native-deadline-jr-repair-20261014/expected-red.receipt.md)
+  and [validation](evidence/e31-native-deadline-jr-repair-20261014/validation.receipt.md)
+  retain exact hashes and raw logs.
+
 ## 2026-10-14 E-30 Detached Report Host Consumer
 
 - The live and monitor loops now consume the CPU's outgoing
