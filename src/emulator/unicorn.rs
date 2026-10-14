@@ -14004,12 +14004,26 @@ fn map_kernel_memory_allocations_for_owner<D>(
                 true,
             )?;
             mapped.virtual_pages.extend(newly_mapped.iter().copied());
-            if !newly_mapped.is_empty() && !allocation.initial_bytes.is_empty() {
-                uc.mem_write(u64::from(allocation.base), &allocation.initial_bytes)
+            // An earlier guest fault can already have mapped and written a
+            // page in this allocation. Only new pages may receive the stale
+            // initial seed when this generation sweep fills its remaining
+            // gaps on the first import of a fresh native slice.
+            let seed_start = u64::from(allocation.base);
+            let seed_end = seed_start
+                .saturating_add(allocation.initial_bytes.len() as u64)
+                .min(seed_start + u64::from(allocation.size));
+            for page in newly_mapped {
+                let begin = u64::from(page).max(seed_start);
+                let end = (u64::from(page) + 0x1000).min(seed_end);
+                if begin >= end {
+                    continue;
+                }
+                let offset = (begin - seed_start) as usize;
+                let len = (end - begin) as usize;
+                uc.mem_write(begin, &allocation.initial_bytes[offset..offset + len])
                     .map_err(|err| {
                         Error::Backend(format!(
-                            "seed virtual allocation 0x{:08x}: {err:?}",
-                            allocation.base
+                            "seed virtual allocation page 0x{page:08x}: {err:?}"
                         ))
                     })?;
             }
@@ -56901,6 +56915,56 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn native_virtual_generation_maps_new_page_without_reseeding_guest_store() -> crate::Result<()>
+    {
+        let (kernel, _handle, base, canonical) =
+            two_page_legacy_view_seed_fixture("generation-seed.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        let native_pins = super::NativeMappingPins::default();
+        let active_guards = RefCell::new(BTreeMap::new());
+        assert!(super::repair_missing_virtual_page_for_fault(
+            &mut uc,
+            &kernel,
+            &mut mapped,
+            base,
+            Some(owner),
+            &native_pins,
+            &active_guards,
+        )?);
+        assert!(uc.mem_read(u64::from(base) + 0x1000, &mut [0; 4]).is_err());
+
+        // Execute a real guest store on the fault-mapped first page.
+        const CODE: u64 = 0x0004_0000;
+        const WRITTEN: u32 = 0xaabb_ccdd;
+        uc.mem_map(CODE, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(CODE, &0xac49_0000u32.to_le_bytes()).unwrap(); // sw t1,0(v0)
+        uc.reg_write(RegisterMIPS::V0, u64::from(base)).unwrap();
+        uc.reg_write(RegisterMIPS::T1, u64::from(WRITTEN)).unwrap();
+        uc.emu_start(CODE, CODE + 4, 0, 1).unwrap();
+        let mut actual = [0; 4];
+        uc.mem_read(u64::from(base), &mut actual).unwrap();
+        assert_eq!(actual, WRITTEN.to_le_bytes());
+
+        let mut blobs = Vec::new();
+        super::map_kernel_memory_allocations_for_owner(
+            &mut uc,
+            &kernel,
+            &mut mapped,
+            &mut blobs,
+            Some(owner),
+            Some(&native_pins),
+            Some(&active_guards),
+        )?;
+        uc.mem_read(u64::from(base), &mut actual).unwrap();
+        assert_eq!(actual, WRITTEN.to_le_bytes());
+        uc.mem_read(u64::from(base) + 0x1000, &mut actual).unwrap();
+        assert_eq!(actual, canonical[0x1000..0x1004]);
+        Ok(())
+    }
+
+    #[test]
     fn public_file_view_survives_untouched_second_fresh_slice() -> crate::Result<()> {
         const INITIAL: u32 = 0x1122_3344;
         let mut kernel = phase1_kernel("fresh-public-view.exe")?;
@@ -57002,6 +57066,140 @@ mod unicorn_tests {
             &kernel.handles.file_mapping(mapping_handle)?.data[..4],
             &INITIAL.to_le_bytes()
         );
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn public_file_view_guest_store_survives_first_import_of_fresh_slice() -> crate::Result<()> {
+        const WRITTEN: u32 = 0xaabb_ccdd;
+        const SECOND_PAGE: u32 = 0x5566_7788;
+        let mut kernel = phase1_kernel("fresh-view-first-import.exe")?;
+        let birth = kernel.current_process_birth_key().expect("boot birth");
+        let mapping_handle = kernel.handles.create_file_mapping(None, 0x2000, 0x04, None);
+        kernel.handles.file_mapping_mut(mapping_handle)?.data[..4]
+            .copy_from_slice(&0x1122_3344u32.to_le_bytes());
+        kernel.handles.file_mapping_mut(mapping_handle)?.data[0x1000..0x1004]
+            .copy_from_slice(&SECOND_PAGE.to_le_bytes());
+
+        let view_trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let tick_trap = view_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let mut bytes = tiny_mips_spinner_pe();
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
+        let words = [
+            0x3c19_0000 | (view_trap >> 16),    // lui t9,MapViewOfFile trap high
+            0x3739_0000 | (view_trap & 0xffff), // ori t9,t9,trap low
+            0x0320_f809,                        // jalr t9
+            0,                                  // delay-slot nop
+            0x0040_8021,                        // addu s0,v0,zero: retain view base
+            0x3c09_aabb,                        // lui t1,0xaabb
+            0x3529_ccdd,                        // ori t1,t1,0xccdd
+            0xae09_0000,                        // sw t1,0(s0): fault-map page 0
+            0x8e0b_0000,                        // lw t3,0(s0): pre-import witness
+            0x3c19_0000 | (tick_trap >> 16),    // lui t9,GetTickCount trap high
+            0x3739_0000 | (tick_trap & 0xffff), // ori t9,t9,trap low
+            0x0320_f809,                        // jalr t9: first import this slice
+            0,                                  // delay-slot nop
+            0x8e0a_0000,                        // lw t2,0(s0): post-import witness
+            0x1000_ffff,                        // bounded safety spinner
+            0,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("fresh-view-first-import.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("fixture PE entry");
+        for (address, ordinal, name) in [
+            (
+                view_trap,
+                crate::ce::coredll_ordinals::ORD_MAP_VIEW_OF_FILE,
+                "MapViewOfFile",
+            ),
+            (
+                tick_trap,
+                crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT,
+                "GetTickCount",
+            ),
+        ] {
+            cpu.import_traps
+                .insert(crate::emulator::imports::ImportTrap {
+                    address,
+                    module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                    module_name: "COREDLL.dll".to_owned(),
+                    ordinal: Some(ordinal),
+                    name: Some(name.to_owned()),
+                    iat_va: 0,
+                });
+        }
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = mapping_handle;
+        regs.regs[29] = cpu.stack_top.expect("guest stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        cpu.running_guest_thread = Some((cpu.current_thread_id, u32::MAX));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(entry + 0x10),
+                live_pump: false,
+            },
+        );
+        first.result?;
+        assert_eq!(first.report.start_process_birth(), Some(birth));
+        assert_eq!(first.report.end_process_birth(), Some(birth));
+        assert_eq!(
+            first.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        let view_base = cpu.saved_context.as_ref().expect("import result").regs.regs[2];
+        assert_ne!(view_base, 0, "public MapViewOfFile returned a view");
+        assert_eq!(
+            kernel.handles.file_mapping(mapping_handle)?.views[0].base,
+            view_base
+        );
+        assert!(cpu.native_engine_identity_for_test().is_none());
+
+        let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(entry + 0x38),
+                live_pump: false,
+            },
+        );
+        second.result?;
+        assert_eq!(second.report.start_process_birth(), Some(birth));
+        assert_eq!(second.report.end_process_birth(), Some(birth));
+        assert_eq!(
+            second.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        let saved = cpu
+            .saved_context
+            .as_ref()
+            .expect("post-import continuation");
+        assert_eq!(saved.pc, entry + 0x38);
+        assert_eq!(saved.regs.regs[16], view_base);
+        assert_eq!(
+            saved.regs.regs[11], WRITTEN,
+            "guest read before GetTickCount"
+        );
+        assert_eq!(
+            saved.regs.regs[10], WRITTEN,
+            "guest read after GetTickCount"
+        );
+        let mapping = kernel.handles.file_mapping(mapping_handle)?;
+        assert_eq!(&mapping.data[..4], &WRITTEN.to_le_bytes());
+        assert_eq!(&mapping.data[0x1000..0x1004], &SECOND_PAGE.to_le_bytes());
         assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
     }
