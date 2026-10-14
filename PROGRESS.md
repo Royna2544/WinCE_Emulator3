@@ -110,6 +110,14 @@ E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
 - The full-backend mapping/context control passed. The stop/error controls
   started red and are green since O-P1 (E-7, E-10).
 - The Task/alias controls are the Stage 3 baseline (E-8, E-11, E-26).
+- A bounded Stage 3 child-exit/worker-sweep source slice now passes the D:
+  no-feature suite (1,375 passed, 5 ignored) and release
+  unicorn/trace/desktop suite (1,851 passed, 11 ignored), plus the no-trace
+  desktop check. Real process waits signal only after exact-birth verified
+  completion; stale worker contexts fail closed, and completed child CPUs do
+  not replay entry. This is not TerminateProcess execution-stop, full Stage 3,
+  a performance measurement or live-app acceptance
+  ([source receipt](evidence/stage3-sweep-20261014/validation.receipt.md)).
 - Scoped cleanup archived/hash-verified and removed only two obsolete
   standalone test executable/PDB pairs and one duplicate cache-entry trace.
   Five files total9,522,161 logical bytes; recovery ZIP2,794,447bytes plus
