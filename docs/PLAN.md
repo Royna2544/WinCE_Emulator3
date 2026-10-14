@@ -136,9 +136,10 @@ close only their named gates, not Stage 2 or live acceptance.
   Four ownership/pin controls remain deliberately ignored. A later bounded
   child-exit slice adds exact-birth completion, worker retirement at verified
   exit, request-only parked-child retention and deferred real-process signaling.
-  It does not establish the TerminateProcess execution-stop handshake, exact
-  worker birth across same-process TID reuse, wait-target pins, root-process
-  completion or live-app behavior. Neither slice is full Stage 3 acceptance.
+  It does not establish the TerminateProcess execution-stop handshake,
+  intra-slice unpinned-worker lineage, generic parked-wait continuation,
+  wait-target pins, root-process completion or live-app behavior. Neither
+  slice is full Stage 3 acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full

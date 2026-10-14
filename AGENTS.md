@@ -120,12 +120,13 @@ cargo run --release --features unicorn,trace,win32-desktop -- `
 
 | Path | Role |
 |---|---|
-| `src/main.rs` | CLI, run orchestration, desktop runtime and remote/desktop wiring |
+| `src/main.rs` | CLI, run orchestration and `DesktopRuntime` selection/wiring |
 | `src/emulator/unicorn.rs` | Unicorn engine glue **and** the scheduler/slice loop (`run_with_unicorn`), hooks, parked processes, blocked/pending state. ~51k lines incl. tests |
 | `src/emulator/{pe_loader,imports,dll_search,cpu_mips,...}.rs` | PE loading, import-trap table, DLL search, MIPS helpers |
 | `src/ce/coredll.rs`, `coredll_ordinals.rs` | COREDLL ordinal dispatch and raw handlers (~69k + 14k lines; ~40% GWES/GDI/UI) |
 | `src/ce/kernel.rs`, `scheduler.rs`, `object.rs`, `memory.rs`, `thread.rs`, `timer.rs` | CE kernel state, handles, waits, scheduler records |
-| `src/ce/gwe.rs`, `resource.rs`, `shell.rs`, `framebuffer.rs` | windows/messages, resources, shell and framebuffer; desktop runtime is in `src/main.rs` |
+| `src/ce/gwe.rs`, `resource.rs`, `shell.rs`, `framebuffer.rs` | windows/messages, resources, shell and framebuffer |
+| `src/ce/win32_desktop.rs` | Win32 host input and presenter used by `DesktopRuntime` in `src/main.rs` |
 | `src/ce/file.rs`, `registry.rs`, `devices.rs`, `devices/` | host-backed storage, registry (`registry.reg`), virtual devices (`COM7:` GPS, `MFS1:`, `SMB1:`) |
 | `src/winsock.rs`, `src/remote_server.rs`, `src/ce/audio.rs` | sockets, HTTP/WS control, waveOut |
 | `tests/` | raw-API and subsystem tests, PE fixtures (`tests/test_progs`) |
