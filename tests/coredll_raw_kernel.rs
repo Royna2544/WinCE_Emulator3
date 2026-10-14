@@ -17455,6 +17455,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let root = unique_test_root("image_list_load_image");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("Images")).unwrap();
@@ -23727,7 +23728,7 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
     ));
     assert_eq!(
         kernel.gwe.message_pointer_payload(birth, payload_ptr),
-        Some(payload)
+        Some(payload.clone())
     );
     assert!(
         kernel

@@ -1824,6 +1824,7 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 9;
     let module = 0x0040_0000;
@@ -2774,13 +2775,13 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, indirect_mask_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, indirect_mask_bits)
             .is_none()
     );
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, indirect_color_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, indirect_color_bits)
             .is_none()
     );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
@@ -9802,6 +9803,7 @@ fn coredll_raw_delete_object_frees_owned_dib_section_bits() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 9;
 
@@ -9846,7 +9848,7 @@ fn coredll_raw_delete_object_frees_owned_dib_section_bits() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, bits_ptr)
             .is_some()
     );
 
@@ -9868,7 +9870,7 @@ fn coredll_raw_delete_object_frees_owned_dib_section_bits() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, bits_ptr)
             .is_none()
     );
 
@@ -9880,6 +9882,7 @@ fn coredll_raw_delete_object_frees_owned_compatible_bitmap_bits() -> Result<()> 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 9;
 
@@ -9916,7 +9919,7 @@ fn coredll_raw_delete_object_frees_owned_compatible_bitmap_bits() -> Result<()> 
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, object.bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, object.bits_ptr)
             .is_some()
     );
     let bits_ptr = object.bits_ptr;
@@ -9939,7 +9942,7 @@ fn coredll_raw_delete_object_frees_owned_compatible_bitmap_bits() -> Result<()> 
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, bits_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, bits_ptr)
             .is_none()
     );
 
@@ -24577,6 +24580,7 @@ fn coredll_raw_register_gesture_records_guest_registration() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 9;
 
@@ -24600,7 +24604,7 @@ fn coredll_raw_register_gesture_records_guest_registration() -> Result<()> {
     assert_eq!(registration.arg1, 0x9210);
     assert_eq!(registration.arg2, 0x3001_496c);
     assert_eq!(registration.arg3, 0xa0bc);
-    let allocation = kernel.memory.allocation(handle).unwrap();
+    let allocation = kernel.memory.allocation(heap_birth, handle).unwrap();
     assert!(allocation.actual_size >= 0x400);
     assert!(allocation.zeroed);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
@@ -28360,6 +28364,7 @@ fn coredll_raw_windowposchanged_carries_guest_windowpos_payload() -> Result<()> 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 3;
     let msg_ptr = 0x7100;
@@ -28408,7 +28413,7 @@ fn coredll_raw_windowposchanged_carries_guest_windowpos_payload() -> Result<()> 
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
             .is_some()
     );
 
@@ -28428,7 +28433,7 @@ fn coredll_raw_windowposchanged_carries_guest_windowpos_payload() -> Result<()> 
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, window_pos_ptr)
             .is_none()
     );
 
@@ -57233,6 +57238,7 @@ fn coredll_raw_image_list_begin_drag_clones_source_pixels() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 175_u32;
 
@@ -57319,7 +57325,7 @@ fn coredll_raw_image_list_begin_drag_clones_source_pixels() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, drag_bits)
             .is_some()
     );
 
@@ -57376,7 +57382,7 @@ fn coredll_raw_image_list_begin_drag_clones_source_pixels() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, drag_bits)
             .is_none()
     );
 
@@ -57390,6 +57396,7 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pixels() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 176_u32;
 
@@ -57595,7 +57602,7 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pixels() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, drag_bits)
             .is_none()
     );
 
@@ -57780,6 +57787,7 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pseudo_icon_pixels() -> Resul
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
+    let heap_birth = kernel.current_process_birth_key().expect("boot birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 180_u32;
 
@@ -57978,7 +57986,7 @@ fn coredll_raw_image_list_set_drag_cursor_composes_pseudo_icon_pixels() -> Resul
     assert!(
         kernel
             .memory
-            .heap_size(PROCESS_HEAP_HANDLE, 0, drag_bits)
+            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, drag_bits)
             .is_none()
     );
 
