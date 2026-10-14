@@ -4,6 +4,25 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 parked SendMessage birth source slice
+
+- Native cross-process `BlockedWaitKind::SendMessage` now verifies captured
+  sender birth before queueing, checks the registered scheduler/native pair
+  before publication, and rejects stale active or parked waits before taking
+  results or restoring registers. A normal resume stamps the verified birth.
+  The bounded [receipt](evidence/stage3-send-birth-20261015/validation.receipt.md)
+  seals Git HEAD `442688ae0c81670f4b27b11613f9a6bae07c0ebe` plus an exact
+  `git diff --binary` [patch](evidence/stage3-send-birth-20261015/source-at-seal.patch)
+  (SHA-256 `C2A0796DACF4FA43381C9D85EAFE876A1FDD404511B174273845045AAFB9FDF8`),
+  not a later moving checkout. On that source, full
+  [release attempt a02](evidence/stage3-send-birth-20261015/release-a02.raw.log)
+  passed 1,916/0/9 ignored and full
+  [no-feature attempt a02](evidence/stage3-send-birth-20261015/nofeature-a02.raw.log)
+  passed 1,395/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
+  receipt. Ordinary `BlockedSendMessageTimeout`, receiver-side delivery, and
+  the GWE queued-send lifecycle after standalone `ExitThread` remain open;
+  this is neither full Stage 3 nor live-app acceptance.
+
 ## 2026-10-15 Stage 3 parked serial birth source slice
 
 - Native parked SerialRead/SerialCommEvent paths verify the birth owning
@@ -26,8 +45,9 @@ references for historical reconstruction.
   The final build and test-target, no-trace desktop, Unicorn-only and all-target
   feature checks passed; a matching EXE/PDB pair is SHA-preserved in the
   [source-gate receipt](evidence/stage3-serial-birth-20261015/validation.receipt.md).
-  Raw synchronous/nonblocking/overlapped serial paths, opaque non-task pins,
-  SendMessage, full Stage 3 and live-app behavior remain unaccepted.
+  Raw synchronous/nonblocking/overlapped serial paths and opaque non-task
+  pins remain open. This serial result does not establish the separate
+  SendMessage gate above, full Stage 3 or live-app acceptance.
 
 ## 2026-10-15 Stage 3 parked queue/socket birth source slice
 

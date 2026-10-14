@@ -33,8 +33,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    covers native MessageQueueIo/WinsockRead birth ownership. The bounded
    [parked serial gate](evidence/stage3-serial-birth-20261015/validation.receipt.md)
    covers native SerialRead/SerialCommEvent birth ownership before host RX
-   polling, wait publication and paired wake/timeout completion; next migrate
-   SendMessage and other blocked payloads. Raw synchronous/nonblocking
+   polling, wait publication and paired wake/timeout completion. The bounded
+   [parked SendMessage gate](evidence/stage3-send-birth-20261015/validation.receipt.md)
+   seals its tested Git HEAD and binary patch and covers cross-process native
+   send publication and paired result consumption. Next gate the separate
+   `BlockedSendMessageTimeout` path and cancel A-origin queued sends only after
+   exact-birth standalone `ExitThread` validation; receiver-side delivery and
+   other blocked payloads remain separate. Raw synchronous/nonblocking
    queue/socket paths, raw synchronous/nonblocking/overlapped serial paths,
    opaque non-task pins, generic parked-wait closure and caller parity remain
    separate. O-K3 execution and registered Thread/Process

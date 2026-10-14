@@ -107,9 +107,14 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   [parked serial source gate](evidence/stage3-serial-birth-20261015/validation.receipt.md)
   checks native SerialRead/SerialCommEvent birth before host RX polling,
   publication and paired wake/timeout completion; opaque serial tokens remain
-  unpinned. Boot-main
+  unpinned. The bounded
+  [parked SendMessage source gate](evidence/stage3-send-birth-20261015/validation.receipt.md)
+  birth-verifies native cross-process send publication and paired active/parked
+  result completion; it does not cover ordinary `BlockedSendMessageTimeout`,
+  receiver-side delivery, or A-origin GWE sends left queued after standalone
+  `ExitThread`. Boot-main
   enumeration, aliasless Sleep-suspend, unpinned-worker lineage (currently
-  fails closed), SendMessage and other parked-wait continuation, raw
+  fails closed), other parked-wait continuation, raw
   synchronous/nonblocking queue/socket and synchronous/nonblocking/overlapped
   serial paths, clone relineage, complete GMS
   reclamation and live-app behavior remain open. None of these
