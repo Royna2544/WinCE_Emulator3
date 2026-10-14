@@ -55312,11 +55312,7 @@ fn try_enter_send_message_callout<D>(
     } else {
         if let Some(callout) = pending_returns.borrow_mut().pop() {
             if let Some(restore) = callout.send_restore {
-                retire_exact_opaque_send(
-                    kernel,
-                    restore.send_id,
-                    Some(restore.receiver_thread_id),
-                );
+                retire_exact_opaque_send(kernel, restore.send_id, Some(restore.receiver_thread_id));
                 let _ = kernel.remove_blocked_waiter(restore.wait_id);
                 let blocked_index = blocked_waits
                     .borrow()
@@ -75954,8 +75950,7 @@ mod unicorn_tests {
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let sender_thread = 1;
-        let (_receiver_handle, receiver_thread) =
-            kernel.create_guest_thread(0x0040_3000, 0, false);
+        let (_receiver_handle, receiver_thread) = kernel.create_guest_thread(0x0040_3000, 0, false);
         let hwnd = kernel.create_window_ex_w(receiver_thread, "CROSS_SEND", "", None, 0, 0, 0);
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, 0x0001_3570);
         let unrelated_send_id = kernel
@@ -76018,8 +76013,7 @@ mod unicorn_tests {
             &cross_process_send_yield,
             &terminal_error,
         ));
-        super::TEST_FAIL_NEXT_RECEIVER_SEND_WNDPROC_REGISTERS
-            .with(|fault| assert!(!fault.get()));
+        super::TEST_FAIL_NEXT_RECEIVER_SEND_WNDPROC_REGISTERS.with(|fault| assert!(!fault.get()));
 
         assert!(matches!(
             terminal_error.borrow().as_ref(),
@@ -76033,6 +76027,7 @@ mod unicorn_tests {
         assert!(pending.borrow().is_empty());
         assert!(cross_process_send_yield.borrow().is_none());
         assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
+        assert!(!kernel.gwe.in_send_message(receiver_thread));
         assert!(kernel.gwe.sent_message(unrelated_send_id).is_some());
         assert!(kernel.gwe.sent_message(unrelated_send_id + 1).is_none());
         for &(register, value) in &original_regs {
@@ -79155,7 +79150,10 @@ mod unicorn_tests {
             &running_thread,
             &stale_terminal,
         ));
-        assert!(matches!(stale_terminal.borrow().as_ref(), Some(Error::Backend(_))));
+        assert!(matches!(
+            stale_terminal.borrow().as_ref(),
+            Some(Error::Backend(_))
+        ));
         assert_eq!(current_thread_id.get(), (thread_id, None));
         assert!(blocked_smt.borrow().is_none());
         assert_eq!(kernel.blocked_waiters().count(), 0);
@@ -79230,7 +79228,10 @@ mod unicorn_tests {
             &running_thread,
             &mismatch_terminal,
         ));
-        assert!(matches!(mismatch_terminal.borrow().as_ref(), Some(Error::Backend(_))));
+        assert!(matches!(
+            mismatch_terminal.borrow().as_ref(),
+            Some(Error::Backend(_))
+        ));
         assert_eq!(current_thread_id.get(), (thread_id, None));
         assert!(blocked_smt.borrow().is_none());
         assert!(kernel.gwe.sent_message(1).is_none());
