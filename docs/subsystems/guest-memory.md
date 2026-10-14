@@ -258,16 +258,22 @@ requested page pin. Failed or ambiguous unmap leaves the entire affected run
 pinned/quarantined. VM remains the sole byte authority under A4; full machine
 checkpoint relineage stays separate.
 
-On one interim synthetic **release** source, the 8,192-page/32-MiB uniform
-heap mapped as exactly **32 native regions/calls**: fresh-owner wall 4.427 ms
-and native close 0.398 ms; prepared growth wall 4.741 ms and close 0.394 ms.
-The same binary's ideal old-shape control (one 32-MiB pointer map plus a
-32-MiB memcpy seed) took 3.133 ms map+copy, so batched canonical pages were
-not faster than that copy control in this one sample. Exact 8,192 page
+On the final combined synthetic **release** source, the 8,192-page/32-MiB
+uniform heap mapped as exactly **32 native regions/calls**: fresh-owner wall
+5.056 ms and native close 0.530 ms; prepared growth wall 4.948 ms and close
+0.378 ms. The same binary's partial old-shape control (one 32-MiB pointer
+map plus a 32-MiB memcpy seed) took 3.373 ms map+seed and 0.104 ms close.
+Fresh canonical mapping therefore had 1.683 ms more map time, or 2.109 ms
+more map+close time, before counting the old path's unmeasured end-of-slice
+readback copy. This is not a full-slice speed comparison. Exact 8,192 page
 records/pins and 32-MiB guest-budget charge passed, along with sparse hole,
 clone, first-cold competing proposal, mid-run collision, same-VA birth and
-checked-unmap controls. The release timing preceded the final peer-safety
-follow-up; paired broad gates on a fixed combined source remain pending.
+checked-unmap controls. The parallel Stage 3 verifier reported final-source
+debug no-default all-targets 1,360/0/7 ignored and release
+`unicorn,trace,win32-desktop` all-targets 1,825/0/13 ignored; the desktop
+no-trace check passed. These counts belong to its gate, while the mapper's
+final release profile passed 2/0 on matching source hashes
+([receipt](../../evidence/om2-native-map-profile-20261014/validation.receipt.md)).
 Neither these synthetic measurements nor the E-43 debug copied-image receipt
 establishes iNavi lag, host RSS, frame readiness or live-run acceptance.
 

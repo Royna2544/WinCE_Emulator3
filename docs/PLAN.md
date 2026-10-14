@@ -124,10 +124,14 @@ separate gates.
 Executed controls are recorded in the ledger and source-bound receipts; they
 close only their named gates, not Stage 2 or live acceptance.
 
-- Task/handle ownership: 13 controls, 1 pass, 12 expected failures (E-8,
-  E-11), the red baseline for Stage 3. The added last-public-handle,
-  alias-indexed wake and registered-wait retention controls are red; native
-  execution/wait acquisition and stale-incarnation controls remain to add.
+- Task/handle ownership: the first thread/process alias entry slice passed
+  focused gates and frozen-source debug no-default 1,360/0/7 plus release
+  unicorn/trace/desktop 1,825/0/13; six ownership/pin controls remain
+  deliberately ignored
+  ([receipt](../evidence/stage3-alias-20261014/validation.receipt.md)).
+  This is not Stage 3 acceptance. Next, freeze creation ProcessBirthKey in
+  canonical thread records and route production CreateThread through a checked
+  creator identity; then prove process-worker termination and wait pins.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full

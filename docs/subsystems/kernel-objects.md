@@ -1,6 +1,6 @@
 # Kernel objects and handles
 
-Status: first thread/process alias entry slice partially implemented, with final source gate pending; full Stage 3 remains proposed. The [architecture anchor](../ARCHITECTURE.md) owns shared CeMachine, TaskIdentity, FrameIdentity, AddressSpace, outcome and SnapshotEpoch contracts; the [migration plan](../PLAN.md) sequences changes. This document describes their kernel-object consumers rather than redefining them.
+Status: first thread/process alias entry slice passed its frozen-source gate; full Stage 3 remains proposed. The [architecture anchor](../ARCHITECTURE.md) owns shared CeMachine, TaskIdentity, FrameIdentity, AddressSpace, outcome and SnapshotEpoch contracts; the [migration plan](../PLAN.md) sequences changes. This document describes their kernel-object consumers rather than redefining them.
 
 ## Responsibility
 
@@ -78,7 +78,7 @@ Initial task canonicalization touches:
 
 Do not migrate only Kernel wrappers while direct HandleTable readiness still reads obsolete mutable copies. Keep typed public snapshots separate from authoritative internal records. The existing raw/general object APIs and direct unit fixtures require a documented compatibility path when creation owner is unknown; do not fabricate a PID.
 
-## First handle-alias entry slice (partial, final gate pending)
+## First handle-alias entry slice (source-gated)
 
 This is the reviewed **thread/process** source slice, not generic object authority or full Stage 3. Keep the existing canonical process-birth directory (`src/ce/object.rs:728-842`) as the one process owner. In HandleTable, give each new thread record a checked, non-reused identity; public thread handles reference that record rather than copying mutable priority, suspend, start, exit and signaled fields. The existing direct HandleTable getters, by-ID methods, snapshots, wait-readiness methods and Kernel/native completion consumers must resolve the same record (`src/ce/object.rs:1050-1174`; `src/ce/kernel.rs:3116-3135,6529-6543,7200-7212`). No second Kernel Task state is allowed. Legacy fixtures with unknown creation owner remain explicitly unknown.
 
@@ -87,6 +87,38 @@ This is the reviewed **thread/process** source slice, not generic object authori
 For object waits, derive a typed canonical Thread/Process wake key at the Kernel-to-Scheduler registration boundary (`src/ce/kernel.rs:7290-7330,7388-7391`; `src/ce/scheduler.rs:97-130,179-305,327-339`). Preserve ordered public handles for API reporting and the existing GetMessage/Sleep/Serial/Winsock/SendMessage/modal compatibility queues; do not invent an object identity for them. Wake by canonical key, not by scanning sibling alias numbers. This **index** change alone neither pins a target nor authorizes post-close acquisition. O-K3 must later preflight and pin ordered wait targets, release each acquired pin on completion/cancellation/failure, and make exit/retirement independent of public aliases. The first slice must not claim last-public-handle survival or a completed wait after alias closure.
 
 Deep-copy mutable thread records on `CeKernel::clone` while preserving sibling aliases inside that clone; never share mutable `Rc`/`Arc` state across clones. This proves only the local test's alias graph, not machine/checkpoint birth-key relineage. Leave generic `other => other` duplication and named-object/file/find/mapping/view lifetime behavior explicitly open for a following connected object slice. A source-gate failure calls for a reviewed code rollback with logs and source hashes preserved; this plan gives no permission for a live app run.
+
+## Immutable creation-owner follow-on slice
+
+The next bounded slice freezes a checked `ProcessBirthKey` in each canonical
+`ThreadRecord` when a thread is born. CE6's `NKCreateThread` selects the active
+process at creation (`thread.c` 935) and `InitThreadStruct` stores it as the
+thread owner (`thread.c` 276); `GetProcessIdOfThread` reads that frozen owner
+(`thread.c` 810–812). In the emulator's normal guest path, resolve the
+creator TID's canonical owner before creation, not the mutable selected PID
+afterward. Future cross-process/PSL execution will need a checked active
+process frame at that boundary; this slice does not fabricate one.
+
+Register boot TID 1 as an execution-live, aliasless canonical thread owned by
+the boot process birth so raw and native CreateThread can resolve its creator.
+The child primary gets the child ProcessBirthKey minted in the same launch
+transaction. Production raw and native CreateThread paths pass their creator
+TID through one checked owner route and fail closed for an absent/stale owner.
+Keep the existing selector-based `create_guest_thread` only as an explicitly
+labelled host/test compatibility entry; direct legacy HandleTable fixtures may
+retain an explicit unknown owner. Neither path may infer ownership later from
+the currently selected process.
+
+Make `GetProcessIdOfThread` and Toolhelp read the stored owner for a valid
+thread birth. Turn green `get_process_id_of_thread_reports_immutable_creation_owner`
+and `task_ownership_pid_is_creation_owner_not_selected_process`, strengthening
+their controls with launch-queue drain, process rotation and a creator TID
+whose owner differs from the selected process. If boot-main or child-primary
+identity controls become genuinely satisfied, activate them in the same
+change; otherwise keep their exact missing contracts ignored. This owner key
+is a prerequisite, not proof, of a later TerminateProcess sweep of every
+owned thread (including aliasless workers), fixed-stack budget release or
+request-only parked-child completion.
 
 ## Test gates and pending decisions
 
