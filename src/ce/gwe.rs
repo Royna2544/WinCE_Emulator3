@@ -328,7 +328,7 @@ pub struct Message {
 }
 
 /// Delivery ownership is attached to a queued entry, not to the public MSG
-/// payload. Numeric/window producers remain an explicit compatibility path.
+/// payload. Legacy numeric producers remain an explicit compatibility path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum QueueDeliveryOwner {
     Unscoped,
@@ -712,11 +712,38 @@ pub struct ScrollState {
     pub pos: i32,
 }
 
+/// The immutable creation identity of a HWND. Numeric TID/PID fields on
+/// `Window` are projections for CE APIs and diagnostics, not delivery authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowDeliveryOwner {
+    Birth {
+        thread: ThreadBirthKey,
+        process: ProcessBirthKey,
+    },
+    /// Direct numeric fixtures may lack a registered thread. Kernel-created
+    /// legacy windows still freeze a known process birth for typed payloads.
+    LegacyUnknown {
+        process: Option<ProcessBirthKey>,
+    },
+    SystemDesktop,
+}
+
+impl WindowDeliveryOwner {
+    pub fn process_birth(self) -> Option<ProcessBirthKey> {
+        match self {
+            Self::Birth { process, .. } => Some(process),
+            Self::LegacyUnknown { process } => process,
+            Self::SystemDesktop => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Window {
     pub hwnd: u32,
     pub thread_id: u32,
     pub process_id: u32,
+    delivery_owner: WindowDeliveryOwner,
     pub class_name: String,
     pub title: String,
     pub visible: bool,
@@ -750,6 +777,12 @@ pub struct Window {
     pub hscroll: ScrollState,
     pub vscroll: ScrollState,
     pub props: BTreeMap<String, u32>,
+}
+
+impl Window {
+    pub fn delivery_owner(&self) -> WindowDeliveryOwner {
+        self.delivery_owner
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1015,6 +1048,7 @@ impl Default for Gwe {
                 hwnd: DESKTOP_HWND,
                 thread_id: 0,
                 process_id: 0,
+                delivery_owner: WindowDeliveryOwner::SystemDesktop,
                 class_name: "Desktop".to_owned(),
                 title: String::new(),
                 visible: true,
@@ -1189,6 +1223,41 @@ impl Gwe {
         ex_style: u32,
         rect: Rect,
     ) -> u32 {
+        self.create_window_ex_with_delivery_owner_and_rect(
+            thread_id,
+            process_id,
+            class_name,
+            title,
+            parent,
+            owner,
+            id,
+            style,
+            ex_style,
+            rect,
+            WindowDeliveryOwner::LegacyUnknown { process: None },
+        )
+    }
+
+    pub fn create_window_ex_with_delivery_owner_and_rect(
+        &mut self,
+        thread_id: u32,
+        process_id: u32,
+        class_name: &str,
+        title: &str,
+        parent: Option<u32>,
+        owner: Option<u32>,
+        id: u32,
+        style: u32,
+        ex_style: u32,
+        rect: Rect,
+        delivery_owner: WindowDeliveryOwner,
+    ) -> u32 {
+        let (thread_id, process_id) = match delivery_owner {
+            WindowDeliveryOwner::Birth { thread, process } => {
+                (thread.thread_id(), process.process_id())
+            }
+            _ => (thread_id, process_id),
+        };
         let rect = self.normalize_create_rect(parent, style, rect);
         let class_name = self.resolve_class_name(class_name);
         let wndproc = self
@@ -1224,6 +1293,7 @@ impl Gwe {
                 hwnd,
                 thread_id,
                 process_id,
+                delivery_owner,
                 class_name,
                 title: title.to_owned(),
                 visible,
@@ -3612,10 +3682,33 @@ impl Gwe {
         let Some(window) = self.windows.get(&hwnd) else {
             return false;
         };
-        if window.destroyed {
+        if window.destroyed || matches!(window.delivery_owner, WindowDeliveryOwner::Birth { .. }) {
             return false;
         }
         self.post_message(window.thread_id, message);
+        true
+    }
+
+    /// The Kernel verifies that this exact owner is execution-live before
+    /// entering GWES; the stored HWND owner must agree before queue mutation.
+    pub fn post_message_for_window_birth(
+        &mut self,
+        hwnd: u32,
+        birth: ThreadBirthKey,
+        message: Message,
+    ) -> bool {
+        let Some(window) = self.windows.get(&hwnd) else {
+            return false;
+        };
+        if window.destroyed
+            || !matches!(
+                window.delivery_owner,
+                WindowDeliveryOwner::Birth { thread, .. } if thread == birth
+            )
+        {
+            return false;
+        }
+        self.post_message_with_owner(birth.thread_id(), QueueDeliveryOwner::Birth(birth), message);
         true
     }
 
