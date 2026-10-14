@@ -101,6 +101,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 
 ## Cleanup Queue
 
+- After the view-sync gate, clear the existing release-build warnings in one
+  change: the unused `kernel` parameters in `try_enter_dpa_enum_callout` and
+  `try_enter_dsa_enum_callout` (`src/emulator/unicorn.rs`, from June), the
+  unused `MEM_DECOMMIT` import, and the unused
+  `pending_wndproc_returns_live_pump_hook` and `current_thread_id_code_hook`
+  bindings. These warnings show up in every raw suite log.
 - Keep the five-file small-intermediate recovery archive/receipt. Larger cache
   cleanup requires fresh ownership/idle checks; D debug/build showed other
   editor/compiler activity. The five inventoried legacy paths were retired
