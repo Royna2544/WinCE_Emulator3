@@ -1,6 +1,6 @@
 # TODO
 
-Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
+Refreshed on 2026-10-15. This file is limited to active, plan-aligned work.
 
 ## Immediate engineering queue
 
@@ -14,12 +14,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    Matched iNavi timing requires a separate run approval and fresh adjacent
    mount backups.
 1. Continue the user-authorized Stage 3 scheduler migration. The bounded
-   child-exit sweep has source controls, but real-handle `TerminateProcess`
-   still needs a checked CPU execution-stop handshake and CE-compatible caller
-   wait/timeout semantics. Then complete unpinned intra-slice worker lineage,
-   generic parked-wait continuation, O-K3 wait-target pins, and root-process
-   completion. The E-8/E-11/E-26 controls remain the acceptance baseline, not
-   a reason to treat the design as parked.
+   child-exit sweep and owned-child `TerminateProcess` execution-stop handshake
+   have source controls; finish their frozen-source broad gate before extending
+   semantics. Implement CE-compatible caller wait/timeout behavior, a safe
+   old-MIPS direct-kernel real-handle continuation, and root-process
+   real-handle completion. Then complete unpinned intra-slice worker lineage,
+   generic parked-wait continuation, and O-K3 wait-target pins. The
+   E-8/E-11/E-26 controls remain the acceptance baseline, not a reason to
+   treat the design as parked.
 
 ## Parallel lanes (never gate the queue above)
 

@@ -1,8 +1,20 @@
 # Progress
 
-Refreshed on 2026-10-14 (client KST date). This file records confirmed facts only.
+Refreshed on 2026-10-15 (client KST date). This file records confirmed facts only.
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
+
+## 2026-10-15 Stage 3 TerminateProcess source slice
+
+- Focused source controls now cover an owned active child's request at run
+  preflight, its in-slice self-call import stop, and requested parked or pending
+  children. They also check exact-birth completion before process-wait signal,
+  native CPU sealing before another attempt, and failure rather than unsafe
+  resume for an old-MIPS direct-kernel real-handle call. The desktop loop has
+  a completed-owner maintenance lane so a sealed child is not requeued during
+  host/input handoff. Frozen-source broad validation is still pending; this is
+  not CE caller wait/timeout semantics, root-process real-handle completion,
+  full Stage 3, or live-app acceptance.
 
 ## 2026-10-14 Stage 2 source gates E-30 to E-44 and O-M2
 
@@ -115,8 +127,8 @@ E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
   unicorn/trace/desktop suite (1,851 passed, 11 ignored), plus the no-trace
   desktop check. Real process waits signal only after exact-birth verified
   completion; stale worker contexts fail closed, and completed child CPUs do
-  not replay entry. This is not TerminateProcess execution-stop, full Stage 3,
-  a performance measurement or live-app acceptance
+  not replay entry. That historical slice did not include TerminateProcess
+  execution-stop, full Stage 3, a performance measurement or live-app acceptance
   ([source receipt](evidence/stage3-sweep-20261014/validation.receipt.md)).
 - Scoped cleanup archived/hash-verified and removed only two obsolete
   standalone test executable/PDB pairs and one duplicate cache-entry trace.

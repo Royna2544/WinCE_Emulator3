@@ -1,6 +1,6 @@
 # Known Bugs And Risks
 
-Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entries are removed (history: docs/evidence/ledger.md and git).
+Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entries are removed (history: docs/evidence/ledger.md and git).
 
 ## Open Issues
 
@@ -70,16 +70,20 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   Thread aliases share one mutable record and canonical wake index. Production
   thread births retain a checked ProcessBirthKey, including aliasless boot TID
   1 and child primary, and registered Toolhelp/GetProcessIdOfThread read it.
-  A follow-on source-tested child-exit slice now defers real process-handle
-  signaling until exact-birth completion, sweeps workers at that boundary and
-  retains a parked child on a request-only exit. `TerminateProcess` still has
-  no execution-stop handshake: a looping child may keep running and a waiter
-  may remain blocked. The current-process pseudo-handle uses a separate
-  synchronous compatibility path. Boot-main enumeration, last-public-handle
-  wait pins, intra-slice unpinned-worker lineage (currently fails closed),
-  generic parked-wait continuation, root-process completion, clone relineage,
-  complete GMS reclamation and live-app behavior remain open. This bounded
-  slice is not full Stage 3 acceptance.
+  The child-exit slice defers real process-handle signaling until exact-birth
+  completion and sweeps workers then. A subsequent bounded, source-tested
+  `TerminateProcess` handshake stops an owned running child at preflight or a
+  self-call import boundary, and completes requested parked or pending children
+  without another guest instruction. A process waiter is signaled only after
+  that checked completion, not on the request alone. The current-process
+  pseudo-handle retains a separate synchronous compatibility path. CE caller
+  wait/timeout behavior is not implemented; an old-MIPS direct-kernel
+  real-handle continuation fails closed because no safe return is available.
+  The root process has no owned child-launch handoff for real-handle requests.
+  Boot-main enumeration, last-public-handle/O-K3 wait pins, intra-slice
+  unpinned-worker lineage (currently fails closed), generic parked-wait
+  continuation, clone relineage, complete GMS reclamation and live-app behavior
+  remain open. Neither bounded slice is full Stage 3 acceptance.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
   (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been
