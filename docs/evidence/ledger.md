@@ -1428,8 +1428,10 @@ The expected-red control failed to compile at the missing helper. On
 final no-feature focused and debug Unicorn-feature focused runs each passed
 **5/0**; the full no-feature suite passed **1,302/0/13 ignored** across 17
 blocks. The [E-42 receipt](../../evidence/immutable-image-pages-20261014/validation.receipt.md)
-holds exact raw-log hashes and commands. No full release-feature suite is
-claimed for E-42.
+holds the four retained passing-log hashes and commands. A later test
+overwrote the expected-red raw log; its original bytes are gone, so that red
+attempt is historical observation rather than retained log evidence. No full
+release-feature suite is claimed for E-42.
 
 Production image mapping remains RWX with the old copy path. Sealed segmented
 storage, clone isolation, typed native pins, host-write and readback guards,
