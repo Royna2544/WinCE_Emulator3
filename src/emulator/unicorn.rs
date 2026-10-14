@@ -57205,6 +57205,152 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn public_file_view_store_survives_deferred_create_process_reseed() -> crate::Result<()> {
+        const WRITTEN: u32 = 0xaabb_ccdd;
+        const SECOND_PAGE: u32 = 0x5566_7788;
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        let child_path = test_root.join("child.exe");
+
+        let view_trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let create_trap = view_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let mut bytes = tiny_mips_spinner_pe();
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
+        let words = [
+            0x3c19_0000 | (view_trap >> 16),    // lui t9,MapViewOfFile trap high
+            0x3739_0000 | (view_trap & 0xffff), // ori t9,t9,trap low
+            0x0320_f809,                        // jalr t9
+            0,                                  // delay-slot nop
+            0x0040_8021,                        // addu s0,v0,zero: retain view base
+            0x3c09_aabb,                        // lui t1,0xaabb
+            0x3529_ccdd,                        // ori t1,t1,0xccdd
+            0xae09_0000,                        // sw t1,0(s0): fault-map page 0
+            0x8e0b_0000,                        // lw t3,0(s0): guest pre-import witness
+            0x3c19_0000 | (create_trap >> 16),  // lui t9,CreateProcessW trap high
+            0x3739_0000 | (create_trap & 0xffff), // ori t9,t9,trap low
+            0x0320_f809,                        // jalr t9: deferred launch and re-seed
+            0,                                  // delay-slot nop
+            0x1000_ffff,                        // bounded safety spinner
+            0,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        std::fs::write(&parent_path, &bytes).unwrap();
+        std::fs::write(&child_path, tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_base(0x0040_0000);
+        kernel.set_process_module_path("\\Test\\parent.exe".to_owned());
+        kernel.set_process_module_host_path(parent_path.clone());
+        let birth = kernel.current_process_birth_key().expect("boot birth");
+        let mapping_handle = kernel.handles.create_file_mapping(None, 0x2000, 0x04, None);
+        kernel.handles.file_mapping_mut(mapping_handle)?.data[..4]
+            .copy_from_slice(&0x1122_3344u32.to_le_bytes());
+        kernel.handles.file_mapping_mut(mapping_handle)?.data[0x1000..0x1004]
+            .copy_from_slice(&SECOND_PAGE.to_le_bytes());
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("fixture PE entry");
+        for (address, ordinal, name) in [
+            (
+                view_trap,
+                crate::ce::coredll_ordinals::ORD_MAP_VIEW_OF_FILE,
+                "MapViewOfFile",
+            ),
+            (
+                create_trap,
+                crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W,
+                "CreateProcessW",
+            ),
+        ] {
+            cpu.import_traps
+                .insert(crate::emulator::imports::ImportTrap {
+                    address,
+                    module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                    module_name: "COREDLL.dll".to_owned(),
+                    ordinal: Some(ordinal),
+                    name: Some(name.to_owned()),
+                    iat_va: 0,
+                });
+        }
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+
+        let sp = cpu.stack_top.expect("loaded guest stack") - 0x1000;
+        let application_ptr = sp + 0x100;
+        let process_information_ptr = sp + 0x200;
+        let application = "child.exe"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        write_guest_fixture_bytes(&mut cpu, application_ptr, &application);
+        for (index, value) in [0, 0, 0, 0, 0, process_information_ptr]
+            .into_iter()
+            .enumerate()
+        {
+            write_guest_fixture_bytes(&mut cpu, sp + 16 + index as u32 * 4, &value.to_le_bytes());
+        }
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = mapping_handle;
+        regs.regs[29] = sp;
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        cpu.running_guest_thread = Some((cpu.current_thread_id, u32::MAX));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(entry + 0x10),
+                live_pump: false,
+            },
+        );
+        first.result?;
+        assert_eq!(first.report.start_process_birth(), Some(birth));
+        assert_eq!(first.report.end_process_birth(), Some(birth));
+        let view_base = cpu.saved_context.as_ref().expect("import result").regs.regs[2];
+        assert_ne!(view_base, 0, "public MapViewOfFile returned a view");
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        // CreateProcessW's a0 differs from MapViewOfFile's a0, while v0 still
+        // carries the view base for the first guest instruction in slice two.
+        cpu.saved_context.as_mut().expect("saved parent").regs.regs[4] = application_ptr;
+
+        let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        second.result?;
+        assert_eq!(second.report.start_process_birth(), Some(birth));
+        assert!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .any(|record| record.op == "CreateProcessWQueued")
+        );
+        assert!(
+            cpu.parked_child_process_count() > 0
+                || kernel.current_process_id() != birth.process_id()
+        );
+        let mapping = kernel.handles.file_mapping(mapping_handle)?;
+        assert_eq!(&mapping.data[..4], &WRITTEN.to_le_bytes());
+        assert_eq!(&mapping.data[0x1000..0x1004], &SECOND_PAGE.to_le_bytes());
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        Ok(())
+    }
+
+    #[test]
     fn native_file_view_rejects_ambiguous_global_lazy_seed() -> crate::Result<()> {
         let mut kernel = phase1_kernel("ambiguous-lazy-view.exe")?;
         let boot_owner = kernel.current_process_birth_key().expect("boot birth");
