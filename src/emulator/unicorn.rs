@@ -376,6 +376,61 @@ fn verified_native_register_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn stop_native_opaque_wait_error<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    current_thread: &NativeCurrentThread,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
+    thread_id: u32,
+    reason: impl Into<String>,
+) {
+    let reason = reason.into();
+    tracing::error!(target: "ce.scheduler", thread_id, reason, "native opaque wait rejected");
+    let mut failure = terminal_error.borrow_mut();
+    if failure.is_none() {
+        *failure = Some(Error::Backend(reason));
+    }
+    drop(failure);
+    current_thread.set_unverified(thread_id);
+    let _ = uc.emu_stop();
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_publish_native_opaque_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    current_thread: &NativeCurrentThread,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
+    owner_birth: crate::ce::object::ThreadBirthKey,
+    thread_handle: u32,
+    wait_handles: Vec<u32>,
+    kind: crate::ce::scheduler::SchedulerBlockedWaitKind,
+    wait_started_ms: u32,
+    timeout_ms: u32,
+) -> Option<u64> {
+    match kernel.try_register_opaque_waiter_for_birth(
+        owner_birth,
+        thread_handle,
+        wait_handles,
+        kind,
+        wait_started_ms,
+        timeout_ms,
+    ) {
+        Ok(wait_id) => Some(wait_id),
+        Err(err) => {
+            stop_native_opaque_wait_error(
+                uc,
+                current_thread,
+                terminal_error,
+                owner_birth.thread_id(),
+                format!("opaque wait publication rejected for {owner_birth:?}: {err:?}"),
+            );
+            None
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn verified_native_guest_thread_exit_birth(
     kernel: &CeKernel,
     current_thread: &NativeCurrentThread,
@@ -5829,8 +5884,10 @@ impl UnicornMips {
         let Some(modal) = self.blocked_modal_message_box.take() else {
             return None;
         };
+        // Exact process/thread completion already retires waits owned by that
+        // birth. A numeric-TID sweep here could delete a replacement task's
+        // waits after the ID is reused.
         let _ = kernel.remove_blocked_waiter(modal.wait_id);
-        let _ = kernel.remove_blocked_waiters_for_thread(modal.thread_id);
         Some(modal.modal_state)
     }
 
@@ -10615,6 +10672,7 @@ impl UnicornMips {
                         host_wall_clock_limit,
                         &pending_com_notification_returns_hook,
                         live_pump,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10670,6 +10728,8 @@ impl UnicornMips {
                         &blocked_popup_menu_modal_hook,
                         &blocked_get_message_hook,
                         &running_guest_thread_hook,
+                        &current_thread_id_hook,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10711,6 +10771,8 @@ impl UnicornMips {
                         active_thread_id,
                         &blocked_clipboard_data_hook,
                         &running_guest_thread_hook,
+                        &current_thread_id_hook,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10739,6 +10801,7 @@ impl UnicornMips {
                         host_wall_clock_started,
                         host_wall_clock_limit,
                         live_pump,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10780,6 +10843,7 @@ impl UnicornMips {
                         host_wall_clock_started,
                         host_wall_clock_limit,
                         live_pump,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10807,6 +10871,7 @@ impl UnicornMips {
                         host_wall_clock_started,
                         host_wall_clock_limit,
                         live_pump,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10832,6 +10897,7 @@ impl UnicornMips {
                         host_wall_clock_started,
                         host_wall_clock_limit,
                         live_pump,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10854,6 +10920,7 @@ impl UnicornMips {
                         host_wall_clock_started,
                         host_wall_clock_limit,
                         live_pump,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10879,6 +10946,7 @@ impl UnicornMips {
                         &current_thread_id_hook,
                         &suspended_guest_thread_hook,
                         &running_guest_thread_hook,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10904,6 +10972,7 @@ impl UnicornMips {
                         &current_thread_id_hook,
                         &suspended_guest_thread_hook,
                         &running_guest_thread_hook,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -10923,6 +10992,7 @@ impl UnicornMips {
                         &current_thread_id_hook,
                         &suspended_guest_thread_hook,
                         &running_guest_thread_hook,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -11031,6 +11101,7 @@ impl UnicornMips {
                         &pending_wndproc_returns_hook,
                         &parked_child_processes_hook,
                         &cross_process_send_yield_hook,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -19824,6 +19895,7 @@ fn try_block_empty_get_message<D>(
         std::cell::RefCell<Vec<PendingComNotificationReturn>>,
     >,
     live_pump: bool,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
@@ -19911,8 +19983,12 @@ fn try_block_empty_get_message<D>(
         .rfind(|pending| pending.worker_thread_id == thread_id)
         .cloned();
     if let Some(pending_callout) = pending_callout {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             pending_callout.thread_handle,
             Vec::new(),
             crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
@@ -19922,7 +19998,10 @@ fn try_block_empty_get_message<D>(
             },
             kernel.timers.tick_count(),
             crate::ce::timer::INFINITE,
-        );
+        ) else {
+            *blocked.borrow_mut() = prior_blocked_snapshot;
+            return true;
+        };
         if verified_get_message_wait_birth(
             kernel,
             wait_id,
@@ -19991,8 +20070,12 @@ fn try_block_empty_get_message<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             Vec::new(),
             crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
@@ -20002,7 +20085,10 @@ fn try_block_empty_get_message<D>(
             },
             kernel.timers.tick_count(),
             crate::ce::timer::INFINITE,
-        );
+        ) else {
+            *blocked.borrow_mut() = prior_blocked_snapshot;
+            return true;
+        };
         if verified_get_message_wait_birth(kernel, wait_id, thread_id, thread_handle)
             != Some(captured_native_birth)
         {
@@ -20122,8 +20208,12 @@ fn try_block_empty_get_message<D>(
         kernel.guest_thread_handle_by_id(thread_id)
     };
     if let Some(thread_handle) = fallback_thread_handle {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             Vec::new(),
             crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
@@ -20133,7 +20223,10 @@ fn try_block_empty_get_message<D>(
             },
             kernel.timers.tick_count(),
             crate::ce::timer::INFINITE,
-        );
+        ) else {
+            *blocked.borrow_mut() = prior_blocked_snapshot;
+            return true;
+        };
         if verified_get_message_wait_birth(kernel, wait_id, thread_id, thread_handle)
             != Some(captured_native_birth)
         {
@@ -20445,6 +20538,8 @@ fn try_block_for_popup_menu_modal_wait<D>(
     blocked_popup: &std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -20453,6 +20548,19 @@ fn try_block_for_popup_menu_modal_wait<D>(
     {
         return false;
     }
+
+    let Some(captured_native_birth) =
+        verified_native_register_birth(kernel, current_thread_id, thread_id)
+    else {
+        stop_native_opaque_wait_error(
+            uc,
+            current_thread_id,
+            terminal_error,
+            thread_id,
+            "PopupMenuModal has no verified native register birth",
+        );
+        return true;
+    };
 
     // Re-entry: a prior call parked here waiting for input.
     // The framebuffer is passed to poll_once so that hover rendering works on re-entry.
@@ -20539,8 +20647,12 @@ fn try_block_for_popup_menu_modal_wait<D>(
                 .borrow()
                 .and_then(|(id, handle)| (id == thread_id).then_some(handle))
                 .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
-            let wait_id = kernel.register_opaque_compatibility_waiter(
-                thread_id,
+            let Some(wait_id) = try_publish_native_opaque_wait(
+                kernel,
+                memory.uc,
+                current_thread_id,
+                terminal_error,
+                captured_native_birth,
                 thread_handle,
                 Vec::new(),
                 crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal {
@@ -20548,7 +20660,9 @@ fn try_block_for_popup_menu_modal_wait<D>(
                 },
                 kernel.timers.tick_count(),
                 crate::ce::timer::INFINITE,
-            );
+            ) else {
+                return true;
+            };
             let raw_return_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
             let return_pc = import_callout_return_pc(raw_return_pc, trampoline_jumps);
             *blocked_popup.borrow_mut() = Some(BlockedPopupMenuModal {
@@ -20961,8 +21075,12 @@ fn try_block_for_send_message_timeout_wait<D>(
 
     // Register a SendMessage waiter and park.
     let wait_started_ms = kernel.timers.tick_count();
-    let wait_id = kernel.register_opaque_compatibility_waiter(
-        thread_id,
+    let Some(wait_id) = try_publish_native_opaque_wait(
+        kernel,
+        uc,
+        current_thread_id,
+        terminal_error,
+        sender_birth,
         thread_handle,
         Vec::new(),
         crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage {
@@ -20970,7 +21088,11 @@ fn try_block_for_send_message_timeout_wait<D>(
         },
         wait_started_ms,
         block_state.timeout_ms,
-    );
+    ) else {
+        let _ = kernel.timeout_send_message(block_state.send_id);
+        let _ = kernel.take_completed_send_message_result(block_state.send_id);
+        return true;
+    };
     let blocked = BlockedSendMessageTimeout {
         wait_id,
         thread_id,
@@ -21270,6 +21392,8 @@ fn try_block_for_clipboard_data_wait<D>(
     thread_id: u32,
     blocked_cbd: &std::rc::Rc<std::cell::RefCell<Option<BlockedClipboardData>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -21284,6 +21408,19 @@ fn try_block_for_clipboard_data_wait<D>(
     if format == 0 {
         return false;
     }
+
+    let Some(captured_native_birth) =
+        verified_native_register_birth(kernel, current_thread_id, thread_id)
+    else {
+        stop_native_opaque_wait_error(
+            uc,
+            current_thread_id,
+            terminal_error,
+            thread_id,
+            "ClipboardRender has no verified native register birth",
+        );
+        return true;
+    };
 
     // Re-entry: the blocked thread re-ran at this ordinal — check if render is done.
     if let Some(blocked) = blocked_cbd.borrow().clone() {
@@ -21363,14 +21500,20 @@ fn try_block_for_clipboard_data_wait<D>(
         .and_then(|(id, handle)| (id == thread_id).then_some(handle))
         .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
     let now_ms = kernel.timers.tick_count();
-    let wait_id = kernel.register_opaque_compatibility_waiter(
-        thread_id,
+    let Some(wait_id) = try_publish_native_opaque_wait(
+        kernel,
+        uc,
+        current_thread_id,
+        terminal_error,
+        captured_native_birth,
         thread_handle,
         Vec::new(),
         crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { format },
         now_ms,
         CLIPBOARD_RENDER_TIMEOUT_MS,
-    );
+    ) else {
+        return true;
+    };
     kernel.threads.set_last_error(thread_id, 0);
     *blocked_cbd.borrow_mut() = Some(BlockedClipboardData {
         wait_id,
@@ -21864,7 +22007,7 @@ fn unicorn_blocked_wait_kind_name(
         }
         crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. } => "winsock_read",
         crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => "send_message",
-        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => "modal_message_box",
+        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { .. } => "modal_message_box",
         crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { .. } => "popup_menu_modal",
         crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { .. } => {
             "clipboard_render"
@@ -22200,6 +22343,7 @@ fn try_block_message_queue_io<D>(
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
     live_pump: bool,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use crate::ce::coredll_ordinals::{ORD_READ_MSG_QUEUE, ORD_WRITE_MSG_QUEUE};
     use unicorn_engine::RegisterMIPS;
@@ -22292,14 +22436,20 @@ fn try_block_message_queue_io<D>(
         .cloned();
     if let Some(pending_callout) = pending_callout {
         let wait_handles = vec![queue_handle];
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             pending_callout.thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -22379,14 +22529,20 @@ fn try_block_message_queue_io<D>(
             );
         }
         let wait_handles = vec![queue_handle];
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -22494,14 +22650,20 @@ fn try_block_message_queue_io<D>(
         }
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
         let wait_handles = vec![queue_handle];
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -22602,6 +22764,28 @@ fn complete_native_task_wait_preparation_failure<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn stop_native_task_wait_publication_failure<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    current_thread_id: &NativeCurrentThread,
+    thread_id: u32,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
+    stage: &'static str,
+    detail: impl std::fmt::Debug,
+) -> bool {
+    tracing::error!(target: "ce.scheduler", thread_id, stage, ?detail, "native task wait publication failed");
+    let mut failure = terminal_error.borrow_mut();
+    if failure.is_none() {
+        *failure = Some(Error::Backend(format!(
+            "native task wait {stage} failed for thread {thread_id}: {detail:?}"
+        )));
+    }
+    drop(failure);
+    current_thread_id.set_unverified(thread_id);
+    let _ = uc.emu_stop();
+    true
+}
+
+#[cfg(feature = "unicorn")]
 fn try_block_wait_for_single_object<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -22624,6 +22808,7 @@ fn try_block_wait_for_single_object<D>(
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
     live_pump: bool,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT)
@@ -22639,10 +22824,9 @@ fn try_block_wait_for_single_object<D>(
     let Some(captured_native_birth) =
         verified_native_register_birth(kernel, current_thread_id, thread_id)
     else {
-        tracing::error!(target: "ce.scheduler", thread_id, current = ?current_thread_id.get(), "object wait has no verified register birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
-        return true;
+        return stop_native_task_wait_publication_failure(
+            uc, current_thread_id, thread_id, terminal_error, "single birth preflight", "no verified register birth",
+        );
     };
     if pending_returns.borrow().iter().any(|pending| {
         pending.worker_thread_id == thread_id && pending.worker_birth != captured_native_birth
@@ -22699,17 +22883,23 @@ fn try_block_wait_for_single_object<D>(
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
         if wait_thread_id != thread_id || prepared.owner_birth() != Some(captured_native_birth) {
-            tracing::error!(target: "ce.scheduler", thread_id, wait_thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "object wait owner disagrees with captured registers");
-            current_thread_id.set_unverified(thread_id);
-            let _ = uc.emu_stop();
-            return true;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single pending owner", "wait owner differs from captured registers",
+            );
+        }
+        if let Err(error) = prepared.preflight_owner_birth() {
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single pending preflight", error,
+            );
         }
         let Some(callout) = pop_pending_guest_thread_return_for_thread(
             pending_returns,
             prepared.kernel_mut(),
             thread_id,
         ) else {
-            return false;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single pending handoff", "pending return disappeared",
+            );
         };
         prepared.kernel_mut().record_blocked_single_wait(timeout);
         remove_stale_blocked_get_message_for_thread(
@@ -22718,7 +22908,12 @@ fn try_block_wait_for_single_object<D>(
             thread_id,
         );
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, wait_thread_id);
-        let wait_id = prepared.publish();
+        let wait_id = match prepared.try_publish() {
+            Ok(wait_id) => wait_id,
+            Err(error) => return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single pending publish", error,
+            ),
+        };
         annotate_blocking_single_wait_import(
             kernel,
             last_imports,
@@ -22805,10 +23000,14 @@ fn try_block_wait_for_single_object<D>(
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
         if prepared.owner_birth() != Some(captured_native_birth) {
-            tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "object wait owner changed before publication");
-            current_thread_id.set_unverified(thread_id);
-            let _ = uc.emu_stop();
-            return true;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single running owner", "wait owner differs from captured registers",
+            );
+        }
+        if let Err(error) = prepared.preflight_owner_birth() {
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single running preflight", error,
+            );
         }
         prepared.kernel_mut().record_blocked_single_wait(timeout);
         remove_stale_blocked_get_message_for_thread(
@@ -22817,7 +23016,12 @@ fn try_block_wait_for_single_object<D>(
             thread_id,
         );
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, wait_thread_id);
-        let wait_id = prepared.publish();
+        let wait_id = match prepared.try_publish() {
+            Ok(wait_id) => wait_id,
+            Err(error) => return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single running publish", error,
+            ),
+        };
         annotate_blocking_single_wait_import(
             kernel,
             last_imports,
@@ -22935,10 +23139,14 @@ fn try_block_wait_for_single_object<D>(
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
         if prepared.owner_birth() != Some(captured_native_birth) {
-            tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "object wait fallback owner changed before publication");
-            current_thread_id.set_unverified(thread_id);
-            let _ = uc.emu_stop();
-            return true;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single fallback owner", "wait owner differs from captured registers",
+            );
+        }
+        if let Err(error) = prepared.preflight_owner_birth() {
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single fallback preflight", error,
+            );
         }
         prepared.kernel_mut().record_blocked_single_wait(timeout);
         remove_stale_blocked_get_message_for_thread(
@@ -22947,7 +23155,12 @@ fn try_block_wait_for_single_object<D>(
             thread_id,
         );
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
-        let wait_id = prepared.publish();
+        let wait_id = match prepared.try_publish() {
+            Ok(wait_id) => wait_id,
+            Err(error) => return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "single fallback publish", error,
+            ),
+        };
         annotate_blocking_single_wait_import(
             kernel,
             last_imports,
@@ -23373,6 +23586,7 @@ fn try_block_sleep<D>(
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
     live_pump: bool,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -23457,14 +23671,20 @@ fn try_block_sleep<D>(
         .rfind(|pending| pending.worker_thread_id == thread_id)
         .cloned();
     if let Some(pending_callout) = pending_callout {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             pending_callout.thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
-        );
+        ) else {
+            return true;
+        };
         if verified_sleep_wait_birth(kernel, wait_id, thread_id, pending_callout.thread_handle)
             != Some(captured_native_birth)
         {
@@ -23536,14 +23756,20 @@ fn try_block_sleep<D>(
                 kernel, uc, thread_id, timeout, return_pc, live_pump,
             );
         }
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
-        );
+        ) else {
+            return true;
+        };
         if verified_sleep_wait_birth(kernel, wait_id, thread_id, thread_handle)
             != Some(captured_native_birth)
         {
@@ -23647,14 +23873,20 @@ fn try_block_sleep<D>(
             );
         }
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
-        );
+        ) else {
+            return true;
+        };
         if verified_sleep_wait_birth(kernel, wait_id, thread_id, thread_handle)
             != Some(captured_native_birth)
         {
@@ -24105,6 +24337,7 @@ fn try_block_wait_for_multiple_objects<D>(
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
     live_pump: bool,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_MULTIPLE_OBJECTS)
@@ -24146,10 +24379,9 @@ fn try_block_wait_for_multiple_objects<D>(
     let Some(captured_native_birth) =
         verified_native_register_birth(kernel, current_thread_id, thread_id)
     else {
-        tracing::error!(target: "ce.scheduler", thread_id, current = ?current_thread_id.get(), "multiple-object wait has no verified register birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
-        return true;
+        return stop_native_task_wait_publication_failure(
+            uc, current_thread_id, thread_id, terminal_error, "multiple birth preflight", "no verified register birth",
+        );
     };
     if pending_returns.borrow().iter().any(|pending| {
         pending.worker_thread_id == thread_id && pending.worker_birth != captured_native_birth
@@ -24216,17 +24448,23 @@ fn try_block_wait_for_multiple_objects<D>(
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
         if prepared.owner_birth() != Some(captured_native_birth) {
-            tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "multiple-object wait pending owner changed before publication");
-            current_thread_id.set_unverified(thread_id);
-            let _ = uc.emu_stop();
-            return true;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "multiple pending owner", "wait owner differs from captured registers",
+            );
+        }
+        if let Err(error) = prepared.preflight_owner_birth() {
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "multiple pending preflight", error,
+            );
         }
         let Some(callout) = pop_pending_guest_thread_return_for_thread(
             pending_returns,
             prepared.kernel_mut(),
             thread_id,
         ) else {
-            return false;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "multiple pending handoff", "pending return disappeared",
+            );
         };
         prepared
             .kernel_mut()
@@ -24237,7 +24475,12 @@ fn try_block_wait_for_multiple_objects<D>(
             blocked_get_message,
             thread_id,
         );
-        let wait_id = prepared.publish();
+        let wait_id = match prepared.try_publish() {
+            Ok(wait_id) => wait_id,
+            Err(error) => return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "multiple pending publish", error,
+            ),
+        };
         kernel.record_wait_event_trace(
             "BlockWaitForMultipleObjects",
             None,
@@ -24293,10 +24536,14 @@ fn try_block_wait_for_multiple_objects<D>(
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
         if prepared.owner_birth() != Some(captured_native_birth) {
-            tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "multiple-object wait running owner changed before publication");
-            current_thread_id.set_unverified(thread_id);
-            let _ = uc.emu_stop();
-            return true;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "multiple running owner", "wait owner differs from captured registers",
+            );
+        }
+        if let Err(error) = prepared.preflight_owner_birth() {
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "multiple running preflight", error,
+            );
         }
         prepared
             .kernel_mut()
@@ -24307,7 +24554,12 @@ fn try_block_wait_for_multiple_objects<D>(
             blocked_get_message,
             thread_id,
         );
-        let wait_id = prepared.publish();
+        let wait_id = match prepared.try_publish() {
+            Ok(wait_id) => wait_id,
+            Err(error) => return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "multiple running publish", error,
+            ),
+        };
         kernel.record_wait_event_trace(
             "BlockWaitForMultipleObjects",
             None,
@@ -24449,6 +24701,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
     live_pump: bool,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -24498,10 +24751,9 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
     let Some(captured_native_birth) =
         verified_native_register_birth(kernel, current_thread_id, thread_id)
     else {
-        tracing::error!(target: "ce.scheduler", thread_id, current = ?current_thread_id.get(), "MsgWait has no verified register birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
-        return true;
+        return stop_native_task_wait_publication_failure(
+            uc, current_thread_id, thread_id, terminal_error, "MsgWait birth preflight", "no verified register birth",
+        );
     };
     if pending_returns.borrow().iter().any(|pending| {
         pending.worker_thread_id == thread_id && pending.worker_birth != captured_native_birth
@@ -24578,23 +24830,34 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
         if prepared.owner_birth() != Some(captured_native_birth) {
-            tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "MsgWait pending owner changed before publication");
-            current_thread_id.set_unverified(thread_id);
-            let _ = uc.emu_stop();
-            return true;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "MsgWait pending owner", "wait owner differs from captured registers",
+            );
+        }
+        if let Err(error) = prepared.preflight_owner_birth() {
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "MsgWait pending preflight", error,
+            );
         }
         let Some(callout) = pop_pending_guest_thread_return_for_thread(
             pending_returns,
             prepared.kernel_mut(),
             thread_id,
         ) else {
-            return false;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "MsgWait pending handoff", "pending return disappeared",
+            );
         };
         prepared
             .kernel_mut()
             .record_blocked_msg_wait(count, timeout);
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
-        let wait_id = prepared.publish();
+        let wait_id = match prepared.try_publish() {
+            Ok(wait_id) => wait_id,
+            Err(error) => return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "MsgWait pending publish", error,
+            ),
+        };
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -24639,16 +24902,25 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
         if prepared.owner_birth() != Some(captured_native_birth) {
-            tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "MsgWait running owner changed before publication");
-            current_thread_id.set_unverified(thread_id);
-            let _ = uc.emu_stop();
-            return true;
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "MsgWait running owner", "wait owner differs from captured registers",
+            );
+        }
+        if let Err(error) = prepared.preflight_owner_birth() {
+            return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "MsgWait running preflight", error,
+            );
         }
         prepared
             .kernel_mut()
             .record_blocked_msg_wait(count, timeout);
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
-        let wait_id = prepared.publish();
+        let wait_id = match prepared.try_publish() {
+            Ok(wait_id) => wait_id,
+            Err(error) => return stop_native_task_wait_publication_failure(
+                uc, current_thread_id, thread_id, terminal_error, "MsgWait running publish", error,
+            ),
+        };
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -24921,32 +25193,27 @@ fn verified_serial_wait_candidate_birth<D>(
     current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     thread_id: u32,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> Option<crate::ce::object::ThreadBirthKey> {
     let Some(captured_birth) = verified_native_register_birth(kernel, current_thread_id, thread_id)
     else {
-        tracing::error!(target: "ce.scheduler", thread_id, current = ?current_thread_id.get(), "serial wait candidate has no verified register birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "serial wait candidate has no verified register birth");
         return None;
     };
     if pending_returns.borrow().iter().any(|pending| {
         pending.worker_thread_id == thread_id && pending.worker_birth != captured_birth
     }) {
-        tracing::error!(target: "ce.scheduler", thread_id, ?captured_birth, "serial wait candidate disagrees with pending worker birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "serial wait candidate disagrees with pending worker birth");
         return None;
     }
     if let Some((running_thread_id, _)) = *running_thread.borrow()
         && running_thread_id != thread_id
     {
-        tracing::error!(target: "ce.scheduler", thread_id, running_thread_id, "serial wait candidate running owner differs from native registers");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, format!("serial wait candidate running owner {running_thread_id} differs from native registers"));
         return None;
     }
     if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
-        current_thread_id.set_unverified(thread_id);
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "serial wait candidate has stale pending worker return");
         return None;
     }
     Some(captured_birth)
@@ -24967,6 +25234,7 @@ fn try_block_serial_read_file<D>(
     current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_READ_FILE)
@@ -24991,6 +25259,7 @@ fn try_block_serial_read_file<D>(
             current_thread_id,
             running_thread,
             thread_id,
+            terminal_error,
         )
         .is_none()
     {
@@ -25023,6 +25292,7 @@ fn try_block_serial_read_file<D>(
             requested,
             transferred_ptr,
             timeout_ms,
+            terminal_error,
         );
     };
     if timeout_ms == 0 {
@@ -25046,6 +25316,7 @@ fn try_block_serial_read_file<D>(
         requested,
         transferred_ptr,
         timeout_ms,
+        terminal_error,
     )
 }
 
@@ -25067,6 +25338,7 @@ fn block_serial_read_file<D>(
     requested: u32,
     transferred_ptr: u32,
     timeout_ms: u32,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -25077,6 +25349,7 @@ fn block_serial_read_file<D>(
         current_thread_id,
         running_thread,
         thread_id,
+        terminal_error,
     ) else {
         return true;
     };
@@ -25098,14 +25371,20 @@ fn block_serial_read_file<D>(
         .rfind(|pending| pending.worker_thread_id == thread_id)
         .cloned();
     if let Some(pending_callout) = pending_callout {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             pending_callout.thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_ms,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -25164,14 +25443,20 @@ fn block_serial_read_file<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_ms,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -25291,6 +25576,7 @@ fn try_block_wait_comm_event<D>(
     current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_COMM_EVENT)
@@ -25320,6 +25606,7 @@ fn try_block_wait_comm_event<D>(
         running_thread,
         handle,
         event_ptr,
+        terminal_error,
     )
 }
 
@@ -25337,6 +25624,7 @@ fn block_wait_comm_event<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     handle: u32,
     event_ptr: u32,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -25347,6 +25635,7 @@ fn block_wait_comm_event<D>(
         current_thread_id,
         running_thread,
         thread_id,
+        terminal_error,
     ) else {
         return true;
     };
@@ -25367,14 +25656,20 @@ fn block_wait_comm_event<D>(
         .rfind(|pending| pending.worker_thread_id == thread_id)
         .cloned();
     if let Some(pending_callout) = pending_callout {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             pending_callout.thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_ms,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -25433,14 +25728,20 @@ fn block_wait_comm_event<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_ms,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -25509,6 +25810,7 @@ fn try_block_winsock_read<D>(
     current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Winsock {
         return false;
@@ -25527,29 +25829,23 @@ fn try_block_winsock_read<D>(
     let Some(captured_native_birth) =
         verified_native_register_birth(kernel, current_thread_id, thread_id)
     else {
-        tracing::error!(target: "ce.scheduler", thread_id, current = ?current_thread_id.get(), "Winsock candidate has no verified register birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "Winsock candidate has no verified register birth");
         return true;
     };
     if pending_returns.borrow().iter().any(|pending| {
         pending.worker_thread_id == thread_id && pending.worker_birth != captured_native_birth
     }) {
-        tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, "Winsock candidate disagrees with pending worker birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "Winsock candidate disagrees with pending worker birth");
         return true;
     }
     if let Some((running_thread_id, _)) = *running_thread.borrow()
         && running_thread_id != thread_id
     {
-        tracing::error!(target: "ce.scheduler", thread_id, running_thread_id, "Winsock candidate running owner differs from native registers");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, format!("Winsock candidate running owner {running_thread_id} differs from native registers"));
         return true;
     }
     if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
-        current_thread_id.set_unverified(thread_id);
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "Winsock candidate has stale pending worker return");
         return true;
     }
     if name == "connect" {
@@ -25584,6 +25880,7 @@ fn try_block_winsock_read<D>(
         read_mask,
         write_mask,
         except_mask,
+        terminal_error,
     )
 }
 
@@ -25867,35 +26164,30 @@ fn block_winsock_read<D>(
     read_mask: u64,
     write_mask: u64,
     except_mask: u64,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
     let Some(captured_native_birth) =
         verified_native_register_birth(kernel, current_thread_id, thread_id)
     else {
-        tracing::error!(target: "ce.scheduler", thread_id, current = ?current_thread_id.get(), "Winsock wait has no verified register birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "Winsock wait has no verified register birth");
         return true;
     };
     if pending_returns.borrow().iter().any(|pending| {
         pending.worker_thread_id == thread_id && pending.worker_birth != captured_native_birth
     }) {
-        tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, "Winsock wait disagrees with pending worker birth");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "Winsock wait disagrees with pending worker birth");
         return true;
     }
     if let Some((running_thread_id, _)) = *running_thread.borrow()
         && running_thread_id != thread_id
     {
-        tracing::error!(target: "ce.scheduler", thread_id, running_thread_id, "Winsock wait running owner differs from native registers");
-        current_thread_id.set_unverified(thread_id);
-        let _ = uc.emu_stop();
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, format!("Winsock wait running owner {running_thread_id} differs from native registers"));
         return true;
     }
     if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
-        current_thread_id.set_unverified(thread_id);
+        stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, thread_id, "Winsock wait has stale pending worker return");
         return true;
     }
 
@@ -25920,14 +26212,20 @@ fn block_winsock_read<D>(
         .rfind(|pending| pending.worker_thread_id == thread_id)
         .cloned();
     if let Some(pending_callout) = pending_callout {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             pending_callout.thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_ms,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -25984,14 +26282,20 @@ fn block_winsock_read<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            captured_native_birth,
             thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_ms,
-        );
+        ) else {
+            return true;
+        };
         if verified_registered_native_wait_birth(
             kernel,
             wait_id,
@@ -27344,8 +27648,8 @@ fn scheduler_blocked_msg_wait_has_input(
                 kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
             }
         }
-        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => {
-            kernel.thread_has_modal_dialog_result(blocked.thread_id)
+        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd } => {
+            kernel.has_modal_dialog_result(blocked.thread_id, dialog_hwnd)
                 || kernel.thread_has_pending_sent_message(blocked.thread_id)
                 || kernel.gwe.has_message_filtered(
                     blocked.thread_id,
@@ -27434,7 +27738,7 @@ fn scheduler_blocked_wait_is_ready(
             crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
             }
-            crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => {
+            crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { .. } => {
                 kernel.thread_has_modal_dialog_result(blocked.thread_id)
                     || kernel.thread_has_pending_sent_message(blocked.thread_id)
                     || kernel.gwe.has_message_filtered(
@@ -33719,6 +34023,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_millis(1)),
             false,
+            &std::cell::RefCell::new(None),
         ));
 
         assert_eq!(*running_thread.borrow(), None);
@@ -34001,6 +34306,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             true,
+            &std::cell::RefCell::new(None),
         ));
 
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
@@ -34094,6 +34400,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             true,
+            &std::cell::RefCell::new(None),
         ));
         assert_eq!(blocked_waits.borrow().len(), 1);
         assert_eq!(blocked_waits.borrow()[0].wait_id, old_wait_id);
@@ -34210,6 +34517,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             true,
+            &std::cell::RefCell::new(None),
         ));
         assert_eq!(
             pending_returns.borrow().as_slice(),
@@ -34263,6 +34571,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             true,
+            &std::cell::RefCell::new(None),
         ));
         assert!(pending_returns.borrow().is_empty());
         assert!(kernel.blocked_waiter(old_wait_id).is_none());
@@ -34372,6 +34681,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             true,
+            &std::cell::RefCell::new(None),
         ));
         assert_eq!(blocked_waits.borrow().len(), 1);
         assert_eq!(blocked_waits.borrow()[0].wait_id, old_wait_id);
@@ -34470,6 +34780,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             true,
+            &std::cell::RefCell::new(None),
         ));
         assert!(blocked_waits.borrow().is_empty());
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
@@ -34544,6 +34855,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             true,
+            &std::cell::RefCell::new(None),
         ));
 
         let waits = blocked_waits.borrow();
@@ -34621,6 +34933,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             true,
+            &std::cell::RefCell::new(None),
         ));
 
         let waits = blocked_waits.borrow();
@@ -35701,6 +36014,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             false,
+            &std::cell::RefCell::new(None),
         ));
 
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
@@ -35805,6 +36119,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             false,
+            &std::cell::RefCell::new(None),
         ));
 
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
@@ -39460,6 +39775,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::ZERO),
             true,
+            &std::cell::RefCell::new(None),
         );
 
         assert!(
@@ -39553,6 +39869,7 @@ mod wait_scheduler_tests {
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
             false,
+            &std::cell::RefCell::new(None),
         );
 
         assert!(blocked_waits.borrow().is_empty());
@@ -41877,20 +42194,27 @@ fn drain_remote_server_control_messages_for_message_target(
 #[cfg(feature = "unicorn")]
 fn modal_message_remote_input_target_for_unicorn(kernel: &CeKernel) -> Option<(u32, Option<u32>)> {
     kernel.scheduler.blocked_waits().find_map(|wait| {
-        if wait.kind != crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox {
-            return None;
+        let crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd } =
+            wait.kind
+        else { return None };
+        match wait.owner_birth {
+            Some(birth)
+                if birth.thread_id() == wait.thread_id
+                    && kernel.handles.thread_birth_key_by_id(wait.thread_id) == Some(birth)
+                    && kernel.handles.thread_execution_live_by_id(wait.thread_id) => {}
+            None if kernel.handles.thread_birth_key_by_id(wait.thread_id).is_none() => {}
+            _ => return None,
         }
         let dialog = kernel
             .gwe
-            .windows_snapshot()
-            .into_iter()
-            .find(|window| {
+            .window(dialog_hwnd)
+            .filter(|window| {
                 window.thread_id == wait.thread_id
                     && window.visible
                     && !window.destroyed
                     && window.class_name.eq_ignore_ascii_case("dialog")
             })
-            .map(|window| window.hwnd);
+            .map(|_| dialog_hwnd);
         Some((wait.thread_id, dialog))
     })
 }
@@ -53997,6 +54321,7 @@ fn try_enter_send_message_callout<D>(
     cross_process_send_yield: &std::rc::Rc<
         std::cell::RefCell<Option<UnicornCrossProcessSendYield>>,
     >,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -54074,13 +54399,7 @@ fn try_enter_send_message_callout<D>(
                     },
                 );
             let Some(sender_birth) = sender_birth else {
-                current_thread_id.set_unverified(active_thread_id);
-                tracing::error!(
-                    target: "ce.gwe",
-                    active_thread_id,
-                    "rejected cross-process SendMessage from stale or mismatched sender birth"
-                );
-                let _ = uc.emu_stop();
+                stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, active_thread_id, "cross-process SendMessage has stale or mismatched sender birth");
                 return true;
             };
             let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
@@ -54118,14 +54437,22 @@ fn try_enter_send_message_callout<D>(
                 result_ptr,
                 previous_running_thread,
             };
-            let wait_id = kernel.register_opaque_compatibility_waiter(
-                active_thread_id,
+            let Some(wait_id) = try_publish_native_opaque_wait(
+                kernel,
+                uc,
+                current_thread_id,
+                terminal_error,
+                sender_birth,
                 thread_handle,
                 Vec::new(),
                 scheduler_blocked_wait_kind(kind),
                 wait_started_ms,
                 timeout_for_wait,
-            );
+            ) else {
+                let _ = kernel.gwe.timeout_sent_message(send_id);
+                let _ = kernel.take_completed_send_message_result(send_id);
+                return true;
+            };
             let blocked = BlockedWaitThread {
                 wait_id,
                 thread_id: active_thread_id,
@@ -54141,15 +54468,7 @@ fn try_enter_send_message_callout<D>(
                 let _ = kernel.remove_blocked_waiter(wait_id);
                 let _ = kernel.gwe.timeout_sent_message(send_id);
                 let _ = kernel.take_completed_send_message_result(send_id);
-                current_thread_id.set_unverified(active_thread_id);
-                tracing::error!(
-                    target: "ce.gwe",
-                    active_thread_id,
-                    send_id,
-                    wait_id,
-                    "rejected cross-process SendMessage with mismatched scheduler/native wait"
-                );
-                let _ = uc.emu_stop();
+                stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, active_thread_id, format!("cross-process SendMessage {send_id} wait {wait_id} has mismatched scheduler/native owner"));
                 return true;
             }
             blocked_waits.borrow_mut().push(blocked);
@@ -54269,6 +54588,12 @@ fn try_enter_send_message_callout<D>(
     );
 
     let send_restore = if should_receiver_context {
+        let sender_birth = verified_native_register_birth(kernel, current_thread_id, active_thread_id)
+            .filter(|_| kernel.handles.thread_creation_owner_by_id(active_thread_id) == kernel.current_process_birth_key());
+        let Some(sender_birth) = sender_birth else {
+            stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, active_thread_id, "receiver-context SendMessage has stale or mismatched sender birth");
+            return true;
+        };
         let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
         let Some(send_id) = kernel.begin_cross_thread_send_message_w(
             active_thread_id,
@@ -54284,7 +54609,10 @@ fn try_enter_send_message_callout<D>(
             .gwe
             .activate_sent_message_for_receiver(target_thread_id, send_id)
         {
-            return false;
+            let _ = kernel.gwe.timeout_sent_message(send_id);
+            let _ = kernel.take_completed_send_message_result(send_id);
+            stop_native_opaque_wait_error(uc, current_thread_id, terminal_error, active_thread_id, format!("receiver-context SendMessage {send_id} activation failed"));
+            return true;
         }
         let sender_regs = capture_mips_gprs(uc);
         let previous_running_thread = *running_thread.borrow();
@@ -54301,14 +54629,22 @@ fn try_enter_send_message_callout<D>(
             result_ptr,
             previous_running_thread,
         };
-        let wait_id = kernel.register_opaque_compatibility_waiter(
-            active_thread_id,
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            sender_birth,
             thread_handle,
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout_for_wait,
-        );
+        ) else {
+            let _ = kernel.gwe.timeout_sent_message(send_id);
+            let _ = kernel.take_completed_send_message_result(send_id);
+            return true;
+        };
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id: active_thread_id,
@@ -66798,6 +67134,7 @@ mod unicorn_tests {
                 std::time::Instant::now(),
                 Some(std::time::Duration::from_millis(100)),
                 false,
+                &std::cell::RefCell::new(None),
             ));
         }
 

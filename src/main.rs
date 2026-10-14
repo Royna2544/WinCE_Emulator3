@@ -1828,20 +1828,27 @@ fn blocked_remote_input_target(
 
 fn saved_message_remote_input_target(kernel: &CeKernel) -> Option<BlockedRemoteInputTarget> {
     let modal_message_box = kernel.scheduler.blocked_waits().find_map(|wait| {
-        if wait.kind != SchedulerBlockedWaitKind::ModalMessageBox {
+        let SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd } = wait.kind else {
             return None;
+        };
+        match wait.owner_birth {
+            Some(birth)
+                if birth.thread_id() == wait.thread_id
+                    && kernel.handles.thread_birth_key_by_id(wait.thread_id) == Some(birth)
+                    && kernel.handles.thread_execution_live_by_id(wait.thread_id) => {}
+            None if kernel.handles.thread_birth_key_by_id(wait.thread_id).is_none() => {}
+            _ => return None,
         }
         let dialog = kernel
             .gwe
-            .windows_snapshot()
-            .into_iter()
-            .find(|window| {
+            .window(dialog_hwnd)
+            .filter(|window| {
                 window.thread_id == wait.thread_id
                     && window.visible
                     && !window.destroyed
                     && window.class_name.eq_ignore_ascii_case("dialog")
             })
-            .map(|window| window.hwnd);
+            .map(|_| dialog_hwnd);
         Some(BlockedRemoteInputTarget {
             thread_id: wait.thread_id,
             hwnd: dialog,
