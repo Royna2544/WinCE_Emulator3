@@ -1176,6 +1176,26 @@ one-run RW approval is exhausted. The
 [E-33 repair receipt](../../evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)
 retains source/test/build hashes and the exact limitations.
 
+## E-34 O-P1 mixed-stop JR classification (2026-10-14, executed)
+
+The new real-MIPS fixture first failed with genuine simultaneous native
+`TIMEOUT=true` and typed `VisibleParkedPeerYield`: raw PC was the checked JR
+`0x00401010`, but post-run repairs rewrote saved/native/snapshot PC to the
+import trap and added a false host-wall debug marker. The first JR repair now
+uses the typed reason rather than marker presence, and the second import-page
+repair refuses typed stops; marker reads only maintain debug history. The
+active E-31 pure test and E-34 fixture now pass: both stop facts remain, all
+four PCs stay at the JR, no marker is added, and resume dispatches the real
+import once. Final-source release passed **1,697/0/16 ignored**, no-feature
+**1,265/0/14 ignored**; both no-trace checks, normal release build, format and
+diff checks passed. The [E-34 receipt](../../evidence/e34-op1-mixed-jr-20261014/validation.receipt.md)
+records exact source/log/artifact hashes and raw logs. **O-P1 stop
+classification is closed**, excluding report-tail sealing/effect salvage,
+genuine C query-error and competing-hook controls, nested-start ambiguity,
+and other ready-resume failure consistency. Stage 2/fresh-default, broader
+scheduler and iNavi map acceptance remain open; no app run or mount write
+occurred.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

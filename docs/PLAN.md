@@ -91,8 +91,9 @@ Executed controls are recorded in the ledger; none of them is a stage pass.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full
-  release suite (1,634/0/4 ignored); the remaining O-P1 causes and count
-  witness are open. In-slice native FPU wait→resume→exit remains unexecuted.
+  release suite (1,634/0/4 ignored). E-28 added the native count-stop witness;
+  E-34 closes stop classification and checked mixed-stop JR preservation, while
+  report/failure hardening and in-slice native FPU wait→resume→exit remain open.
 - VM coherence: E-16's injected same-VA view control is green on its frozen
   source. E-18's private fresh-owner guest-write control was an expected red
   on the frozen E-19 source; its updated test-only slab control is green on

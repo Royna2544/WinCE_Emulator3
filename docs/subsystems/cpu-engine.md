@@ -32,7 +32,8 @@ exited 0; exact source/log hashes are in the
 An additive owned `NativeAttemptReport` now carries per-call diagnostic
 evidence through native execution and a possible child handoff, including
 `NoAttempt` on preflight. Its frame is `LegacyUnbound`, not a canonical
-Task/Frame-qualified `RunOutcome`; the app loop still discards it and
+Task/Frame-qualified `RunOutcome`. E-30 connected optional live/monitor host
+observers to the outgoing report; production passes `None`, and
 service-boundary rotation still reads selected-CPU compatibility state.
 The completed [earlier report-source validation](../../evidence/e28-run-outcome-20261014/detached-report-current-source-validation.receipt.md)
 passed **1,682/0/16 ignored** release and **1,262/0/14 ignored** no-feature;
@@ -45,9 +46,9 @@ source rejects that retry before native entry; its focused control passed
 1/0, full release **1,683/0/16 ignored**, no-feature **1,262/0/14 ignored**
 and applicable check/format/diff gates exited 0
 ([green receipt](../../evidence/e28-run-outcome-20261014/ordinary-finish-retry-green.receipt.md)).
-This is fail-closed continuation handling, not full tail sealing. O-P1,
-Stage 2 and S3-A remain open with the same rotation policy; E-29 was a
-pre-fix, splash-only bounded app run.
+This is fail-closed continuation handling, not full tail sealing. E-34 later
+closed O-P1 stop classification only; Stage 2 and S3-A remain open with the
+same rotation policy. E-29 was a pre-fix, splash-only bounded app run.
 
 ## Current implementation
 
@@ -171,15 +172,20 @@ Search by symbol, not by line number; the file moves.
 - `Query::TIMEOUT`, the actual expiry, was collected only when
   `ce.slice_profile` debug was on. Current D: source collects it every attempt.
 
-After the narrow E-15/E-17/E-19 corrections and E-28 count adapter, the
-remaining connected O-P1 work is:
+E-34 closes O-P1 stop classification: an actual native deadline and a checked
+typed visible-peer yield can coexist, and neither post-run JR import repair
+may discard the hook's safe continuation. The real-MIPS mixed-stop fixture
+keeps both facts, the raw/saved/native/snapshot JR PC and an exactly-once
+resumed import. The historical wall-clock marker is not repair authority.
+This does not close the broader Stage 2/5 CPU or scheduler work. Remaining
+report and failure-path hardening outside the classification contract is:
 
 1. Finish sealing and consuming the now-returned owned outgoing-attempt
    report after all fallible context, PC, byte/view sync and lease-finish work.
    The current report is an observational transport with a checked
    host-process-local diagnostic ID and `LegacyUnbound` frame, not Task
-   transition authority. Live/monitor callers still discard it through a
-   `Result<()>` wrapper; selected-CPU outcome remains their policy input.
+   transition authority. E-30 live/monitor observers can consume it, but
+   selected-CPU outcome remains their production policy input.
    E-28 supplies a count-stop *request* witness, not an exclusive cause or
    retired-instruction total. The ordinary tail now checks fallible
    `uc.finish()` before handoff, with a focused real-MIPS error/owner control;
@@ -194,20 +200,20 @@ remaining connected O-P1 work is:
    query Rust adapter-error controls preserve diagnostic-private provenance,
    but do not inject a C failure. Add genuine C query-error and competing-hook
    controls.
-2. Record each remaining hook reason at its actual request, then make
-   post-run restart-PC repair consume typed provenance while preserving safe
-   continuations after remote/ready-peer yields and actual budget stops.
-   Both rotation consumers already read `NativeSliceOutcome`; keep their
-   existing successful-boundary policy. Do not revive
+2. Audit other ready-resume families and native-entry failure consistency;
+   the E-34 mixed-stop JR control does not cover every callback/trampoline
+   continuation. Both rotation consumers still read `NativeSliceOutcome`;
+   keep their successful-boundary policy. Do not revive
    `unicorn_native_timeout` or change the current scheduling tick. Preserve
    verified encoded-kernel-exit decoding, but never let it mask a failed
    hook-control operation or primary native failure.
-3. Repeat the focused controls after hardening, then execute the broader
+3. Repeat focused controls after hardening, then execute the broader
    feature/full-backend and bounded live gates. Record newly exposed native
    errors in KNOWN_BUGS; do not suppress them again.
 
-These steps would close the remaining O-P1 classification/report gap. E-28
-did not change the 1M-instruction tick, quantum, clock or handoff policy.
+These steps close separate hardening gaps, not the already-closed O-P1
+classification gate. E-28 and E-34 did not change the 1M-instruction tick,
+quantum, clock or handoff policy.
 
 Historical E-19 status (source identity: `types.rs` SHA-256
 `00856084…80521`, `unicorn.rs` `6560E1E3…A0F2`;

@@ -224,8 +224,9 @@ unused Task enum, another pending-vector variant or hidden policy heuristic.
 
 Open decisions are tracked in [DECISIONS.md](DECISIONS.md), not on individual
 pages. Gating design items: canonical task/object reference retirement; VM page
-coherence; guest-time progression and live-event fencing; explicit stop
-classification. Deferred to the persistent-engine swap (not gating): native
+coherence; guest-time progression and live-event fencing. Explicit stop
+classification is closed by E-34; report/failure hardening remains.
+Deferred to the persistent-engine swap (not gating): native
 translation-arena handler proof and budget; stable hook rebinding.
 Real-coredll/syscall migration remains a separate later go/no-go, not implied
 by scheduler-core authorization.

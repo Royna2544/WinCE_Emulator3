@@ -8,9 +8,9 @@ an internal `cfg(test)` slab opt-in. Public `VirtualAlloc` still selects
 `LegacySeed` ([allocator](../../src/ce/memory.rs),
 [COREDLL dispatch](../../src/ce/coredll.rs)). The later [E29](ledger.md)
 330-second app run ended on splash despite observed GPS `COM7:` transfers and
-tap dequeue; it neither identifies a VM cause nor relaxes this gate. Closing
-O-P1 stop provenance would clear a separate CPU dependency, not switch public
-memory backing by itself.
+tap dequeue; it neither identifies a VM cause nor relaxes this gate. E-34
+closed O-P1 stop classification, a separate CPU dependency; that does not
+switch public memory backing by itself.
 
 ## Smallest connected first implementation
 

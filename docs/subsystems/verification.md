@@ -32,15 +32,16 @@ page owns only how to read it:
 - Full-backend controls (E-7): the mapping/context control passed; the
   count-stop and native-error controls were an expected-red baseline, then
   turned green in the D: checkout without fabricating native expiry. These
-  narrow results do not complete O-P1 or Stage 2.
+  narrow results did not alone complete O-P1 or Stage 2; E-34 later closed
+  classification, not Stage 2.
 - Task/handle ownership (E-8/E-11) is a red baseline: 13 controls, 1 pass,
   12 failures.
 - The cross-owner same-VA/FPU green control (E-10) uses the experimental
   persistent-owner path; it cannot accept the Stage 2 fresh-engine VM gate.
 - E-13's repaired-PC FPU continuation and E-16's owner-qualified injected
-  same-VA native-view controls are narrow greens. E-18 is an ignored, explicitly
-  rerun expected red: private guest-written bytes are stale after test-only
-  fresh-owner closure, despite correct PC and normal stops. Public same-VA
+  same-VA native-view controls are narrow greens. E-18 was an expected red for
+  stale private guest-written bytes after fresh-owner closure; E-25 made it
+  green only through a test-only slab opt-in. Public same-VA
   `MapViewOfFile`, public `VirtualAlloc`, and production fresh-owner lifetime
   remain open.
 - E-19's global deferred-stop slice types the first hook-observed remote or
@@ -48,8 +49,9 @@ page owns only how to read it:
   the full release suite passed 1,634 tests (0 failed, 4 ignored), both no-trace
   release checks exited 0, and no-feature passed 1,239 tests (0 failed, 1
   ignored). The E-18 red was reconfirmed separately on the same source; it is
-  not a suite pass. Sparse/hookless reasons, native count witness, typed
-  restart-PC repair and Unicorn-control failure injection remain open.
+  not a suite pass. At that E-19 checkpoint, sparse/hookless reasons, native
+  count witness, typed restart-PC repair and Unicorn-control failure injection
+  remained open; E-28/E-34 later closed the classification part only.
 - Hot-path throughput (E-9) is measured per slice from guest instructions and busy
   MIPS, not from time to a milestone.
 - Unexecuted staged fragments are not applied, compiled or passing until

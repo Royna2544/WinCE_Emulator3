@@ -17,10 +17,10 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Experiment | Persistent-owner 650 passed 1,618 tests, then host-crashed at 129.108 s with 1.62 GiB RSS (E-2). Source preserved in the D: checkout; deferred to Stage 8 |
 | Plan position | Stage 0 evidence is diagnostic and ongoing; Stage 1 pages are written. E-21 migrated public process-birth aliases, not full Stage 2/3 Task ownership. Stages 3-6 run on fresh engines (D-003) |
 | Red baselines | Historical E-7 stop/error controls are green; E-18 private fresh-owner bytes are green only under a test-only slab opt-in. Public private/same-VA VM and Stage 3 Task gates remain open |
-| Decisions | D-001 to D-008 decided; D-008 selects the O-M1 backing design, not its implementation. Next gates: O-P1, O-M1 and O-P4 (Stage 2), then O-T1, O-K1 to O-K3 (Stage 3) |
+| Decisions | D-001 to D-009 decided; D-008 selects the O-M1 backing design, not its implementation. E-34 closes O-P1 stop classification; next connected gates are public O-M1 and O-P4, then Stage 3 Task ownership |
 | Source control | D-004 now permits an external supervisor's unsigned backup commits on `main`; those snapshots are not reviewed releases and do not replace frozen test evidence |
-| Source of truth | One active source dir (this repo) and one Cargo target dir (D-007). The D working tree still contains the persistent-owner experiment; E-7 stop/error controls pass and O-P1 stop taxonomy is partial. O-P4 fresh-default/VM coherence remains open |
-| Next action | E-33's narrow Windows TCG commit-tail repair passed native and broad suites, but E-32's app crash is still unattributed. Complete O-P1 and private-VM gates and the full E-29 attempt trace before interpreting another app run; any further original-mount run needs new approval. E-30 only connected the host report consumer. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
+| Source of truth | One active source dir (this repo) and one Cargo target dir (D-007). The D working tree still contains the persistent-owner experiment; O-P1 stop classification is closed (E-34), while report hardening and O-P4 fresh-default/VM coherence remain open |
+| Next action | Implement the connected public `VirtualAlloc` slab gate, then O-P4 fresh-default ownership. E-33's native repair has not been tested by another app run and E-32's crash remains unattributed. The E-29 attempt trace is a parallel app-evidence lane; any further original-mount run needs new approval. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
 
 ## Standalone boundaries
 
