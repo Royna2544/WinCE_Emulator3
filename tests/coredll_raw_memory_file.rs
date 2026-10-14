@@ -481,6 +481,11 @@ fn coredll_raw_process_text_pointers_are_birth_scoped_and_replace_freed_cache() 
     ));
     assert_ne!(parent_command, 0);
     assert_ne!(parent_name, 0);
+    let parent_command_size = kernel
+        .memory
+        .local_size(parent, parent_command)
+        .expect("parent command-line allocation");
+    let parent_command_bytes = memory.read_bytes(parent_command, parent_command_size as usize);
 
     let _child_handle = kernel.handles.create_process(2);
     // Native child handoff writes the incoming strings before selecting B.
@@ -519,6 +524,14 @@ fn coredll_raw_process_text_pointers_are_birth_scoped_and_replace_freed_cache() 
     assert_eq!(kernel.process_name_guest_ptr_for(child), Some(child_name));
     assert_eq!(kernel.memory.local_size(child, parent_command), Some(0x100));
     assert_eq!(kernel.memory.local_size(parent, child_command), None);
+    assert_eq!(
+        kernel.memory.local_size(parent, parent_command),
+        Some(parent_command_size)
+    );
+    assert_eq!(
+        memory.read_bytes(parent_command, parent_command_size as usize),
+        parent_command_bytes
+    );
 
     // Restoration likewise writes A's strings while B is still selected.
     kernel.set_process_command_line("parent args");

@@ -7301,11 +7301,7 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
         height: 40,
         flags: 0,
     });
-    assert!(!gwe.insert_message_pointer_payload(
-        owner_a,
-        0x1234,
-        duplicate_payload,
-    ));
+    assert!(!gwe.insert_message_pointer_payload(owner_a, 0x1234, duplicate_payload,));
     let other_payload = MessagePointerPayload::WindowPos(WindowPos {
         hwnd: hwnd2,
         insert_after: HWND_TOP,
@@ -7316,11 +7312,23 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
         flags: 0,
     });
     assert!(gwe.insert_message_pointer_payload(owner_b, 0x1234, other_payload.clone()));
-    assert_eq!(gwe.message_pointer_payload(owner_a, 0x1234), Some(payload.clone()));
-    assert_eq!(gwe.message_pointer_payload(owner_b, 0x1234), Some(other_payload.clone()));
-    assert_eq!(gwe.take_message_pointer_payload(owner_a, 0x1234), Some(payload));
+    assert_eq!(
+        gwe.message_pointer_payload(owner_a, 0x1234),
+        Some(payload.clone())
+    );
+    assert_eq!(
+        gwe.message_pointer_payload(owner_b, 0x1234),
+        Some(other_payload.clone())
+    );
+    assert_eq!(
+        gwe.take_message_pointer_payload(owner_a, 0x1234),
+        Some(payload)
+    );
     assert!(gwe.message_pointer_payload(owner_a, 0x1234).is_none());
-    assert_eq!(gwe.take_message_pointer_payload(owner_b, 0x1234), Some(other_payload));
+    assert_eq!(
+        gwe.take_message_pointer_payload(owner_b, 0x1234),
+        Some(other_payload)
+    );
     assert!(gwe.take_message_pointer_payload(owner_b, 0x1234).is_none());
 
     // dialog_return_command / dialog_cancel_command / default_push_button / is_push_button.
