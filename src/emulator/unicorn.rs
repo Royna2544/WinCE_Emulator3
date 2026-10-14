@@ -21621,21 +21621,17 @@ fn try_block_wait_for_single_object<D>(
             Ok(prepared) => prepared,
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
+        let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id)
+        else {
+            return false;
+        };
         prepared.kernel_mut().record_blocked_single_wait(timeout);
         remove_stale_blocked_get_message_for_thread(
             prepared.kernel_mut(),
             blocked_get_message,
             thread_id,
         );
-        let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id)
-        else {
-            return false;
-        };
-        remove_stale_blocked_waits_for_thread(
-            prepared.kernel_mut(),
-            blocked_waits,
-            wait_thread_id,
-        );
+        remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, wait_thread_id);
         let wait_id = prepared.publish();
         annotate_blocking_single_wait_import(
             kernel,
@@ -21692,11 +21688,7 @@ fn try_block_wait_for_single_object<D>(
             )
         {
             kernel.record_blocked_single_wait(timeout);
-            remove_stale_blocked_get_message_for_thread(
-                kernel,
-                blocked_get_message,
-                thread_id,
-            );
+            remove_stale_blocked_get_message_for_thread(kernel, blocked_get_message, thread_id);
             return complete_current_single_wait_timeout(
                 kernel,
                 uc,
@@ -21726,11 +21718,7 @@ fn try_block_wait_for_single_object<D>(
             blocked_get_message,
             thread_id,
         );
-        remove_stale_blocked_waits_for_thread(
-            prepared.kernel_mut(),
-            blocked_waits,
-            wait_thread_id,
-        );
+        remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, wait_thread_id);
         let wait_id = prepared.publish();
         annotate_blocking_single_wait_import(
             kernel,
@@ -21824,11 +21812,7 @@ fn try_block_wait_for_single_object<D>(
             )
         {
             kernel.record_blocked_single_wait(timeout);
-            remove_stale_blocked_get_message_for_thread(
-                kernel,
-                blocked_get_message,
-                thread_id,
-            );
+            remove_stale_blocked_get_message_for_thread(kernel, blocked_get_message, thread_id);
             return complete_current_single_wait_timeout(
                 kernel,
                 uc,
@@ -21858,11 +21842,7 @@ fn try_block_wait_for_single_object<D>(
             blocked_get_message,
             thread_id,
         );
-        remove_stale_blocked_waits_for_thread(
-            prepared.kernel_mut(),
-            blocked_waits,
-            thread_id,
-        );
+        remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
         let wait_id = prepared.publish();
         annotate_blocking_single_wait_import(
             kernel,
@@ -22995,11 +22975,13 @@ fn try_block_wait_for_multiple_objects<D>(
             Ok(prepared) => prepared,
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
-        prepared.kernel_mut().record_blocked_multiple_wait(count, timeout);
         let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id)
         else {
             return false;
         };
+        prepared
+            .kernel_mut()
+            .record_blocked_multiple_wait(count, timeout);
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
         remove_stale_blocked_get_message_for_thread(
             prepared.kernel_mut(),
@@ -23061,7 +23043,9 @@ fn try_block_wait_for_multiple_objects<D>(
             Ok(prepared) => prepared,
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
-        prepared.kernel_mut().record_blocked_multiple_wait(count, timeout);
+        prepared
+            .kernel_mut()
+            .record_blocked_multiple_wait(count, timeout);
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
         remove_stale_blocked_get_message_for_thread(
             prepared.kernel_mut(),
@@ -23309,11 +23293,13 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             Ok(prepared) => prepared,
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
-        prepared.kernel_mut().record_blocked_msg_wait(count, timeout);
         let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id)
         else {
             return false;
         };
+        prepared
+            .kernel_mut()
+            .record_blocked_msg_wait(count, timeout);
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
         let wait_id = prepared.publish();
         blocked_waits.borrow_mut().push(BlockedWaitThread {
@@ -23359,7 +23345,9 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             Ok(prepared) => prepared,
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
-        prepared.kernel_mut().record_blocked_msg_wait(count, timeout);
+        prepared
+            .kernel_mut()
+            .record_blocked_msg_wait(count, timeout);
         remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
         let wait_id = prepared.publish();
         blocked_waits.borrow_mut().push(BlockedWaitThread {
@@ -29703,9 +29691,11 @@ mod wait_scheduler_tests {
         .unwrap();
         uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
             .unwrap();
-        assert!(kernel
-            .handles
-            .set_wait_target_pin_count_for_test(target_pin, u32::MAX));
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(target_pin, u32::MAX)
+        );
 
         assert!(super::try_block_wait_for_single_object(
             &mut kernel,
@@ -29730,20 +29720,72 @@ mod wait_scheduler_tests {
             Some(std::time::Duration::from_secs(1)),
             true,
         ));
-        assert_eq!(pending_returns.borrow().as_slice(), &[pending_return]);
+        assert_eq!(
+            pending_returns.borrow().as_slice(),
+            &[pending_return.clone()]
+        );
         assert_eq!(blocked_waits.borrow().len(), 1);
         assert_eq!(blocked_waits.borrow()[0].wait_id, old_wait_id);
         assert!(kernel.blocked_waiter(old_wait_id).is_some());
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
         assert_eq!(*current_thread_id.borrow(), thread_id);
-        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(u32::MAX));
-        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, crate::ce::timer::WAIT_FAILED);
+        assert_eq!(
+            kernel.handles.wait_target_pin_count(target_pin),
+            Some(u32::MAX)
+        );
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::V0).unwrap() as u32,
+            crate::ce::timer::WAIT_FAILED
+        );
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(
             kernel.threads.get_last_error(thread_id),
             crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY
         );
-        assert!(kernel.handles.set_wait_target_pin_count_for_test(target_pin, 0));
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(target_pin, 0)
+        );
+
+        // A retry with capacity available must publish the new wait and only
+        // then hand control back to the creator of the pending worker callout.
+        assert!(super::try_block_wait_for_single_object(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
+            &[target_handle, INFINITE],
+            &last_imports,
+            &import_milestones,
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &displaced_blocked_get_messages,
+            &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
+            &running_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            true,
+        ));
+        assert!(pending_returns.borrow().is_empty());
+        assert!(kernel.blocked_waiter(old_wait_id).is_none());
+        let replacement = blocked_waits.borrow();
+        assert_eq!(replacement.len(), 1);
+        assert_eq!(replacement[0].wait_handles, vec![target_handle]);
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(1));
+        assert_eq!(*current_thread_id.borrow(), super::MAIN_GUEST_THREAD_ID);
+        assert_eq!(*running_thread.borrow(), None);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, thread_handle);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
+            pending_return.return_pc
+        );
     }
 
     #[test]
@@ -29803,14 +29845,18 @@ mod wait_scheduler_tests {
         .unwrap();
         uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
             .unwrap();
-        uc.mem_write(0x3000_0100, &first_handle.to_le_bytes()).unwrap();
-        uc.mem_write(0x3000_0104, &second_handle.to_le_bytes()).unwrap();
+        uc.mem_write(0x3000_0100, &first_handle.to_le_bytes())
+            .unwrap();
+        uc.mem_write(0x3000_0104, &second_handle.to_le_bytes())
+            .unwrap();
         let return_pc = 0x0040_6000;
         uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
             .unwrap();
-        assert!(kernel
-            .handles
-            .set_wait_target_pin_count_for_test(second_pin, u32::MAX));
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(second_pin, u32::MAX)
+        );
 
         assert!(super::try_block_wait_for_multiple_objects(
             &mut kernel,
@@ -29838,14 +29884,24 @@ mod wait_scheduler_tests {
         assert!(kernel.blocked_waiter(old_wait_id).is_some());
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
         assert_eq!(kernel.handles.wait_target_pin_count(first_pin), Some(0));
-        assert_eq!(kernel.handles.wait_target_pin_count(second_pin), Some(u32::MAX));
-        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, crate::ce::timer::WAIT_FAILED);
+        assert_eq!(
+            kernel.handles.wait_target_pin_count(second_pin),
+            Some(u32::MAX)
+        );
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::V0).unwrap() as u32,
+            crate::ce::timer::WAIT_FAILED
+        );
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(
             kernel.threads.get_last_error(thread_id),
             crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY
         );
-        assert!(kernel.handles.set_wait_target_pin_count_for_test(second_pin, 0));
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(second_pin, 0)
+        );
     }
 
     #[test]
@@ -29883,14 +29939,18 @@ mod wait_scheduler_tests {
         .unwrap();
         uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
             .unwrap();
-        uc.mem_write(0x3000_0100, &first_handle.to_le_bytes()).unwrap();
-        uc.mem_write(0x3000_0104, &second_handle.to_le_bytes()).unwrap();
+        uc.mem_write(0x3000_0100, &first_handle.to_le_bytes())
+            .unwrap();
+        uc.mem_write(0x3000_0104, &second_handle.to_le_bytes())
+            .unwrap();
         let return_pc = 0x0040_6000;
         uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
             .unwrap();
-        assert!(kernel
-            .handles
-            .set_wait_target_pin_count_for_test(second_pin, u32::MAX));
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(second_pin, u32::MAX)
+        );
 
         assert!(super::try_block_msg_wait_for_multiple_objects_ex(
             &mut kernel,
@@ -29913,14 +29973,24 @@ mod wait_scheduler_tests {
         assert!(blocked_waits.borrow().is_empty());
         assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
         assert_eq!(kernel.handles.wait_target_pin_count(first_pin), Some(0));
-        assert_eq!(kernel.handles.wait_target_pin_count(second_pin), Some(u32::MAX));
-        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, crate::ce::timer::WAIT_FAILED);
+        assert_eq!(
+            kernel.handles.wait_target_pin_count(second_pin),
+            Some(u32::MAX)
+        );
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::V0).unwrap() as u32,
+            crate::ce::timer::WAIT_FAILED
+        );
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
         assert_eq!(
             kernel.threads.get_last_error(thread_id),
             crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY
         );
-        assert!(kernel.handles.set_wait_target_pin_count_for_test(second_pin, 0));
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(second_pin, 0)
+        );
     }
 
     #[test]

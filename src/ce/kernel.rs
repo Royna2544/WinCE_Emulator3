@@ -7597,9 +7597,10 @@ impl CeKernel {
         wait_started_ms: u32,
         timeout_ms: u32,
     ) -> u64 {
-        // Compatibility subscriptions may use opaque non-object tokens (for
-        // example Winsock sockets) even with the historical Kernel kind.
-        // Native object-wait imports validate their handles before this call.
+        // Legacy test/compatibility entry. Production object waits use the
+        // fallible prepare/publish transaction; opaque production subscriptions
+        // use register_opaque_compatibility_waiter. A failed task pin must not
+        // panic or publish an unpinned frame. Zero is never a scheduler wait ID.
         self.prepare_wait_with_policy(
             thread_id,
             thread_handle,
@@ -7609,8 +7610,8 @@ impl CeKernel {
             timeout_ms,
             false,
         )
-        .expect("registered task wait target preparation failed")
-        .publish()
+        .map(PreparedTaskWait::publish)
+        .unwrap_or(0)
     }
 
     /// Publishes a compatibility subscription whose slots are opaque tokens,
@@ -11659,6 +11660,53 @@ mod tests {
             Some(u32::MAX)
         );
         assert_eq!(kernel.scheduler.waiter_count(), waiters_before);
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(second_pin, 0)
+        );
+    }
+
+    #[test]
+    fn legacy_wait_registration_pin_failure_returns_zero_without_publication() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (first, _) = kernel.create_guest_thread(0x401000, 0, false);
+        let (second, _) = kernel.create_guest_thread(0x402000, 0, false);
+        let first_pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(first)
+                .expect("first thread birth"),
+        );
+        let second_pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(second)
+                .expect("second thread birth"),
+        );
+        assert!(
+            kernel
+                .handles
+                .set_wait_target_pin_count_for_test(second_pin, u32::MAX)
+        );
+        let waiters_before = kernel.scheduler.waiter_count();
+        let wait_id = kernel.register_blocked_waiter(
+            77,
+            0,
+            vec![first, second],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(wait_id, 0);
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert_eq!(kernel.scheduler.waiter_count(), waiters_before);
+        assert_eq!(kernel.handles.wait_target_pin_count(first_pin), Some(0));
+        assert_eq!(
+            kernel.handles.wait_target_pin_count(second_pin),
+            Some(u32::MAX)
+        );
+        assert_eq!(kernel.threads.get_last_error(77), ERROR_NOT_ENOUGH_MEMORY);
         assert!(
             kernel
                 .handles
