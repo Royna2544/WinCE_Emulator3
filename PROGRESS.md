@@ -236,63 +236,34 @@ E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
 - That run executes 1,037,557,247 guest instructions across 3,406 slices;
   weighted busy-slice MIPS is 12.846 versus preceding 12.314. Guest work and
   late phase rates are comparable; no controlled speed improvement is claimed.
-- Explicit nonzero PC stops now preserve native registers, thread/process,
-  pending callback state and ownership before ordinary thunk/callback repairs
-  or handoff. Import traps independently honor the stop before dispatch;
-  PC zero remains an error. CLI/monitor continuation and trace selection require
-  the fresh matching stop and retained context, not a historical snapshot.
-  Real MIPS thunk/trap/nested-callback/ready-peer regressions pass. The isolated
-  debugger build DE5AEDB1...858A98 passes all 1,540 tests, one fixture ignored,
-  release build and both no-trace plus stub checks. Logs:
-  `target/bringup_1013_pcstop_trace_{tests,build,check_ci,check_unicorn,check_stub}.log`.
-  Earlier installed executable/symbols remain in `pre_exact_pc_1013.{exe,pdb}`.
-- Read-only binary evidence identifies the real splash manager show/destroy
-  methods at 0x5e7a0/0x5e880 and WM_INITDIALOG startup at 0x2bc34. The first
-  large initializer is 0x30e1c, return 0x2bde4. Pool worker 5 starts at
-  0xe6cd0, not the unproven engine wrapper. The first probed cache miss returns
-  a valid node; that does not establish whole-job completion. Current exact
-  entry/return investigation must retain actual PID/TID, SP and controller
-  identity. No completion event or app state is forced.
-- Source audit finds direct visible callbacks bypass the deferred typed
-  message-payload serializer. It also finds NotifyIcon output writes beyond
-  its 152-byte allocation. The target CE6 coredll ordinal 481 explicitly
-  marshals 0x98 bytes, so enlarging to 160 is not a CE6 fix. Scoped shared
-  payload/writer corrections now pass seven focused MIPS/raw-equivalence tests,
-  a notification neighbor-sentinel test, all 1,547 tests (one fixture ignored),
-  release build and three feature checks. Payload-only executable is
-  26FD49C5...D7ABFD in the mirror; it is not installed or live-run evidence.
-  Logs: `target/bringup_1013_payload_fixed_*`. Its sparse persisted heap pages
-  now use a contiguous mapping frontier so lower gaps are not skipped.
-  The first fixture run hung on unvalidated synthetic paint; only its owned
-  test process was stopped, and bounded validating drains fix that test setup.
-- The exact debugger subsequently proves MapInit enters and returns normally
-  on UI thread 1 with V0=1. Its actual stack is 0x7ffdf558, 0x20 below the
-  original 0x5237 caller's 0x7ffdf578. Historical WNDPROC fallback discarded
-  saved SP/GPR/HI/LO and restored only PC/RA/V0. The authentic startup saved
-  RA is 0x2bad0 at 0x7ffdf664; the shifted epilogue slot instead contains 5.
-  Authentic archived SP/GPR/HI/LO restoration now passes native callback and
-  real caller-epilogue regressions, including K0/K1. Missing/ambiguous ownership
-  fails closed; native write/readback must succeed before consuming history.
-  The diagnostic is not a timing benchmark (manual pauses/global hooks and
-  simultaneous fixture spin), and ended via explicit monitor quit, exit 0.
-- The integrated installed BC2E13E0...954555 executable passes 1,552 tests,
-  one eVC4 fixture ignored, release build and three feature checks. Logs:
-  `target/bringup_1013_archive_fixed_*`; previous debugger outputs are retained
-  in `pre_callback_archive_1013.{exe,pdb}`. Later allocation/message source
-  edits are in progress and are NOT covered by that frozen validation.
-- Its normal 330 s GPS/tap run exits 0 at 330.236 s, without watchdog or
-  stderr. Actual 0x5237 callback recovery restores UI thread 1's original
-  0x7ffdf578 stack at +2.796 s, with result 1. No old PC-only fallback or
-  CPU-error marker is observed. Splash appears by +4.683 s, COM7 by +27.293 s,
-  and every later sampled/terminal frame remains genuine splash, not map.
-  199 GPS responses plus retained positive COM7 payloads prove delivery;
-  they do not prove parsed navigation position. Tap DOWN then UP return
-  cleanly, with 0.835 s initial delivery lag and about 22 ms per handler.
-  Peak RSS/private are 492.6/503.2 MiB, versus prior A3's 566.0/568.0 MiB.
-  This combined, non-cache-controlled run is not an isolated latency/memory
-  benchmark. Four SD probe markers remain absent. Artifacts:
-  `target/bringup_1013_callback_drive_*`; full timed evidence is in the chat
-  workspace `validation/bringup-1013-callback-drive-evidence.md`.
+- Explicit nonzero PC stops preserve native registers, thread/process,
+  pending callback state and ownership before thunk/callback repair or
+  handoff. Import traps honor the stop before dispatch, and PC zero remains an
+  error. Continuation and trace selection need the fresh matching stop and
+  retained context, never a historical snapshot.
+- Binary evidence (read-only): the splash manager show/destroy methods are at
+  0x5e7a0/0x5e880, WM_INITDIALOG startup is at 0x2bc34, and the first large
+  initializer is 0x30e1c (return 0x2bde4). Pool worker 5 starts at 0xe6cd0.
+  A valid first cache-miss node does not establish whole-job completion. No
+  completion event or app state is forced.
+- Direct visible callbacks bypassed the deferred typed-payload serializer, and
+  NotifyIcon output overran its 152-byte allocation. CE6 coredll ordinal 481
+  marshals exactly 0x98 bytes, so the fix corrects the shared payload writers
+  rather than enlarging the buffer. Sparse persisted heap pages use a
+  contiguous mapping frontier.
+- MapInit enters and returns normally on UI thread 1 with V0=1, on stack
+  0x7ffdf558 (0x20 below the 0x5237 caller's 0x7ffdf578). The old WNDPROC
+  fallback restored only PC/RA/V0. Authentic archived SP/GPR/HI/LO (including
+  K0/K1) restoration now passes native callback and caller-epilogue
+  regressions. Missing or ambiguous ownership fails closed.
+- Callback-drive 330 s GPS/tap run (installed BC2E13E0): exit 0 at 330.236 s.
+  0x5237 recovery restored UI thread 1's original stack at +2.796 s. Splash
+  appeared by +4.683 s and COM7 by +27.293 s, and every later frame was the
+  splash, not the map. 199 GPS responses and positive COM7 payloads were
+  delivered, with parsed position unproven. Tap DOWN/UP had 0.835 s initial
+  lag and about 22 ms per handler. Peak RSS/private was 492.6/503.2 MiB
+  (A3: 566.0/568.0), not cache-controlled. Report:
+  `validation/bringup-1013-callback-drive-evidence.md` (chat workspace).
 - That run executes 1,434,175,567 guest instructions in 3,211 slices at
   weighted busy MIPS 14.071. iNavi contributes 1,002,008,727 at 13.140 MIPS;
   most extra aggregate work is happyway (432,073,151 versus prior 2,072,966),
@@ -303,11 +274,6 @@ E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
   which invokes engine virtual +0x14c then can sleep/wait and repeat. A finite
   cache lookup is not whole-job completion. Actual matching invocation/return
   and current object reads are the next diagnostic boundary, not forced events.
-- Historical copy-mirror validation also needed changed source mtimes updated:
-  Copy-Item could preserve a timestamp older than an existing library artifact.
-  Exact hashes plus a fresh build were required. This is an archived workflow,
-  superseded by D-007's single D: source checkout; do not create or stamp new
-  copy mirrors.
 - Checked initial guest allocation now reserves without live metadata, maps
   writable persistent RAM, explicitly zeros requested physical extent, runs
   checked initializers, then commits/publishes. All 36 immediate raw/native
