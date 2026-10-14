@@ -166,14 +166,19 @@ close only their named gates, not Stage 2 or live acceptance.
   payload with its live scheduler wait before wake consumption, retires only
   an invalid exact wait ID, and carries verified birth into a normal resumed
   slice.
+  The separate bounded [parked MsgWait source gate](../evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
+  validates the captured native birth before timer pumping or publication,
+  quarantines a stale exact wait before preselection timer delivery or input
+  acknowledgement, and stamps a verified birth on normal resume. Its raw
+  synchronous fallback paths are not covered.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE
   caller wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
   aliasless Sleep-suspend and generic parked-wait continuation remain open.
-  MsgWait, serial, Winsock, message-queue I/O, SendMessage and other blocked
-  payload families have not been migrated by the Sleep/object gate.
+  Serial, Winsock, message-queue I/O, SendMessage and other blocked payload
+  families have not been migrated by these parked-wait gates.
   These bounded source slices are not full Stage 3 or live-app acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19

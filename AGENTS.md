@@ -159,7 +159,10 @@ birth-verifies pending returns, suspended contexts, native slice-end staging,
 and the GetMessage bridge. The bounded
 [Sleep/object parked-wait gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
 verifies captured wait-owner birth before publication and wake consumption;
-aliasless Sleep-suspend and other parked-wait families remain open. These
+[parked MsgWait gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
+extends that rule before timer pumping or message-edge consumption. Raw
+synchronous MsgWait paths, aliasless Sleep-suspend and other parked-wait
+families remain open. These
 slices do not complete the
 machine-owned Task/continuation/scheduler core, Stage 3, or live-app
 acceptance. See `PROGRESS.md` and `docs/PLAN.md` for current gates.
