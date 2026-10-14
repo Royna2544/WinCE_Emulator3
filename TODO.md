@@ -7,9 +7,19 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
+0. Fix the fresh-default file-view readback regression (KNOWN_BUGS, top
+   entry). Read back only the parts of each view that are natively mapped in
+   this owner, using `mem_regions` intersected per page. A view range that is
+   not mapped received no native writes in this lease, so the kernel copy stays
+   authoritative. Hard-fail only on real read errors on mapped ranges.
+   Same change: a real-native public `MapViewOfFile` test on the fresh default
+   that is red first, then green. It covers three slices: one writes page 0, the
+   next touches nothing, the third writes page 1. Both pages must keep the right
+   bytes.
 1. Only after fresh human approval and fresh adjacent ZIP backups of the
-   original SD, ResidentFlash and emulator-root writable mounts, run one
-   bounded iNavi comparison on the O-P4 fresh-default build. Compare sampled
+   original SD, ResidentFlash and emulator-root writable mounts, re-run the
+   bounded iNavi comparison on a build with item 0 fixed. The O-P4 EXE run
+   failed at 2.9 s (`evidence/e22-live-20261014T041105Z`). Compare sampled
    host memory, busy-slice guest MIPS, fixed per-slice setup cost and guest/map
    progress with the persistent-owner runs (about 1.5 GiB; E-22, E-27, E-29)
    and BED2 (E-1); retain exact binary, input and run evidence. The

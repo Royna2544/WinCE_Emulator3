@@ -4,6 +4,16 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
+- Fresh-default regression (blocks every app run): the first bounded iNavi run
+  on the O-P4 EXE (`4C9EC274…4E02`) exited 1 after 2.934 s, before any NMEA
+  or tap, with `Backend("read process 67 mapped view 0x50000000:
+  READ_UNMAPPED")` (`evidence/e22-live-20261014T041105Z`). The inbound seed
+  skips a view that is unmapped in the engine but has a canonical lazy seed
+  (`src/emulator/unicorn.rs` `sync_file_mapping_views_to_unicorn`). The
+  outbound readback (`sync_file_mapping_views_from_unicorn`) still reads
+  every view of the owner. A fresh owner maps a view page only when the guest
+  touches it, so a view the slice never touches is not mapped and the read
+  fails. Under the persistent owner, earlier slices had left the pages mapped.
 - The E-32 source-matched, read/write bounded iNavi run exited with host
   `0xC0000005` after 135.282 s, before its planned tap. The matching
   minidump/PDB locate a 4-byte write crossing a host page boundary in
@@ -28,8 +38,8 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   still zero failed reads and drop write errors; o32 float-return restore sites
   are unaudited (CPU page, E-12 follow-ups).
 - E-35 public private slabs and E-36 source-bound fresh-per-slice default are
-  validated, but no post-switch bounded iNavi run has measured memory or map
-  readiness. Real native two-process A→B→A byte isolation and shared-view slab
+  validated, but the only post-switch iNavi run failed at 2.9 s (entry above)
+  and measured neither memory nor map readiness. Real native two-process A→B→A byte isolation and shared-view slab
   coherence remain unproved. A same-PID DIB view without VA metadata can Flush
   but not Unmap; the immediate CreateProcess view-sync failure path has no
   fault injection. `VirtualAllocEx`/`VirtualQueryEx` name exports remain
