@@ -4,6 +4,31 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 parked serial birth source slice
+
+- Native parked SerialRead/SerialCommEvent paths verify the birth owning
+  captured MIPS registers before host serial RX polling or wait publication.
+  Resume checks the exact scheduler/native pair and live owner before serial
+  wake or timeout completion, host RX consumption, guest output or register
+  restoration; a valid continuation stamps verified birth. The finite
+  SerialRead inline timeout rechecks after host sleep. Peer review closed a
+  stale-deadline scheduler probe and prevented a failed native register write
+  from stamping a verified birth. The
+  focused wait-scheduler suite passed 127/0. On the frozen
+  `src/emulator/unicorn.rs` SHA-256
+  `220E95A32A8166E46AF7E4DC13E25E24BCCC545749108D8AA7575A5B4D4968DE`,
+  full release attempt `a02` passed 1,908/0/9 ignored and no-feature attempt
+  `a02` passed 1,395/0/3 ignored. The retained raw
+  [release log](evidence/stage3-serial-birth-20261015/release-a02.raw.log)
+  hashes to `80DDCEEF80E62882C16F4B61976FCAD4BCE51E096E037EBDAA24DCA3414DC23D`;
+  the [no-feature log](evidence/stage3-serial-birth-20261015/nofeature-a02.raw.log)
+  hashes to `DE6B2BFC7BE00EB506858FF8AB512B41F1844018401F98C7ED9532C89640648E`.
+  The final build and test-target, no-trace desktop, Unicorn-only and all-target
+  feature checks passed; a matching EXE/PDB pair is SHA-preserved in the
+  [source-gate receipt](evidence/stage3-serial-birth-20261015/validation.receipt.md).
+  Raw synchronous/nonblocking/overlapped serial paths, opaque non-task pins,
+  SendMessage, full Stage 3 and live-app behavior remain unaccepted.
+
 ## 2026-10-15 Stage 3 parked queue/socket birth source slice
 
 - Native parked MessageQueueIo and WinsockRead paths now verify the birth owning
