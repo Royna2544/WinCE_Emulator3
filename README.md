@@ -100,8 +100,8 @@ remote-control HTTP/WebSocket surface.
   time, or establish map readiness
   ([D-008 receipt](evidence/d008-shared-view-20261014/validation.receipt.md)).
 - E-42 selects whole R/RX image-page candidates by PE section characteristics
-  and borrows caller-supplied bytes without a helper copy. Expected-red and
-  focused no-feature/Unicorn controls passed; full no-feature passed
+  and borrows caller-supplied bytes without a helper copy. Focused
+  no-feature/Unicorn controls passed; full no-feature passed
   **1,302/0/13 ignored** across 17 blocks. The synthetic bytes were patched
   manually, not by the actual loader. No sealed storage, native page mapping,
   host-write guard, 56-MiB benchmark or app run is claimed

@@ -19,6 +19,8 @@ references for historical reconstruction.
   `src/emulator/pe_loader.rs` SHA-256
   `30791E94E6F47DD0A8B4B2DA0F1CA42253F4B07519B48CC12C2A083C0F68016A`
   ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
+  A later test accidentally overwrote the expected-red raw log; its original
+  bytes are gone. The four passing logs remain hash-verified in that receipt.
 - This is a selector-only source gate. Runtime image mapping remains the old
   RWX/copy path; sealed backing, typed native pins, write guards, clone and
   readback isolation, a 56-MiB setup benchmark, iNavi timing and Stage 2
