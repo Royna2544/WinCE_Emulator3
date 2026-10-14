@@ -6749,7 +6749,10 @@ impl UnicornMips {
                 )),
             };
         }
-        if self.run_slice_generation != 0 && self.saved_context.is_none() {
+        if self.run_slice_generation != 0
+            && self.saved_context.is_none()
+            && (self.owned_process_launch.is_some() || self.has_active_blocked_state(kernel))
+        {
             report.failure_operation = Some("missing saved process continuation preflight");
             return AttemptExecution {
                 report,
@@ -60686,6 +60689,8 @@ mod unicorn_tests {
         }
         // A caller requests a fresh entry, as guest-exit cleanup can do. There
         // is no fabricated runtime stop or native result in this fixture.
+        assert!(cpu.owned_process_launch.is_none());
+        assert!(!cpu.has_active_blocked_state(&kernel));
         cpu.saved_context = None;
         phase1_run_twenty(&mut cpu, &mut kernel, &mut framebuffer)?;
         assert_eq!(phase1_engine_id(&cpu), identity);
