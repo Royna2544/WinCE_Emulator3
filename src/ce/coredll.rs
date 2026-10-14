@@ -23,7 +23,7 @@ use crate::{
         gwe::{
             BS_DEFPUSHBUTTON, BS_PUSHBUTTON, GWL_STYLE, Message, MessagePointerPayload, PeekFlags,
             Point, Rect, WM_FILECHANGEINFO, WNDCLASSW_SIZE, WS_CHILD, WS_EX_TOPMOST, WS_POPUP,
-            WS_TABSTOP, WS_VISIBLE, WindowPos,
+            WS_TABSTOP, WS_VISIBLE, WindowDeliveryOwner, WindowPos,
         },
         kernel::{
             CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
@@ -6175,6 +6175,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel,
             memory,
             framebuffer,
+            context,
             thread_id,
             args,
         ))),
@@ -7208,7 +7209,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_CREATE_DIALOG_INDIRECT_PARAM_W | ORD_DIALOG_BOX_INDIRECT_PARAM_W => {
             Some(CoredllValue::Handle(create_dialog_indirect_param_w_raw(
-                kernel, memory, thread_id, args,
+                kernel, memory, context, thread_id, args,
             )))
         }
         ORD_END_DIALOG => Some(CoredllValue::Bool(end_dialog_raw(
@@ -32016,13 +32017,36 @@ fn find_window_w_raw<M: CoredllGuestMemory>(
     hwnd
 }
 
+/// Resolve an import's creation owner before reading guest input or changing
+/// GWES/LastError. A missing captured birth is the explicit raw-fixture path;
+/// a present but stale birth must never be reinterpreted as the live same TID.
+fn window_creation_owner_for_raw(
+    kernel: &CeKernel,
+    context: &CoredllRawContext,
+    thread_id: u32,
+) -> Option<WindowDeliveryOwner> {
+    match context.caller_birth {
+        Some(birth) if birth.thread_id() == thread_id => {
+            kernel.checked_window_delivery_owner_for_birth(birth)
+        }
+        Some(_) => None,
+        None => Some(WindowDeliveryOwner::LegacyUnknown {
+            process: kernel.current_process_birth_key(),
+        }),
+    }
+}
+
 fn create_window_ex_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     framebuffer: Option<&mut dyn Framebuffer>,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    let Some(delivery_owner) = window_creation_owner_for_raw(kernel, context, thread_id) else {
+        return 0;
+    };
     let Some(class_name) = read_guest_wide_arg(memory, raw_arg(args, 1)) else {
         kernel
             .threads
@@ -32072,17 +32096,34 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
         create_params = format_args!("0x{:08x}", raw_arg(args, 11)),
         "CreateWindowExW"
     );
-    let hwnd = kernel.create_window_ex_w_with_parent_owner_and_rect(
-        thread_id,
-        &class_name,
-        &title,
-        parent,
-        owner,
-        id,
-        style,
-        raw_arg(args, 0),
-        rect,
-    );
+    let hwnd = match delivery_owner {
+        WindowDeliveryOwner::Birth { thread, .. } => kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread,
+                &class_name,
+                &title,
+                parent,
+                owner,
+                id,
+                style,
+                raw_arg(args, 0),
+                rect,
+            )
+            .unwrap_or(0),
+        WindowDeliveryOwner::LegacyUnknown { .. } => kernel
+            .create_window_ex_w_with_parent_owner_and_rect(
+                thread_id,
+                &class_name,
+                &title,
+                parent,
+                owner,
+                id,
+                style,
+                raw_arg(args, 0),
+                rect,
+            ),
+        WindowDeliveryOwner::SystemDesktop => unreachable!("guest creator is not the desktop"),
+    };
     if hwnd != 0 && menu != 0 {
         let _ = kernel.gwe.set_menu(hwnd, menu);
     }
@@ -32379,9 +32420,13 @@ fn window_long_index_name(index: i32) -> &'static str {
 fn create_dialog_indirect_param_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    let Some(delivery_owner) = window_creation_owner_for_raw(kernel, context, thread_id) else {
+        return 0;
+    };
     let template_ptr = raw_arg(args, 1);
     let parent = (raw_arg(args, 2) != 0).then_some(raw_arg(args, 2));
     let dlgproc = raw_arg(args, 3);
@@ -32394,31 +32439,39 @@ fn create_dialog_indirect_param_w_raw<M: CoredllGuestMemory>(
     let Some(template) = read_dialog_template(kernel, memory, thread_id, template_ptr) else {
         return 0;
     };
-    let hwnd = kernel.gwe.create_window_ex_with_process_and_rect(
+    let process_id = delivery_owner
+        .process_birth()
+        .map(ProcessBirthKey::process_id)
+        .unwrap_or_else(|| kernel.current_process_id());
+    let hwnd = kernel.gwe.create_window_ex_with_delivery_owner_and_rect(
         thread_id,
-        kernel.current_process_id(),
+        process_id,
         "Dialog",
         &template.title,
         parent,
+        None,
         0,
         template.style,
         template.ex_style,
         Rect::from_origin_size(template.x, template.y, template.cx, template.cy),
+        delivery_owner,
     );
     kernel
         .gwe
         .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, dlgproc);
     for control in template.controls {
-        let control_hwnd = kernel.gwe.create_window_ex_with_process_and_rect(
+        let control_hwnd = kernel.gwe.create_window_ex_with_delivery_owner_and_rect(
             thread_id,
-            kernel.current_process_id(),
+            process_id,
             &control.class_name,
             &control.title,
             Some(hwnd),
+            None,
             control.id,
             control.style,
             control.ex_style,
             Rect::from_origin_size(control.x, control.y, control.cx, control.cy),
+            delivery_owner,
         );
         if control.class_name.eq_ignore_ascii_case("button") && control.title.is_empty() {
             kernel.gwe.set_window_text(control_hwnd, "Button");

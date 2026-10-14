@@ -6953,6 +6953,7 @@ impl CeKernel {
             // Retire only input published to this incarnation. Numeric TID
             // cleanup would also destroy a replacement task's queue.
             self.gwe.retire_thread_birth(key);
+            self.release_discarded_message_pointer_payloads();
             self.timers.remove_thread_timers_for_birth(key);
             // A completed owner cannot resume its frame. Cancel through the
             // Kernel removal path so every acquired target pin is released;
@@ -10292,7 +10293,19 @@ impl CeKernel {
         if window.destroyed {
             return None;
         }
-        window.delivery_owner().process_birth()
+        match window.delivery_owner() {
+            WindowDeliveryOwner::Birth { thread, process } => (self.is_live_thread_birth(thread)
+                && self
+                    .handles
+                    .live_thread_creation_owner_by_id(thread.thread_id())
+                    == Some(process)
+                && self.handles.process_execution_live_by_birth(process))
+            .then_some(process),
+            WindowDeliveryOwner::LegacyUnknown { process } => {
+                process.filter(|process| self.handles.process_execution_live_by_birth(*process))
+            }
+            WindowDeliveryOwner::SystemDesktop => None,
+        }
     }
 
     pub fn message_pointer_payload_for_message(
@@ -11611,21 +11624,41 @@ impl CeKernel {
         {
             return false;
         }
-        let Some(thread_id) = self.gwe.window(hwnd).map(|window| window.thread_id) else {
+        let Some(window) = self.gwe.window(hwnd) else {
             return false;
         };
+        let thread_id = window.thread_id;
+        let delivery_owner = window.delivery_owner();
         let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count())
             .with_typed_payload_owner(owner);
-        self.post_gwe_message(thread_id, message);
-        true
+        if let WindowDeliveryOwner::Birth { thread, .. } = delivery_owner {
+            if !self
+                .gwe
+                .post_message_for_window_birth(hwnd, thread, message.clone())
+            {
+                return false;
+            }
+            self.record_message_op("post_message", thread_id, &message, Some(1), None);
+            self.scheduler
+                .queue_message_wake_candidates_for_birth(thread);
+            true
+        } else {
+            self.post_gwe_message(thread_id, message);
+            true
+        }
     }
 
     fn post_window_message(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) {
         let Some(window) = self.gwe.window(hwnd) else {
             return;
         };
+        if matches!(window.delivery_owner(), WindowDeliveryOwner::Birth { .. }) {
+            let _ = self.post_message_w(hwnd, msg, wparam, lparam);
+            return;
+        }
+        let thread_id = window.thread_id;
         let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
-        self.post_gwe_message(window.thread_id, message);
+        self.post_gwe_message(thread_id, message);
     }
 
     fn clear_timer_message_pending(&mut self, thread_id: u32, message: &Message) {
@@ -12999,7 +13032,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: W-B1a window HWND posts must not cross a reused TID birth"]
     fn checked_window_hwnd_post_does_not_cross_reused_tid_birth() -> Result<()> {
         use crate::ce::gwe::{PeekFlags, QS_POSTMESSAGE, WM_USER};
 
@@ -13029,6 +13061,7 @@ mod tests {
                 Rect::default(),
             )
             .expect("A checked window");
+        assert_eq!(kernel.recipient_birth_for_window(hwnd_a), Some(owner_a));
         kernel.timers.sleep_ms(17);
         let message_a = WM_USER + 0x91;
         assert!(kernel.post_message_w(hwnd_a, message_a, 0xa1, 0));
@@ -13065,7 +13098,16 @@ mod tests {
             kernel.handles.thread_creation_owner_by_id(thread_id),
             Some(owner_b)
         );
-        assert_eq!(kernel.recipient_birth_for_window(hwnd_a), Some(owner_a));
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_a)
+                .unwrap()
+                .delivery_owner()
+                .process_birth(),
+            Some(owner_a)
+        );
+        assert_eq!(kernel.recipient_birth_for_window(hwnd_a), None);
         kernel.set_current_process_id(launch_b.process_id);
         let windows_before_stale_create = kernel.gwe.windows_snapshot().len();
         assert!(
@@ -13198,9 +13240,130 @@ mod tests {
             .process_birth_key(77)
             .expect("reused PID birth");
         assert_ne!(process_a, process_b);
-        assert_eq!(kernel.recipient_birth_for_window(hwnd_a), Some(process_a));
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_a)
+                .unwrap()
+                .delivery_owner()
+                .process_birth(),
+            Some(process_a)
+        );
+        assert_eq!(kernel.recipient_birth_for_window(hwnd_a), None);
         assert_ne!(kernel.recipient_birth_for_window(hwnd_a), Some(process_b));
         assert!(kernel.close_handle(process_handle_b)?);
+        Ok(())
+    }
+
+    #[test]
+    fn birth_owned_window_typed_post_retires_without_reaching_reused_tid() -> Result<()> {
+        use crate::ce::gwe::{QS_POSTMESSAGE, WM_WINDOWPOSCHANGED};
+
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let process_a = kernel.current_process_birth_key().expect("boot birth");
+        let (handle_a, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth_a = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_a)
+            .expect("A thread birth");
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_a,
+                "BIRTH_TYPED_A",
+                "A",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("A checked window");
+        let position = WindowPos {
+            hwnd: hwnd_a,
+            insert_after: HWND_TOP,
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+            flags: 0,
+        };
+        let (payload_owner, ptr) = kernel
+            .queue_window_pos_payload(hwnd_a, position.clone())
+            .expect("A payload");
+        assert_eq!(payload_owner, process_a);
+        assert!(kernel.post_window_typed_payload_message(
+            hwnd_a,
+            WM_WINDOWPOSCHANGED,
+            0,
+            ptr,
+            payload_owner,
+        ));
+        assert_ne!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(birth_a, QS_POSTMESSAGE),
+            0
+        );
+
+        assert!(kernel.mark_guest_thread_exited_by_birth(birth_a, 0));
+        assert!(kernel.close_handle(handle_a)?);
+        assert!(kernel.gwe.message_pointer_payload(process_a, ptr).is_none());
+        assert!(
+            kernel
+                .memory
+                .heap_size(process_a, PROCESS_HEAP_HANDLE, 0, ptr)
+                .is_none()
+        );
+        assert!(kernel.queue_window_pos_payload(hwnd_a, position).is_none());
+
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = kernel
+            .handles
+            .process_birth_key(launch_b.process_id)
+            .expect("B process birth");
+        let handle_b = kernel
+            .handles
+            .try_create_thread_in_birth(process_b, thread_id, 0x402000, 0, false)?;
+        let birth_b = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_b)
+            .expect("B thread birth");
+        assert_ne!(birth_a, birth_b);
+        let trace_before = kernel.recent_message_ops().len();
+        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
+        let signals_before = kernel.scheduler_stats().message_input_signal_count;
+        // Failed typed allocation for the stale HWND follows the ordinary
+        // WM_WINDOWPOSCHANGED fallback, which must also reject A's owner.
+        kernel.post_window_rect_messages(
+            hwnd_a,
+            Some(Rect::from_origin_size(0, 0, 10, 10)),
+            Some(Rect::from_origin_size(1, 0, 10, 10)),
+            HWND_TOP,
+            0,
+            false,
+        );
+        assert_eq!(kernel.recent_message_ops().len(), trace_before);
+        assert_eq!(
+            kernel.scheduler_stats().message_input_wake_candidate_count,
+            wakes_before
+        );
+        assert_eq!(
+            kernel.scheduler_stats().message_input_signal_count,
+            signals_before
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(birth_b, QS_POSTMESSAGE),
+            0
+        );
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_a),
+            WM_WINDOWPOSCHANGED,
+            WM_WINDOWPOSCHANGED,
+        ));
         Ok(())
     }
 
