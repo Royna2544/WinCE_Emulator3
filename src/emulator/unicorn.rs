@@ -396,12 +396,27 @@ fn native_gwe_queue_import_requires_verified_birth(
 }
 
 #[cfg(feature = "unicorn")]
-fn native_queue_or_thread_timer_import_requires_verified_birth(
+fn native_window_creation_import_requires_verified_birth(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+) -> bool {
+    module_kind == crate::emulator::imports::ImportModuleKind::Coredll
+        && matches!(
+            ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W)
+                | Some(crate::ce::coredll_ordinals::ORD_CREATE_DIALOG_INDIRECT_PARAM_W)
+                | Some(crate::ce::coredll_ordinals::ORD_DIALOG_BOX_INDIRECT_PARAM_W)
+        )
+}
+
+#[cfg(feature = "unicorn")]
+fn native_import_requires_verified_thread_birth(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     first_arg: u32,
 ) -> bool {
     native_gwe_queue_import_requires_verified_birth(module_kind, ordinal)
+        || native_window_creation_import_requires_verified_birth(module_kind, ordinal)
         || (module_kind == crate::emulator::imports::ImportModuleKind::Coredll
             && first_arg == 0
             && matches!(
@@ -10657,12 +10672,11 @@ impl UnicornMips {
                     active_thread_id,
                 );
                 // A native register context belongs to the task incarnation
-                // that supplied it. GWE queue APIs must never reinterpret an
-                // escaped A context as B merely because B reused the TID.
-                // HWND-less timer calls also target that exact caller birth;
-                // window timers retain their existing HWND-owned path.
+                // that supplied it. Queue, window-creation and HWND-less timer
+                // imports must never reinterpret escaped A registers as B
+                // merely because B reused the numeric TID.
                 if trap.as_ref().is_some_and(|trap| {
-                    native_queue_or_thread_timer_import_requires_verified_birth(
+                    native_import_requires_verified_thread_birth(
                         trap.module_kind,
                         trap.ordinal,
                         args.first().copied().unwrap_or(0),
@@ -10671,7 +10685,24 @@ impl UnicornMips {
                 {
                     *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
                         format!(
-                            "native GWE or thread-timer import has stale or unverified thread birth for TID {active_thread_id}"
+                            "native birth-sensitive import has stale or unverified thread birth for TID {active_thread_id}"
+                        ),
+                    ));
+                    let _ = uc.emu_stop();
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    native_window_creation_import_requires_verified_birth(
+                        trap.module_kind,
+                        trap.ordinal,
+                    )
+                }) && !caller_birth.zip(native_owner_birth).is_some_and(|(birth, process)| {
+                    unsafe { &*kernel_ptr }.checked_window_delivery_owner_for_birth(birth)
+                        == Some(crate::ce::gwe::WindowDeliveryOwner::Birth { thread: birth, process })
+                }) {
+                    *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
+                        format!(
+                            "native window creation has stale or mismatched process birth for TID {active_thread_id}"
                         ),
                     ));
                     let _ = uc.emu_stop();
@@ -11565,6 +11596,34 @@ impl UnicornMips {
                     return;
                 }
                 let result = import_return.v0;
+                if result != 0
+                    && trap.as_ref().is_some_and(|trap| {
+                        native_window_creation_import_requires_verified_birth(
+                            trap.module_kind,
+                            trap.ordinal,
+                        )
+                    })
+                {
+                    let expected_owner = caller_birth.zip(native_owner_birth).map(
+                        |(thread, process)| crate::ce::gwe::WindowDeliveryOwner::Birth {
+                            thread,
+                            process,
+                        },
+                    );
+                    let actual_owner = unsafe { &*kernel_ptr }
+                        .gwe
+                        .window(result)
+                        .map(|window| window.delivery_owner());
+                    if expected_owner.is_none() || actual_owner != expected_owner {
+                        *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
+                            format!(
+                                "native window creation returned HWND 0x{result:08x} with owner {actual_owner:?}, expected {expected_owner:?}"
+                            ),
+                        ));
+                        let _ = memory.uc.emu_stop();
+                        return;
+                    }
+                }
                 if let Err(err) = map_kernel_memory_allocations_for_owner(
                     memory.uc,
                     unsafe { &*kernel_ptr },
@@ -59731,10 +59790,11 @@ fn try_enter_create_window_create_callout<D>(
     let Some(window) = kernel.gwe.window(hwnd) else {
         return false;
     };
-    let Some(owner) = kernel.handles.process_birth_key(window.process_id) else {
+    let Some(owner) = window.delivery_owner().process_birth() else {
         return false;
     };
-    if kernel.current_process_birth_key() != Some(owner) {
+    if owner.process_id() != window.process_id || kernel.current_process_birth_key() != Some(owner)
+    {
         return false;
     }
     let wndproc = window.wndproc;
@@ -80524,7 +80584,7 @@ mod unicorn_tests {
 
     fn checked_stale_native_window_creation_import(ordinal: u32) -> crate::Result<()> {
         use crate::ce::{
-            coredll::{CoredllDispatch, CoredllRawContext, CoredllValue, CoredllExportTable},
+            coredll::{CoredllDispatch, CoredllExportTable, CoredllRawContext, CoredllValue},
             coredll_ordinals::{
                 ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_WINDOW_EX_W,
                 ORD_DIALOG_BOX_INDIRECT_PARAM_W,
@@ -80533,7 +80593,9 @@ mod unicorn_tests {
         use crate::emulator::imports::ImportModuleKind;
 
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
-        let process_birth = kernel.current_process_birth_key().expect("boot process birth");
+        let process_birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
         let (a_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
         let a_birth = kernel
             .handles
@@ -80573,13 +80635,9 @@ mod unicorn_tests {
         uc.mem_write(u64::from(TEMPLATE_PTR), &template).unwrap();
         let args = match ordinal {
             ORD_CREATE_WINDOW_EX_W => vec![0, 0x82, 0, 0, 4, 8, 40, 24, 0, 0, 0, 0],
-            ORD_CREATE_DIALOG_INDIRECT_PARAM_W | ORD_DIALOG_BOX_INDIRECT_PARAM_W => vec![
-                0,
-                TEMPLATE_PTR,
-                0,
-                crate::ce::gwe::DEFAULT_WNDPROC,
-                0,
-            ],
+            ORD_CREATE_DIALOG_INDIRECT_PARAM_W | ORD_DIALOG_BOX_INDIRECT_PARAM_W => {
+                vec![0, TEMPLATE_PTR, 0, crate::ce::gwe::DEFAULT_WNDPROC, 0]
+            }
             _ => panic!("unexpected native window creator ordinal {ordinal}"),
         };
         kernel.threads.set_last_error(thread_id, SENTINEL_ERROR);
@@ -80594,7 +80652,7 @@ mod unicorn_tests {
         // raw COREDLL dispatch. A full run cannot start with A's stale saved
         // registers: its earlier saved-context preflight rejects them. Keep
         // this control at the import seam without weakening that preflight.
-        let requires_birth = super::native_queue_or_thread_timer_import_requires_verified_birth(
+        let requires_birth = super::native_import_requires_verified_thread_birth(
             ImportModuleKind::Coredll,
             Some(ordinal),
             args[0],
@@ -80648,12 +80706,14 @@ mod unicorn_tests {
             SENTINEL_ERROR,
             "stale native creator ordinal {ordinal} changed B's LastError"
         );
-        assert!(returned.is_none(), "stale native import reached raw dispatch");
+        assert!(
+            returned.is_none(),
+            "stale native import reached raw dispatch"
+        );
         Ok(())
     }
 
     #[test]
-    #[ignore = "expected red: W-B1a stale native CreateWindowExW birth"]
     fn stale_native_create_window_ex_w_birth() -> crate::Result<()> {
         checked_stale_native_window_creation_import(
             crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W,
@@ -80661,7 +80721,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: W-B1a stale native CreateDialogIndirectParamW birth"]
     fn stale_native_create_dialog_indirect_param_w_birth() -> crate::Result<()> {
         checked_stale_native_window_creation_import(
             crate::ce::coredll_ordinals::ORD_CREATE_DIALOG_INDIRECT_PARAM_W,
@@ -80669,7 +80728,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: W-B1a stale native DialogBoxIndirectParamW birth"]
     fn stale_native_dialog_box_indirect_param_w_birth() -> crate::Result<()> {
         checked_stale_native_window_creation_import(
             crate::ce::coredll_ordinals::ORD_DIALOG_BOX_INDIRECT_PARAM_W,
@@ -80677,7 +80735,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: W-B1a native self-termination before CreateWindowExW"]
     fn stale_native_create_window_ex_w_after_self_termination_import() -> crate::Result<()> {
         use crate::ce::coredll_ordinals::{ORD_CREATE_WINDOW_EX_W, ORD_TERMINATE_THREAD};
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
@@ -80690,10 +80747,10 @@ mod unicorn_tests {
             0x3739_0000 | (terminate_trap & 0xffff),
             0x0320_f809, // jalr t9: A exits inside this native attempt
             0,
-            0x2404_0000, // addiu a0,zero,0: dwExStyle
-            0x2405_0082, // addiu a1,zero,0x82: nonempty class atom
-            0x2406_0000, // addiu a2,zero,0: no title
-            0x2407_0000, // addiu a3,zero,0: no style
+            0x2404_0000,                       // addiu a0,zero,0: dwExStyle
+            0x2405_0082,                       // addiu a1,zero,0x82: nonempty class atom
+            0x2406_0000,                       // addiu a2,zero,0: no title
+            0x2407_0000,                       // addiu a3,zero,0: no style
             0x3c19_0000 | (create_trap >> 16), // lui t9,CreateWindowExW trap
             0x3739_0000 | (create_trap & 0xffff),
             0x0320_f809, // jalr t9: stale A registers must not create
@@ -80802,27 +80859,21 @@ mod unicorn_tests {
         use crate::emulator::imports::ImportModuleKind;
 
         for ordinal in [ORD_SET_TIMER, ORD_KILL_TIMER] {
-            assert!(
-                super::native_queue_or_thread_timer_import_requires_verified_birth(
-                    ImportModuleKind::Coredll,
-                    Some(ordinal),
-                    0,
-                )
-            );
-            assert!(
-                !super::native_queue_or_thread_timer_import_requires_verified_birth(
-                    ImportModuleKind::Coredll,
-                    Some(ordinal),
-                    0x1234,
-                )
-            );
-            assert!(
-                !super::native_queue_or_thread_timer_import_requires_verified_birth(
-                    ImportModuleKind::Fsdmgr,
-                    Some(ordinal),
-                    0,
-                )
-            );
+            assert!(super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Coredll,
+                Some(ordinal),
+                0,
+            ));
+            assert!(!super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Coredll,
+                Some(ordinal),
+                0x1234,
+            ));
+            assert!(!super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Fsdmgr,
+                Some(ordinal),
+                0,
+            ));
         }
 
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
