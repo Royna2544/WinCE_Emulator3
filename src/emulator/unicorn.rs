@@ -24603,7 +24603,12 @@ mod wait_scheduler_tests {
         }
     }
 
-    fn blocked_comm_event(wait_id: u64, handle: u32, event_ptr: u32) -> BlockedWaitThread {
+    fn blocked_comm_event(
+        wait_id: u64,
+        handle: u32,
+        event_ptr: u32,
+        owner: crate::ce::object::ProcessBirthKey,
+    ) -> BlockedWaitThread {
         BlockedWaitThread {
             wait_id,
             thread_id: 51,
@@ -24612,7 +24617,7 @@ mod wait_scheduler_tests {
             kind: BlockedWaitKind::SerialCommEvent {
                 handle,
                 event_ptr,
-                owner_birth: None,
+                owner_birth: Some(owner),
             },
             wait_started_ms: 0,
             timeout_ms: crate::ce::timer::INFINITE,
@@ -27479,6 +27484,7 @@ mod wait_scheduler_tests {
         const EV_RXCHAR: u32 = 0x0001;
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
         let remote_target = kernel.remote_gps_target();
         let com = kernel
             .create_file_w(&remote_target, GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
@@ -27493,10 +27499,14 @@ mod wait_scheduler_tests {
             unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
         )
         .unwrap();
-        let event_ptr = 0x3000_2000;
+        let event_ptr = 0x2000_2000;
         uc.mem_map(event_ptr.into(), 0x1000, unicorn_engine::Prot::ALL)
             .unwrap();
-        let blocked = blocked_comm_event(7, com, event_ptr);
+        let blocked = blocked_comm_event(7, com, event_ptr, owner);
+        let mapped = std::cell::RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let pins = super::NativeMappingPins::default();
+        let guards = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let terminal_error = std::cell::RefCell::new(None);
 
         assert!(blocked_serial_comm_event_ready(&blocked, &kernel));
         assert_eq!(
@@ -27505,10 +27515,17 @@ mod wait_scheduler_tests {
                 &mut kernel,
                 &mut uc,
                 &super::SealedHostWriteGuard::default(),
-                None,
+                Some(super::UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                }),
             ),
             1
         );
+        assert!(terminal_error.borrow().is_none());
         let mut event = [0; 4];
         uc.mem_read(event_ptr.into(), &mut event).unwrap();
         assert_eq!(u32::from_le_bytes(event), EV_RXCHAR);
@@ -27519,6 +27536,7 @@ mod wait_scheduler_tests {
         const EV_RXCHAR: u32 = 0x0001;
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
         let com = kernel
             .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
             .unwrap();
@@ -27537,12 +27555,16 @@ mod wait_scheduler_tests {
             unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
         )
         .unwrap();
-        let event_ptr = 0x3000_2000;
+        let event_ptr = 0x2000_2000;
         uc.mem_map(event_ptr.into(), 0x1000, unicorn_engine::Prot::ALL)
             .unwrap();
         uc.mem_write(event_ptr.into(), &0xfeed_faceu32.to_le_bytes())
             .unwrap();
-        let blocked = blocked_comm_event(wait_id, com, event_ptr);
+        let blocked = blocked_comm_event(wait_id, com, event_ptr, owner);
+        let mapped = std::cell::RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let pins = super::NativeMappingPins::default();
+        let guards = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let terminal_error = std::cell::RefCell::new(None);
 
         assert!(blocked_serial_comm_event_ready(&blocked, &kernel));
         assert_eq!(
@@ -27551,10 +27573,17 @@ mod wait_scheduler_tests {
                 &mut kernel,
                 &mut uc,
                 &super::SealedHostWriteGuard::default(),
-                None,
+                Some(super::UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                }),
             ),
             1
         );
+        assert!(terminal_error.borrow().is_none());
         let mut event = [0; 4];
         uc.mem_read(event_ptr.into(), &mut event).unwrap();
         assert_eq!(u32::from_le_bytes(event), 0);
@@ -27565,12 +27594,13 @@ mod wait_scheduler_tests {
     fn blocked_wait_outputs_reject_sealed_bytes_before_consuming_results() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
             unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
         )
         .unwrap();
-        let output_ptr = 0x3000_2000u32;
+        let output_ptr = 0x2000_2000u32;
         uc.mem_map(u64::from(output_ptr), 0x1000, unicorn_engine::Prot::ALL)
             .unwrap();
         uc.mem_write(u64::from(output_ptr), &0xfeed_faceu32.to_le_bytes())
@@ -27602,14 +27632,30 @@ mod wait_scheduler_tests {
         blocked.kind = BlockedWaitKind::SerialCommEvent {
             handle: 0,
             event_ptr: output_ptr,
-            owner_birth: None,
+            owner_birth: Some(owner),
         };
+        let mapped = std::cell::RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let pins = super::NativeMappingPins::default();
+        let guards = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let terminal_error = std::cell::RefCell::new(None);
         let comm_guard = super::SealedHostWriteGuard {
             ranges: std::rc::Rc::new(vec![(u64::from(output_ptr), u64::from(output_ptr) + 4)]),
             violation: std::rc::Rc::new(std::cell::RefCell::new(None)),
         };
         assert_eq!(
-            complete_blocked_serial_comm_event(&blocked, &mut kernel, &mut uc, &comm_guard, None),
+            complete_blocked_serial_comm_event(
+                &blocked,
+                &mut kernel,
+                &mut uc,
+                &comm_guard,
+                Some(super::UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                }),
+            ),
             0
         );
         assert!(comm_guard.poison_error().is_some());
@@ -27825,18 +27871,19 @@ mod wait_scheduler_tests {
 
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
             unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
         )
         .unwrap();
-        uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
+        uc.mem_map(0x2000_0000, 0x1000, unicorn_engine::Prot::ALL)
             .unwrap();
         let thread_id = 6;
         let thread_handle = 0x606;
         let return_pc = 0x0040_6000;
-        let buffer = 0x3000_0100;
-        let transferred_ptr = 0x3000_0200;
+        let buffer = 0x2000_0100;
+        let transferred_ptr = 0x2000_0200;
         let handle = kernel
             .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
             .unwrap();
@@ -27852,6 +27899,10 @@ mod wait_scheduler_tests {
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+        let mapped = std::cell::RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let pins = super::NativeMappingPins::default();
+        let guards = std::cell::RefCell::new(std::collections::BTreeMap::new());
+        let terminal_error = std::cell::RefCell::new(None);
 
         // Bracket both tick readings with host timestamps so host scheduling
         // jitter does not require an arbitrary upper bound on total duration.
@@ -27863,7 +27914,13 @@ mod wait_scheduler_tests {
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
-            None,
+            Some(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            }),
             &[],
             thread_id,
             &blocked_waits,
@@ -27906,6 +27963,7 @@ mod wait_scheduler_tests {
         uc.mem_read(u64::from(transferred_ptr), &mut transferred)
             .unwrap();
         assert_eq!(u32::from_le_bytes(transferred), 0);
+        assert!(terminal_error.borrow().is_none());
     }
 
     #[test]
@@ -53724,13 +53782,14 @@ mod unicorn_tests {
             .chain(std::iter::once(0))
             .flat_map(u16::to_le_bytes)
             .collect::<Vec<_>>();
-        write_guest_fixture_bytes(&mut parent, application_ptr, &application);
+        write_guest_fixture_stack_bytes(&parent, &mut kernel, application_ptr, &application);
         for (index, value) in [0, 0, 0, 0, 0, process_information_ptr]
             .into_iter()
             .enumerate()
         {
-            write_guest_fixture_bytes(
-                &mut parent,
+            write_guest_fixture_stack_bytes(
+                &parent,
+                &mut kernel,
                 sp + 16 + index as u32 * 4,
                 &value.to_le_bytes(),
             );
@@ -54177,6 +54236,50 @@ mod unicorn_tests {
             .as_mut_owned()
             .expect("fixture guest image must remain mutable")[offset..offset + bytes.len()]
             .copy_from_slice(bytes);
+    }
+
+    fn write_guest_fixture_stack_bytes(
+        parent: &super::UnicornMips,
+        kernel: &mut CeKernel,
+        address: u32,
+        bytes: &[u8],
+    ) {
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("fixture process birth");
+        super::reserve_fixed_system_slabs(
+            &parent.memory,
+            &parent.mapped_blobs,
+            kernel,
+            Some(owner),
+        )
+        .expect("reserve fixture heap and stack without byte blobs");
+        let len = u32::try_from(bytes.len()).expect("bounded fixture stack input");
+        let prepared = kernel
+            .memory
+            .prepare_fixed_private_span(owner, address, len)
+            .expect("prepare canonical fixture stack span");
+        if !prepared.new_page_pins().is_empty() {
+            assert_eq!(
+                kernel.memory.commit_prepared_private_vm(prepared),
+                Some(address & !0xfff),
+                "publish canonical fixture stack pages"
+            );
+        }
+        let mut copied = 0usize;
+        while copied < bytes.len() {
+            let guest_address = address + copied as u32;
+            let page = guest_address & !0xfff;
+            let offset = (guest_address & 0xfff) as usize;
+            let count = (0x1000 - offset).min(bytes.len() - copied);
+            kernel
+                .memory
+                .private_page_pin(owner, page)
+                .expect("canonical fixture stack pin")
+                .write_bytes(offset, &bytes[copied..copied + count])
+                .expect("seed canonical fixture stack bytes");
+            copied += count;
+        }
     }
 
     #[test]
@@ -58517,9 +58620,23 @@ mod unicorn_tests {
     // actual ProcessNativeEngine owner and returns Option<usize> while idle.
     // There is no duplicate scheduler, fabricated native snapshot or seeded GPRs.
 
-    const PHASE1_COUNTER_ADDRESS: u32 = super::GUEST_HEAP_ARENA_BASE;
+    // The fixed heap is only writable after HeapAlloc commits its high-water
+    // pages. These scheduler fixtures need independent, test-only scratch RAM.
+    const PHASE1_COUNTER_ADDRESS: u32 = 0x3800_0000;
 
     fn phase1_counter_cpu(seed: u16, name: &str) -> crate::Result<super::UnicornMips> {
+        phase1_counter_cpu_with_backing(seed, name, true)
+    }
+
+    fn phase1_view_counter_cpu(seed: u16, name: &str) -> crate::Result<super::UnicornMips> {
+        phase1_counter_cpu_with_backing(seed, name, false)
+    }
+
+    fn phase1_counter_cpu_with_backing(
+        seed: u16,
+        name: &str,
+        persistent_ram_blob: bool,
+    ) -> crate::Result<super::UnicornMips> {
         let mut bytes = tiny_mips_spinner_pe();
         write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
         let mut words = vec![
@@ -58544,6 +58661,20 @@ mod unicorn_tests {
         let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
         let mut cpu = super::UnicornMips::new()?;
         cpu.load_pe_image(&image)?;
+        cpu.map_region(
+            PHASE1_COUNTER_ADDRESS,
+            0x1000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "phase1-counter",
+        )?;
+        if persistent_ram_blob {
+            super::ensure_mapped_ram_blob(
+                &mut cpu.mapped_blobs,
+                "phase1-counter",
+                PHASE1_COUNTER_ADDRESS,
+                0x1000,
+            )?;
+        }
         Ok(cpu)
     }
 
@@ -58964,7 +59095,7 @@ mod unicorn_tests {
                 process_birth: None,
             },
         );
-        let mut active = phase1_counter_cpu(0x3000, "view-writer.exe")?;
+        let mut active = phase1_view_counter_cpu(0x3000, "view-writer.exe")?;
         // This parent was selected by the preceding slice-end handoff. Force
         // its real native attempt before the preflight runnable-child gate.
         active.slice_end_rotation_pending = true;
@@ -59046,7 +59177,23 @@ mod unicorn_tests {
             .iter()
             .find(|parked| parked.process_state.process_id == 1)
             .expect("actual slice-end handoff parked the writer");
-        assert_eq!(phase1_counter(&outgoing.cpu), 0x3006);
+        assert_eq!(
+            outgoing
+                .cpu
+                .saved_context
+                .as_ref()
+                .expect("outgoing guest context")
+                .regs
+                .regs[9],
+            0x3006
+        );
+        assert!(
+            outgoing
+                .cpu
+                .read_mapped_bytes(PHASE1_COUNTER_ADDRESS, 4)
+                .is_none(),
+            "view bytes must not have a competing test RAM blob"
+        );
         assert_eq!(
             &kernel
                 .handles
@@ -59097,7 +59244,7 @@ mod unicorn_tests {
                 process_birth: None,
             },
         );
-        let mut active = phase1_counter_cpu(0x3000, "finish-writer.exe")?;
+        let mut active = phase1_view_counter_cpu(0x3000, "finish-writer.exe")?;
         // The prior handoff selected this parent. Its native attempt must run
         // before the preflight runnable-child gate can rotate again.
         active.slice_end_rotation_pending = true;
@@ -59193,7 +59340,12 @@ mod unicorn_tests {
             1,
             "failed parent cannot hand off"
         );
-        assert_eq!(phase1_counter(&active), 0x3006);
+        assert!(
+            active
+                .read_mapped_bytes(PHASE1_COUNTER_ADDRESS, 4)
+                .is_none(),
+            "view bytes must not have a competing test RAM blob"
+        );
         assert_eq!(
             &kernel
                 .handles
@@ -59352,6 +59504,12 @@ mod unicorn_tests {
             let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
             let mut cpu = super::UnicornMips::new()?;
             cpu.load_pe_image(&image)?;
+            cpu.map_region(
+                PHASE1_COUNTER_ADDRESS,
+                0x1000,
+                MemoryPerms::READ | MemoryPerms::WRITE,
+                "phase1-file-view",
+            )?;
             cpu.native_engine = super::ProcessNativeEngine::with_lifetime(
                 Arch::MIPS,
                 Mode::MIPS32 | Mode::LITTLE_ENDIAN,
@@ -60226,12 +60384,17 @@ mod unicorn_tests {
             .chain(std::iter::once(0))
             .flat_map(u16::to_le_bytes)
             .collect::<Vec<_>>();
-        write_guest_fixture_bytes(&mut cpu, application_ptr, &application);
+        write_guest_fixture_stack_bytes(&cpu, &mut kernel, application_ptr, &application);
         for (index, value) in [0, 0, 0, 0, 0, process_information_ptr]
             .into_iter()
             .enumerate()
         {
-            write_guest_fixture_bytes(&mut cpu, sp + 16 + index as u32 * 4, &value.to_le_bytes());
+            write_guest_fixture_stack_bytes(
+                &cpu,
+                &mut kernel,
+                sp + 16 + index as u32 * 4,
+                &value.to_le_bytes(),
+            );
         }
         let mut regs = super::MipsGuestContext::zero();
         regs.regs[4] = mapping_handle;
@@ -61498,9 +61661,18 @@ mod unicorn_tests {
         assert_ne!(mapping_handle, 0, "public CreateFileMappingW result");
         assert_ne!(view_base, 0, "public MapViewOfFile result");
         assert_eq!(a_saved.regs.regs[10], 0, "new anonymous page starts zero");
+        let parent_stack_page = parent.stack_top.expect("parent stack") - 0x1000;
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(parent_birth, parent_stack_page)
+                .is_some(),
+            "parent's real stack arguments commit one fixed slab page"
+        );
         assert_eq!(
             kernel.memory.private_commit_used_bytes(),
-            committed_before + 4096
+            committed_before + 2 * 4096,
+            "one shared view page plus the parent's stack page"
         );
         assert_eq!(
             kernel
@@ -61548,9 +61720,18 @@ mod unicorn_tests {
         assert_eq!(b_saved.regs.regs[16], mapping_handle, "named reopen");
         assert_eq!(b_saved.regs.regs[17], view_base, "same guest VA, new owner");
         assert_eq!(b_saved.regs.regs[10], A_BYTES, "B loaded A's guest store");
+        let child_stack_page = child.stack_top.expect("child stack") - 0x1000;
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(child_birth, child_stack_page)
+                .is_some(),
+            "child's real stack arguments commit its own fixed slab page"
+        );
         assert_eq!(
             kernel.memory.private_commit_used_bytes(),
-            committed_before + 4096
+            committed_before + 3 * 4096,
+            "the named view reuses one shared page; the child adds one stack page"
         );
         let b_pin = kernel
             .memory
@@ -61592,7 +61773,8 @@ mod unicorn_tests {
         );
         assert_eq!(
             kernel.memory.private_commit_used_bytes(),
-            committed_before + 4096
+            committed_before + 3 * 4096,
+            "same-owner alias reuses the shared page and the parent's existing stack"
         );
         let alias_pin = kernel
             .memory
@@ -68602,9 +68784,11 @@ mod unicorn_tests {
         {
             assert!(system_slab_ranges.contains(&(region.base, region.size)));
         }
-        assert!(!cpu.mapped_blobs.iter().any(|blob| {
-            matches!(blob.name.as_str(), "ram:ce-heap-arena" | "ram:guest-stack")
-        }));
+        assert!(
+            !cpu.mapped_blobs.iter().any(|blob| {
+                matches!(blob.name.as_str(), "ram:ce-heap-arena" | "ram:guest-stack")
+            })
+        );
         let stack_base = cpu
             .memory
             .regions()
@@ -68635,7 +68819,10 @@ mod unicorn_tests {
         super::map_sealed_image_runs(&mut uc, &cpu.mapped_blobs, &mut mapped, &expected, &pins)?;
         super::map_private_slab_pages(&mut uc, &kernel, &mut mapped, birth, &pins, None)?;
         assert!(mapped.private_pages.is_empty());
-        assert_eq!(super::native_page_perms(&uc, super::GUEST_HEAP_ARENA_BASE)?, None);
+        assert_eq!(
+            super::native_page_perms(&uc, super::GUEST_HEAP_ARENA_BASE)?,
+            None
+        );
         assert_eq!(super::native_page_perms(&uc, stack_base)?, None);
         let fresh_ptr_map_calls = pins.image_len() - fresh_pins_before;
         let fresh_ptr_map_bytes: u64 = mapped
@@ -68661,21 +68848,25 @@ mod unicorn_tests {
         let fresh_readback_ms = fresh_readback_started.elapsed().as_secs_f64() * 1000.0;
 
         let reused_started = std::time::Instant::now();
-        let reused_ranges = super::reconcile_persistent_native_memory_with_private_and_system_slabs(
-            &mut uc,
-            &cpu.memory,
-            &cpu.mapped_blobs,
-            &mapped.virtual_pages,
-            &mapped.private_pages,
-            &expected,
-            &system_slab_ranges,
-        )?;
+        let reused_ranges =
+            super::reconcile_persistent_native_memory_with_private_and_system_slabs(
+                &mut uc,
+                &cpu.memory,
+                &cpu.mapped_blobs,
+                &mapped.virtual_pages,
+                &mapped.private_pages,
+                &expected,
+                &system_slab_ranges,
+            )?;
         mapped.ranges = reused_ranges;
         let reused_pins_before = pins.image_len();
         super::map_sealed_image_runs(&mut uc, &cpu.mapped_blobs, &mut mapped, &expected, &pins)?;
         super::map_private_slab_pages(&mut uc, &kernel, &mut mapped, birth, &pins, None)?;
         assert!(mapped.private_pages.is_empty());
-        assert_eq!(super::native_page_perms(&uc, super::GUEST_HEAP_ARENA_BASE)?, None);
+        assert_eq!(
+            super::native_page_perms(&uc, super::GUEST_HEAP_ARENA_BASE)?,
+            None
+        );
         assert_eq!(super::native_page_perms(&uc, stack_base)?, None);
         let reused_ptr_map_calls = pins.image_len() - reused_pins_before;
         let reused_blob_write_bytes = super::sync_persisted_blobs_to_native(
