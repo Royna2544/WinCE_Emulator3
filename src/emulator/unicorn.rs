@@ -27,7 +27,7 @@ use crate::ce::memory::{
     VirtualAllocationBacking,
 };
 #[cfg(all(test, feature = "unicorn"))]
-use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, USER_KDATA_PAGE_BASE, user_kdata_page};
+use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, user_kdata_page};
 use crate::{
     ce::{
         coredll::CoredllGuestMemory,
@@ -45,7 +45,8 @@ use crate::{
         pe_loader::{
             GUEST_HEAP_ARENA_BASE, GUEST_HEAP_ARENA_SIZE, MappedBlob, MappedResource,
             MappedResourceString, PeLoadResult, RESERVED_IMPORT_TRAP_STUB_BYTES,
-            SYS_HANDLE_CURRENT_PROCESS, SYS_HANDLE_CURRENT_THREAD, align_up_4k,
+            SYS_HANDLE_CURRENT_PROCESS, SYS_HANDLE_CURRENT_THREAD, USER_KDATA_PAGE_BASE,
+            USER_KDATA_PAGE_SIZE, align_up_4k,
             choose_dll_load_base, loaded_module_info, range_contains, ranges_overlap,
             refresh_import_trap_page_blob, user_kdata_handle_address,
         },
@@ -1269,10 +1270,24 @@ impl SealedHostWriteGuard {
                 ));
             }
         }
-        Ok(Self {
+        let guard = Self {
             ranges: Rc::new(ranges),
             violation: Rc::new(RefCell::new(None)),
-        })
+        };
+        // The per-thread KData writes and runtime trap-page refresh are fixed
+        // native host writes. Reject a malformed image layout once, before
+        // either direct writer can touch a shared pointer-backed page.
+        for (base, size, label) in [
+            (USER_KDATA_PAGE_BASE, USER_KDATA_PAGE_SIZE, "KData"),
+            (IMPORT_TRAP_BASE, IMPORT_TRAP_PAGE_SIZE, "import trap"),
+        ] {
+            guard
+                .check_write(u64::from(base), size as usize)
+                .map_err(|err| Error::Backend(format!(
+                    "sealed main image overlaps fixed {label} page: {err}"
+                )))?;
+        }
+        Ok(guard)
     }
 
     fn check_write(&self, address: u64, len: usize) -> Result<()> {
@@ -14805,6 +14820,16 @@ fn repair_missing_virtual_page_for_fault<D>(
         return Ok(false);
     };
     let page_base = address & !0xfff;
+    let page_end = u64::from(page_base) + 0x1000;
+    if mapped.sealed_image_runs.values().any(|run| {
+        let run_begin = u64::from(run.base);
+        let run_end = run_begin + u64::from(run.len);
+        u64::from(page_base) < run_end && run_begin < page_end
+    }) {
+        return Err(Error::Backend(format!(
+            "virtual allocation fault repair range 0x{page_base:08x}..0x{page_end:08x} overlaps sealed main image"
+        )));
+    }
     if matches!(
         allocation.backing,
         VirtualAllocationBacking::StablePrivateSlab
@@ -51960,6 +51985,35 @@ mod unicorn_tests {
         assert!(clean.check_write(u64::from(u32::MAX), 2).is_err());
     }
 
+    #[test]
+    fn sealed_image_cannot_overlap_fixed_kdata_or_import_trap_writers() -> crate::Result<()> {
+        let cpu = sealed_spinner_cpu()?;
+        let sealed = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.bytes.sealed_pin().is_some())
+            .expect("synthetic main image has a sealed run");
+        let backing = sealed.bytes.sealed_pin().unwrap();
+        let pointer = backing.as_ptr();
+        let before = backing.to_vec();
+
+        for (base, label) in [
+            (super::USER_KDATA_PAGE_BASE, "KData"),
+            (super::IMPORT_TRAP_BASE, "import trap"),
+        ] {
+            let mut colliding = sealed.clone();
+            colliding.base = base;
+            let err = super::SealedHostWriteGuard::from_mapped_blobs(&[colliding])
+                .err()
+                .expect("fixed native writer overlap must fail before publication");
+            assert!(format!("{err}").contains(&format!("fixed {label} page")));
+            assert!(format!("{err}").contains("overlaps sealed image"));
+            assert_eq!(backing.as_ptr(), pointer);
+            assert_eq!(&backing[..], &before);
+        }
+        Ok(())
+    }
+
     struct PausingFramebuffer {
         inner: VirtualFramebuffer,
         ticks: u32,
@@ -54138,6 +54192,46 @@ mod unicorn_tests {
 
         assert!(ranges.contains(&(0x1000_0000, 0x0000_2000)));
         assert!(ranges.contains(&(0x2000_1000, 0x0000_2000)));
+    }
+
+    #[test]
+    fn runtime_dll_candidate_cannot_overwrite_sealed_main_image() -> crate::Result<()> {
+        let cpu = sealed_spinner_cpu()?;
+        let sealed = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.bytes.sealed_pin().is_some())
+            .expect("synthetic main image has a sealed run");
+        let backing = sealed.bytes.sealed_pin().unwrap();
+        let pointer = backing.as_ptr();
+        let before = backing.to_vec();
+        let occupied = super::runtime_occupied_ranges(&cpu.memory, &cpu.mapped_blobs);
+        let mut next_dll_base = super::RUNTIME_DLL_LOAD_BASE;
+        let chosen = super::choose_dll_load_base(
+            sealed.base,
+            0x1000,
+            &occupied,
+            &mut next_dll_base,
+        )?;
+        assert!(!super::ranges_overlap(
+            chosen,
+            0x1000,
+            sealed.base,
+            sealed.bytes.len() as u32,
+        ));
+
+        // The memory map is a second barrier before the direct runtime-DLL
+        // native seed if an allocator ever returns a colliding address.
+        let mut memory = cpu.memory.clone();
+        let region_count = memory.regions().count();
+        let err = memory
+            .map(sealed.base, 0x1000, MemoryPerms::READ, "dll:bad")
+            .unwrap_err();
+        assert!(format!("{err}").contains("memory region dll:bad overlaps pe-image"));
+        assert_eq!(memory.regions().count(), region_count);
+        assert_eq!(backing.as_ptr(), pointer);
+        assert_eq!(&backing[..], &before);
+        Ok(())
     }
 
     #[test]
@@ -66929,6 +67023,100 @@ mod unicorn_tests {
         );
         assert_eq!(backing.to_vec(), baseline);
         assert!(cpu.native_engine_identity_for_test().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn patched_branch_likely_final_bytes_are_sealed_and_execute_in_fresh_owners()
+    -> crate::Result<()> {
+        const ORIGIN: u32 = 0x0040_1000;
+        const STUB: u32 = 0x0040_2000;
+        const SOURCE_BRANCH: u32 = 0x5060_0003; // beqzl v1,zero,+3
+        const PATCHED_JUMP: u32 = 0x0810_0800; // j STUB
+
+        let mut bytes = tiny_mips_spinner_pe();
+        // A complete, non-writable .text page remains eligible even though
+        // the loader replaces the branch and delay slot with a trampoline jump.
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x1000); // .text VirtualSize
+        write_vec_u32(&mut bytes, 0x200, SOURCE_BRANCH);
+        write_vec_u32(&mut bytes, 0x204, 0x2442_0001); // addiu v0,v0,1
+        let image = crate::pe::PeImage::parse_bytes("sealed-patched-branch.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+
+        let sealed = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.base == ORIGIN)
+            .expect("patched entry page remains mapped");
+        let backing = sealed
+            .bytes
+            .sealed_pin()
+            .expect("final patched entry page is sealed");
+        assert_eq!(backing.len(), 0x1000);
+        assert_eq!(&backing[..4], &PATCHED_JUMP.to_le_bytes());
+        assert_eq!(&backing[4..8], &0u32.to_le_bytes());
+        assert_ne!(&backing[..4], &SOURCE_BRANCH.to_le_bytes());
+        assert!(
+            cpu.trampoline_jumps
+                .iter()
+                .any(|jump| jump.origin == ORIGIN && jump.stub == STUB)
+        );
+        let baseline = backing.to_vec();
+        let kernel = phase1_kernel("sealed-patched-branch.exe")?;
+        let birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let expected =
+            super::expected_sealed_image_runs(&cpu.mapped_blobs, &cpu.memory, Some(birth))?;
+        assert_eq!(expected.len(), 1);
+        let host_guard = super::SealedHostWriteGuard::from_mapped_blobs(&cpu.mapped_blobs)?;
+
+        // Execute the production loader's final bytes, not a hand-built stub:
+        // each iteration uses a fresh native owner and its pointer-map ledger.
+        for (v1, instruction_count, expected_pc, expected_v0) in [
+            (1, 6, ORIGIN + 8, 41),  // false: branch-likely delay slot annulled
+            (0, 7, ORIGIN + 16, 42), // true: delay slot executed exactly once
+        ] {
+            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+            let pins = super::NativeMappingPins::default();
+            let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+            mapped.ranges = super::reconcile_persistent_native_memory_with_private(
+                &mut uc,
+                &cpu.memory,
+                &cpu.mapped_blobs,
+                &HashSet::new(),
+                &BTreeMap::new(),
+                &expected,
+            )?;
+            super::map_sealed_image_runs(
+                &mut uc,
+                &cpu.mapped_blobs,
+                &mut mapped,
+                &expected,
+                &pins,
+            )?;
+            assert_eq!(pins.image_len(), 1);
+            assert!(pins.has_image(ORIGIN, backing.as_ptr() as usize, 0x1000));
+            super::sync_persisted_blobs_to_native(&mut uc, &cpu.mapped_blobs, false, &host_guard)?;
+            assert_eq!(
+                &uc.mem_read_as_vec(u64::from(ORIGIN), 8).unwrap()[..],
+                &backing[..8]
+            );
+            uc.reg_write(RegisterMIPS::V1, v1).unwrap();
+            uc.reg_write(RegisterMIPS::V0, 41).unwrap();
+            uc.emu_start(u64::from(ORIGIN), 0, 0, instruction_count)
+                .unwrap();
+            assert_eq!(
+                uc.reg_read(RegisterMIPS::PC).unwrap(),
+                u64::from(expected_pc)
+            );
+            assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), expected_v0);
+            drop(uc); // Native owner must die before its host pointer pin.
+            drop(mapped);
+            drop(pins);
+            assert_eq!(&backing[..], &baseline);
+        }
         Ok(())
     }
 

@@ -372,22 +372,11 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
     }
     result.import_traps.merge(traps);
 
-    // The final main-image bytes have now passed every loader patcher. Split
-    // only this image; DLLs and runtime import/trap pages remain copy-backed.
-    #[cfg(feature = "unicorn")]
-    let trampoline_patch_ranges: Vec<(u32, u32)> = result
-        .trampoline_jumps
-        .iter()
-        .filter_map(|jump| {
-            jump.origin
-                .checked_sub(image.image_base())
-                .filter(|&rva| rva < image.optional_header.size_of_image)
-                .map(|rva| (rva, 8))
-        })
-        .collect();
-    #[cfg(not(feature = "unicorn"))]
-    let trampoline_patch_ranges = Vec::new();
-    let main_image_runs = final_main_image_runs(image, mapped, &trampoline_patch_ranges)?;
+    // The final main-image bytes have now passed every loader patcher. The
+    // patched branch origins are final executable bytes, not future writes;
+    // their stub tails live beyond SizeOfImage. Split only this image; DLLs
+    // and runtime import/trap pages remain copy-backed.
+    let main_image_runs = final_main_image_runs(image, mapped)?;
 
     // Memory regions: main image runs, DLLs, trampolines (same address order).
     for (blob, perms) in &main_image_runs {
@@ -644,21 +633,19 @@ fn next_image_load_generation() -> Result<u64> {
 }
 
 /// Consume the fully patched main image into contiguous, page-aligned runs.
-/// Patch sites are excluded explicitly, and any byte that changed since the
-/// original mapped image also excludes its entire page. The original image is
-/// only a temporary exact-comparison witness, never retained beside the runs.
+/// IAT thunks remain copy-backed because import binding can change after
+/// publication. One-time loader relocations and trampoline-origin rewrites
+/// are already final bytes at this boundary and may be sealed.
 fn final_main_image_runs(
     image: &PeImage,
     mapped: Vec<u8>,
-    trampoline_patch_ranges: &[(u32, u32)],
 ) -> Result<Vec<(MappedBlob, MemoryPerms)>> {
-    let mut excluded = trampoline_patch_ranges.to_vec();
+    let mut excluded = Vec::new();
     for descriptor in &image.imports {
         for thunk in &descriptor.imports {
             excluded.push((thunk.iat_rva, 4));
         }
     }
-    let original = image.mapped_image()?;
     let selected = eligible_immutable_image_pages(
         image.optional_header.size_of_image,
         image.optional_header.size_of_headers,
@@ -666,19 +653,10 @@ fn final_main_image_runs(
         &mapped,
         &excluded,
     )?;
-    let mut eligible = Vec::with_capacity(selected.len());
-    for page in selected {
-        let start = usize::try_from(page.rva).map_err(|_| {
-            Error::InvalidArgument("main image page RVA exceeds host usize".to_owned())
-        })?;
-        let end = start
-            .checked_add(IMAGE_PAGE_SIZE as usize)
-            .ok_or_else(|| Error::InvalidArgument("main image page end overflow".to_owned()))?;
-        if original.get(start..end) == Some(page.bytes) {
-            eligible.push((page.rva, page.perms));
-        }
-    }
-    drop(original);
+    let eligible = selected
+        .into_iter()
+        .map(|page| (page.rva, page.perms))
+        .collect::<Vec<_>>();
     partition_main_image_runs(&image.path, image.image_base(), mapped, &eligible)
 }
 
@@ -1163,7 +1141,10 @@ mod immutable_image_page_tests {
         use crate::emulator::dll_search::{
             emulator_provided_import_module, normalize_module_name, resolve_dll_path,
         };
-        use std::{collections::BTreeSet, path::PathBuf};
+        use std::{
+            collections::{BTreeMap, BTreeSet},
+            path::PathBuf,
+        };
 
         let exe_path =
             PathBuf::from(std::env::var_os("WINCE_COVERAGE_EXE").ok_or_else(|| {
@@ -1264,19 +1245,15 @@ mod immutable_image_page_tests {
             .filter(|blob| blob.name == main_name && blob.bytes.sealed_pin().is_some())
             .map(|blob| blob.bytes.len() / IMAGE_PAGE_SIZE as usize)
             .sum();
-        let mut excluded_ranges: Vec<(u32, u32)> = image
+        let excluded_ranges: Vec<(u32, u32)> = image
             .imports
             .iter()
             .flat_map(|descriptor| descriptor.imports.iter().map(|thunk| (thunk.iat_rva, 4)))
             .collect();
-        excluded_ranges.extend(result.trampoline_jumps.iter().filter_map(|jump| {
-            jump.origin
-                .checked_sub(image.image_base())
-                .filter(|&rva| rva < image_size)
-                .map(|rva| (rva, 8))
-        }));
-        let mut changed_pages = 0usize;
-        let mut unchanged_excluded_pages = 0usize;
+        let mut sealed_changed_pages = 0usize;
+        let mut sealed_unchanged_pages = 0usize;
+        let mut excluded_changed_pages = 0usize;
+        let mut excluded_unchanged_pages = 0usize;
         for page in candidate_pages {
             let address = image
                 .image_base()
@@ -1291,14 +1268,21 @@ mod immutable_image_page_tests {
                 })
                 .ok_or_else(|| Error::Backend("coverage page has no main blob".to_owned()))?;
             let offset = (address - blob.base) as usize;
-            if &blob.bytes[offset..offset + IMAGE_PAGE_SIZE as usize] != page.bytes {
-                changed_pages += 1;
-                continue;
-            }
-            if excluded_ranges.iter().any(|&(start, size)| {
+            let changed = &blob.bytes[offset..offset + IMAGE_PAGE_SIZE as usize] != page.bytes;
+            let excluded = excluded_ranges.iter().any(|&(start, size)| {
                 page.rva < start.saturating_add(size) && start < page.rva + IMAGE_PAGE_SIZE
-            }) {
-                unchanged_excluded_pages += 1;
+            });
+            match (blob.bytes.sealed_pin().is_some(), changed, excluded) {
+                (true, true, false) => sealed_changed_pages += 1,
+                (true, false, false) => sealed_unchanged_pages += 1,
+                (false, true, true) => excluded_changed_pages += 1,
+                (false, false, true) => excluded_unchanged_pages += 1,
+                _ => {
+                    return Err(Error::Backend(format!(
+                        "coverage page at RVA 0x{:08x} violates final-byte selection",
+                        page.rva
+                    )));
+                }
             }
         }
         if sealed_pages > non_writable_pages || sealed_pages > total_pages as usize {
@@ -1306,7 +1290,13 @@ mod immutable_image_page_tests {
                 "sealed coverage exceeds a denominator".to_owned(),
             ));
         }
-        if sealed_pages + changed_pages + unchanged_excluded_pages != non_writable_pages {
+        if sealed_changed_pages
+            + sealed_unchanged_pages
+            + excluded_changed_pages
+            + excluded_unchanged_pages
+            != non_writable_pages
+            || sealed_pages != sealed_changed_pages + sealed_unchanged_pages
+        {
             return Err(Error::Backend(
                 "sealed coverage breakdown mismatch".to_owned(),
             ));
@@ -1315,16 +1305,53 @@ mod immutable_image_page_tests {
             eprintln!("real_main_image_coverage_dll path={}", dll.path);
         }
         eprintln!(
-            "real_main_image_coverage exe={} dlls={} image_bytes={} total_pages={} non_writable_section_pages={} changed_pages={} unchanged_excluded_pages={} sealed_pages={} sealed_mib={:.6}",
+            "real_main_image_coverage exe={} dlls={} image_bytes={} total_pages={} non_writable_section_pages={} sealed_changed_pages={} sealed_unchanged_pages={} iat_excluded_changed_pages={} iat_excluded_unchanged_pages={} sealed_pages={} sealed_mib={:.6}",
             exe_path.display(),
             loaded.len(),
             image_size,
             total_pages,
             non_writable_pages,
-            changed_pages,
-            unchanged_excluded_pages,
+            sealed_changed_pages,
+            sealed_unchanged_pages,
+            excluded_changed_pages,
+            excluded_unchanged_pages,
             sealed_pages,
             sealed_pages as f64 * IMAGE_PAGE_SIZE as f64 / (1024.0 * 1024.0),
+        );
+        // This creates only the production owner-side memory/blob plan. It
+        // does not construct a native CPU or execute any guest instruction.
+        let mut cpu = crate::emulator::unicorn::UnicornMips::new()?;
+        cpu.load_pe_image_with_dlls(&image, &loaded)?;
+        let owner_blobs = cpu.mapped_blob_ranges();
+        let mut families: BTreeMap<String, (usize, u64, u64)> = BTreeMap::new();
+        for owner_blob in &owner_blobs {
+            let bytes = u64::from(owner_blob.size);
+            let sealed = result.mapped_blobs.iter().any(|blob| {
+                blob.name == owner_blob.name
+                    && blob.base == owner_blob.base
+                    && blob.bytes.len() == bytes as usize
+                    && blob.bytes.sealed_pin().is_some()
+            });
+            let entry = families.entry(owner_blob.name.clone()).or_default();
+            entry.0 += 1;
+            entry.1 += bytes;
+            if sealed {
+                entry.2 += bytes;
+            }
+        }
+        let (mut blob_count, mut blob_bytes, mut sealed_bytes) = (0usize, 0u64, 0u64);
+        for (name, (count, bytes, sealed)) in families {
+            eprintln!(
+                "real_owner_blob_family name={name:?} blobs={count} bytes={bytes} mib={:.6} sealed_bytes={sealed}",
+                bytes as f64 / (1024.0 * 1024.0),
+            );
+            blob_count += count;
+            blob_bytes += bytes;
+            sealed_bytes += sealed;
+        }
+        eprintln!(
+            "real_owner_blob_total blobs={blob_count} bytes={blob_bytes} mib={:.6} sealed_bytes={sealed_bytes}",
+            blob_bytes as f64 / (1024.0 * 1024.0),
         );
         Ok(())
     }
