@@ -176,14 +176,20 @@ close only their named gates, not Stage 2 or live acceptance.
   or host socket work, rejects stale exact waits before wake consumption, and
   stamps verified birth on normal resume. Raw synchronous/nonblocking fallbacks
   and opaque non-task target pins remain separate.
+  The bounded [parked serial source gate](../evidence/stage3-serial-birth-20261015/validation.receipt.md)
+  verifies native SerialRead/SerialCommEvent register birth before host serial
+  polling or publication, checks the exact live scheduler/native pair before
+  wake or finite-timeout completion, and stamps verified birth on normal
+  resume. Raw synchronous/nonblocking/overlapped serial paths and opaque
+  non-task serial target pins remain separate.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE
   caller wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
   aliasless Sleep-suspend and generic parked-wait continuation remain open.
-  Serial, SendMessage and other blocked payload families have not been migrated
-  by these parked-wait gates.
+  SendMessage and other blocked payload families have not been migrated by
+  these parked-wait gates.
   These bounded source slices are not full Stage 3 or live-app acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
