@@ -4,6 +4,10 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-34 O-P1 Stop Classification
+
+- Typed JR repair and a real-MIPS mixed deadline/peer-yield continuation control close O-P1 stop classification only; report/failure hardening, Stage 2 and app readiness remain open ([ledger E-34](docs/evidence/ledger.md)).
+
 ## 2026-10-14 E-33 Windows TCG Commit-Tail Repair
 
 - The pristine vendored Windows handler's final-commit branch requested the
@@ -40,10 +44,10 @@ references for historical reconstruction.
 
 - The first native-deadline JR-thunk repair predicate was extracted with
   unchanged production behavior. A pure typed-peer-yield/deadline control
-  failed at its intended marker-based decision and is now ignored pending a
-  genuine real-MIPS mixed-stop PC fixture. The second unconditional JR
-  repair and historical debug-snapshot policy still need separate controls;
-  O-P1 is **not closed**. The final source passed release **1,691/0/17
+  failed at its intended marker-based decision and was ignored at that
+  checkpoint pending a genuine real-MIPS mixed-stop PC fixture. The second
+  unconditional JR repair was still untested; O-P1 was **not closed** at E-31.
+  The final E-31 source passed release **1,691/0/17
   ignored**, no-feature **1,265/0/14 ignored**, both no-trace checks, format
   and diff checks. The executable was rebuilt, but no app run occurred.
   [Expected red](evidence/e31-native-deadline-jr-repair-20261014/expected-red.receipt.md)

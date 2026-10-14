@@ -7,25 +7,21 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-1. Close O-P1 classification: land the real-MIPS mixed-stop JR test green with
-   the typed JR repair. No repair or rotation decision may read
-   `host_wall_clock_stop`; reads that only maintain the debug record keep a
-   one-line comment. Write an "O-P1 classification closed" ledger line with its
-   exclusions. Hardening follow-ups are listed in KNOWN_BUGS ("O-P1 hardening").
-2. Switch public `VirtualAlloc` private commits to `StablePrivatePage` by default,
-   following the three-step gate in
-   `docs/evidence/public-virtualalloc-slab-migration-gate-20261014.md`. In the
-   same change, delete the private `initial_bytes` reseed and the `cfg(test)`
-   slab opt-in. Point E-18 at the public path. Run the full suite with raw logs
-   (D-008, ledger E-25).
-3. Make fresh-default ownership the default (O-P4): turn the E-7 closed-owner
+1. Implement the connected public `VirtualAlloc` private-slab gate in
+   `docs/evidence/public-virtualalloc-slab-migration-gate-20261014.md`: stage
+   public expected-red controls and the owner-qualified transaction first;
+   enable `StablePrivatePage` by default only after its publication, lifecycle,
+   failure and clone/close boundaries pass. Then delete the private
+   `initial_bytes` reseed and `cfg(test)` slab opt-in, point E-18 at the public
+   path, and run the full suite with raw logs (D-008, ledger E-25).
+2. Make fresh-default ownership the default (O-P4): turn the E-7 closed-owner
    red green and delete `close_idle_owner_preserving_snapshot_for_test`. Run the
    full suite plus one bounded live run, and report the memory peak against the
    persistent-owner runs (about 1.5 GiB; E-22, E-27, E-29) and BED2 (E-1).
-4. Then migrate the remaining D-008 families: the E-20 public two-PID same-VA
+3. Then migrate the remaining D-008 families: the E-20 public two-PID same-VA
    case (global native overlap fence), shared file views on slabs, and
    image/heap blobs.
-5. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
+4. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
 ## Parallel lanes (never gate the queue above)
