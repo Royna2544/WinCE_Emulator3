@@ -1,6 +1,6 @@
 # Kernel objects and handles
 
-Status: thread/process alias, immutable creation-owner, child completion, bounded `TerminateProcess`, O-K3 execution/task-wait pins, stale-TID/native-stamp continuation, and parked Sleep/object/MsgWait/queue/socket birth slices passed source gates; the parked serial birth slice passed focused controls. Full Stage 3 and live-app behavior remain unaccepted. The [architecture anchor](../ARCHITECTURE.md) owns shared CeMachine, TaskIdentity, FrameIdentity, AddressSpace, outcome and SnapshotEpoch contracts; the [migration plan](../PLAN.md) sequences changes. This document describes their kernel-object consumers rather than redefining them.
+Status: thread/process alias, immutable creation-owner, child completion, bounded `TerminateProcess`, O-K3 execution/task-wait pins, stale-TID/native-stamp continuation, and parked Sleep/object/MsgWait/queue/socket/serial birth slices passed source gates; full Stage 3 and live-app behavior remain unaccepted. The [architecture anchor](../ARCHITECTURE.md) owns shared CeMachine, TaskIdentity, FrameIdentity, AddressSpace, outcome and SnapshotEpoch contracts; the [migration plan](../PLAN.md) sequences changes. This document describes their kernel-object consumers rather than redefining them.
 
 ## Responsibility
 
