@@ -32,6 +32,36 @@ second writable full-image Vec. Clone and unload must respect pins and module
 generation; the physical-budget treatment of ROM/XIP-style pages is still an
 explicit decision, not an assumed `GlobalMemoryStatus` improvement.
 
+Unicorn requires `uc_mem_map_ptr` backing to remain host-readable and
+host-writable (`vendor/unicorn-engine-sys/include/unicorn/unicorn.h:1162-1164`).
+Seal bytes through a Rust type that exposes no mutable access after publication;
+only the guest mapping gets R or RX permissions. Do not host-`VirtualProtect`
+the slab. Checked host writes must also reject any overlap with sealed pages,
+because Unicorn's host `mem_write` can bypass guest R/RX permissions.
+
+Checked post-load paths before publication (source anchors are the current
+copy-backed implementation):
+
+| Path | Required sealed-page behavior |
+| --- | --- |
+| Final patch/publication (`pe_loader.rs:132-257,320-338`; `unicorn.rs:6021-6041`) | Seal only after relocations, cross-DLL/main imports and trampolines; reject any patched-byte overlap not accounted for by eligibility. |
+| Native reconcile/restore (`unicorn.rs:6436-6456,11909-12019,12039-12067`) | Never ordinary-`mem_map` or blob-`mem_write` a sealed page; pointer-map with an exact module-generation/page/pointer/perms identity and fail closed on reused-owner mismatch. |
+| End-of-slice readback (`unicorn.rs:10808-10809,14598-14617`) | Skip sealed pages entirely; test zero readback attempts, unchanged final bytes and identical page pointer after a slice executes one. |
+| Runtime DLL/import rebinding (`unicorn.rs:12849-12974`; `pe_loader.rs:397-414`) | Keep runtime DLLs copy-backed in this slice; refresh only the separate import-trap page and reject any attempted sealed-image overlap. Unload-pending is not checked native unmap/pin retirement. |
+| Guest-pointer host writes (`unicorn.rs:50510-50578,50637-50650` and direct writes at `8347,16219,16710,17932,18028,19882,22728,22753,30983,31989`) | Check sealed-range disjointness before every host write, including prevalidated `VirtualProtect` output and fill; fail closed without changing another owner's bytes. Vendored `uc.c:965-993` shows host `uc_mem_write` temporarily bypasses guest protection. |
+| VM/view seeding and readback (`unicorn.rs:14037,14253,14381-14475,14584`) | Assert disjoint ranges before host writes or view synchronization; do not let a legacy view alias a sealed image page. |
+| Isolated probe (`unicorn.rs:32454-32489`) | Keep its synthetic code mapping in its own Unicorn engine; never borrow a live sealed page pin or write the source image. |
+| Code/debug readers (`unicorn.rs:1112-1214,5943-5984,12157-12215,16423-16432`) | Read sealed authority without a retained full-image copy; make indirect-site cache generation-aware and preserve cross-page debug reads. |
+| Clone/checkpoint (`ce/memory.rs:617-651`; `unicorn.rs:130-140`; `native_engine.rs:195-223`; `main.rs:2337-2369`) | Share immutable page `Rc`/pointer identity across lineages while writable image bytes remain independent. Until machine-level restore is proven, extend the monitor's explicit `Unsupported` gate for sealed images; test both lineages and writable isolation. |
+| Native snapshot mode (`native_engine.rs:281-291`; `vendor/unicorn-engine-sys/uc.c:978-983`) | CPU-only Context is a precondition. Future memory-mode context or `uc_snapshot` must fail closed or pass a separate copy-on-write identity gate before sealed mappings are used. |
+
+The storage candidate is one logical module blob with sorted page-aligned
+`Sealed(Rc<aligned host-RW run>)` and `Mutable(Vec<u8>)` runs, not a second
+full-image buffer. Consume the final patched Vec when partitioning it; share
+sealed runs on CPU clone and deep-copy only mutable runs. Preserve full logical
+extent for code-index, labels and cross-page reads; coalesce adjacent same-
+permission sealed pages so setup does not issue a native map call per page.
+
 Run expected-red section-eligibility and final-byte tests before changing the
 loader. Native controls then execute one sealed page in two fresh owners with
 the same pinned page identity and no per-owner blob write; a guest store must
