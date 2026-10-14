@@ -12,7 +12,7 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Item | State |
 | --- | --- |
 | Installed baseline | BED2: clean bounded 330 s run, still on the decorative splash (ledger E-1) |
-| App goal | E-29's 330 s bounded run still showed splash after positive guest `COM7:` reads and a returned tap; parsed position, map presentation and responsive navigation remain open |
+| App goal | E-29's 330 s run stayed on splash despite COM7 reads and a returned tap; the later E-32 E-31-source run also stayed on splash and host-crashed before its tap. Map and responsive navigation remain open |
 | Architecture implemented | Partial diagnostic/identity contracts exist (`ProcessBirthKey`, `NativeAttemptReport`, E-30 host consumer), but canonical Task/Frame authority and the Stage 2 VM/default-owner gates are not complete |
 | Experiment | Persistent-owner 650 passed 1,618 tests, then host-crashed at 129.108 s with 1.62 GiB RSS (E-2). Source preserved in the D: checkout; deferred to Stage 8 |
 | Plan position | Stage 0 evidence is diagnostic and ongoing; Stage 1 pages are written. E-21 migrated public process-birth aliases, not full Stage 2/3 Task ownership. Stages 3-6 run on fresh engines (D-003) |
@@ -20,7 +20,7 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Decisions | D-001 to D-008 decided; D-008 selects the O-M1 backing design, not its implementation. Next gates: O-P1, O-M1 and O-P4 (Stage 2), then O-T1, O-K1 to O-K3 (Stage 3) |
 | Source control | D-004 now permits an external supervisor's unsigned backup commits on `main`; those snapshots are not reviewed releases and do not replace frozen test evidence |
 | Source of truth | One active source dir (this repo) and one Cargo target dir (D-007). The D working tree still contains the persistent-owner experiment; E-7 stop/error controls pass and O-P1 stop taxonomy is partial. O-P4 fresh-default/VM coherence remains open |
-| Next action | Complete O-P1 stop provenance and public private-VM backing gates; finish the bounded E-29 attempt trace before another source-matched app run. E-30 only connected the host report consumer. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
+| Next action | Reproduce and validate the Windows TCG arena tail boundary in an isolated native control; E-32's crash dump identifies host code emission, not its cause. Complete O-P1 and private-VM gates and the full E-29 attempt trace before interpreting another app run. E-30 only connected the host report consumer. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
 
 ## Standalone boundaries
 

@@ -59,7 +59,13 @@ caller `0x5237` (SP `0x7ffdf578`) was recovered, with no later `0x5237`/wParam
 graceful finish record.
 
 Limits: the memory growth correlates with the crash but does not establish
-cause; no dump survives; no evidence implicates a particular shim or loader.
+cause; no evidence implicates a particular shim or loader. A matching
+1,027,645-byte Windows minidump was recovered on 2026-10-14 and copied beside
+the already-preserved 650 EXE/PDB as
+`evidence/legacy-target-release-20261013/wince_emulation_v3.scheduler_core_failed_1013.dmp`
+(SHA-256 `DFD12E4351A5084326FA65FF49717D4E256040C6B2E5B5BBFB7CA872DC62A23F`).
+Its existence updates the historical “no dump survives” limit; it has not
+established E-2's cause.
 
 ## E-3 Translation-arena retention mechanism (source-confirmed)
 
@@ -1136,6 +1142,23 @@ format and diff checks passed. The [red](../../evidence/e31-native-deadline-jr-r
 and [validation](../../evidence/e31-native-deadline-jr-repair-20261014/validation.receipt.md)
 retain source, executable and log hashes. O-P1 remains open; no app run or
 mounted-file change occurred.
+
+## E-32 E-31-source bounded iNavi diagnostic and TCG crash (2026-10-14, executed)
+
+The one newly approved writable-mount run rebuilt E-31 source into executable
+`D3F07DEF…BE0B89`, with `RUST_LOG=warn,ce.slice_profile=debug`, a 330-s app
+cap and 2,048-MiB RSS guard. Three newly adjacent ZIP backups passed
+source-entry SHA checks before launch. The host exited early with
+`0xC0000005` after 135.282 s without watchdog action; the tap was not sent.
+Splash persisted through the final successful +130.994-s frame poll, while
+121 completed native slices from outgoing PIDs 1/67/68 were logged after
++120 s. Sixteen NMEA ACKs and 11 retained positive COM7 reads/2,784 B do
+not prove parsing. Sampled RSS peaked at 1,655,271,424 B. Mounted contents
+were unchanged by hash, with four timestamp/metadata changes. Matching
+EXE/PDB/dump show a host write fault in Unicorn TCG code emission at module
+RVA `0x89618c`; the missing arena bounds prevent assigning the known Windows
+VEH commit-tail defect as the cause. Neither O-P1 nor Stage 2 nor map
+acceptance is closed. [Full E-32 receipt](../../evidence/e22-live-20261014T002535Z/analysis.receipt.md).
 
 ## Chat-project validation notes (not in this repository)
 
