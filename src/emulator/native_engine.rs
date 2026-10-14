@@ -774,6 +774,17 @@ mod tests {
 
     #[test]
     fn fresh_finish_failure_closes_owner_before_releasing_pins() {
+        struct LivePinnedPage {
+            bytes: Box<[u8; 0x1000]>,
+            drops: Rc<Cell<u32>>,
+        }
+
+        impl Drop for LivePinnedPage {
+            fn drop(&mut self) {
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+
         let slot: ProcessNativeEngine<Key, Vec<(u64, u64)>> = ProcessNativeEngine::with_lifetime(
             Arch::MIPS,
             Mode::MIPS32 | Mode::LITTLE_ENDIAN,
@@ -783,9 +794,25 @@ mod tests {
         slot.arm_finish_failure_once_for_test();
         let mut lease = slot.lease().unwrap();
         mapped(&mut lease);
-        lease.mapping_pins().pin(Dropped(Rc::clone(&drops)));
+        let mut page = LivePinnedPage {
+            bytes: Box::new([0; 0x1000]),
+            drops: Rc::clone(&drops),
+        };
+        let ptr = page.bytes.as_mut_ptr();
+        lease.mapping_pins().pin(page);
+        // SAFETY: the page is fixed-size and pinned until this owner closes.
+        unsafe { lease.mem_map_ptr(0x3000, 0x1000, Prot::ALL, ptr.cast()) }.unwrap();
+        lease.set_metadata(vec![(0x1000, 0x1000), (0x3000, 0x1000)]);
+        let words = [0x2408_0007u32, 0x3c09_0000, 0x3529_3000, 0xad28_0000];
+        let program: Vec<u8> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        lease.mem_write(0x1000, &program).unwrap();
         lease.add_code_hook(0x1000, 0x1010, |_, _, _| {}).unwrap();
         lease.emu_start(0x1000, 0x1010, 100_000, 16).unwrap();
+        assert_eq!(
+            lease.mem_read_as_vec(0x3000, 4).unwrap(),
+            7u32.to_le_bytes()
+        );
+        assert_eq!(drops.get(), 0, "live mapped backing must outlive execution");
         assert_eq!(lease.finish(), Err(uc_error::RESOURCE));
         assert_eq!(drops.get(), 1, "closed fresh owner retained a pin");
         assert!(slot.identity().is_none());
@@ -1171,7 +1198,8 @@ mod tests {
             lease.mapping_pins().pin(page);
             assert_eq!(lease.mapping_pins().len(), 1);
             // SAFETY: the pointer belongs to a fixed-size Box pinned by this
-            // lease. It remains live through native unmap and owner close.
+            // lease. It remains live through native unmap, if performed, and
+            // otherwise through owner close.
             unsafe { lease.mem_map_ptr(0x3000, 0x1000, Prot::ALL, ptr.cast()) }.unwrap();
             let value = cycle as u32 + 1;
             let words = [
@@ -1187,13 +1215,19 @@ mod tests {
                 lease.mem_read_as_vec(0x3000, 4).unwrap(),
                 value.to_le_bytes()
             );
-            lease.mem_unmap(0x3000, 0x1000).unwrap();
+            let metadata = if cycle % 2 == 0 {
+                lease.mem_unmap(0x3000, 0x1000).unwrap();
+                vec![(0x1000, 0x1000)]
+            } else {
+                // Exercise owner close with a still-live native pointer map.
+                vec![(0x1000, 0x1000), (0x3000, 0x1000)]
+            };
             assert_eq!(
                 drops.get(),
                 cycle,
                 "native backing was dropped before fresh owner closure"
             );
-            lease.set_metadata(vec![(0x1000, 0x1000)]);
+            lease.set_metadata(metadata);
             lease.finish().unwrap();
             assert!(slot.identity().is_none(), "cycle {cycle} retained an owner");
             assert_eq!(drops.get(), cycle + 1, "cycle {cycle} retained a pin");

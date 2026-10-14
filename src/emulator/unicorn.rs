@@ -61517,7 +61517,11 @@ mod unicorn_tests {
         const LO: u64 = 0x9abc_def0;
 
         let slot: super::ProcessNativeEngine<(u32, super::SavedCpuContext), ()> =
-            super::ProcessNativeEngine::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN);
+            super::ProcessNativeEngine::with_lifetime(
+                Arch::MIPS,
+                Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+                crate::emulator::native_engine::NativeEngineLifetime::FreshPerSlice,
+            );
         let mut first = slot.lease().unwrap();
         first.mem_map(0x1000, 0x2000, Prot::ALL).unwrap();
         first.reg_write(RegisterMIPS::F0, F0).unwrap();
