@@ -88,6 +88,18 @@ Unmigrated image/heap bytes, full machine checkpoint relineage, guest
 gates; Stage 2 is not complete. Stage 3 extends, rather than recreates, the
 process-birth authority.
 
+### Next Stage 2 slice after the D008 broad gate (design only)
+
+Make anonymous Legacy mapping creation lazy and migrate only its nonzero
+4-KiB ranges plus requested view pages to canonical slabs; keep file-backed
+zero overlays intact. First run a large-section, one-dirty-DIB-page expected-
+red control: a dirty-page view costs one page, then an untouched zero-page
+view costs one more, with matching `GlobalMemoryStatus` deltas. Viewed pages
+remain eagerly admitted; demand-zero faults are a separate measured gate.
+Keep A4's one-way authority and rollback controls. Immutable PE image pages
+are the following separate Stage 2 slice; writable image/heap and Stage 3
+Task authority stay later. See [memory](subsystems/guest-memory.md).
+
 ### Parallel lanes (never gate a stage)
 
 - Native arena lane: E-33's one vendored Windows commit-tail arithmetic repair

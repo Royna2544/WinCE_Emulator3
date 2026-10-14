@@ -130,6 +130,18 @@ already have changed; there is no atomic rollback. Image/heap and older
 legacy-view backing, full machine checkpoint relineage, other native failure
 edges and live map readiness remain separate gates.
 
+### Post-D008 sparse anonymous Legacy conversion (design only; not implemented)
+
+After D008's broad gate, make anonymous Legacy creation lazy and first public
+migration sparse: nonzero 4-KiB Legacy ranges plus viewed pages; file-backed
+zero overlays remain full. Preflight before one-way Slab publication and
+preserve Legacy on failure (A4). An expected-red large-section/dirty-DIB test
+must show a dirty one-page view charges 4 KiB, then an untouched zero-page
+view charges 4 KiB more in public `GlobalMemoryStatus`; rollback, file,
+alias and broad controls stay green. Eager viewed-page admission and far-offset
+DIB Vec prefixes remain; demand-zero, immutable images and Stage 3 are later
+gates. No live-app acceptance is implied.
+
 ## Target authority and permitted interfaces
 
 - `CeMachine` owns mutation sequencing; each `AddressSpace` owns its process's
