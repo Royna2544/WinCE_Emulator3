@@ -14323,7 +14323,7 @@ fn ensure_unique_file_views_for_owner(kernel: &CeKernel, owner_pid: u32) -> Resu
         for view in mapping
             .views
             .iter()
-            .filter(|view| view.process_id == owner_pid)
+            .filter(|view| view.process_id == owner_pid && view.process_birth.is_none())
         {
             if !owner_bases.insert(view.base) {
                 return Err(Error::Backend(format!(
@@ -50257,6 +50257,10 @@ impl<'a, 'uc, D> UnicornGuestMemory<'a, 'uc, D> {
 
 #[cfg(feature = "unicorn")]
 impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
+    fn native_shared_view_owner(&self) -> Option<crate::ce::object::ProcessBirthKey> {
+        self.private_vm_mapping.map(|mapping| mapping.owner)
+    }
+
     fn apply_prepared_private_vm(
         &mut self,
         kernel: &CeKernel,
@@ -58414,6 +58418,254 @@ mod unicorn_tests {
             .read_bytes(0, &mut actual)
             .expect("B remains isolated");
         assert_eq!(actual, CHILD_BYTES.to_le_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn public_named_file_view_same_va_aliases_share_one_native_page() -> crate::Result<()> {
+        const A_BYTES: u32 = 0x1122_3344;
+        const B_BYTES: u32 = 0x5566_7788;
+        const ALIAS_BYTES: u32 = 0xaabb_ccdd;
+        const NAME_VA: u32 = 0x0040_1180;
+
+        let mut kernel = phase1_kernel("shared-view-parent.exe")?;
+        let parent_state = kernel.current_process_state();
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\shared-view-child.exe".to_owned()), None);
+        assert!(kernel
+            .take_pending_process_launches()
+            .iter()
+            .any(|queued| queued.process_id == launch.process_id));
+        let child_state = crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        };
+        let child_birth = kernel
+            .handles
+            .process_birth_key(launch.process_id)
+            .expect("queued child birth");
+        assert_ne!(parent_birth, child_birth);
+        let committed_before = kernel.memory.private_commit_used_bytes();
+
+        let create_trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let view_trap = create_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let make_cpu = |name: &str,
+                        thread_id: u32,
+                        initial: u32|
+         -> crate::Result<(super::UnicornMips, u32)> {
+            let mut bytes = tiny_mips_spinner_pe();
+            write_vec_u32(&mut bytes, 0x178 + 8, 0x200); // include the UTF-16 name
+            write_vec_u32(&mut bytes, 0x380, 0x0000_0058); // "X\0" at NAME_VA
+            let words = [
+                0x3c08_0000 | (NAME_VA >> 16),    // lui t0,NAME_VA high
+                0x3508_0000 | (NAME_VA & 0xffff), // ori t0,t0,NAME_VA low
+                0x2404_ffff,                       // addiu a0,zero,-1: anonymous section
+                0x0000_2821,                       // addu a1,zero,zero: attributes
+                0x2406_0004,                       // addiu a2,zero,PAGE_READWRITE
+                0x0000_3821,                       // addu a3,zero,zero: size high
+                0x2409_1000,                       // addiu t1,zero,4096
+                0xafa9_0010,                       // sw t1,16(sp): size low
+                0xafa8_0014,                       // sw t0,20(sp): UTF-16 name
+                0x3c19_0000 | (create_trap >> 16), // lui t9,CreateFileMappingW high
+                0x3739_0000 | (create_trap & 0xffff), // ori t9,t9,low
+                0x0320_f809,                       // jalr t9
+                0,                                 // delay slot
+                0x0040_8021,                       // addu s0,v0,zero: mapping handle
+                0x0200_2021,                       // addu a0,s0,zero
+                0x0000_2821,                       // addu a1,zero,zero: access
+                0x0000_3021,                       // addu a2,zero,zero: offset high
+                0x0000_3821,                       // addu a3,zero,zero: offset low
+                0x3c19_0000 | (view_trap >> 16),   // lui t9,MapViewOfFile high
+                0x3739_0000 | (view_trap & 0xffff), // ori t9,t9,low
+                0x0320_f809,                       // jalr t9
+                0,                                 // delay slot
+                0x0040_8821,                       // addu s1,v0,zero: first view
+                0x8e2a_0000,                       // lw t2,0(s1): prior owner's bytes
+                0x3c09_0000 | (initial >> 16),     // lui t1,initial high
+                0x3529_0000 | (initial & 0xffff),  // ori t1,t1,initial low
+                0xae29_0000,                       // sw t1,0(s1): canonical page
+                0x8e2a_0000,                       // resume: lw t2,0(s1)
+                0x0200_2021,                       // addu a0,s0,zero
+                0x0000_2821,                       // addu a1,zero,zero
+                0x0000_3021,                       // addu a2,zero,zero
+                0x0000_3821,                       // addu a3,zero,zero
+                0x3c19_0000 | (view_trap >> 16),   // lui t9,MapViewOfFile high
+                0x3739_0000 | (view_trap & 0xffff), // ori t9,t9,low
+                0x0320_f809,                       // jalr t9: second A alias
+                0,                                 // delay slot
+                0x0040_9021,                       // addu s2,v0,zero: alias view
+                0x3c0b_0000 | (ALIAS_BYTES >> 16), // lui t3,alias high
+                0x356b_0000 | (ALIAS_BYTES & 0xffff), // ori t3,t3,alias low
+                0xae2b_0000,                       // sw t3,0(s1): no flush/import
+                0x8e4c_0000,                       // lw t4,0(s2): alias sees store
+                0x1000_ffff,                       // bounded safety spinner
+                0,
+            ];
+            for (index, word) in words.into_iter().enumerate() {
+                write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+            }
+            let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
+            let mut cpu = super::UnicornMips::new()?;
+            cpu.load_pe_image(&image)?;
+            cpu.native_engine = super::ProcessNativeEngine::with_lifetime(
+                Arch::MIPS,
+                Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+                crate::emulator::native_engine::NativeEngineLifetime::FreshPerSlice,
+            );
+            cpu.set_initial_thread_id(thread_id);
+            for (address, ordinal, import_name) in [
+                (
+                    create_trap,
+                    crate::ce::coredll_ordinals::ORD_CREATE_FILE_MAPPING_W,
+                    "CreateFileMappingW",
+                ),
+                (
+                    view_trap,
+                    crate::ce::coredll_ordinals::ORD_MAP_VIEW_OF_FILE,
+                    "MapViewOfFile",
+                ),
+            ] {
+                cpu.import_traps.insert(crate::emulator::imports::ImportTrap {
+                    address,
+                    module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                    module_name: "COREDLL.dll".to_owned(),
+                    ordinal: Some(ordinal),
+                    name: Some(import_name.to_owned()),
+                    iat_va: 0,
+                });
+            }
+            super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+            let entry = cpu.entry.expect("fixture PE entry");
+            let mut regs = super::MipsGuestContext::zero();
+            regs.regs[29] = cpu.stack_top.expect("guest stack") - 0x100;
+            cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+            cpu.running_guest_thread = Some((thread_id, u32::MAX));
+            Ok((cpu, entry))
+        };
+
+        let (mut parent, parent_entry) = make_cpu("shared-view-parent.exe", 1, A_BYTES)?;
+        let (mut child, child_entry) =
+            make_cpu("shared-view-child.exe", launch.thread_id, B_BYTES)?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let run_to = |stop_pc| super::UnicornRunLimits {
+            instruction_limit: 96,
+            wall_clock_limit_ms: 500,
+            stop_pc: Some(stop_pc),
+            live_pump: false,
+        };
+
+        let a_first = parent.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            run_to(parent_entry + 27 * 4),
+        );
+        a_first.result?;
+        assert_eq!(a_first.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(a_first.report.end_process_birth(), Some(parent_birth));
+        assert_eq!(
+            a_first.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        assert!(parent.native_engine_identity_for_test().is_none());
+        let a_saved = parent.saved_context.as_ref().expect("A after guest store");
+        assert_eq!(a_saved.pc, parent_entry + 27 * 4);
+        let mapping_handle = a_saved.regs.regs[16];
+        let view_base = a_saved.regs.regs[17];
+        assert_ne!(mapping_handle, 0, "public CreateFileMappingW result");
+        assert_ne!(view_base, 0, "public MapViewOfFile result");
+        assert_eq!(a_saved.regs.regs[10], 0, "new anonymous page starts zero");
+        assert_eq!(kernel.memory.private_commit_used_bytes(), committed_before + 4096);
+        assert_eq!(
+            kernel
+                .memory
+                .virtual_allocation(parent_birth, view_base)
+                .expect("A public view allocation")
+                .source,
+            crate::ce::memory::VirtualAllocationSource::FileViewSlab
+        );
+        let a_pin = kernel
+            .memory
+            .stable_page_pin(parent_birth, view_base)
+            .expect("A's canonical shared page pin");
+        let mut actual = [0; 4];
+        // Flush/write-back must source the page, even before an explicit flush.
+        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut actual));
+        assert_eq!(actual, A_BYTES.to_le_bytes());
+        assert_eq!(
+            kernel.handles.file_mapping(mapping_handle)?.views[0].process_birth,
+            Some(parent_birth)
+        );
+
+        kernel.set_current_process_state(child_state);
+        kernel.set_process_module_path("\\Test\\shared-view-child.exe");
+        kernel.set_process_module_host_path(std::path::PathBuf::from("shared-view-child.exe"));
+        let b_first = child.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            run_to(child_entry + 27 * 4),
+        );
+        b_first.result?;
+        assert_eq!(b_first.report.start_process_birth(), Some(child_birth));
+        assert_eq!(b_first.report.end_process_birth(), Some(child_birth));
+        assert_eq!(
+            b_first.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        assert!(child.native_engine_identity_for_test().is_none());
+        let b_saved = child.saved_context.as_ref().expect("B after guest store");
+        assert_eq!(b_saved.pc, child_entry + 27 * 4);
+        assert_eq!(b_saved.regs.regs[16], mapping_handle, "named reopen");
+        assert_eq!(b_saved.regs.regs[17], view_base, "same guest VA, new owner");
+        assert_eq!(b_saved.regs.regs[10], A_BYTES, "B loaded A's guest store");
+        assert_eq!(kernel.memory.private_commit_used_bytes(), committed_before + 4096);
+        let b_pin = kernel
+            .memory
+            .stable_page_pin(child_birth, view_base)
+            .expect("B's canonical shared page pin");
+        assert_eq!(a_pin.native_ptr(), b_pin.native_ptr(), "one shared page");
+        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut actual));
+        assert_eq!(actual, B_BYTES.to_le_bytes());
+
+        kernel.set_current_process_state(parent_state);
+        kernel.set_process_module_path("\\Test\\shared-view-parent.exe");
+        kernel.set_process_module_host_path(std::path::PathBuf::from("shared-view-parent.exe"));
+        let a_second = parent.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            run_to(parent_entry + 41 * 4),
+        );
+        a_second.result?;
+        assert_eq!(a_second.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(a_second.report.end_process_birth(), Some(parent_birth));
+        assert_eq!(
+            a_second.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        assert!(parent.native_engine_identity_for_test().is_none());
+        let a_saved = parent.saved_context.as_ref().expect("A fresh-owner resume");
+        assert_eq!(a_saved.pc, parent_entry + 41 * 4);
+        assert_eq!(a_saved.regs.regs[10], B_BYTES, "A loaded B's guest store");
+        let alias_base = a_saved.regs.regs[18];
+        assert_ne!(alias_base, 0, "second public MapViewOfFile result");
+        assert_ne!(alias_base, view_base, "same-owner views have distinct VAs");
+        assert_eq!(
+            a_saved.regs.regs[12], ALIAS_BYTES,
+            "A's alias loaded its unflushed same-slice guest store"
+        );
+        assert_eq!(kernel.memory.private_commit_used_bytes(), committed_before + 4096);
+        let alias_pin = kernel
+            .memory
+            .stable_page_pin(parent_birth, alias_base)
+            .expect("A's second shared view pin");
+        assert_eq!(a_pin.native_ptr(), alias_pin.native_ptr(), "alias one page");
+        assert!(kernel.memory.shared_mapping_read(mapping_handle, 0, &mut actual));
+        assert_eq!(actual, ALIAS_BYTES.to_le_bytes());
+        let views = &kernel.handles.file_mapping(mapping_handle)?.views;
+        assert_eq!(views.len(), 3);
+        assert_eq!(views[1].process_birth, Some(child_birth));
+        assert_eq!(views[2].process_birth, Some(parent_birth));
         Ok(())
     }
 
