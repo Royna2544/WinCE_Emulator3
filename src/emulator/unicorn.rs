@@ -10335,11 +10335,11 @@ impl UnicornMips {
             let pin = pre_entry_try!(
                 kernel
                     .memory
-                    .private_page_pin(owner, page)
+                    .stable_page_pin(owner, page)
                     .filter(|pin| {
                         pin.identity() == recorded.identity
                             && pin.native_ptr() as usize == recorded.host_address
-                            && kernel.memory.contains_private_page_pin(pin)
+                            && kernel.memory.contains_stable_page_pin(pin)
                     })
                     .ok_or_else(|| {
                         Error::Backend(format!(
@@ -10347,12 +10347,17 @@ impl UnicornMips {
                         ))
                     })
             );
-            let guard = pre_entry_try!(pin.begin_native_execution().map_err(|err| {
-                Error::Backend(format!("fence private slab page 0x{page:08x}: {err:?}"))
-            }));
-            active_private_page_guards
-                .borrow_mut()
-                .insert(recorded.identity, guard);
+            if !active_private_page_guards
+                .borrow()
+                .contains_key(&recorded.host_address)
+            {
+                let guard = pre_entry_try!(pin.begin_native_execution().map_err(|err| {
+                    Error::Backend(format!("fence stable page 0x{page:08x}: {err:?}"))
+                }));
+                active_private_page_guards
+                    .borrow_mut()
+                    .insert(recorded.host_address, guard);
+            }
         }
         // This checked ordinal is diagnostic correlation, never a Task or
         // native-handle identity. Allocate only when a primary start is next.
@@ -13671,7 +13676,7 @@ impl KernelMemoryMappings {
 
 #[cfg(feature = "unicorn")]
 type ActivePrivatePageGuards =
-    RefCell<BTreeMap<PrivatePageIdentity, StablePrivatePageExecutionGuard>>;
+    RefCell<BTreeMap<usize, StablePrivatePageExecutionGuard>>;
 
 #[cfg(feature = "unicorn")]
 fn native_page_perms<D>(uc: &unicorn_engine::Unicorn<'_, D>, page: u32) -> Result<Option<u32>> {
@@ -13710,7 +13715,7 @@ fn map_private_slab_page<D>(
     if identity.owner() != owner
         || page as usize % STABLE_PRIVATE_PAGE_SIZE != 0
         || (pin.native_ptr() as usize) % STABLE_PRIVATE_PAGE_SIZE != 0
-        || !kernel.memory.contains_private_page_pin(&pin)
+        || !kernel.memory.contains_stable_page_pin(&pin)
     {
         return Err(Error::Backend(format!(
             "stale or unaligned private slab page 0x{page:08x} for process {}",
@@ -13723,7 +13728,11 @@ fn map_private_slab_page<D>(
         .ok_or_else(|| {
             Error::Backend(format!("private slab allocation for 0x{page:08x} vanished"))
         })?;
-    if allocation.backing != VirtualAllocationBacking::StablePrivateSlab
+    if !matches!(
+        allocation.backing,
+        VirtualAllocationBacking::StablePrivateSlab
+            | VirtualAllocationBacking::StableSharedViewSlab
+    )
         || allocation.incarnation != identity.allocation_incarnation()
     {
         return Err(Error::Backend(format!(
@@ -13762,11 +13771,11 @@ fn map_private_slab_page<D>(
     let mut inserted_guard = false;
     if let Some(guards) = active_guards {
         let mut guards = guards.borrow_mut();
-        if !guards.contains_key(&identity) {
+        if !guards.contains_key(&expected.host_address) {
             let guard = pin.begin_native_execution().map_err(|err| {
                 Error::Backend(format!("fence private slab 0x{page:08x}: {err:?}"))
             })?;
-            guards.insert(identity, guard);
+            guards.insert(expected.host_address, guard);
             inserted_guard = true;
         }
     }
@@ -13778,7 +13787,7 @@ fn map_private_slab_page<D>(
             active_guards
                 .expect("new guard came from active registry")
                 .borrow_mut()
-                .remove(&identity);
+                .remove(&expected.host_address);
         }
         return Err(Error::Backend(format!(
             "private slab page 0x{page:08x} already has a native pin"
@@ -13852,14 +13861,16 @@ fn map_prepared_private_slab_page<D>(
     let guard = pin.begin_native_execution().map_err(|err| {
         Error::Backend(format!("fence prepared private slab 0x{page:08x}: {err:?}"))
     })?;
-    if active_guards.borrow().contains_key(&identity) {
+    if active_guards.borrow().contains_key(&expected.host_address) {
         return Err(Error::Backend(format!(
             "prepared private slab 0x{page:08x} already has an active guard"
         )));
     }
-    active_guards.borrow_mut().insert(identity, guard);
+    active_guards
+        .borrow_mut()
+        .insert(expected.host_address, guard);
     if !native_pins.pin_private(identity, pin.native_ptr() as usize, pin.clone()) {
-        active_guards.borrow_mut().remove(&identity);
+        active_guards.borrow_mut().remove(&expected.host_address);
         return Err(Error::Backend(format!(
             "prepared private slab page 0x{page:08x} already has a native pin"
         )));
@@ -13889,7 +13900,7 @@ fn map_private_slab_pages<D>(
     native_pins: &NativeMappingPins,
     active_guards: Option<&ActivePrivatePageGuards>,
 ) -> Result<()> {
-    for pin in kernel.memory.private_page_pins_for(owner) {
+    for pin in kernel.memory.stable_page_pins_for(owner) {
         map_private_slab_page(uc, kernel, mapped, owner, pin, native_pins, active_guards)?;
     }
     Ok(())
@@ -13910,11 +13921,11 @@ fn reclaim_stale_private_slab_pages<D>(
                 "native private slab owner changed at 0x{page:08x}"
             )));
         }
-        let current = kernel.memory.private_page_pin(owner, page);
+        let current = kernel.memory.stable_page_pin(owner, page);
         if current.as_ref().is_some_and(|pin| {
             pin.identity() == recorded.identity
                 && pin.native_ptr() as usize == recorded.host_address
-                && kernel.memory.contains_private_page_pin(pin)
+                && kernel.memory.contains_stable_page_pin(pin)
         }) {
             continue;
         }
@@ -13924,9 +13935,6 @@ fn reclaim_stale_private_slab_pages<D>(
                     "unmap stale private slab page 0x{page:08x}: {err:?}"
                 ))
             })?;
-        if let Some(guards) = active_guards {
-            guards.borrow_mut().remove(&recorded.identity);
-        }
         if !native_pins.release_private_after_unmap(recorded.identity, recorded.host_address) {
             return Err(Error::Backend(format!(
                 "checked unmap of private slab 0x{page:08x} has no matching native pin"
@@ -13934,6 +13942,14 @@ fn reclaim_stale_private_slab_pages<D>(
         }
         mapped.private_pages.remove(&page);
         remove_mapped_guest_page(mapped, page);
+        if let Some(guards) = active_guards
+            && !mapped
+                .private_pages
+                .values()
+                .any(|other| other.host_address == recorded.host_address)
+        {
+            guards.borrow_mut().remove(&recorded.host_address);
+        }
     }
     Ok(())
 }
@@ -13991,7 +14007,7 @@ fn map_kernel_memory_allocations_for_owner<D>(
             None => kernel.memory.virtual_allocations().collect(),
         };
         for allocation in allocations {
-            if allocation.backing == VirtualAllocationBacking::StablePrivateSlab {
+            if allocation.backing != VirtualAllocationBacking::LegacySeed {
                 continue;
             }
             let newly_mapped = map_guest_range(
@@ -14193,13 +14209,17 @@ fn repair_missing_virtual_page_for_fault<D>(
         return Ok(false);
     };
     let page_base = address & !0xfff;
-    if allocation.backing == VirtualAllocationBacking::StablePrivateSlab {
+    if matches!(
+        allocation.backing,
+        VirtualAllocationBacking::StablePrivateSlab
+            | VirtualAllocationBacking::StableSharedViewSlab
+    ) {
         let owner = owner.ok_or_else(|| {
             Error::Backend(format!(
                 "private slab fault at 0x{page_base:08x} has no captured process birth"
             ))
         })?;
-        let Some(pin) = kernel.memory.private_page_pin(owner, page_base) else {
+        let Some(pin) = kernel.memory.stable_page_pin(owner, page_base) else {
             // Reserved but not committed: preserve the guest memory fault.
             return Ok(false);
         };
@@ -14277,6 +14297,9 @@ fn ensure_unambiguous_file_view_lazy_seeds(kernel: &CeKernel) -> Result<()> {
     let mut seeded_bases = HashSet::new();
     for mapping in kernel.handles.file_mappings() {
         for view in &mapping.views {
+            if view.process_birth.is_some() {
+                continue;
+            }
             if kernel
                 .memory
                 .virtual_allocation_by_base_legacy(view.base)
@@ -14334,6 +14357,9 @@ fn ensure_private_slab_file_views_disjoint(kernel: &CeKernel, owner_pid: u32) ->
         let slab_end = slab_start + u64::from(allocation.size);
         for mapping in kernel.handles.file_mappings() {
             for view in &mapping.views {
+                if view.process_birth.is_some() {
+                    continue;
+                }
                 let view_start = u64::from(view.base);
                 let view_end = view_start + u64::from(view.size);
                 if slab_start < view_end && view_start < slab_end {
@@ -14376,7 +14402,7 @@ fn sync_file_mapping_views_from_unicorn<D>(
             continue;
         };
         for view in mapping.views.iter().copied() {
-            if view.process_id != owner_pid {
+            if view.process_id != owner_pid || view.process_birth.is_some() {
                 continue;
             }
             let size = view.size.min(mapping.size.saturating_sub(view.offset)) as usize;
@@ -14454,7 +14480,7 @@ fn sync_file_mapping_views_from_unicorn<D>(
         .handles
         .file_mappings()
         .flat_map(|mapping| {
-            mapping.views.iter().map(|view| {
+            mapping.views.iter().filter(|view| view.process_birth.is_none()).map(|view| {
                 let start = (view.offset as usize).min(mapping.data.len());
                 let end = start
                     .saturating_add(view.size as usize)
@@ -14495,7 +14521,7 @@ fn sync_file_mapping_views_to_unicorn<D>(
     })?;
     for mapping in kernel.handles.file_mappings() {
         for view in mapping.views.iter().copied() {
-            if view.process_id != owner_pid {
+            if view.process_id != owner_pid || view.process_birth.is_some() {
                 continue;
             }
             let start = view.offset as usize;
@@ -50364,7 +50390,10 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                         .map_err(|err| {
                             Error::Backend(format!("unmap private VM page 0x{page:08x}: {err:?}"))
                         })?;
-                    mapping.active_guards.borrow_mut().remove(&identity);
+                    mapping
+                        .active_guards
+                        .borrow_mut()
+                        .remove(&(pin.native_ptr() as usize));
                     if !mapping
                         .native_pins
                         .release_private_after_unmap(identity, pin.native_ptr() as usize)
@@ -56258,6 +56287,7 @@ mod unicorn_tests {
                 size: 4,
                 offset: 0,
                 process_id: 1,
+                process_birth: None,
             },
         );
         let mut active = phase1_counter_cpu(0x3000, "view-writer.exe")?;
@@ -56386,6 +56416,7 @@ mod unicorn_tests {
                 size: 4,
                 offset: 0,
                 process_id: 1,
+                process_birth: None,
             },
         );
         let mut active = phase1_counter_cpu(0x3000, "finish-writer.exe")?;
@@ -56614,6 +56645,7 @@ mod unicorn_tests {
                 size: 4,
                 offset: 0,
                 process_id,
+                process_birth: None,
             });
         }
 
@@ -56805,6 +56837,7 @@ mod unicorn_tests {
                 size: 4,
                 offset: 0,
                 process_id,
+                process_birth: None,
             });
         }
         assert!(
@@ -56864,6 +56897,7 @@ mod unicorn_tests {
             size: SIZE as u32,
             offset: 0,
             process_id: owner.process_id(),
+            process_birth: None,
         });
 
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
@@ -56936,6 +56970,7 @@ mod unicorn_tests {
             size: SIZE as u32,
             offset: 0,
             process_id: owner.process_id(),
+            process_birth: None,
         });
         Ok((kernel, handle, base, canonical))
     }
@@ -57450,6 +57485,7 @@ mod unicorn_tests {
                     size: 4,
                     offset: 0,
                     process_id,
+                    process_birth: None,
                 },
             );
         }
@@ -57482,6 +57518,7 @@ mod unicorn_tests {
             size: 4,
             offset: 0,
             process_id: owner.process_id(),
+            process_birth: None,
         });
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(u64::from(base), 0x1000, Prot::ALL).unwrap();
