@@ -140,8 +140,11 @@ close only their named gates, not Stage 2 or live acceptance.
   owned active child before another native attempt or at its self-call import
   boundary. It also completes exact-birth requested parked and pending children
   without running them. The current-process pseudo-handle remains a separate
-  synchronous compatibility lane. The frozen-source broad gate for this latest
-  slice is pending; no live-app behavior has been measured. CE caller
+  synchronous compatibility lane. Its frozen-source broad gates passed:
+  no-feature 1,375/0/5 ignored and release Unicorn/trace/desktop
+  1,858/0/11 ignored, with the no-trace desktop check green
+  ([receipt](../evidence/stage3-terminate-20261015/validation.receipt.md));
+  no live-app behavior has been measured. CE caller
   wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
   generic parked-wait continuation and O-K3 wait pins remain open. These

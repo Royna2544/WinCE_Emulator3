@@ -122,8 +122,10 @@ only after exact-birth verified completion; a request alone does not signal a
 real process wait. A later bounded `TerminateProcess` source slice stops an
 owned active child at preflight or a self-call import boundary, and completes
 requested parked or pending children without another guest instruction. The
-frozen-source broad gate for that latest slice is pending. CE caller
-wait/timeout, old-MIPS direct-kernel real-handle continuation, root-process
+frozen-source broad gates for that latest slice passed: no-feature 1,375/0/5
+ignored and release Unicorn/trace/desktop 1,858/0/11 ignored
+([receipt](../../evidence/stage3-terminate-20261015/validation.receipt.md)).
+CE caller wait/timeout, old-MIPS direct-kernel real-handle continuation, root-process
 real-handle completion, intra-slice unpinned-worker lineage and O-K3 wait pins
 remain open. The owner-slice
 [receipt](../../evidence/stage3-owner-20261014/validation.receipt.md) records
