@@ -375,6 +375,12 @@ const MB_TOPMOST: u32 = 0x0004_0000;
 const SMTO_BLOCK: u32 = 0x0001;
 const SMTO_ABORTIFHUNG: u32 = 0x0002;
 const SMTO_SUPPORTED_CE_FLAGS: u32 = SMTO_BLOCK | SMTO_ABORTIFHUNG;
+// Preserve the existing shim's hung-receiver cutoff in raw, broadcast and
+// native parked SMT. Win32 documents five seconds as a nonresponding-thread
+// precedent (https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-sendmessagetimeouta);
+// the exact CE 6 numeric threshold is not established by the available source.
+// Raw and block-preparation controls cover this compatibility value.
+pub(crate) const CE_HUNG_THRESHOLD_MS: u32 = 5000;
 const ACCEL_FVIRTKEY: u8 = 0x01;
 const ACCEL_FSHIFT: u8 = 0x04;
 const ACCEL_FCONTROL: u8 = 0x08;
@@ -64528,7 +64534,6 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
         return 0;
     };
     if target_thread != thread_id {
-        const CE_HUNG_THRESHOLD_MS: u32 = 5000;
         if flags & SMTO_ABORTIFHUNG != 0
             && kernel.gwe.is_thread_hung(
                 target_thread,
@@ -64587,7 +64592,6 @@ fn send_message_timeout_broadcast_raw(
     flags: u32,
     timeout_ms: u32,
 ) -> u32 {
-    const CE_HUNG_THRESHOLD_MS: u32 = 5000;
     let targets: Vec<(u32, u32)> = kernel
         .gwe
         .z_order_snapshot()
@@ -64688,7 +64692,6 @@ pub(crate) fn send_message_timeout_block_prepare(
     let timeout_ms = raw_arg(args, 5);
     let result_ptr = raw_arg(args, 6);
     let target_thread = send_message_timeout_block_target_thread(kernel, thread_id, args)?;
-    const CE_HUNG_THRESHOLD_MS: u32 = 5000;
     if flags & SMTO_ABORTIFHUNG != 0
         && kernel.gwe.is_thread_hung(
             target_thread,
@@ -64749,7 +64752,6 @@ pub(crate) fn send_message_timeout_parkable_target_thread(
     args: &[u32],
 ) -> Option<u32> {
     let target_thread = send_message_timeout_block_target_thread(kernel, thread_id, args)?;
-    const CE_HUNG_THRESHOLD_MS: u32 = 5000;
     if raw_arg(args, 4) & SMTO_ABORTIFHUNG != 0
         && kernel.gwe.is_thread_hung(
             target_thread,

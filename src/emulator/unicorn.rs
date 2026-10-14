@@ -10675,7 +10675,7 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
-                    try_block_for_send_message_timeout_wait_with_terminal_error(
+                    try_block_for_send_message_timeout_wait(
                         unsafe { &mut *kernel_ptr },
                         uc,
                         &sealed_host_write_guard_import,
@@ -20790,7 +20790,7 @@ fn retire_stale_send_message_timeout_wait(
 
 #[cfg(feature = "unicorn")]
 #[allow(clippy::too_many_arguments)]
-fn try_block_for_send_message_timeout_wait_with_terminal_error<D>(
+fn try_block_for_send_message_timeout_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
@@ -21000,11 +21000,11 @@ fn try_block_for_send_message_timeout_wait_with_terminal_error<D>(
     true
 }
 
-// Keep the pre-existing direct helper controls concise. Production import
-// dispatch always supplies the attempt's real terminal-error latch above.
+// Test-only adapter for older direct helper controls. Production has one SMT
+// helper entry point and always supplies the attempt's real terminal latch.
 #[cfg(all(test, feature = "unicorn"))]
 #[allow(clippy::too_many_arguments)]
-fn try_block_for_send_message_timeout_wait<D>(
+fn test_block_for_send_message_timeout_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
@@ -21016,7 +21016,7 @@ fn try_block_for_send_message_timeout_wait<D>(
     blocked_smt: &std::rc::Rc<std::cell::RefCell<Option<BlockedSendMessageTimeout>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
-    try_block_for_send_message_timeout_wait_with_terminal_error(
+    try_block_for_send_message_timeout_wait(
         kernel,
         uc,
         sealed_host_write_guard,
@@ -77155,6 +77155,105 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn occupied_send_message_timeout_import_hook_reports_backend_error() -> crate::Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let (a_handle, a_thread) = kernel.create_guest_thread(0x0040_a000, 0, false);
+        let (b_handle, b_thread) = kernel.create_guest_thread(0x0040_a100, 0, false);
+        let a_birth = kernel.handles.thread_birth_key_by_id(a_thread).unwrap();
+        let hwnd = kernel.gwe.create_window(1, "SMT_NATIVE_OCCUPIED", "receiver");
+        let blocked_smt = Rc::new(RefCell::new(None));
+        let a_current = Rc::new(super::NativeCurrentThread::new(a_thread, Some(a_birth)));
+        let a_running = Rc::new(RefCell::new(Some((a_thread, a_handle))));
+        let mut a_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        a_uc.reg_write(RegisterMIPS::PC, 0x7fff_a000).unwrap();
+        a_uc.reg_write(RegisterMIPS::RA, 0x0040_a008).unwrap();
+        assert!(super::test_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut a_uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &[hwnd, crate::ce::gwe::WM_USER + 284, 0, 0, 0, 100, 0],
+            a_thread,
+            &a_current,
+            &blocked_smt,
+            &a_running,
+        ));
+        let a_blocked = blocked_smt.borrow().as_ref().expect("A blocked").clone();
+        let a_sent = kernel.gwe.sent_message(a_blocked.block_state.send_id).unwrap().clone();
+
+        let trap = super::IMPORT_TRAP_BASE + 0x400;
+        let mut image_bytes = tiny_mips_spinner_pe();
+        for (index, word) in [
+            0x3c19_0000 | (trap >> 16),
+            0x3739_0000 | (trap & 0xffff),
+            0x0320_f809, // jalr t9: native SMT import hook
+            0,
+            0x1000_ffff, // bounded safety spinner if the hook falls through
+            0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut image_bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("smt-occupied-native.exe", &image_bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.set_initial_thread_id(b_thread);
+        cpu.import_traps.insert(crate::emulator::imports::ImportTrap {
+            address: trap,
+            module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+            module_name: "COREDLL.dll".to_owned(),
+            ordinal: Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            name: Some("SendMessageTimeout".to_owned()),
+            iat_va: 0,
+        });
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        cpu.blocked_send_message_timeout = blocked_smt.borrow_mut().take();
+        let stack_pointer = cpu.stack_top.expect("fixture stack") - 0x100;
+        let mut stack_args = [0u8; 12];
+        stack_args[4..8].copy_from_slice(&100u32.to_le_bytes()); // dwTimeout
+        write_guest_fixture_stack_bytes(&cpu, &mut kernel, stack_pointer + 16, &stack_args);
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = hwnd;
+        regs.regs[5] = crate::ce::gwe::WM_USER + 285;
+        regs.regs[29] = stack_pointer;
+        cpu.saved_context = Some(super::SavedCpuContext {
+            pc: cpu.entry.expect("fixture entry"),
+            regs,
+        });
+        stamp_synthetic_saved_context(&mut cpu, &kernel);
+        cpu.running_guest_thread = Some((b_thread, b_handle));
+        kernel.threads.set_last_error(b_thread, 0xa100_1234);
+
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 32,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        match attempt.result {
+            Err(Error::Backend(message)) => assert!(message.contains("slot occupied"), "{message}"),
+            other => panic!("occupied native import did not report Backend: {other:?}"),
+        }
+        assert_eq!(attempt.report.final_outcome(), super::NativeSliceOutcome::BackendError);
+        assert_eq!(kernel.threads.get_last_error(b_thread), 0xa100_1234);
+        assert_eq!(kernel.blocked_waiters().count(), 1);
+        assert_eq!(kernel.gwe.sent_message(a_blocked.block_state.send_id), Some(&a_sent));
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            vec![a_blocked.block_state.send_id]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn occupied_send_message_timeout_slot_fails_closed_for_second_sender() -> crate::Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -77174,6 +77273,8 @@ mod unicorn_tests {
         let b_result_ptr = 0x0001_a044;
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(0x0001_a000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(a_result_ptr), &0xface_aaaa_u32.to_le_bytes())
+            .unwrap();
         uc.mem_write(u64::from(b_result_ptr), &0xface_9090_u32.to_le_bytes())
             .unwrap();
         uc.reg_write(RegisterMIPS::PC, 0x7fff_9000).unwrap();
@@ -77181,8 +77282,16 @@ mod unicorn_tests {
         let current_thread_id = Rc::new(super::NativeCurrentThread::new(a_thread, Some(a_birth)));
         let blocked_smt = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(Some((a_thread, a_handle))));
-        let a_args = [hwnd, crate::ce::gwe::WM_USER + 280, 0, 0, 0, 100, a_result_ptr];
-        assert!(super::try_block_for_send_message_timeout_wait(
+        let a_args = [
+            hwnd,
+            crate::ce::gwe::WM_USER + 280,
+            0,
+            0,
+            0,
+            100,
+            a_result_ptr,
+        ];
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77196,7 +77305,13 @@ mod unicorn_tests {
         ));
         let a_blocked = blocked_smt.borrow().as_ref().expect("A owns slot").clone();
         let a_send_id = a_blocked.block_state.send_id;
-        assert!(kernel.gwe.sent_message(a_send_id).is_some());
+        let a_sent = kernel
+            .gwe
+            .sent_message(a_send_id)
+            .expect("A queued send")
+            .clone();
+        assert_eq!(a_sent.result_ptr, Some(a_result_ptr));
+        assert_eq!(a_sent.timeout_ms, Some(100));
         assert!(kernel.blocked_waiter(a_blocked.wait_id).is_some());
 
         current_thread_id.set_verified(b_birth);
@@ -77205,9 +77320,17 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::PC, 0x7fff_9100).unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x0040_9108).unwrap();
         uc.reg_write(RegisterMIPS::V0, 0x9090_5678).unwrap();
-        let b_args = [hwnd, crate::ce::gwe::WM_USER + 281, 0, 0, 0, 100, b_result_ptr];
+        let b_args = [
+            hwnd,
+            crate::ce::gwe::WM_USER + 281,
+            0,
+            0,
+            0,
+            100,
+            b_result_ptr,
+        ];
         let terminal_error = RefCell::new(None);
-        assert!(super::try_block_for_send_message_timeout_wait_with_terminal_error(
+        assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77220,23 +77343,37 @@ mod unicorn_tests {
             &running_thread,
             &terminal_error,
         ));
-        assert!(terminal_error.borrow().as_ref().is_some_and(|error| {
-            error.to_string().contains("slot occupied")
-        }));
-        assert_eq!(blocked_smt.borrow().as_ref().unwrap().wait_id, a_blocked.wait_id);
+        assert!(
+            terminal_error
+                .borrow()
+                .as_ref()
+                .is_some_and(|error| { error.to_string().contains("slot occupied") })
+        );
+        assert_eq!(
+            blocked_smt.borrow().as_ref().unwrap().wait_id,
+            a_blocked.wait_id
+        );
         assert_eq!(kernel.blocked_waiters().count(), 1);
         assert!(kernel.blocked_waiter(a_blocked.wait_id).is_some());
-        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![a_send_id]);
+        assert_eq!(kernel.gwe.sent_message(a_send_id), Some(&a_sent));
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            vec![a_send_id]
+        );
         assert_eq!(kernel.threads.get_last_error(b_thread), 0x9090_1234);
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x7fff_9100);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, 0x0040_9108);
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0x9090_5678);
         let mut result_bytes = [0; 4];
-        uc.mem_read(u64::from(b_result_ptr), &mut result_bytes).unwrap();
+        uc.mem_read(u64::from(a_result_ptr), &mut result_bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0xface_aaaa);
+        uc.mem_read(u64::from(b_result_ptr), &mut result_bytes)
+            .unwrap();
         assert_eq!(u32::from_le_bytes(result_bytes), 0xface_9090);
 
         *terminal_error.borrow_mut() = Some(Error::Backend("prior terminal error".to_owned()));
-        assert!(super::try_block_for_send_message_timeout_wait_with_terminal_error(
+        assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77249,10 +77386,20 @@ mod unicorn_tests {
             &running_thread,
             &terminal_error,
         ));
-        assert!(terminal_error.borrow().as_ref().is_some_and(|error| {
-            error.to_string().contains("prior terminal error")
-        }));
-        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![a_send_id]);
+        assert!(
+            terminal_error
+                .borrow()
+                .as_ref()
+                .is_some_and(|error| { error.to_string().contains("prior terminal error") })
+        );
+        assert_eq!(kernel.gwe.sent_message(a_send_id), Some(&a_sent));
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            vec![a_send_id]
+        );
+        uc.mem_read(u64::from(a_result_ptr), &mut result_bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0xface_aaaa);
         Ok(())
     }
 
@@ -77266,6 +77413,8 @@ mod unicorn_tests {
         let b_birth = kernel.handles.thread_birth_key_by_id(b_thread).unwrap();
         let hwnd = kernel.gwe.create_window(1, "SMT_OCCUPIED_RAW", "receiver");
         let self_hwnd = kernel.gwe.create_window(b_thread, "SMT_SELF_RAW", "sender");
+        let destroyed_hwnd = kernel.gwe.create_window(1, "SMT_DESTROYED_RAW", "gone");
+        assert!(kernel.gwe.destroy_window(destroyed_hwnd, 0));
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.reg_write(RegisterMIPS::PC, 0x7fff_9200).unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x0040_9208).unwrap();
@@ -77273,7 +77422,7 @@ mod unicorn_tests {
         let blocked_smt = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(Some((a_thread, a_handle))));
         let a_args = [hwnd, crate::ce::gwe::WM_USER + 282, 0, 0, 0, 100, 0];
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77313,6 +77462,9 @@ mod unicorn_tests {
         let mut invalid = b_args;
         invalid[0] = 0xdead_cafe;
         cases.push(("invalid window", invalid));
+        let mut destroyed = b_args;
+        destroyed[0] = destroyed_hwnd;
+        cases.push(("destroyed window", destroyed));
         let mut broadcast = b_args;
         broadcast[0] = crate::ce::gwe::HWND_BROADCAST;
         cases.push(("broadcast", broadcast));
@@ -77325,38 +77477,62 @@ mod unicorn_tests {
                 "{case}"
             );
             let terminal_error = RefCell::new(None);
-            assert!(!super::try_block_for_send_message_timeout_wait_with_terminal_error(
-                &mut kernel,
-                &mut uc,
-                &super::SealedHostWriteGuard::default(),
-                crate::emulator::imports::ImportModuleKind::Coredll,
-                Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
-                &args,
-                b_thread,
-                &current_thread_id,
-                &blocked_smt,
-                &running_thread,
-                &terminal_error,
-            ), "{case}");
+            assert!(
+                !super::try_block_for_send_message_timeout_wait(
+                    &mut kernel,
+                    &mut uc,
+                    &super::SealedHostWriteGuard::default(),
+                    crate::emulator::imports::ImportModuleKind::Coredll,
+                    Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+                    &args,
+                    b_thread,
+                    &current_thread_id,
+                    &blocked_smt,
+                    &running_thread,
+                    &terminal_error,
+                ),
+                "{case}"
+            );
             assert!(terminal_error.borrow().is_none(), "{case}");
-            assert_eq!(blocked_smt.borrow().as_ref().unwrap().wait_id, a_blocked.wait_id, "{case}");
-            assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![a_send_id], "{case}");
-            assert_eq!(kernel.threads.get_last_error(b_thread), 0x9292_1234, "{case}");
+            assert_eq!(
+                blocked_smt.borrow().as_ref().unwrap().wait_id,
+                a_blocked.wait_id,
+                "{case}"
+            );
+            assert_eq!(
+                kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+                vec![a_send_id],
+                "{case}"
+            );
+            assert_eq!(
+                kernel.threads.get_last_error(b_thread),
+                0x9292_1234,
+                "{case}"
+            );
         }
 
-        kernel.timers.sleep_ms(5001);
-        kernel.gwe.record_thread_dispatched(1, kernel.timers.tick_count() - 5001);
-        assert!(kernel.gwe.is_thread_hung(1, kernel.timers.tick_count(), 5000));
+        let hung_threshold = crate::ce::coredll::CE_HUNG_THRESHOLD_MS;
+        kernel.timers.sleep_ms(hung_threshold + 1);
+        kernel
+            .gwe
+            .record_thread_dispatched(1, kernel.timers.tick_count() - (hung_threshold + 1));
+        assert!(
+            kernel
+                .gwe
+                .is_thread_hung(1, kernel.timers.tick_count(), hung_threshold)
+        );
         let mut hung_abort = b_args;
         hung_abort[4] = 0x0000_0002;
         assert_eq!(
             crate::ce::coredll::send_message_timeout_parkable_target_thread(
-                &kernel, b_thread, &hung_abort,
+                &kernel,
+                b_thread,
+                &hung_abort,
             ),
             None
         );
         let terminal_error = RefCell::new(None);
-        assert!(!super::try_block_for_send_message_timeout_wait_with_terminal_error(
+        assert!(!super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77370,8 +77546,14 @@ mod unicorn_tests {
             &terminal_error,
         ));
         assert!(terminal_error.borrow().is_none());
-        assert_eq!(blocked_smt.borrow().as_ref().unwrap().wait_id, a_blocked.wait_id);
-        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![a_send_id]);
+        assert_eq!(
+            blocked_smt.borrow().as_ref().unwrap().wait_id,
+            a_blocked.wait_id
+        );
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            vec![a_send_id]
+        );
         assert_eq!(kernel.threads.get_last_error(b_thread), 0x9292_1234);
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x7fff_9300);
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0x9292_5678);
@@ -77419,7 +77601,7 @@ mod unicorn_tests {
             result_ptr,
         ];
 
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77451,7 +77633,7 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::S0, 0x9999_0001).unwrap();
         uc.reg_write(RegisterMIPS::V0, 0xeeee_6101).unwrap();
         uc.reg_write(RegisterMIPS::PC, 0x7fff_6104).unwrap();
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77527,7 +77709,7 @@ mod unicorn_tests {
             result_ptr,
         ];
 
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77558,7 +77740,7 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::S0, 0x9999_0001).unwrap();
         uc.reg_write(RegisterMIPS::V0, 0xeeee_6901).unwrap();
         uc.reg_write(RegisterMIPS::PC, 0x7fff_6904).unwrap();
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77639,7 +77821,7 @@ mod unicorn_tests {
             result_ptr,
         ];
 
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77770,7 +77952,7 @@ mod unicorn_tests {
             result_ptr,
         ];
 
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77909,7 +78091,7 @@ mod unicorn_tests {
             Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
         kernel.threads.set_last_error(thread_id, 0x1234_5678);
 
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77934,7 +78116,7 @@ mod unicorn_tests {
         // Eligibility remains read-only: zero timeout belongs to the raw API.
         let mut zero_args = args;
         zero_args[5] = 0;
-        assert!(!super::try_block_for_send_message_timeout_wait(
+        assert!(!super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77950,7 +78132,7 @@ mod unicorn_tests {
 
         let mut same_thread_args = args;
         same_thread_args[0] = kernel.gwe.create_window(thread_id, "SMT_SELF", "self");
-        assert!(!super::try_block_for_send_message_timeout_wait(
+        assert!(!super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77964,7 +78146,7 @@ mod unicorn_tests {
         ));
         let mut unsupported_args = args;
         unsupported_args[4] = 0x8000_0000;
-        assert!(!super::try_block_for_send_message_timeout_wait(
+        assert!(!super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77980,7 +78162,7 @@ mod unicorn_tests {
 
         current_thread_id.set_verified(new_birth);
         *running_thread.borrow_mut() = Some((thread_id + 100, new_handle));
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -77998,7 +78180,7 @@ mod unicorn_tests {
         assert!(kernel.close_handle(new_handle)?);
         assert!(kernel.handles.thread_execution_live_by_id(thread_id));
         *running_thread.borrow_mut() = Some((thread_id, new_handle));
-        assert!(super::try_block_for_send_message_timeout_wait(
+        assert!(super::test_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
@@ -78058,7 +78240,7 @@ mod unicorn_tests {
                 100,
                 result_ptr,
             ];
-            assert!(super::try_block_for_send_message_timeout_wait(
+            assert!(super::test_block_for_send_message_timeout_wait(
                 &mut kernel,
                 &mut uc,
                 &super::SealedHostWriteGuard::default(),
@@ -78091,7 +78273,7 @@ mod unicorn_tests {
             uc.reg_write(RegisterMIPS::V0, 0x1234_8484).unwrap();
 
             assert!(
-                super::try_block_for_send_message_timeout_wait(
+                super::test_block_for_send_message_timeout_wait(
                     &mut kernel,
                     &mut uc,
                     &super::SealedHostWriteGuard::default(),
@@ -78157,7 +78339,7 @@ mod unicorn_tests {
                 Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
             let running_thread = Rc::new(RefCell::new(Some((thread_id, old_handle))));
             let blocked_smt = Rc::new(RefCell::new(None));
-            assert!(super::try_block_for_send_message_timeout_wait(
+            assert!(super::test_block_for_send_message_timeout_wait(
                 &mut kernel,
                 &mut uc,
                 &super::SealedHostWriteGuard::default(),
@@ -78235,7 +78417,7 @@ mod unicorn_tests {
 
             if scenario.starts_with("reentry") {
                 assert!(
-                    super::try_block_for_send_message_timeout_wait(
+                    super::test_block_for_send_message_timeout_wait(
                         &mut kernel,
                         &mut uc,
                         &super::SealedHostWriteGuard::default(),
