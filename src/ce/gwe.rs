@@ -3597,6 +3597,14 @@ impl Gwe {
             .collect()
     }
 
+    pub fn has_queued_typed_payload_message(&self, owner: ProcessBirthKey, ptr: u32) -> bool {
+        self.queues.values().any(|queue| {
+            queue
+                .iter()
+                .any(|message| message.typed_payload_owner == Some(owner) && message.lparam == ptr)
+        })
+    }
+
     pub fn take_discarded_host_payload_messages(&mut self) -> Vec<Message> {
         std::mem::take(&mut self.discarded_host_payload_messages)
     }

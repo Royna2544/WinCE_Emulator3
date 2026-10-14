@@ -9267,7 +9267,9 @@ impl CeKernel {
             && delivered.msg == message.msg
             && delivered.wparam == message.wparam
             && delivered.lparam == message.lparam
-            && self.message_pointer_payload_for_message(delivered).is_some())
+            && self
+                .message_pointer_payload_for_message(delivered)
+                .is_some())
         .then_some(owner)
     }
 
@@ -9290,6 +9292,21 @@ impl CeKernel {
             .retain(|(birth, _, _), message| *birth != owner || message.lparam != ptr);
         let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
         Some(payload)
+    }
+
+    pub fn release_dispatched_typed_payload(
+        &mut self,
+        owner: ProcessBirthKey,
+        ptr: u32,
+    ) -> Option<MessagePointerPayload> {
+        // A PM_NOREMOVE MSG can be dispatched while an identical tagged
+        // message remains in GWE's queue. Its heap bytes stay live for the
+        // eventual PM_REMOVE delivery.
+        if self.gwe.has_queued_typed_payload_message(owner, ptr) {
+            None
+        } else {
+            self.release_message_pointer_payload(owner, ptr)
+        }
     }
 
     fn release_discarded_message_pointer_payloads(&mut self) {
@@ -9338,7 +9355,7 @@ impl CeKernel {
         );
         if should_release {
             if let Some(owner) = message.typed_payload_owner {
-                self.release_message_pointer_payload(owner, message.lparam);
+                self.release_dispatched_typed_payload(owner, message.lparam);
             }
         }
     }
@@ -12105,11 +12122,24 @@ mod tests {
             .unwrap();
         kernel.record_delivered_typed_payload_message(owner_a, 11, 0x2000, &message_a);
         kernel.record_delivered_typed_payload_message(owner_b, 22, 0x2000, &message_b);
+        let raw_a = Message::new(hwnd_a, WM_WINDOWPOSCHANGED, 0, ptr_a, 0);
+        assert_eq!(
+            kernel.delivered_typed_payload_owner_for_message(owner_a, 11, 0x2000, &raw_a),
+            Some(owner_a)
+        );
+        assert_eq!(
+            kernel.delivered_typed_payload_owner_for_message(owner_b, 22, 0x2000, &raw_a),
+            None
+        );
 
         assert!(kernel.destroy_window(hwnd_a));
         assert!(kernel.message_pointer_payload(owner_a, ptr_a).is_none());
         assert!(kernel.message_pointer_payload(owner_b, ptr_b).is_some());
-        let mut stale_a = Message::new(hwnd_a, WM_WINDOWPOSCHANGED, 0, ptr_a, 0);
+        assert_eq!(
+            kernel.delivered_typed_payload_owner_for_message(owner_a, 11, 0x2000, &raw_a),
+            None
+        );
+        let mut stale_a = raw_a;
         kernel.reattach_delivered_typed_payload_message(owner_a, 11, 0x2000, &mut stale_a);
         assert_eq!(stale_a.typed_payload_owner, None);
         assert_eq!(kernel.dispatch_message_w_for_thread(11, message_a), 0);

@@ -394,6 +394,96 @@ fn raw_get_destroy_dispatch_keeps_other_births_same_va_payload() -> Result<()> {
 }
 
 #[test]
+fn raw_peek_no_remove_dispatch_preserves_typed_payload_until_remove() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let owner = kernel.current_process_birth_key().unwrap();
+    let thread_id = 73;
+    let hwnd = kernel.create_window_ex_w(thread_id, "PEEK_DISPATCH", "", None, 0, WS_VISIBLE, 0);
+    assert!(kernel.set_window_pos(hwnd, None, 2, 3, 8, 9, 0));
+    let queued = kernel
+        .peek_ready_visible_message_w_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_WINDOWPOSCHANGED,
+            WM_WINDOWPOSCHANGED,
+        )
+        .unwrap();
+    assert_eq!(queued.typed_payload_owner, Some(owner));
+    let msg_ptr = 0x28_000;
+    let mut memory = TestGuestMemory::default();
+    memory.map_words(msg_ptr, 7);
+    for flags in [0, 1] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_PEEK_MESSAGE_W,
+                [
+                    msg_ptr,
+                    hwnd,
+                    WM_WINDOWPOSCHANGED,
+                    WM_WINDOWPOSCHANGED,
+                    flags
+                ],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert_eq!(memory.read_u32(msg_ptr + 12)?, queued.lparam);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DISPATCH_MESSAGE_W,
+                [msg_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        if flags == 0 {
+            assert!(
+                kernel
+                    .message_pointer_payload(owner, queued.lparam)
+                    .is_some()
+            );
+            assert!(
+                kernel
+                    .peek_ready_visible_message_w_filtered(
+                        thread_id,
+                        Some(hwnd),
+                        WM_WINDOWPOSCHANGED,
+                        WM_WINDOWPOSCHANGED,
+                    )
+                    .is_some()
+            );
+        }
+    }
+    assert!(
+        kernel
+            .message_pointer_payload(owner, queued.lparam)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .peek_ready_visible_message_w_filtered(
+                thread_id,
+                Some(hwnd),
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+            )
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_common_file_dialog_validates_openfilenamew_before_unsupported() -> Result<()> {
     const OPENFILENAMEW_SIZE: u32 = 76;
     const OPENFILENAMEW_LPSTR_FILE_OFFSET: u32 = 28;
