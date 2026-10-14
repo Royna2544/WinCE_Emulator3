@@ -103,6 +103,20 @@ impl NativeStopEvidence {
     }
 }
 
+#[cfg(feature = "unicorn")]
+fn should_repair_native_deadline_jr_import_thunk(
+    native_result_ok: bool,
+    requested_pc_stop: bool,
+    outcome: NativeSliceOutcome,
+    _typed_hook_stop_reason: Option<NativeHookStopReason>,
+    debug_marker_present: bool,
+) -> bool {
+    native_result_ok
+        && !requested_pc_stop
+        && outcome == NativeSliceOutcome::NativeDeadline
+        && !debug_marker_present
+}
+
 #[derive(Debug, Clone)]
 pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
@@ -10490,11 +10504,13 @@ impl UnicornMips {
             }
         }
         let mut post_run_pc_repair_error = None::<String>;
-        if result.is_ok()
-            && native_requested_pc_stop.is_none()
-            && self.last_native_slice_outcome == NativeSliceOutcome::NativeDeadline
-            && host_wall_clock_stop.borrow().is_none()
-        {
+        if should_repair_native_deadline_jr_import_thunk(
+            result.is_ok(),
+            native_requested_pc_stop.is_some(),
+            self.last_native_slice_outcome,
+            native_hook_stop_reason.get(),
+            host_wall_clock_stop.borrow().is_some(),
+        ) {
             let mut pc = read_mips_reg(&uc, RegisterMIPS::PC);
             if let Some(target) =
                 import_trap_target_for_mips_jr_thunk(&uc, &import_traps_live.borrow(), pc)
@@ -56700,6 +56716,67 @@ mod unicorn_tests {
                 .unwrap(),
             0,
             "a later explicit stop must not inherit the prior count witness"
+        );
+    }
+
+    #[test]
+    #[ignore = "expected red: typed peer-yield plus real timeout needs an end-to-end JR continuation control"]
+    fn native_deadline_jr_repair_must_not_override_typed_safe_hook_stop() {
+        use super::{NativeHookStopReason, NativeSliceOutcome};
+
+        let should_repair = super::should_repair_native_deadline_jr_import_thunk;
+        assert!(should_repair(
+            true,
+            false,
+            NativeSliceOutcome::NativeDeadline,
+            None,
+            false,
+        ));
+        assert!(!should_repair(
+            false,
+            false,
+            NativeSliceOutcome::NativeDeadline,
+            None,
+            false,
+        ));
+        assert!(!should_repair(
+            true,
+            true,
+            NativeSliceOutcome::NativeDeadline,
+            None,
+            false,
+        ));
+        assert!(!should_repair(
+            true,
+            false,
+            NativeSliceOutcome::HookStop(NativeHookStopReason::HostWallBudget),
+            Some(NativeHookStopReason::HostWallBudget),
+            false,
+        ));
+        assert!(!should_repair(
+            true,
+            false,
+            NativeSliceOutcome::NativeDeadline,
+            None,
+            true,
+        ));
+        assert!(!should_repair(
+            true,
+            false,
+            NativeSliceOutcome::NativeError,
+            None,
+            false,
+        ));
+
+        assert!(
+            !should_repair(
+                true,
+                false,
+                NativeSliceOutcome::NativeDeadline,
+                Some(NativeHookStopReason::VisibleParkedPeerYield),
+                false,
+            ),
+            "a typed safe peer yield must not be overridden by a concurrent native deadline even when it has no debug marker"
         );
     }
 
