@@ -16,11 +16,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - Remaining numeric GWE producer-birth routing (window, broadcast,
-     HWND-owned timer, keyboard, remote-input, sent, paint and modal paths);
-     the bounded thread-post and HWND-less timer gates are in `PROGRESS.md`.
-     The independently reviewed [W-B1 window-owner contract](docs/subsystems/gwe-messaging.md#w-b1-window-owner-birth-reviewed-not-source-tested)
-     is not yet a source gate; implement W-B1a expected-red before W-B1b.
+   - W-B1b remote touch/key target-birth validation before focus/input
+     mutation, explicit stale-input drop without rerouting, and owner-filtered
+     host teardown. W-B1a window creation, explicit HWND post and typed-payload
+     ownership is source-gated ([receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md));
+     broadcast, HWND-owned timers, hotkeys, sent/paint/modal and other numeric
+     GWE producers need separate gates.
    - Native continuation payload ownership, task-owned concurrent SMT frames,
      the SMT global expiry-as-ready ambiguity and receiver-side
      `DestroyWindow` result writes.

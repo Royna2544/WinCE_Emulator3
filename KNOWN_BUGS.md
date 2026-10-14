@@ -71,13 +71,16 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     no owned child-launch handoff for real-handle requests, and the
     current-process pseudo-handle keeps a separate synchronous path.
   - `TaskWaitStore` separates exact births from explicit legacy-unknown TIDs;
-    thread-directed post/quit delivery, status and wake, plus HWND-less
-    thread timers, now use exact births
+    thread-directed post/quit delivery, status and wake, HWND-less thread
+    timers, and W-B1a window creation/explicit HWND post/typed payloads now
+    use frozen birth ownership
     ([wait receipt](evidence/stage3-wait-owner-20261015/validation.receipt.md),
     [GWE receipt](evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md),
-    [timer receipt](evidence/stage3-thread-timer-birth-20261015/validation.receipt.md)).
-    Window/unscoped status, HWND-owned timers and other numeric GWE producers
-    remain outside the bounded birth gates; reuse isolation is unproved.
+    [timer receipt](evidence/stage3-thread-timer-birth-20261015/validation.receipt.md),
+    [window receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md)).
+    Broadcast, HWND-owned timers, hotkeys, sent/paint/modal producers, remote
+    input and host teardown remain outside W-B1a; their reuse isolation is
+    unproved.
   - Opaque non-task wait slots (queue, socket, serial tokens) and duplicated
     native wait payloads are unpinned despite exact-birth publication. Wait-ID
     wrap/reuse and live modal continuation behavior remain unproved.

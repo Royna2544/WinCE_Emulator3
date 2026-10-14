@@ -12,6 +12,18 @@ first. Totals are passed/failed/ignored for release
 HEAD and patch, raw logs and EXE/PDB hashes. The per-slice text before this
 condense is at `git show d4263dde:PROGRESS.md`.
 
+- W-B1a window-owner birth
+  ([receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md)):
+  windows retain one frozen creation owner; native creation ordinals 246/688/690
+  preflight the captured caller, while explicit HWND posts, typed payloads,
+  exact queue/wake/exit and CreateWindow callbacks use that owner. Five pre-fix
+  reds, including in-slice MIPS self-termination, are preserved. The first
+  broad release failed on stale typed-payload fixtures; corrected tests passed
+  focused a16–a18, sealed release 1,967/0/9 and no-feature 1,427/0/3 across
+  18 blocks each, plus Unicorn-only and desktop no-trace checks. The corrected
+  base `0e686c9c` patch SHA-256 is `02429B95…E608DD`. Broadcast, HWND timers,
+  hotkeys, sent/paint/modal paths, remote input, host teardown and live iNavi
+  acceptance remain open.
 - HWND-less thread-timer birth ownership
   ([receipt](evidence/stage3-thread-timer-birth-20261015/validation.receipt.md)):
   raw/native Set/Kill now carry the captured exact caller birth; timer keys,
