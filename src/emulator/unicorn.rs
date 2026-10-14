@@ -152,8 +152,8 @@ pub struct UnicornMips {
     last_native_slice_outcome: NativeSliceOutcome,
     #[cfg(all(test, feature = "unicorn"))]
     native_mixed_jr_stop_probe: Option<Rc<std::cell::Cell<NativeMixedJrStopProbe>>>,
-    // An E18 diagnostic pointer-map failure cannot resume from an older CPU
-    // snapshot or silently restart at process entry on a later call.
+    // An E18 pointer-map failure or unowned worker exit cannot resume from an
+    // older CPU snapshot or silently restart at process entry on a later call.
     private_slab_attempt_poisoned: bool,
     /// The current child returned and its canonical execution was retired.
     /// If no parked successor exists, the old CPU must never run another slice.
@@ -238,6 +238,13 @@ pub struct UnicornMips {
     guest_thread_stack_slots: std::collections::BTreeMap<u32, u32>,
     #[cfg(feature = "unicorn")]
     saved_context: Option<SavedCpuContext>,
+    /// Canonical thread birth that owns the saved runnable CPU context.
+    #[cfg(feature = "unicorn")]
+    saved_context_thread_birth: Option<crate::ce::object::ThreadBirthKey>,
+    /// Birth that produced a saved worker exit stub. A TID (and its public
+    /// alias) may be reused before the host consumes that stop.
+    #[cfg(feature = "unicorn")]
+    saved_worker_exit_birth: Option<crate::ce::object::ThreadBirthKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -1493,6 +1500,10 @@ impl UnicornMips {
             guest_thread_stack_slots: std::collections::BTreeMap::new(),
             #[cfg(feature = "unicorn")]
             saved_context: None,
+            #[cfg(feature = "unicorn")]
+            saved_context_thread_birth: None,
+            #[cfg(feature = "unicorn")]
+            saved_worker_exit_birth: None,
         })
     }
 
@@ -1956,6 +1967,9 @@ impl UnicornMips {
                 pc: callout.return_pc,
                 regs,
             });
+            self.saved_context_thread_birth = kernel
+                .handles
+                .thread_birth_key_by_id(self.current_thread_id);
         } else if let Some(saved) = self.saved_context.as_mut() {
             saved.pc = callout.return_pc;
             saved.regs.regs[2] = final_result;
@@ -2268,6 +2282,7 @@ impl UnicornMips {
             pc: wndproc,
             regs: call_regs,
         });
+        self.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(thread_id);
         self.current_thread_id = thread_id;
         self.running_guest_thread = (thread_handle != 0).then_some((thread_id, thread_handle));
         true
@@ -2527,6 +2542,7 @@ impl UnicornMips {
             pc: wndproc,
             regs: call_regs,
         });
+        self.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(thread_id);
         self.current_thread_id = thread_id;
         self.running_guest_thread = kernel
             .guest_thread_handle_by_id(thread_id)
@@ -2738,6 +2754,7 @@ impl UnicornMips {
             pc: wndproc,
             regs: call_regs,
         });
+        self.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(thread_id);
         self.current_thread_id = thread_id;
         self.running_guest_thread = kernel
             .guest_thread_handle_by_id(thread_id)
@@ -3161,6 +3178,7 @@ impl UnicornMips {
             pc: resume.import_pc,
             regs: resume.regs,
         });
+        self.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(resume.thread_id);
         self.current_thread_id = resume.thread_id;
         self.running_guest_thread = resume.running_thread;
         tracing::warn!(
@@ -3484,6 +3502,7 @@ impl UnicornMips {
         }
         let Some(index) = self.parked_child_processes.iter().position(|process| {
             !self.parked_process_matches_current_active(process, kernel)
+                && Self::parked_process_has_verified_resume_path(process, kernel)
                 && Self::parked_process_contains_thread(process, thread_ids)
                 && (Self::parked_process_has_priority_ready_work(process, kernel)
                     || thread_ids
@@ -4173,6 +4192,7 @@ impl UnicornMips {
             pc: resume.pc,
             regs: resume.regs,
         });
+        self.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(resume.thread_id);
         true
     }
 
@@ -4229,6 +4249,7 @@ impl UnicornMips {
             pc: resume.pc,
             regs: resume.regs,
         });
+        self.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(resume.thread_id);
         true
     }
 
@@ -5012,6 +5033,15 @@ impl UnicornMips {
             );
             return false;
         }
+        if !kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer) {
+            tracing::warn!(
+                target: "ce.scheduler",
+                process_id = launch.process_id,
+                thread_id = launch.thread_id,
+                "active child completion was rejected; retaining its CPU"
+            );
+            return false;
+        }
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessChildReturned",
             application: launch.application.clone(),
@@ -5028,15 +5058,6 @@ impl UnicornMips {
             error: None,
             detail: Some(format!("active_exit show_cmd={:?}", launch.show_cmd)),
         });
-        if !kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer) {
-            tracing::warn!(
-                target: "ce.scheduler",
-                process_id = launch.process_id,
-                thread_id = launch.thread_id,
-                "active child completion was rejected; retaining its CPU"
-            );
-            return false;
-        }
         self.seal_completed_active_process_cpu();
         self.remove_parked_process_tree_by_identity(launch.process_id, launch.thread_id);
         let switched = self.switch_to_next_parked_process(kernel, false);
@@ -5073,15 +5094,39 @@ impl UnicornMips {
             return false;
         }
         let live_birth = kernel.handles.thread_birth_key_by_id(thread_id);
-        if live_birth.is_some()
-            && kernel.handles.thread_creation_owner_by_id(thread_id)
-                != self
-                    .owned_process_launch
-                    .as_ref()
-                    .and_then(|launch| launch.process_birth)
-                    .or_else(|| kernel.current_process_birth_key())
+        let expected_birth = self.saved_worker_exit_birth;
+        let expected_owner = self
+            .owned_process_launch
+            .as_ref()
+            .and_then(|launch| launch.process_birth)
+            .or_else(|| kernel.current_process_birth_key());
+        if expected_birth.is_none()
+            || live_birth.is_some_and(|birth| Some(birth) != expected_birth)
+            || live_birth.is_some()
+                && kernel.handles.thread_creation_owner_by_id(thread_id) != expected_owner
         {
-            return false;
+            // Consume only this stale CPU continuation. Numeric-ID cleanup
+            // below could delete the replacement worker's waits, stack slot,
+            // or canonical thread record after a same-process TID reuse.
+            tracing::warn!(
+                target: "ce.scheduler",
+                thread_id,
+                expected_birth = ?expected_birth,
+                live_birth = ?live_birth,
+                "saved worker exit has no matching live birth; retaining thread state"
+            );
+            self.saved_context = None;
+            self.saved_context_thread_birth = None;
+            self.saved_worker_exit_birth = None;
+            // There is no safe continuation to synthesize from a stale worker
+            // stub. Without this sentinel, the next run would restart the
+            // process at its entry point after `saved_context` was cleared.
+            self.private_slab_attempt_poisoned = true;
+            self.current_thread_id = self.initial_thread_id;
+            self.last_debug = None;
+            self.last_wall_clock_debug = None;
+            self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
+            return true;
         }
         let thread_handle = kernel.guest_thread_handle_by_id(thread_id).unwrap_or(0);
 
@@ -5100,6 +5145,8 @@ impl UnicornMips {
             let _ = kernel.mark_guest_thread_exited_by_id(thread_id, exit_code);
         }
         self.saved_context = None;
+        self.saved_context_thread_birth = None;
+        self.saved_worker_exit_birth = None;
         self.current_thread_id = self.initial_thread_id;
         self.last_debug = None;
         self.last_wall_clock_debug = None;
@@ -5227,6 +5274,15 @@ impl UnicornMips {
                     kernel.process_module_path()
                 )
             });
+        if !kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer) {
+            tracing::warn!(
+                target: "ce.scheduler",
+                process_id = launch.process_id,
+                thread_id = launch.thread_id,
+                "terminal child completion was rejected; retaining its CPU"
+            );
+            return None;
+        }
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessChildReturned",
             application: launch.application.clone(),
@@ -5243,15 +5299,6 @@ impl UnicornMips {
             error: None,
             detail: Some(terminal_detail),
         });
-        if !kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer) {
-            tracing::warn!(
-                target: "ce.scheduler",
-                process_id = launch.process_id,
-                thread_id = launch.thread_id,
-                "terminal child completion was rejected; retaining its CPU"
-            );
-            return None;
-        }
         let modal_state = self.take_terminal_blocked_modal(kernel);
         self.seal_completed_active_process_cpu();
         self.remove_parked_process_tree_by_identity(launch.process_id, launch.thread_id);
@@ -5629,7 +5676,48 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn parked_process_has_verified_resume_path(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        if Self::parked_process_has_resumable_context(parked) {
+            return true;
+        }
+        if parked.cpu.run_slice_generation == 0
+            && parked.cpu.saved_context.is_none()
+            && parked.cpu.last_debug_snapshot().is_none()
+        {
+            // A never-run child may start at its image entry once.
+            return true;
+        }
+        if parked.blocked_send_id.is_some_and(|send_id| {
+            kernel.sent_message_result_ready(send_id)
+                && parked.cpu.blocked_wait_threads.iter().any(|blocked| {
+                    matches!(blocked.kind, BlockedWaitKind::SendMessage { send_id: id, .. } if id == send_id)
+                })
+        }) {
+            // switch_to_parked_process materializes this exact send result.
+            return true;
+        }
+        parked
+            .cpu
+            .blocked_modal_message_box
+            .as_ref()
+            .is_some_and(|modal| {
+                kernel.blocked_waiter(modal.wait_id).is_some_and(|wait| {
+                    scheduler_blocked_wait_is_ready(wait, kernel)
+                        || crate::ce::scheduler::blocked_wait_timed_out(
+                            wait,
+                            kernel.timers.tick_count(),
+                        )
+                })
+            })
+        // A generic ready wait alone is not a saved CPU continuation. After
+        // a worker stop it must not replay the process's original entry.
+    }
+
+    #[cfg(feature = "unicorn")]
     fn parked_process_has_priority_ready_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        if !Self::parked_process_has_verified_resume_path(parked, kernel) {
+            return false;
+        }
         // Priority handoff is reserved for genuine wake events: a completed
         // synchronous send or a signaled/timed-out wait. A pending posted
         // message is ordinary runnable work in CE and must ride round-robin;
@@ -5664,6 +5752,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn parked_process_can_run(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        if !Self::parked_process_has_verified_resume_path(parked, kernel) {
+            return false;
+        }
         if let Some(send_id) = parked.blocked_send_id {
             return kernel.sent_message_result_ready(send_id);
         }
@@ -5989,6 +6080,7 @@ impl UnicornMips {
             pc: blocked.return_pc,
             regs,
         });
+        cpu.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(blocked.thread_id);
         cpu.current_thread_id = blocked.thread_id;
         cpu.running_guest_thread = running_thread;
         true
@@ -6093,6 +6185,7 @@ impl UnicornMips {
             pc: wndproc,
             regs: call_regs,
         });
+        cpu.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(blocked.thread_id);
         cpu.current_thread_id = blocked.thread_id;
         cpu.running_guest_thread = running_thread;
         true
@@ -6135,6 +6228,7 @@ impl UnicornMips {
             pc: modal.return_pc,
             regs,
         });
+        cpu.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(modal.thread_id);
         cpu.current_thread_id = modal.thread_id;
         cpu.running_guest_thread = Some((modal.thread_id, modal.thread_handle));
         true
@@ -6386,6 +6480,10 @@ impl UnicornMips {
                 guest_thread_stack_slots: std::mem::take(&mut self.guest_thread_stack_slots),
                 #[cfg(feature = "unicorn")]
                 saved_context: self.saved_context.take(),
+                #[cfg(feature = "unicorn")]
+                saved_context_thread_birth: self.saved_context_thread_birth.take(),
+                #[cfg(feature = "unicorn")]
+                saved_worker_exit_birth: self.saved_worker_exit_birth.take(),
             }),
             blocked_send_id,
             module_base,
@@ -6651,12 +6749,41 @@ impl UnicornMips {
                 )),
             };
         }
+        if self.run_slice_generation != 0 && self.saved_context.is_none() {
+            report.failure_operation = Some("missing saved process continuation preflight");
+            return AttemptExecution {
+                report,
+                result: Err(Error::Backend(
+                    "previously executed process CPU has no saved continuation".to_owned(),
+                )),
+            };
+        }
         if self.private_slab_attempt_poisoned {
             report.failure_operation = Some("poisoned native-attempt preflight");
             return AttemptExecution {
                 report,
                 result: Err(Error::Backend(
                     "native attempt is poisoned; a fresh machine is required".to_owned(),
+                )),
+            };
+        }
+        if self.saved_context.is_some()
+            && self.current_thread_id != self.initial_thread_id
+            && self.saved_context_thread_birth.is_some_and(|saved_birth| {
+                kernel
+                    .handles
+                    .thread_birth_key_by_id(self.current_thread_id)
+                    != Some(saved_birth)
+            })
+        {
+            self.private_slab_attempt_poisoned = true;
+            self.saved_context = None;
+            self.saved_context_thread_birth = None;
+            report.failure_operation = Some("stale saved worker birth preflight");
+            return AttemptExecution {
+                report,
+                result: Err(Error::Backend(
+                    "saved worker CPU context belongs to a retired thread birth".to_owned(),
                 )),
             };
         }
@@ -6957,6 +7084,19 @@ impl UnicornMips {
         report.start_process_id = Some(native_owner_pid);
         report.start_process_birth = kernel.current_process_birth_key();
         report.start_thread_id = Some(self.current_thread_id);
+        let slice_entry_thread_id = self.current_thread_id;
+        let slice_entry_thread_birth = if self
+            .saved_context
+            .as_ref()
+            .is_some_and(|saved| saved.pc == THREAD_EXIT_STUB_ADDR)
+        {
+            self.saved_worker_exit_birth
+                .or(self.saved_context_thread_birth)
+        } else if self.saved_context.is_some() {
+            self.saved_context_thread_birth
+        } else {
+            kernel.handles.thread_birth_key_by_id(slice_entry_thread_id)
+        };
         // Capture once, before any import can create the first public slab.
         // A later selected-PID change must not retarget this native attempt.
         let native_owner_birth = kernel.current_process_birth_key();
@@ -8787,6 +8927,8 @@ impl UnicornMips {
             );
         }
         let thread_exit_reached = Rc::new(RefCell::new(false));
+        let worker_exit_birth = Rc::new(RefCell::new(None));
+        let worker_exit_birth_import_hook = Rc::clone(&worker_exit_birth);
 
         // ── Import trap hook: CE API dispatch (all PCs in the import trap page) ──
         // A successful live-pump CreateProcessW must return to guest code before
@@ -8848,6 +8990,27 @@ impl UnicornMips {
                 if address == THREAD_EXIT_STUB_ADDR {
                     let active_thread_id = *current_thread_id_hook.borrow();
                     let no_running_thread = running_guest_thread_hook.borrow().is_none();
+                    if no_running_thread && active_thread_id != process_primary_thread_id {
+                        let expected_birth = (active_thread_id == slice_entry_thread_id)
+                            .then_some(slice_entry_thread_birth)
+                            .flatten();
+                        *worker_exit_birth_import_hook.borrow_mut() = expected_birth;
+                        let live_birth = unsafe { &*kernel_ptr }
+                            .handles
+                            .thread_birth_key_by_id(active_thread_id);
+                        if live_birth.is_some() && live_birth != expected_birth {
+                            tracing::warn!(
+                                target: "ce.scheduler",
+                                thread_id = active_thread_id,
+                                expected_birth = ?expected_birth,
+                                live_birth = ?live_birth,
+                                "raw worker exit refused a different thread birth"
+                            );
+                            *thread_exit_reached_import_hook.borrow_mut() = true;
+                            let _ = uc.emu_stop();
+                            return;
+                        }
+                    }
                     if no_running_thread
                         && active_thread_id != process_primary_thread_id
                         && unsafe { &*kernel_ptr }
@@ -11637,8 +11800,21 @@ impl UnicornMips {
         }
         self.orphaned_wndproc_returns = last_wndproc_returns.borrow().clone();
         let staged_saved_context = snapshot_context_result.as_ref().ok().cloned();
+        let staged_worker_exit_birth = staged_saved_context
+            .as_ref()
+            .filter(|saved| saved.pc == THREAD_EXIT_STUB_ADDR)
+            .and_then(|_| *worker_exit_birth.borrow());
+        let staged_context_thread_birth = staged_saved_context.as_ref().and_then(|saved| {
+            if saved.pc == THREAD_EXIT_STUB_ADDR {
+                staged_worker_exit_birth
+            } else {
+                kernel.handles.thread_birth_key_by_id(executed_thread_id)
+            }
+        });
         if !diagnostic_private {
             self.saved_context = staged_saved_context.clone();
+            self.saved_context_thread_birth = staged_context_thread_birth;
+            self.saved_worker_exit_birth = staged_worker_exit_birth;
         }
         uc.set_metadata(mapped_kernel_memory.borrow().clone());
         let slice_snapshot_elapsed = slice_profile.elapsed();
@@ -12289,6 +12465,8 @@ impl UnicornMips {
                 )));
             }
             self.saved_context = staged_saved_context;
+            self.saved_context_thread_birth = staged_context_thread_birth;
+            self.saved_worker_exit_birth = staged_worker_exit_birth;
             self.persist_run_state(&run_state, kernel);
             if native_requested_pc_stop.is_none()
                 && matches!(
@@ -12514,6 +12692,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             running_guest_thread: None,
             guest_thread_stack_slots: std::collections::BTreeMap::new(),
             saved_context: None,
+            saved_context_thread_birth: None,
+            saved_worker_exit_birth: None,
             private_slab_attempt_poisoned: false,
             completed_active_process_exit: false,
             owned_process_launch: None,
@@ -32544,6 +32724,10 @@ mod wait_scheduler_tests {
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new()?;
         let (thread_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker birth");
         let other_thread_id = thread_id + 1;
         let event_a = kernel.create_event_w(None, true, false);
         let event_b = kernel.create_event_w(None, true, true);
@@ -32594,6 +32778,8 @@ mod wait_scheduler_tests {
             pc: super::THREAD_EXIT_STUB_ADDR,
             regs,
         });
+        scheduler.saved_worker_exit_birth = Some(birth);
+        scheduler.saved_context_thread_birth = Some(birth);
         scheduler.last_debug = Some(super::UnicornDebugSnapshot {
             pc: super::THREAD_EXIT_STUB_ADDR,
             v0: 0x44,
@@ -32712,11 +32898,119 @@ mod wait_scheduler_tests {
             pc: super::THREAD_EXIT_STUB_ADDR,
             regs,
         });
+        scheduler.saved_worker_exit_birth = Some(birth);
+        scheduler.saved_context_thread_birth = Some(birth);
 
         assert!(scheduler.complete_saved_guest_thread_exit(&mut kernel));
         assert!(!kernel.handles.contains_thread_birth(birth));
         assert_eq!(kernel.open_thread_handle(thread_id), None);
         assert!(!scheduler.guest_thread_stack_slots.contains_key(&thread_id));
+        Ok(())
+    }
+
+    #[test]
+    fn saved_thread_exit_stub_does_not_retire_reused_same_process_tid() -> crate::error::Result<()>
+    {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new()?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("old worker birth");
+
+        scheduler.current_thread_id = thread_id;
+        scheduler.saved_worker_exit_birth = Some(old_birth);
+        scheduler.saved_context_thread_birth = Some(old_birth);
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: super::THREAD_EXIT_STUB_ADDR,
+            regs: super::MipsGuestContext::zero(),
+        });
+        scheduler.guest_thread_stack_slots.insert(thread_id, 9);
+
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x11));
+        kernel.close_handle(old_handle)?;
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_4000, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("replacement worker birth");
+        assert_ne!(old_birth, new_birth);
+
+        assert!(scheduler.complete_saved_guest_thread_exit(&mut kernel));
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert!(kernel.handles.thread_execution_live_by_id(thread_id));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(scheduler.guest_thread_stack_slots.get(&thread_id), Some(&9));
+        assert!(scheduler.saved_context.is_none());
+        assert!(scheduler.private_slab_attempt_poisoned);
+        assert_eq!(scheduler.current_thread_id(), super::MAIN_GUEST_THREAD_ID);
+        Ok(())
+    }
+
+    #[test]
+    fn saved_runnable_worker_context_rejects_reused_tid_before_native_entry()
+    -> crate::error::Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("old worker birth");
+        let mut scheduler = super::UnicornMips::new()?;
+        scheduler.current_thread_id = thread_id;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: 0x0040_3000,
+            regs: super::MipsGuestContext::zero(),
+        });
+        scheduler.saved_context_thread_birth = Some(old_birth);
+
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x11));
+        kernel.close_handle(old_handle)?;
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_4000, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("replacement worker birth");
+        assert_ne!(old_birth, new_birth);
+
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let attempt = scheduler.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1,
+                wall_clock_limit_ms: 1,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        assert!(attempt.result.is_err());
+        assert_eq!(
+            attempt.report.failure_operation,
+            Some("stale saved worker birth preflight")
+        );
+        assert!(scheduler.private_slab_attempt_poisoned);
+        assert!(scheduler.saved_context.is_none());
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
         Ok(())
     }
 
@@ -38836,6 +39130,100 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn rejected_active_child_exit_does_not_publish_return_trace() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let launch = kernel.queue_process_launch(None, None);
+        let other = kernel.queue_process_launch(None, None);
+        let birth = launch.process_birth.expect("queued child birth");
+        let mut wrong_birth_launch = launch.clone();
+        wrong_birth_launch.process_birth = other.process_birth;
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.owned_process_launch = Some(wrong_birth_launch);
+        scheduler.set_initial_thread_id(launch.thread_id);
+        scheduler.current_thread_id = launch.thread_id;
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x45,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+
+        assert!(!scheduler.complete_active_process_thread_exit_with_framebuffer(&mut kernel, None));
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(!scheduler.active_process_execution_completed());
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record.op == "CreateProcessChildReturned"
+                && record.process_id == Some(launch.process_id)
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn once_run_parked_wait_without_saved_context_cannot_replay_process_entry() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let event = kernel.create_event_w(None, true, false);
+        let wait_id = kernel.register_blocked_waiter(
+            4,
+            0,
+            vec![event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut stopped_cpu = UnicornMips::new()?;
+        stopped_cpu.set_initial_thread_id(4);
+        stopped_cpu.current_thread_id = 4;
+        stopped_cpu.run_slice_generation = 1;
+        stopped_cpu.entry = Some(0x0040_1000);
+        stopped_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            wait_id,
+            thread_id: 4,
+            thread_handle: 0,
+            wait_handles: vec![event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_2000,
+        });
+        let mut scheduler = UnicornMips::new()?;
+        scheduler
+            .parked_child_processes
+            .push_back(parked_process_for_cpu(4, stopped_cpu));
+
+        assert!(kernel.set_event(event));
+        assert!(!scheduler.has_ready_parked_wait_unblock(&kernel));
+        assert!(!scheduler.switch_to_next_parked_child_process(&mut kernel));
+        assert_eq!(scheduler.parked_child_process_count(), 1);
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let attempted = scheduler
+            .parked_child_processes
+            .front_mut()
+            .expect("stopped CPU remains parked")
+            .cpu
+            .run_until_import_trap_with_framebuffer_limits_report(
+                &mut kernel,
+                &mut framebuffer,
+                super::UnicornRunLimits::default(),
+            );
+        assert!(attempted.result.is_err());
+        assert_eq!(attempted.report.attempt_id(), None);
+        assert_eq!(
+            attempted.report.failure_operation(),
+            Some("missing saved process continuation preflight")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn active_child_exit_without_successor_disposes_native_cpu_before_return() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -39214,6 +39602,8 @@ mod guest_thread_stack_tests {
             pc: THREAD_EXIT_STUB_ADDR,
             regs,
         });
+        child_cpu.saved_worker_exit_birth = kernel.handles.thread_birth_key_by_id(worker_tid);
+        child_cpu.saved_context_thread_birth = child_cpu.saved_worker_exit_birth;
         child_cpu.last_debug = Some(UnicornDebugSnapshot {
             pc: THREAD_EXIT_STUB_ADDR,
             v0: 0x24,

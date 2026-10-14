@@ -373,6 +373,9 @@ fn run_cpu_loop(
             if let Some(thread_id) = cpu.parked_timer_fallback_thread_id() {
                 kernel.pump_timers_to_gwe(thread_id);
             }
+            if service_completed_active_desktop(cpu, desktop, kernel, args.desktop)? != 0 {
+                reported_blocked_message_wait = false;
+            }
             let remote_target = blocked_remote_input_target(cpu, kernel);
             let _ = service_remote_endpoint(cpu, kernel, desktop, remote_target.as_ref());
             if cpu.switch_to_next_parked_child_process(kernel) {
@@ -2094,6 +2097,19 @@ fn enqueue_desktop_input_for_current_wait(
         if let Some(blocked) = blocked_get_message {
             kernel.drain_remote_input_to_thread_window(blocked.thread_id, blocked.hwnd);
         }
+    }
+    Ok(queued)
+}
+
+fn service_completed_active_desktop(
+    cpu: &UnicornMips,
+    desktop: &mut DesktopRuntime,
+    kernel: &mut CeKernel,
+    desktop_mode: DesktopMode,
+) -> Result<usize> {
+    let queued = enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, desktop_mode)?;
+    if desktop_mode == DesktopMode::Host {
+        desktop.present()?;
     }
     Ok(queued)
 }
@@ -5142,6 +5158,67 @@ mod tests {
                 hwnd: Some(hwnd),
             })
         );
+    }
+
+    #[test]
+    fn completed_cpu_idle_polls_host_input_for_parked_message_waiter() {
+        let mut kernel = CeKernel::boot(
+            RuntimeConfig::load_default().expect("runtime config loads for parked input test"),
+        );
+        let cpu = UnicornMips::new().expect("CPU initializes for parked input test");
+        let hwnd = kernel.create_window_ex_w(
+            7,
+            "PARKED_HOST_INPUT_TARGET",
+            "",
+            None,
+            0,
+            wince_emulation_v3::ce::gwe::WS_VISIBLE,
+            0,
+        );
+        let wait_id = kernel.register_blocked_waiter(
+            7,
+            0x120,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: Some(hwnd),
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            u32::MAX,
+        );
+        let mut virtual_desktop =
+            VirtualDesktop::default_primary().expect("virtual desktop initializes");
+        virtual_desktop.input_mut().push_touch_down(12, 34);
+        let mut desktop = DesktopRuntime::Virtual(virtual_desktop);
+        kernel.remote.set_framebuffer_size(
+            desktop.framebuffer().width(),
+            desktop.framebuffer().height(),
+        );
+
+        assert_eq!(
+            service_completed_active_desktop(&cpu, &mut desktop, &mut kernel, DesktopMode::Host)
+                .expect("completed CPU idle service succeeds"),
+            1
+        );
+        assert!(kernel.recent_message_ops().iter().any(|record| {
+            record.op == "remote_touch_target"
+                && record.thread_id == 7
+                && record.hwnd == Some(hwnd)
+                && record.msg == Some(wince_emulation_v3::ce::gwe::WM_LBUTTONDOWN)
+        }));
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| {
+                matches!(blocked.kind, SchedulerBlockedWaitKind::GetMessage { .. })
+                    && kernel.gwe.has_queue_input(blocked.thread_id, u32::MAX)
+            }),
+            Some(wait_id)
+        );
+        if let DesktopRuntime::Virtual(virtual_desktop) = &desktop {
+            assert_eq!(virtual_desktop.presenter().presentation_count(), 1);
+        } else {
+            panic!("test desktop must remain virtual");
+        }
     }
 
     #[test]
