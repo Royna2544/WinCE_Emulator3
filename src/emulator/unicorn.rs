@@ -6309,6 +6309,7 @@ impl UnicornMips {
         &self,
         kernel: &CeKernel,
         uc: &mut unicorn_engine::Unicorn<'_, D>,
+        guard: &SealedHostWriteGuard,
     ) -> Result<()> {
         use unicorn_engine::RegisterMIPS;
 
@@ -6331,7 +6332,7 @@ impl UnicornMips {
             command_line_bytes.extend_from_slice(&unit.to_le_bytes());
         }
         command_line_bytes.extend_from_slice(&0u16.to_le_bytes());
-        uc.mem_write(u64::from(command_line), &command_line_bytes)
+        checked_host_write(uc, guard, u64::from(command_line), &command_line_bytes)
             .map_err(|err| Error::Backend(format!("write guest command line: {err:?}")))?;
         for (register, value, name) in [
             (RegisterMIPS::A0, hinstance, "A0/hInstance"),
@@ -6679,7 +6680,7 @@ impl UnicornMips {
             }
             uc.reg_write(RegisterMIPS::RA, u64::from(THREAD_EXIT_STUB_ADDR))
                 .map_err(|err| Error::Backend(format!("set guest RA: {err:?}")))?;
-            self.write_process_entry_context(kernel, &mut uc)?;
+            self.write_process_entry_context(kernel, &mut uc, &sealed_host_write_guard)?;
             self.entry
                 .ok_or_else(|| Error::Backend("no PE entry point has been loaded".to_owned()))?
         };
@@ -7860,6 +7861,7 @@ impl UnicornMips {
         let native_hook_stop_reason_timeslice_hook = Rc::clone(&native_hook_stop_reason);
         let native_hook_control_error_timeslice_hook = Rc::clone(&native_hook_control_error);
         let framebuffer_tick_error_timeslice_hook = Rc::clone(&framebuffer_tick_error);
+        let sealed_host_write_guard_timeslice_hook = sealed_host_write_guard.clone();
         #[cfg(test)]
         let native_mixed_jr_stop_probe_timeslice_hook = self.native_mixed_jr_stop_probe.clone();
         pre_entry_try!(uc.add_block_hook(1, 0, move |uc, address, size| {
@@ -8125,6 +8127,7 @@ impl UnicornMips {
             if try_resume_blocked_wait_with_active_pc(
                 unsafe { &mut *kernel_ptr },
                 uc,
+                &sealed_host_write_guard_timeslice_hook,
                 active_thread_id,
                 &current_thread_id_timeslice_hook,
                 &blocked_wait_threads_timeslice_hook,
@@ -8139,6 +8142,7 @@ impl UnicornMips {
             if try_resume_blocked_get_message_with_active_pc(
                 unsafe { &mut *kernel_ptr },
                 uc,
+                &sealed_host_write_guard_timeslice_hook,
                 active_thread_id,
                 &current_thread_id_timeslice_hook,
                 &blocked_guest_thread_timeslice_hook,
@@ -8191,6 +8195,7 @@ impl UnicornMips {
             if try_resume_blocked_send_message_timeout(
                 unsafe { &mut *kernel_ptr },
                 uc,
+                &sealed_host_write_guard_timeslice_hook,
                 active_thread_id,
                 &current_thread_id_timeslice_hook,
                 &blocked_send_message_timeout_timeslice_hook,
@@ -8388,6 +8393,7 @@ impl UnicornMips {
                         if try_wait_and_resume_blocked_wait(
                             unsafe { &mut *kernel_ptr },
                             uc,
+                            &sealed_host_write_guard_import,
                             active_thread_id,
                             &current_thread_id_hook,
                             &blocked_wait_threads_hook,
@@ -8399,6 +8405,7 @@ impl UnicornMips {
                         ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
                             unsafe { &mut *kernel_ptr },
                             uc,
+                            &sealed_host_write_guard_import,
                             active_thread_id,
                             &current_thread_id_hook,
                             &blocked_guest_thread_hook,
@@ -8419,6 +8426,7 @@ impl UnicornMips {
                         && (try_wait_and_resume_blocked_wait(
                             unsafe { &mut *kernel_ptr },
                             uc,
+                            &sealed_host_write_guard_import,
                             active_thread_id,
                             &current_thread_id_hook,
                             &blocked_wait_threads_hook,
@@ -8430,6 +8438,7 @@ impl UnicornMips {
                         ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
                             unsafe { &mut *kernel_ptr },
                             uc,
+                            &sealed_host_write_guard_import,
                             active_thread_id,
                             &current_thread_id_hook,
                             &blocked_guest_thread_hook,
@@ -8809,7 +8818,11 @@ impl UnicornMips {
                     return;
                 }
                 if address == QSORT_RETURN_STUB_ADDR {
-                    if !handle_qsort_return_stub(uc, &pending_qsort_returns_hook) {
+                    if !handle_qsort_return_stub(
+                        uc,
+                        &sealed_host_write_guard_import,
+                        &pending_qsort_returns_hook,
+                    ) {
                         let _ = uc.emu_stop();
                     }
                     return;
@@ -8861,17 +8874,23 @@ impl UnicornMips {
                 if address == ENUM_FONT_FAMILIES_RETURN_STUB_ADDR {
                     handle_enum_font_families_return_stub(
                         uc,
+                        &sealed_host_write_guard_import,
                         &pending_enum_font_families_returns_hook,
                     );
                     return;
                 }
                 if address == LOCALE_ENUM_RETURN_STUB_ADDR {
-                    handle_locale_enum_return_stub(uc, &pending_locale_enum_returns_hook);
+                    handle_locale_enum_return_stub(
+                        uc,
+                        &sealed_host_write_guard_import,
+                        &pending_locale_enum_returns_hook,
+                    );
                     return;
                 }
                 if address == IME_ENUM_REGISTER_WORD_RETURN_STUB_ADDR {
                     if !handle_ime_enum_register_word_return_stub(
                         uc,
+                        &sealed_host_write_guard_import,
                         &pending_ime_enum_register_word_returns_hook,
                     ) {
                         let _ = uc.emu_stop();
@@ -8892,6 +8911,7 @@ impl UnicornMips {
                     if !handle_fsdmgr_file_lock_return_stub(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         active_thread_id,
                         &pending_fsdmgr_file_lock_returns_hook,
                     ) {
@@ -8944,6 +8964,7 @@ impl UnicornMips {
                         if try_wait_and_resume_blocked_wait(
                             unsafe { &mut *kernel_ptr },
                             uc,
+                            &sealed_host_write_guard_import,
                             active_thread_id,
                             &current_thread_id_hook,
                             &blocked_wait_threads_hook,
@@ -8955,6 +8976,7 @@ impl UnicornMips {
                         ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
                             unsafe { &mut *kernel_ptr },
                             uc,
+                            &sealed_host_write_guard_import,
                             active_thread_id,
                             &current_thread_id_hook,
                             &blocked_guest_thread_hook,
@@ -8980,6 +9002,7 @@ impl UnicornMips {
                         if try_wait_and_resume_blocked_wait(
                             unsafe { &mut *kernel_ptr },
                             uc,
+                            &sealed_host_write_guard_import,
                             worker_thread_id,
                             &current_thread_id_hook,
                             &blocked_wait_threads_hook,
@@ -8991,6 +9014,7 @@ impl UnicornMips {
                         ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
                             unsafe { &mut *kernel_ptr },
                             uc,
+                            &sealed_host_write_guard_import,
                             worker_thread_id,
                             &current_thread_id_hook,
                             &blocked_guest_thread_hook,
@@ -9275,6 +9299,7 @@ impl UnicornMips {
                     try_block_for_send_message_timeout_wait(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9305,6 +9330,7 @@ impl UnicornMips {
                     try_block_sleep(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9348,6 +9374,7 @@ impl UnicornMips {
                     try_block_message_queue_io(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9372,6 +9399,7 @@ impl UnicornMips {
                     try_block_wait_for_single_object(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9398,6 +9426,7 @@ impl UnicornMips {
                     try_block_wait_for_multiple_objects(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9422,6 +9451,7 @@ impl UnicornMips {
                     try_block_msg_wait_for_multiple_objects_ex(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9443,6 +9473,7 @@ impl UnicornMips {
                     try_block_serial_read_file(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9460,6 +9491,7 @@ impl UnicornMips {
                     try_block_wait_comm_event(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9477,6 +9509,7 @@ impl UnicornMips {
                     try_block_winsock_read(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         trap.name.as_deref(),
@@ -9602,6 +9635,7 @@ impl UnicornMips {
                     try_enter_set_window_pos_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         Some(UnicornHeapMapping { mapped: mapped_kernel_memory_hook.as_ref(), mapped_blobs: mapped_blobs_ptr }),
                         trap.module_kind,
                         trap.ordinal,
@@ -9721,6 +9755,7 @@ impl UnicornMips {
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_qsort_callout(
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9732,6 +9767,7 @@ impl UnicornMips {
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_dpa_sort_callout(
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9743,6 +9779,7 @@ impl UnicornMips {
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_dsa_sort_callout(
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9766,6 +9803,7 @@ impl UnicornMips {
                     try_enter_enum_font_families_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9777,6 +9815,7 @@ impl UnicornMips {
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_locale_enum_callout(
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9814,6 +9853,7 @@ impl UnicornMips {
                     try_enter_enum_display_monitors_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9849,6 +9889,7 @@ impl UnicornMips {
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_fsdmgr_file_lock_callout(
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         trap.name.as_deref(),
@@ -10144,6 +10185,7 @@ impl UnicornMips {
                         &mapped_kernel_memory_hook,
                         unsafe { &mut *mapped_blobs_ptr },
                         &create_window_returns_hook,
+                        &sealed_host_write_guard_import,
                     )
                 }) {
                     return;
@@ -10211,6 +10253,7 @@ impl UnicornMips {
                     if try_resume_blocked_wait(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         active_thread_id,
                         &current_thread_id_hook,
                         &blocked_wait_threads_hook,
@@ -10222,6 +10265,7 @@ impl UnicornMips {
                     if try_resume_blocked_get_message(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         active_thread_id,
                         &current_thread_id_hook,
                         &blocked_guest_thread_hook,
@@ -10560,6 +10604,7 @@ impl UnicornMips {
             if try_resume_blocked_wait_with_active_pc(
                 kernel,
                 &mut uc,
+                &sealed_host_write_guard,
                 active_thread_id,
                 &current_thread_id,
                 &blocked_wait_threads,
@@ -10571,6 +10616,7 @@ impl UnicornMips {
             ) || try_resume_blocked_get_message_with_active_pc(
                 kernel,
                 &mut uc,
+                &sealed_host_write_guard,
                 active_thread_id,
                 &current_thread_id,
                 &blocked_guest_thread,
@@ -10614,6 +10660,7 @@ impl UnicornMips {
             ) || try_resume_blocked_send_message_timeout(
                 kernel,
                 &mut uc,
+                &sealed_host_write_guard,
                 active_thread_id,
                 &current_thread_id,
                 &blocked_send_message_timeout,
@@ -11138,7 +11185,8 @@ impl UnicornMips {
                             "sync decoded-exit file mapping views"
                         );
                     }
-                    if let Err(err) = uc.finish() {
+                    if let Some(err) = sealed_host_write_guard.poison_error() { self.private_slab_attempt_poisoned = true; self.saved_context = None; self.last_native_slice_outcome = NativeSliceOutcome::BackendError; report.failure_operation = Some("sealed host write"); return Err(err); }
+            if let Err(err) = uc.finish() {
                         self.private_slab_attempt_poisoned = true;
                         self.saved_context = None;
                         self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
@@ -11181,7 +11229,8 @@ impl UnicornMips {
                         )),
                     });
                 }
-                if let Err(err) = uc.finish() {
+                if let Some(err) = sealed_host_write_guard.poison_error() { self.private_slab_attempt_poisoned = true; self.saved_context = None; self.last_native_slice_outcome = NativeSliceOutcome::BackendError; report.failure_operation = Some("sealed host write"); return Err(err); }
+            if let Err(err) = uc.finish() {
                     report.failure_operation = Some("finish decoded process exit");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
@@ -11288,7 +11337,8 @@ impl UnicornMips {
                             "sync decoded-exit file mapping views"
                         );
                     }
-                    if let Err(err) = uc.finish() {
+                    if let Some(err) = sealed_host_write_guard.poison_error() { self.private_slab_attempt_poisoned = true; self.saved_context = None; self.last_native_slice_outcome = NativeSliceOutcome::BackendError; report.failure_operation = Some("sealed host write"); return Err(err); }
+            if let Err(err) = uc.finish() {
                         self.private_slab_attempt_poisoned = true;
                         self.saved_context = None;
                         self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
@@ -11331,7 +11381,8 @@ impl UnicornMips {
                         )),
                     });
                 }
-                if let Err(err) = uc.finish() {
+                if let Some(err) = sealed_host_write_guard.poison_error() { self.private_slab_attempt_poisoned = true; self.saved_context = None; self.last_native_slice_outcome = NativeSliceOutcome::BackendError; report.failure_operation = Some("sealed host write"); return Err(err); }
+            if let Err(err) = uc.finish() {
                     report.failure_operation = Some("finish decoded process exit");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
@@ -11483,6 +11534,7 @@ impl UnicornMips {
                 }
                 return Err(err);
             }
+            if let Some(err) = sealed_host_write_guard.poison_error() { self.private_slab_attempt_poisoned = true; self.saved_context = None; self.last_native_slice_outcome = NativeSliceOutcome::BackendError; report.failure_operation = Some("sealed host write"); return Err(err); }
             if let Err(err) = uc.finish() {
                 self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                 if diagnostic_private {
@@ -11521,6 +11573,7 @@ impl UnicornMips {
             {
                 reject_private_attempt!(err);
             }
+            if let Some(err) = sealed_host_write_guard.poison_error() { self.private_slab_attempt_poisoned = true; self.saved_context = None; self.last_native_slice_outcome = NativeSliceOutcome::BackendError; report.failure_operation = Some("sealed host write"); return Err(err); }
             if let Err(err) = uc.finish() {
                 self.private_slab_attempt_poisoned = true;
                 self.saved_context = None;
@@ -11573,7 +11626,8 @@ impl UnicornMips {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             return Err(err);
         }
-        if let Err(err) = uc.finish() {
+        if let Some(err) = sealed_host_write_guard.poison_error() { self.private_slab_attempt_poisoned = true; self.saved_context = None; self.last_native_slice_outcome = NativeSliceOutcome::BackendError; report.failure_operation = Some("sealed host write"); return Err(err); }
+            if let Err(err) = uc.finish() {
             report.failure_operation = Some("finish native slice hooks");
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             return Err(Error::Backend(format!(
@@ -15492,6 +15546,14 @@ fn map_guest_range<D>(
         .and_then(|end| end.checked_add(0xfff))
         .map(|end| end & !0xfff)
         .ok_or_else(|| Error::InvalidArgument(format!("{label} range overflow")))?;
+    if mapped.sealed_image_runs.values().any(|run| {
+        let run_end = u64::from(run.base) + u64::from(run.len);
+        u64::from(first_page) < run_end && u64::from(run.base) < u64::from(page_end)
+    }) {
+        return Err(Error::Backend(format!(
+            "{label} range 0x{first_page:08x}..0x{page_end:08x} overlaps sealed main image"
+        )));
+    }
     let (spans, newly_mapped) =
         unmapped_guest_spans(mapped, first_page, page_end, label, group_contiguous)?;
     for (span_base, span_size) in spans {
@@ -17716,6 +17778,7 @@ fn try_block_empty_get_message<D>(
             && (try_complete_current_get_message_timer_wait(
                 kernel,
                 uc,
+                sealed_host_write_guard,
                 mapped_kernel_memory,
                 mapped_blobs,
                 thread_id,
@@ -17729,6 +17792,7 @@ fn try_block_empty_get_message<D>(
             ) || try_wait_and_complete_current_get_message_timer_wait(
                 kernel,
                 uc,
+                sealed_host_write_guard,
                 mapped_kernel_memory,
                 mapped_blobs,
                 thread_id,
@@ -17776,6 +17840,7 @@ fn try_block_empty_get_message<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -17790,6 +17855,7 @@ fn try_block_empty_get_message<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_thread,
@@ -17833,6 +17899,7 @@ fn try_block_empty_get_message<D>(
             && (try_complete_current_get_message_timer_wait(
                 kernel,
                 uc,
+                sealed_host_write_guard,
                 mapped_kernel_memory,
                 mapped_blobs,
                 thread_id,
@@ -17846,6 +17913,7 @@ fn try_block_empty_get_message<D>(
             ) || try_wait_and_complete_current_get_message_timer_wait(
                 kernel,
                 uc,
+                sealed_host_write_guard,
                 mapped_kernel_memory,
                 mapped_blobs,
                 thread_id,
@@ -17892,6 +17960,7 @@ fn try_block_empty_get_message<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -17906,6 +17975,7 @@ fn try_block_empty_get_message<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_thread,
@@ -18347,6 +18417,7 @@ fn try_resume_blocked_popup_menu_modal<D>(
 fn try_block_for_send_message_timeout_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -18392,7 +18463,12 @@ fn try_block_for_send_message_timeout_wait<D>(
                 ) {
                     let bytes = result.to_le_bytes();
                     mem.copy_from_slice(&bytes);
-                    let _ = uc.mem_write(u64::from(blocked.block_state.result_ptr), &bytes);
+                    let _ = checked_host_write(
+                        uc,
+                        sealed_host_write_guard,
+                        u64::from(blocked.block_state.result_ptr),
+                        &bytes,
+                    );
                 }
             }
             (1u32, 0u32)
@@ -18451,6 +18527,7 @@ fn try_block_for_send_message_timeout_wait<D>(
 fn try_resume_blocked_send_message_timeout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_smt: &std::rc::Rc<std::cell::RefCell<Option<BlockedSendMessageTimeout>>>,
@@ -18488,7 +18565,12 @@ fn try_resume_blocked_send_message_timeout<D>(
             .unwrap_or(0);
         if blocked.block_state.result_ptr != 0 {
             let bytes = result.to_le_bytes();
-            let _ = uc.mem_write(u64::from(blocked.block_state.result_ptr), &bytes);
+            let _ = checked_host_write(
+                uc,
+                sealed_host_write_guard,
+                u64::from(blocked.block_state.result_ptr),
+                &bytes,
+            );
         }
         (1u32, 0u32)
     } else {
@@ -19326,6 +19408,7 @@ fn timer_delay_can_sleep_in_host_hook(
 fn try_wait_and_complete_current_get_message_timer_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     mapped_kernel_memory: &RefCell<KernelMemoryMappings>,
     mapped_blobs: *mut Vec<MappedBlob>,
     thread_id: u32,
@@ -19361,6 +19444,7 @@ fn try_wait_and_complete_current_get_message_timer_wait<D>(
     try_complete_current_get_message_wait(
         kernel,
         uc,
+        sealed_host_write_guard,
         thread_id,
         wait_id,
         msg_ptr,
@@ -19379,6 +19463,7 @@ fn try_wait_and_complete_current_get_message_timer_wait<D>(
 fn try_complete_current_get_message_timer_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     mapped_kernel_memory: &RefCell<KernelMemoryMappings>,
     mapped_blobs: *mut Vec<MappedBlob>,
     thread_id: u32,
@@ -19403,6 +19488,7 @@ fn try_complete_current_get_message_timer_wait<D>(
     try_complete_current_get_message_wait(
         kernel,
         uc,
+        sealed_host_write_guard,
         thread_id,
         wait_id,
         msg_ptr,
@@ -19422,6 +19508,7 @@ fn try_complete_current_get_message_timer_wait<D>(
 fn try_complete_current_get_message_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     wait_id: u64,
     msg_ptr: u32,
@@ -19451,9 +19538,16 @@ fn try_complete_current_get_message_wait<D>(
     ) else {
         return false;
     };
-    if prepare_native_message_pointer_payload(kernel, uc, thread_id, &message, heap_mapping)
+    if prepare_native_message_pointer_payload(
+        kernel,
+        uc,
+        sealed_host_write_guard,
+        thread_id,
+        &message,
+        heap_mapping,
+    )
         .is_err()
-        || write_unicorn_message(uc, msg_ptr, &message).is_err()
+        || write_unicorn_message(uc, sealed_host_write_guard, msg_ptr, &message).is_err()
     {
         return false;
     }
@@ -19480,6 +19574,7 @@ fn try_complete_current_get_message_wait<D>(
 fn try_block_message_queue_io<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -19606,7 +19701,7 @@ fn try_block_message_queue_io<D>(
             )
         {
             return complete_current_message_queue_io_timeout(
-                kernel, uc, thread_id, timeout, return_pc, live_pump, kind,
+                kernel, uc, sealed_host_write_guard, thread_id, timeout, return_pc, live_pump, kind,
             );
         }
         let wait_handles = vec![queue_handle];
@@ -19639,6 +19734,7 @@ fn try_block_message_queue_io<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -19650,6 +19746,7 @@ fn try_block_message_queue_io<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -19664,6 +19761,7 @@ fn try_block_message_queue_io<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_get_message,
@@ -19691,7 +19789,7 @@ fn try_block_message_queue_io<D>(
             )
         {
             return complete_current_message_queue_io_timeout(
-                kernel, uc, thread_id, timeout, return_pc, live_pump, kind,
+                kernel, uc, sealed_host_write_guard, thread_id, timeout, return_pc, live_pump, kind,
             );
         }
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
@@ -19723,6 +19821,7 @@ fn try_block_message_queue_io<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -19734,6 +19833,7 @@ fn try_block_message_queue_io<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -19748,6 +19848,7 @@ fn try_block_message_queue_io<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_get_message,
@@ -19771,6 +19872,7 @@ fn try_block_message_queue_io<D>(
 fn try_block_wait_for_single_object<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -19938,6 +20040,7 @@ fn try_block_wait_for_single_object<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -19949,6 +20052,7 @@ fn try_block_wait_for_single_object<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -19963,6 +20067,7 @@ fn try_block_wait_for_single_object<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_get_message,
@@ -20045,6 +20150,7 @@ fn try_block_wait_for_single_object<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -20056,6 +20162,7 @@ fn try_block_wait_for_single_object<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -20070,6 +20177,7 @@ fn try_block_wait_for_single_object<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_get_message,
@@ -20415,6 +20523,7 @@ fn try_enter_thread_context_callout<D>(
 fn try_block_sleep<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -20579,6 +20688,7 @@ fn try_block_sleep<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -20590,6 +20700,7 @@ fn try_block_sleep<D>(
         if try_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_get_message,
@@ -20603,6 +20714,7 @@ fn try_block_sleep<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -20617,6 +20729,7 @@ fn try_block_sleep<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_get_message,
@@ -20675,6 +20788,7 @@ fn try_block_sleep<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -20686,6 +20800,7 @@ fn try_block_sleep<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_get_message,
@@ -20790,6 +20905,7 @@ fn complete_current_single_wait_timeout<D>(
 fn complete_current_message_queue_io_timeout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     timeout: u32,
     return_pc: u32,
@@ -20805,7 +20921,7 @@ fn complete_current_message_queue_io_timeout<D>(
     if live_pump {
         let _ = kernel.drain_remote_server_control_messages_to_thread_window(thread_id, None);
     }
-    let result = complete_message_queue_io_import(kind, kernel, uc, thread_id);
+    let result = complete_message_queue_io_import(kind, kernel, uc, sealed_host_write_guard, thread_id);
     kernel.record_resumed_wait(crate::ce::timer::WAIT_TIMEOUT);
     let writes = [
         uc.reg_write(RegisterMIPS::V0, u64::from(result)),
@@ -21035,6 +21151,7 @@ fn try_yield_sleep<D>(
 fn try_block_wait_for_multiple_objects<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -21209,6 +21326,7 @@ fn try_block_wait_for_multiple_objects<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -21220,6 +21338,7 @@ fn try_block_wait_for_multiple_objects<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -21234,6 +21353,7 @@ fn try_block_wait_for_multiple_objects<D>(
         if try_wait_and_resume_blocked_get_message_after_current_blocked(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_get_message,
@@ -21304,6 +21424,7 @@ fn try_complete_current_multiple_wait_timeout<D>(
 fn try_block_msg_wait_for_multiple_objects_ex<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -21471,6 +21592,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -21482,6 +21604,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         if try_wait_and_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -21717,6 +21840,7 @@ fn try_complete_current_msg_wait_timeout<D>(
 fn try_block_serial_read_file<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -21754,6 +21878,7 @@ fn try_block_serial_read_file<D>(
         return block_serial_read_file(
             kernel,
             uc,
+            sealed_host_write_guard,
             args,
             thread_id,
             blocked_waits,
@@ -21775,6 +21900,7 @@ fn try_block_serial_read_file<D>(
     block_serial_read_file(
         kernel,
         uc,
+        sealed_host_write_guard,
         args,
         thread_id,
         blocked_waits,
@@ -21794,6 +21920,7 @@ fn try_block_serial_read_file<D>(
 fn block_serial_read_file<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     _args: &[u32],
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
@@ -21890,6 +22017,7 @@ fn block_serial_read_file<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -21914,7 +22042,7 @@ fn block_serial_read_file<D>(
             };
             let blocked = blocked_waits.borrow_mut().remove(index);
             let _ = kernel.remove_blocked_waiter(blocked.wait_id);
-            let result = complete_blocked_serial_read(&blocked, kernel, uc);
+            let result = complete_blocked_serial_read(&blocked, kernel, uc, sealed_host_write_guard);
             restore_mips_gprs(uc, &blocked.regs);
             let writes = [
                 uc.reg_write(RegisterMIPS::V0, u64::from(result)),
@@ -21937,6 +22065,7 @@ fn block_serial_read_file<D>(
 fn try_block_wait_comm_event<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -21965,6 +22094,7 @@ fn try_block_wait_comm_event<D>(
     block_wait_comm_event(
         kernel,
         uc,
+        sealed_host_write_guard,
         thread_id,
         blocked_waits,
         pending_returns,
@@ -21980,6 +22110,7 @@ fn try_block_wait_comm_event<D>(
 fn block_wait_comm_event<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
@@ -22068,6 +22199,7 @@ fn block_wait_comm_event<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -22086,6 +22218,7 @@ fn block_wait_comm_event<D>(
 fn try_block_winsock_read<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     name: Option<&str>,
@@ -22114,6 +22247,7 @@ fn try_block_winsock_read<D>(
     block_winsock_read(
         kernel,
         uc,
+        sealed_host_write_guard,
         thread_id,
         blocked_waits,
         pending_returns,
@@ -22394,6 +22528,7 @@ fn winsock_replay_args(args: &[u32]) -> [u32; 6] {
 fn block_winsock_read<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
@@ -22498,6 +22633,7 @@ fn block_winsock_read<D>(
         if try_resume_blocked_wait(
             kernel,
             uc,
+            sealed_host_write_guard,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -22516,6 +22652,7 @@ fn block_winsock_read<D>(
 fn try_resume_blocked_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
@@ -22525,6 +22662,7 @@ fn try_resume_blocked_wait<D>(
     try_resume_blocked_wait_with_active_pc(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_waits,
@@ -22541,6 +22679,7 @@ fn try_resume_blocked_wait<D>(
 fn try_resume_blocked_wait_with_active_pc<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
@@ -22617,7 +22756,7 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     let wait_result = if sleep_timed_out {
         0
     } else if message_queue_io_ready || message_queue_io_timed_out {
-        complete_blocked_message_queue_io(&blocked, kernel, uc)
+        complete_blocked_message_queue_io(&blocked, kernel, uc, sealed_host_write_guard)
     } else if let Some(handle) = pulsed_handle {
         blocked
             .wait_handles
@@ -22643,17 +22782,17 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         consume_blocked_msg_wait_input(&blocked, kernel);
         crate::ce::timer::WAIT_OBJECT_0 + blocked.wait_handles.len() as u32
     } else if serial_read_ready {
-        complete_blocked_serial_read(&blocked, kernel, uc)
+        complete_blocked_serial_read(&blocked, kernel, uc, sealed_host_write_guard)
     } else if serial_read_timed_out {
-        complete_blocked_serial_read(&blocked, kernel, uc)
+        complete_blocked_serial_read(&blocked, kernel, uc, sealed_host_write_guard)
     } else if serial_comm_event_ready {
-        complete_blocked_serial_comm_event(&blocked, kernel, uc)
+        complete_blocked_serial_comm_event(&blocked, kernel, uc, sealed_host_write_guard)
     } else if winsock_read_ready {
-        complete_blocked_winsock_read(&blocked, kernel, uc)
+        complete_blocked_winsock_read(&blocked, kernel, uc, sealed_host_write_guard)
     } else if winsock_read_timed_out {
-        complete_blocked_winsock_read(&blocked, kernel, uc)
+        complete_blocked_winsock_read(&blocked, kernel, uc, sealed_host_write_guard)
     } else if send_message_ready {
-        complete_blocked_send_message(&blocked, kernel, uc)
+        complete_blocked_send_message(&blocked, kernel, uc, sealed_host_write_guard)
     } else if blocked_wait_timed_out(&blocked, kernel.timers.tick_count()) {
         crate::ce::timer::WAIT_TIMEOUT
     } else {
@@ -22826,6 +22965,7 @@ fn recover_running_guest_thread_for_saved_context(
 fn try_wait_and_resume_blocked_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
@@ -22838,6 +22978,7 @@ fn try_wait_and_resume_blocked_wait<D>(
     if try_resume_blocked_wait(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_waits,
@@ -22869,6 +23010,7 @@ fn try_wait_and_resume_blocked_wait<D>(
     try_resume_blocked_wait(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_waits,
@@ -23121,8 +23263,9 @@ fn complete_blocked_message_queue_io<D>(
     blocked: &BlockedWaitThread,
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
 ) -> u32 {
-    complete_message_queue_io_import(blocked.kind, kernel, uc, blocked.thread_id)
+    complete_message_queue_io_import(blocked.kind, kernel, uc, sealed_host_write_guard, blocked.thread_id)
 }
 
 #[cfg(feature = "unicorn")]
@@ -23130,12 +23273,14 @@ fn complete_message_queue_io_import<D>(
     kind: BlockedWaitKind,
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
 ) -> u32 {
     let BlockedWaitKind::MessageQueueIo { ordinal, args } = kind else {
         return 0;
     };
-    let mut memory = UnicornGuestMemory::new(uc);
+    let mut memory = UnicornGuestMemory::new(uc)
+        .with_sealed_host_write_guard(sealed_host_write_guard);
     match crate::ce::coredll::CoredllExportTable::static_ordinals()
         .dispatch_raw_ordinal_with_memory(kernel, &mut memory, thread_id, ordinal, args)
     {
@@ -23152,6 +23297,7 @@ fn complete_blocked_winsock_read<D>(
     blocked: &BlockedWaitThread,
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
 ) -> u32 {
     let BlockedWaitKind::WinsockRead {
         name,
@@ -23162,7 +23308,8 @@ fn complete_blocked_winsock_read<D>(
     else {
         return crate::winsock::SOCKET_ERROR;
     };
-    let mut memory = UnicornGuestMemory::new(uc);
+    let mut memory = UnicornGuestMemory::new(uc)
+        .with_sealed_host_write_guard(sealed_host_write_guard);
     crate::winsock::dispatch_import(kernel, blocked.thread_id, ordinal, name, &mut memory, &args)
 }
 
@@ -23171,6 +23318,7 @@ fn complete_blocked_send_message<D>(
     blocked: &BlockedWaitThread,
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
 ) -> u32 {
     const ERROR_TIMEOUT: u32 = 1460;
     let BlockedWaitKind::SendMessage {
@@ -23181,6 +23329,13 @@ fn complete_blocked_send_message<D>(
     else {
         return 0;
     };
+    if let Some(result_ptr) = result_ptr
+        && sealed_host_write_guard
+            .check_write(u64::from(result_ptr), std::mem::size_of::<u32>())
+            .is_err()
+    {
+        return 0;
+    }
     let timed_out = kernel
         .gwe
         .sent_message(send_id)
@@ -23189,7 +23344,7 @@ fn complete_blocked_send_message<D>(
         .take_completed_send_message_result(send_id)
         .unwrap_or(0);
     if let Some(result_ptr) = result_ptr {
-        let _ = uc.mem_write(u64::from(result_ptr), &result.to_le_bytes());
+        let _ = checked_host_write(uc, sealed_host_write_guard, u64::from(result_ptr), &result.to_le_bytes());
     }
     if timed_out {
         kernel
@@ -23204,18 +23359,23 @@ fn complete_blocked_serial_comm_event<D>(
     blocked: &BlockedWaitThread,
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
 ) -> u32 {
     let BlockedWaitKind::SerialCommEvent { handle, event_ptr } = blocked.kind else {
         return 0;
     };
+    if sealed_host_write_guard
+        .check_write(u64::from(event_ptr), std::mem::size_of::<u32>())
+        .is_err()
+    {
+        return 0;
+    }
     let event = if kernel.take_comm_event_mask_changed_wait(blocked.wait_id) {
         0
     } else {
         kernel.serial_comm_event_value(handle)
     };
-    if uc
-        .mem_write(u64::from(event_ptr), &event.to_le_bytes())
-        .is_err()
+    if checked_host_write(uc, sealed_host_write_guard, u64::from(event_ptr), &event.to_le_bytes()).is_err()
     {
         kernel.threads.set_last_error(
             blocked.thread_id,
@@ -23232,6 +23392,7 @@ fn complete_blocked_serial_read<D>(
     blocked: &BlockedWaitThread,
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
 ) -> u32 {
     let BlockedWaitKind::SerialRead {
         handle,
@@ -23243,7 +23404,8 @@ fn complete_blocked_serial_read<D>(
         return crate::ce::timer::WAIT_FAILED;
     };
 
-    let mut memory = UnicornGuestMemory::new(uc);
+    let mut memory = UnicornGuestMemory::new(uc)
+        .with_sealed_host_write_guard(sealed_host_write_guard);
     let mut cursor = buffer;
     let mut write_failed = false;
     let transferred = match kernel.read_file_into(handle, requested, |bytes| {
@@ -23689,6 +23851,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("recv"),
@@ -23807,6 +23970,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_message_queue_io(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_READ_MSG_QUEUE),
             &[
@@ -23860,6 +24024,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -23939,6 +24104,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_message_queue_io(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_WRITE_MSG_QUEUE),
             &[write_queue, input_ptr, 4, crate::ce::timer::INFINITE, 0x20],
@@ -23973,6 +24139,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -24047,6 +24214,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_message_queue_io(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_READ_MSG_QUEUE),
             &[read_queue, output_ptr, 16, bytes_read_ptr, 25, flags_ptr],
@@ -24149,6 +24317,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("recvfrom"),
@@ -24295,6 +24464,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("accept"),
@@ -24434,6 +24604,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("select"),
@@ -24585,6 +24756,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("select"),
@@ -24603,6 +24775,7 @@ mod wait_scheduler_tests {
         assert!(!super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -24614,6 +24787,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -24737,6 +24911,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("recv"),
@@ -24754,6 +24929,7 @@ mod wait_scheduler_tests {
         assert!(!super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -24765,6 +24941,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -24879,6 +25056,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("recvfrom"),
@@ -24896,6 +25074,7 @@ mod wait_scheduler_tests {
         assert!(!super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -24907,6 +25086,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -25024,6 +25204,7 @@ mod wait_scheduler_tests {
         assert!(!super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("recv"),
@@ -25150,6 +25331,7 @@ mod wait_scheduler_tests {
         assert!(!super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("recvfrom"),
@@ -25284,6 +25466,7 @@ mod wait_scheduler_tests {
         assert!(!super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("accept"),
@@ -25374,6 +25557,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("select"),
@@ -25415,6 +25599,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -25541,6 +25726,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("select"),
@@ -25584,6 +25770,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -25670,6 +25857,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("select"),
@@ -25714,6 +25902,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -25808,6 +25997,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("select"),
@@ -25852,6 +26042,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -26025,6 +26216,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("select"),
@@ -26076,6 +26268,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -26200,6 +26393,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("connect"),
@@ -26324,6 +26518,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_winsock_read(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Winsock,
             None,
             Some("connect"),
@@ -26348,6 +26543,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             0,
             &current_thread_id,
             &blocked_waits,
@@ -27193,6 +27389,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_wait_for_single_object(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
             &[event, 500],
@@ -27255,6 +27452,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_wait_for_single_object(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
             &[event, INFINITE],
@@ -27331,6 +27529,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_wait_for_single_object(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
             &[event, INFINITE],
@@ -27428,6 +27627,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_sleep(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SLEEP),
             &[500],
@@ -27494,6 +27694,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_sleep(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SLEEP),
             &[601],
@@ -27592,6 +27793,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_sleep(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SLEEP),
             &[100],
@@ -27667,6 +27869,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_sleep(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SLEEP),
             &[0],
@@ -27802,6 +28005,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_sleep(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SLEEP),
             &[334],
@@ -27913,6 +28117,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_get_message_after_current_blocked(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             main_thread_id,
             &current_thread_id,
             &blocked_get_message,
@@ -28265,6 +28470,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_sleep(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SLEEP),
             &[100],
@@ -28378,6 +28584,7 @@ mod wait_scheduler_tests {
         assert!(super::try_block_wait_for_multiple_objects(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_MULTIPLE_OBJECTS),
             &[2, 0x3000_0100, 0, INFINITE],
@@ -28569,6 +28776,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait_with_active_pc(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             active_thread_id,
             &current_thread_id,
             &blocked_waits,
@@ -28674,6 +28882,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait_with_active_pc(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             active_thread_id,
             &current_thread_id,
             &blocked_waits,
@@ -31088,6 +31297,7 @@ mod wait_scheduler_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             1,
             &current_thread_id,
             &blocked_waits,
@@ -31607,6 +31817,7 @@ fn try_enter_resumed_thread_callout<D>(
 fn try_resume_blocked_get_message<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -31619,6 +31830,7 @@ fn try_resume_blocked_get_message<D>(
     try_resume_blocked_get_message_with_active_pc(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_thread,
@@ -31637,6 +31849,7 @@ fn try_resume_blocked_get_message<D>(
 fn try_resume_blocked_get_message_after_current_blocked<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -31648,6 +31861,7 @@ fn try_resume_blocked_get_message_after_current_blocked<D>(
     try_resume_blocked_get_message_with_active_pc(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_thread,
@@ -31668,6 +31882,7 @@ fn try_resume_blocked_get_message_after_current_blocked<D>(
 fn try_wait_and_resume_blocked_get_message<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -31682,6 +31897,7 @@ fn try_wait_and_resume_blocked_get_message<D>(
     try_wait_and_resume_blocked_get_message_with_save(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_thread,
@@ -31701,6 +31917,7 @@ fn try_wait_and_resume_blocked_get_message<D>(
 fn try_wait_and_resume_blocked_get_message_after_current_blocked<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -31715,6 +31932,7 @@ fn try_wait_and_resume_blocked_get_message_after_current_blocked<D>(
     try_wait_and_resume_blocked_get_message_with_save(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_thread,
@@ -31734,6 +31952,7 @@ fn try_wait_and_resume_blocked_get_message_after_current_blocked<D>(
 fn try_wait_and_resume_blocked_get_message_with_save<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -31749,6 +31968,7 @@ fn try_wait_and_resume_blocked_get_message_with_save<D>(
     if try_resume_blocked_get_message_with_active_pc(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_thread,
@@ -31793,6 +32013,7 @@ fn try_wait_and_resume_blocked_get_message_with_save<D>(
     try_resume_blocked_get_message_with_active_pc(
         kernel,
         uc,
+        sealed_host_write_guard,
         active_thread_id,
         current_thread_id,
         blocked_thread,
@@ -31812,6 +32033,7 @@ fn try_wait_and_resume_blocked_get_message_with_save<D>(
 fn try_resume_blocked_get_message_with_active_pc<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -31896,13 +32118,15 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
         if prepare_native_message_pointer_payload(
             kernel,
             uc,
+            sealed_host_write_guard,
             blocked.thread_id,
             &message,
             heap_mapping,
         )
         .is_err()
             || (blocked.import_pc == 0
-                && write_unicorn_message(uc, blocked.msg_ptr, &message).is_err())
+                && write_unicorn_message(uc, sealed_host_write_guard, blocked.msg_ptr, &message)
+                    .is_err())
         {
             return false;
         }
@@ -31993,9 +32217,17 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
     ) else {
         return false;
     };
-    if prepare_native_message_pointer_payload(kernel, uc, blocked.thread_id, &message, heap_mapping)
-        .is_err()
-        || write_unicorn_message(uc, blocked.msg_ptr, &message).is_err()
+    if prepare_native_message_pointer_payload(
+        kernel,
+        uc,
+        sealed_host_write_guard,
+        blocked.thread_id,
+        &message,
+        heap_mapping,
+    )
+    .is_err()
+        || write_unicorn_message(uc, sealed_host_write_guard, blocked.msg_ptr, &message)
+            .is_err()
     {
         return false;
     }
@@ -33436,6 +33668,7 @@ mod guest_thread_stack_tests {
             let dispatched = super::try_dispatch_com_notification_callout(
                 &mut kernel,
                 &mut uc,
+                &super::SealedHostWriteGuard::default(),
                 &mapped,
                 &mut blobs,
                 0x80001000,
@@ -33513,6 +33746,7 @@ mod guest_thread_stack_tests {
         uc.reg_write(RegisterMIPS::RA, 0x22000).unwrap();
         let pending = Rc::new(RefCell::new(Vec::new()));
         let args = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xabcdef01];
+        let sealed_host_write_guard = super::SealedHostWriteGuard::from_mapped_blobs(&blobs)?;
         assert!(super::try_enter_create_window_create_callout(
             &mut kernel,
             &mut uc,
@@ -33522,7 +33756,8 @@ mod guest_thread_stack_tests {
             hwnd,
             &mapped,
             &mut blobs,
-            &pending
+            &pending,
+            &sealed_host_write_guard,
         ));
         let create_struct = pending.borrow()[0].lparam;
         assert_eq!(uc.reg_read(RegisterMIPS::A3).unwrap() as u32, create_struct);
@@ -33628,6 +33863,7 @@ mod guest_thread_stack_tests {
         let mapped = Rc::new(RefCell::new(KernelMemoryMappings::new(&[])));
         let mut blobs = Vec::new();
         let pending = Rc::new(RefCell::new(Vec::new()));
+        let sealed_host_write_guard = super::SealedHostWriteGuard::from_mapped_blobs(&blobs)?;
         assert!(super::try_enter_create_window_create_callout(
             &mut kernel,
             &mut uc,
@@ -33637,7 +33873,8 @@ mod guest_thread_stack_tests {
             hwnd,
             &mapped,
             &mut blobs,
-            &pending
+            &pending,
+            &sealed_host_write_guard,
         ));
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 0);
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x22000);
@@ -33662,7 +33899,8 @@ mod guest_thread_stack_tests {
             0,
             &mapped,
             &mut blobs,
-            &pending
+            &pending,
+            &sealed_host_write_guard,
         ));
         assert_eq!(
             kernel.memory.heap_high_water_mark(),
@@ -44089,6 +44327,7 @@ fn write_wndproc_call_registers<D>(
 #[cfg(feature = "unicorn")]
 fn try_enter_qsort_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -44141,7 +44380,7 @@ fn try_enter_qsort_callout<D>(
         return_pc = format_args!("0x{return_pc:08x}"),
         "qsort guest comparator callout"
     );
-    match enter_next_qsort_comparator(uc, &mut state) {
+    match enter_next_qsort_comparator(uc, sealed_host_write_guard, &mut state) {
         QsortStep::ComparatorEntered => {}
         QsortStep::Done => return finish_qsort_callout(uc, state),
         QsortStep::Failed => return false,
@@ -44153,6 +44392,7 @@ fn try_enter_qsort_callout<D>(
 #[cfg(feature = "unicorn")]
 fn handle_qsort_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -44165,10 +44405,17 @@ fn handle_qsort_return_stub<D>(
     let Some((left, right)) = state.current_pair.take() else {
         return false;
     };
-    if !advance_qsort_partition_after_compare(uc, state, left, right, result) {
+    if !advance_qsort_partition_after_compare(
+        uc,
+        sealed_host_write_guard,
+        state,
+        left,
+        right,
+        result,
+    ) {
         return false;
     }
-    match enter_next_qsort_comparator(uc, state) {
+    match enter_next_qsort_comparator(uc, sealed_host_write_guard, state) {
         QsortStep::ComparatorEntered => true,
         QsortStep::Done => {
             let state = pending.pop().unwrap();
@@ -44945,6 +45192,7 @@ fn handle_fsdmgr_file_lock_return_stub<D>(
 #[cfg(feature = "unicorn")]
 fn try_enter_dpa_sort_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -45016,7 +45264,7 @@ fn try_enter_dpa_sort_callout<D>(
         callback = format_args!("0x{callback:08x}"),
         "DPA_Sort guest comparator callout"
     );
-    match enter_next_qsort_comparator(uc, &mut state) {
+    match enter_next_qsort_comparator(uc, sealed_host_write_guard, &mut state) {
         QsortStep::ComparatorEntered => {}
         QsortStep::Done => return finish_qsort_callout(uc, state),
         QsortStep::Failed => return false,
@@ -45028,6 +45276,7 @@ fn try_enter_dpa_sort_callout<D>(
 #[cfg(feature = "unicorn")]
 fn try_enter_dsa_sort_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -45105,7 +45354,7 @@ fn try_enter_dsa_sort_callout<D>(
         callback = format_args!("0x{callback:08x}"),
         "DSA_Sort guest comparator callout"
     );
-    match enter_next_qsort_comparator(uc, &mut state) {
+    match enter_next_qsort_comparator(uc, sealed_host_write_guard, &mut state) {
         QsortStep::ComparatorEntered => {}
         QsortStep::Done => return finish_qsort_callout(uc, state),
         QsortStep::Failed => return false,
@@ -45976,6 +46225,7 @@ fn read_unicorn_wide_z_bounded<D>(
 #[cfg(feature = "unicorn")]
 fn write_unicorn_wide_z<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     ptr: u32,
     text: &str,
     max_chars: usize,
@@ -45985,7 +46235,7 @@ fn write_unicorn_wide_z<D>(
         bytes.extend_from_slice(&word.to_le_bytes());
     }
     bytes.extend_from_slice(&0u16.to_le_bytes());
-    uc.mem_write(u64::from(ptr), &bytes).is_ok()
+    checked_host_write(uc, sealed_host_write_guard, u64::from(ptr), &bytes).is_ok()
 }
 
 #[cfg(feature = "unicorn")]
@@ -46025,6 +46275,7 @@ fn ime_enum_register_word_entries(
 #[cfg(feature = "unicorn")]
 fn call_ime_enum_register_word_entry<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     state: &PendingImeEnumRegisterWordReturn,
     entry: &ImeEnumRegisterWordEntry,
 ) -> bool {
@@ -46032,8 +46283,19 @@ fn call_ime_enum_register_word_entry<D>(
 
     let reading_ptr = state.struct_frame_sp;
     let word_ptr = state.struct_frame_sp + 512;
-    if !write_unicorn_wide_z(uc, reading_ptr, &entry.reading, 256)
-        || !write_unicorn_wide_z(uc, word_ptr, &entry.word, 256)
+    let reading_len = (entry.reading.encode_utf16().take(255).count() + 1) * 2;
+    let word_len = (entry.word.encode_utf16().take(255).count() + 1) * 2;
+    if sealed_host_write_guard
+        .check_write(u64::from(reading_ptr), reading_len)
+        .is_err()
+        || sealed_host_write_guard
+            .check_write(u64::from(word_ptr), word_len)
+            .is_err()
+    {
+        return false;
+    }
+    if !write_unicorn_wide_z(uc, sealed_host_write_guard, reading_ptr, &entry.reading, 256)
+        || !write_unicorn_wide_z(uc, sealed_host_write_guard, word_ptr, &entry.word, 256)
     {
         return false;
     }
@@ -46169,6 +46431,7 @@ fn finish_ime_enum_register_word_callout<D>(
 #[cfg(feature = "unicorn")]
 fn handle_ime_enum_register_word_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingImeEnumRegisterWordReturn>>>,
 ) -> bool {
     let callback_result = read_mips_reg(uc, RegisterMIPS::V0);
@@ -46199,7 +46462,7 @@ fn handle_ime_enum_register_word_return_stub<D>(
     let state_snapshot = state.clone();
     drop(pending);
 
-    if call_ime_enum_register_word_entry(uc, &state_snapshot, &next) {
+    if call_ime_enum_register_word_entry(uc, sealed_host_write_guard, &state_snapshot, &next) {
         true
     } else {
         let mut pending = pending_returns.borrow_mut();
@@ -46362,6 +46625,7 @@ fn handle_enum_windows_return_stub<D>(
 fn try_enter_enum_display_monitors_callout<D>(
     kernel: &CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -46400,7 +46664,7 @@ fn try_enter_enum_display_monitors_callout<D>(
         (desktop.bottom as u32).to_le_bytes(),
     ]
     .concat();
-    if uc.mem_write(u64::from(call_sp), &rect_bytes).is_err() {
+    if checked_host_write(uc, sealed_host_write_guard, u64::from(call_sp), &rect_bytes).is_err() {
         return false;
     }
 
@@ -46895,6 +47159,7 @@ enum QsortStep {
 #[cfg(feature = "unicorn")]
 fn enter_next_qsort_comparator<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     state: &mut PendingQsortReturn,
 ) -> QsortStep {
     use unicorn_engine::RegisterMIPS;
@@ -46948,7 +47213,13 @@ fn enter_next_qsort_comparator<D>(
             let Some(final_pivot_addr) = qsort_record_addr(state, partition.i) else {
                 return QsortStep::Failed;
             };
-            if !swap_guest_qsort_records(uc, final_pivot_addr, partition.pivot_addr, state.size) {
+            if !swap_guest_qsort_records(
+                uc,
+                sealed_host_write_guard,
+                final_pivot_addr,
+                partition.pivot_addr,
+                state.size,
+            ) {
                 return QsortStep::Failed;
             }
             push_qsort_ranges(
@@ -46973,7 +47244,13 @@ fn enter_next_qsort_comparator<D>(
         let Some(high_addr) = qsort_record_addr(state, high) else {
             return QsortStep::Failed;
         };
-        if !swap_guest_qsort_records(uc, pivot_addr, high_addr, state.size) {
+        if !swap_guest_qsort_records(
+            uc,
+            sealed_host_write_guard,
+            pivot_addr,
+            high_addr,
+            state.size,
+        ) {
             return QsortStep::Failed;
         }
         state.partition = Some(PendingQsortPartition {
@@ -46989,6 +47266,7 @@ fn enter_next_qsort_comparator<D>(
 #[cfg(feature = "unicorn")]
 fn advance_qsort_partition_after_compare<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     state: &mut PendingQsortReturn,
     left: u32,
     _right: u32,
@@ -47006,7 +47284,7 @@ fn advance_qsort_partition_after_compare<D>(
         let Some(insert_addr) = base.checked_add(insert_offset) else {
             return false;
         };
-        if !swap_guest_qsort_records(uc, insert_addr, left, size) {
+        if !swap_guest_qsort_records(uc, sealed_host_write_guard, insert_addr, left, size) {
             return false;
         }
         partition.i = partition.i.saturating_add(1);
@@ -47108,12 +47386,24 @@ fn finish_qsort_callout<D>(
 #[cfg(feature = "unicorn")]
 fn swap_guest_qsort_records<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     left: u32,
     right: u32,
     size: u32,
 ) -> bool {
     if left == right || size == 0 {
         return true;
+    }
+    // The second destination must be checked before the first write. This
+    // also rejects a sealed page in a later chunk before any swap is applied.
+    if sealed_host_write_guard
+        .check_write(u64::from(left), size as usize)
+        .is_err()
+        || sealed_host_write_guard
+            .check_write(u64::from(right), size as usize)
+            .is_err()
+    {
+        return false;
     }
     const CHUNK: u32 = 64 * 1024;
     let mut offset = 0u32;
@@ -47131,8 +47421,20 @@ fn swap_guest_qsort_records<D>(
         };
         if uc.mem_read(u64::from(left_addr), &mut left_buf).is_err()
             || uc.mem_read(u64::from(right_addr), &mut right_buf).is_err()
-            || uc.mem_write(u64::from(left_addr), &right_buf).is_err()
-            || uc.mem_write(u64::from(right_addr), &left_buf).is_err()
+            || checked_host_write(
+                uc,
+                sealed_host_write_guard,
+                u64::from(left_addr),
+                &right_buf,
+            )
+            .is_err()
+            || checked_host_write(
+                uc,
+                sealed_host_write_guard,
+                u64::from(right_addr),
+                &left_buf,
+            )
+            .is_err()
         {
             return false;
         }
@@ -47560,6 +47862,7 @@ fn try_enter_create_window_create_callout<D>(
     mapped_kernel_memory: &std::rc::Rc<std::cell::RefCell<KernelMemoryMappings>>,
     mapped_blobs: &mut Vec<MappedBlob>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -47587,7 +47890,8 @@ fn try_enter_create_window_create_callout<D>(
             mapped_kernel_memory.as_ref(),
             mapped_blobs as *mut Vec<MappedBlob>,
         )
-    };
+    }
+    .with_sealed_host_write_guard(sealed_host_write_guard);
     let Some(create_struct) = crate::ce::coredll::allocate_guest_heap_initialized(
         kernel,
         &mut memory,
@@ -52295,6 +52599,7 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::S0, 0x7777_0101).unwrap();
         assert!(super::try_enter_fsdmgr_file_lock_callout(
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Fsdmgr,
             Some(34),
             None,
@@ -52317,6 +52622,7 @@ mod unicorn_tests {
         assert!(super::handle_fsdmgr_file_lock_return_stub(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             9,
             &pending,
         ));
@@ -52333,6 +52639,7 @@ mod unicorn_tests {
         assert!(super::handle_fsdmgr_file_lock_return_stub(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             9,
             &pending,
         ));
@@ -52545,6 +52852,7 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::S0, 0xaaaa_0101).unwrap();
         assert!(super::try_enter_fsdmgr_file_lock_callout(
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Fsdmgr,
             Some(23),
             None,
@@ -52568,6 +52876,7 @@ mod unicorn_tests {
         assert!(super::handle_fsdmgr_file_lock_return_stub(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             9,
             &pending,
         ));
@@ -52589,6 +52898,7 @@ mod unicorn_tests {
         assert!(super::handle_fsdmgr_file_lock_return_stub(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             9,
             &pending,
         ));
@@ -52647,6 +52957,7 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::S0, 0x9999_0101).unwrap();
         assert!(super::try_enter_fsdmgr_file_lock_callout(
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Fsdmgr,
             Some(28),
             None,
@@ -52665,6 +52976,7 @@ mod unicorn_tests {
         assert!(super::handle_fsdmgr_file_lock_return_stub(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             9,
             &pending,
         ));
@@ -52683,6 +52995,7 @@ mod unicorn_tests {
         assert!(super::handle_fsdmgr_file_lock_return_stub(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             9,
             &pending,
         ));
@@ -52737,6 +53050,7 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::S0, 0x8888_0101).unwrap();
         assert!(super::try_enter_fsdmgr_file_lock_callout(
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Fsdmgr,
             Some(29),
             None,
@@ -52755,6 +53069,7 @@ mod unicorn_tests {
         assert!(super::handle_fsdmgr_file_lock_return_stub(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             9,
             &pending,
         ));
@@ -52773,6 +53088,7 @@ mod unicorn_tests {
         assert!(super::handle_fsdmgr_file_lock_return_stub(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             9,
             &pending,
         ));
@@ -52810,6 +53126,7 @@ mod unicorn_tests {
         assert!(!super::try_dispatch_com_notification_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             &RefCell::new(super::KernelMemoryMappings::new(&[])),
             &mut Vec::new(),
             0x8000_1000,
@@ -52869,6 +53186,7 @@ mod unicorn_tests {
         assert!(super::try_dispatch_com_notification_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             &RefCell::new(super::KernelMemoryMappings::new(&[])),
             &mut Vec::new(),
             import_pc,
@@ -55233,6 +55551,7 @@ mod unicorn_tests {
             assert!(super::try_block_wait_for_multiple_objects(
                 &mut self.kernel.borrow_mut(),
                 uc,
+                &super::SealedHostWriteGuard::default(),
                 crate::emulator::imports::ImportModuleKind::Coredll,
                 Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_MULTIPLE_OBJECTS),
                 &[2, handles_ptr, 0, crate::ce::timer::INFINITE],
@@ -55257,6 +55576,7 @@ mod unicorn_tests {
             assert!(super::try_resume_blocked_wait_with_active_pc(
                 &mut self.kernel.borrow_mut(),
                 uc,
+                &super::SealedHostWriteGuard::default(),
                 1,
                 &self.current_thread_id,
                 &self.blocked_waits,
@@ -62852,6 +63172,7 @@ mod unicorn_tests {
         assert!(super::try_enter_set_window_pos_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             Some(super::UnicornHeapMapping {
                 mapped: &mapped,
                 mapped_blobs: &mut blobs
@@ -62883,6 +63204,7 @@ mod unicorn_tests {
         assert!(super::try_enter_set_window_pos_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             None,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_POS),
@@ -62924,6 +63246,7 @@ mod unicorn_tests {
         assert!(super::try_complete_current_get_message_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             1,
             wait_id,
             0x20000,
@@ -63012,6 +63335,7 @@ mod unicorn_tests {
                 assert!(!super::try_resume_blocked_get_message_with_active_pc(
                     &mut kernel,
                     &mut uc,
+                    &super::SealedHostWriteGuard::default(),
                     1,
                     &current,
                     &blocked,
@@ -63038,6 +63362,7 @@ mod unicorn_tests {
                     assert!(!super::try_resume_blocked_get_message_with_active_pc(
                         &mut kernel,
                         &mut uc,
+                        &super::SealedHostWriteGuard::default(),
                         1,
                         &current,
                         &blocked,
@@ -63073,6 +63398,7 @@ mod unicorn_tests {
                 assert!(super::try_resume_blocked_get_message_with_active_pc(
                     &mut kernel,
                     &mut uc,
+                    &super::SealedHostWriteGuard::default(),
                     1,
                     &current,
                     &blocked,
@@ -63110,6 +63436,7 @@ mod unicorn_tests {
                 assert!(!super::try_resume_blocked_get_message_with_active_pc(
                     &mut kernel,
                     &mut uc,
+                    &super::SealedHostWriteGuard::default(),
                     1,
                     &current,
                     &blocked,
@@ -63195,6 +63522,7 @@ mod unicorn_tests {
                 assert!(super::try_complete_current_get_message_wait(
                     &mut kernel,
                     &mut uc,
+                    &super::SealedHostWriteGuard::default(),
                     1,
                     wait_id,
                     msg_ptr,
@@ -63225,6 +63553,7 @@ mod unicorn_tests {
                 !super::try_complete_current_get_message_wait(
                     &mut kernel,
                     &mut uc,
+                    &super::SealedHostWriteGuard::default(),
                     1,
                     wait_id,
                     msg_ptr,
@@ -63267,6 +63596,7 @@ mod unicorn_tests {
                 assert!(super::try_complete_current_get_message_wait(
                     &mut kernel,
                     &mut uc,
+                    &super::SealedHostWriteGuard::default(),
                     1,
                     wait_id,
                     msg_ptr,
@@ -63335,6 +63665,7 @@ mod unicorn_tests {
             super::prepare_native_message_pointer_payload(
                 &mut kernel,
                 &mut uc,
+                &super::SealedHostWriteGuard::default(),
                 1,
                 &prepared,
                 Some(super::UnicornHeapMapping {
@@ -63367,6 +63698,7 @@ mod unicorn_tests {
             super::prepare_native_message_pointer_payload(
                 &mut kernel,
                 &mut uc,
+                &super::SealedHostWriteGuard::default(),
                 1,
                 &ready,
                 Some(super::UnicornHeapMapping {
@@ -63407,8 +63739,15 @@ mod unicorn_tests {
         let before = super::capture_mips_gprs(&uc);
         let regions = uc.mem_regions().unwrap().len();
         kernel.threads.set_last_error(1, 0x7755);
-        super::prepare_native_message_pointer_payload(&mut kernel, &mut uc, 1, &message, None)
-            .unwrap();
+        super::prepare_native_message_pointer_payload(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            1,
+            &message,
+            None,
+        )
+        .unwrap();
         assert_eq!(super::capture_mips_gprs(&uc), before);
         assert_eq!(uc.mem_regions().unwrap().len(), regions);
         assert_eq!(kernel.threads.get_last_error(1), 0x7755);
@@ -63441,6 +63780,7 @@ mod unicorn_tests {
         assert!(super::try_enter_set_window_pos_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             Some(super::UnicornHeapMapping {
                 mapped: &mapped_test,
                 mapped_blobs: &mut blobs_test
@@ -63493,6 +63833,7 @@ mod unicorn_tests {
         assert!(!super::try_enter_set_window_pos_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             None,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_POS),
@@ -64539,6 +64880,7 @@ mod unicorn_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             receiver_thread,
             &current_thread_id,
             &blocked_waits,
@@ -64601,6 +64943,7 @@ mod unicorn_tests {
         assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
@@ -64631,6 +64974,7 @@ mod unicorn_tests {
         assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
@@ -64698,6 +65042,7 @@ mod unicorn_tests {
         assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
@@ -64727,6 +65072,7 @@ mod unicorn_tests {
         assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
@@ -64795,6 +65141,7 @@ mod unicorn_tests {
         assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
@@ -64820,6 +65167,7 @@ mod unicorn_tests {
         assert!(super::try_resume_blocked_send_message_timeout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             active_thread,
             &current_thread_id,
             &blocked_smt,
@@ -64911,6 +65259,7 @@ mod unicorn_tests {
         assert!(super::try_block_for_send_message_timeout_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &args,
@@ -64946,6 +65295,7 @@ mod unicorn_tests {
         assert!(super::try_resume_blocked_send_message_timeout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             active_thread,
             &current_thread_id,
             &blocked_smt,
@@ -65065,6 +65415,7 @@ mod unicorn_tests {
         assert!(super::try_resume_blocked_wait(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             receiver_thread,
             &current_thread_id,
             &blocked_waits,
@@ -65129,6 +65480,7 @@ mod unicorn_tests {
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             &RefCell::new(super::KernelMemoryMappings::new(&[])),
             &mut Vec::new(),
             crate::emulator::imports::ImportModuleKind::Coredll,
@@ -65212,6 +65564,7 @@ mod unicorn_tests {
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             &RefCell::new(super::KernelMemoryMappings::new(&[])),
             &mut Vec::new(),
             crate::emulator::imports::ImportModuleKind::Coredll,
@@ -65372,6 +65725,7 @@ mod unicorn_tests {
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             &RefCell::new(super::KernelMemoryMappings::new(&[])),
             &mut Vec::new(),
             crate::emulator::imports::ImportModuleKind::Coredll,
@@ -65495,6 +65849,7 @@ mod unicorn_tests {
         assert!(!super::try_resume_blocked_get_message_with_active_pc(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             active_thread_id,
             &current_thread_id,
             &blocked_guest_thread,
@@ -65515,6 +65870,7 @@ mod unicorn_tests {
         assert!(super::try_resume_blocked_get_message_with_active_pc(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             active_thread_id,
             &current_thread_id,
             &blocked_guest_thread,
@@ -65598,6 +65954,7 @@ mod unicorn_tests {
         assert!(super::try_resume_blocked_get_message_after_current_blocked(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             active_thread_id,
             &current_thread_id,
             &blocked_guest_thread,
@@ -65648,6 +66005,7 @@ mod unicorn_tests {
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             &RefCell::new(super::KernelMemoryMappings::new(&[])),
             &mut Vec::new(),
             crate::emulator::imports::ImportModuleKind::Coredll,
@@ -65737,6 +66095,7 @@ mod unicorn_tests {
         assert!(super::try_wait_and_resume_blocked_get_message(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             active_thread_id,
             &current_thread_id,
             &blocked_guest_thread,
@@ -65813,6 +66172,7 @@ mod unicorn_tests {
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             &RefCell::new(super::KernelMemoryMappings::new(&[])),
             &mut Vec::new(),
             crate::emulator::imports::ImportModuleKind::Coredll,
@@ -66069,6 +66429,125 @@ mod unicorn_tests {
         assert!(super::mips_patch_rva_overlaps_data_ranges(0x3c, &ranges));
         assert!(super::mips_patch_rva_overlaps_data_ranges(0x40, &ranges));
         assert!(!super::mips_patch_rva_overlaps_data_ranges(0x44, &ranges));
+    }
+
+    fn sealed_spinner_cpu() -> crate::Result<super::UnicornMips> {
+        let mut bytes = tiny_mips_spinner_pe();
+        // Unlike the older 0x100-byte fixture, this section fills one whole
+        // non-writable PE page and is eligible for the production loader path.
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x1000);
+        let image = crate::pe::PeImage::parse_bytes("sealed-spinner.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        assert!(cpu.has_sealed_image_runs());
+        Ok(cpu)
+    }
+
+    #[test]
+    fn sealed_main_image_pointer_maps_two_owners_and_releases_200_fresh_pins()
+    -> crate::Result<()> {
+        let cpu = sealed_spinner_cpu()?;
+        let blob = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.bytes.sealed_pin().is_some())
+            .expect("production loader selected complete RX page");
+        let backing = blob.bytes.sealed_pin().unwrap();
+        let clone = cpu.clone();
+        let clone_backing = clone
+            .mapped_blobs
+            .iter()
+            .find_map(|blob| blob.bytes.sealed_pin())
+            .expect("clone retained sealed run");
+        assert!(Rc::ptr_eq(&backing, &clone_backing));
+        assert_eq!((backing.as_ptr() as usize) & 0xfff, 0);
+        let baseline_bytes = backing.to_vec();
+        let baseline_refs = Rc::strong_count(&backing);
+        let kernel = phase1_kernel("sealed-spinner.exe")?;
+        let birth = kernel.current_process_birth_key().expect("boot process birth");
+        let mut image_only_memory = MemoryMap::default();
+        image_only_memory.map(
+            blob.base,
+            blob.bytes.len() as u32,
+            MemoryPerms::READ | MemoryPerms::EXEC,
+            "pe-image",
+        )?;
+        let expected = super::expected_sealed_image_runs(
+            &cpu.mapped_blobs,
+            &image_only_memory,
+            Some(birth),
+        )?;
+        assert_eq!(expected.len(), 1);
+        for cycle in 0..200 {
+            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+            let pins = super::NativeMappingPins::default();
+            let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+            mapped.ranges = super::reconcile_persistent_native_memory_with_private(
+                &mut uc,
+                &image_only_memory,
+                &cpu.mapped_blobs,
+                &HashSet::new(),
+                &BTreeMap::new(),
+                &expected,
+            )?;
+            super::map_sealed_image_runs(
+                &mut uc,
+                &cpu.mapped_blobs,
+                &mut mapped,
+                &expected,
+                &pins,
+            )?;
+            let record = mapped.sealed_image_runs.get(&blob.base).unwrap();
+            assert_eq!(record.host_address, backing.as_ptr() as usize);
+            assert!(pins.has_image(blob.base, record.host_address, record.len));
+            assert_eq!(pins.image_len(), 1);
+            if cycle < 2 {
+                const STORE_CODE: u64 = 0x0001_0000;
+                uc.mem_map(STORE_CODE, 0x1000, Prot::ALL).unwrap();
+                uc.mem_write(STORE_CODE, &0xac49_0000u32.to_le_bytes())
+                    .unwrap(); // sw t1,0(v0)
+                uc.reg_write(RegisterMIPS::V0, u64::from(blob.base)).unwrap();
+                uc.reg_write(RegisterMIPS::T1, 0xdead_beef).unwrap();
+                assert_eq!(
+                    uc.emu_start(STORE_CODE, STORE_CODE + 4, 0, 1).unwrap_err(),
+                    unicorn_engine::unicorn_const::uc_error::WRITE_PROT
+                );
+                assert_eq!(&backing[..], &baseline_bytes);
+            }
+            drop(uc); // Native owner is gone before its raw-pointer pin.
+            drop(mapped);
+            drop(pins);
+            assert_eq!(Rc::strong_count(&backing), baseline_refs);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sealed_main_image_executes_one_real_fresh_native_slice() -> crate::Result<()> {
+        let mut cpu = sealed_spinner_cpu()?;
+        let backing = cpu
+            .mapped_blobs
+            .iter()
+            .find_map(|blob| blob.bytes.sealed_pin())
+            .unwrap();
+        let baseline = backing.to_vec();
+        let mut kernel = phase1_kernel("sealed-spinner.exe")?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 16,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        execution.result?;
+        assert_eq!(execution.report.start_process_birth(), kernel.current_process_birth_key());
+        assert_eq!(backing.to_vec(), baseline);
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        Ok(())
     }
 
     fn write_u32(uc: &mut Unicorn<'_, ()>, address: u64, value: u32) {
