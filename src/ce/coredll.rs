@@ -69958,6 +69958,106 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FailingPrivateVmMemory {
+        guest: UnitGuestMemory,
+        fail_alloc_at_pin: Option<usize>,
+        fail_change_at_action: Option<usize>,
+        allocation_attempts: usize,
+        change_attempts: usize,
+        native_actions_attempted: usize,
+        terminal_failures: usize,
+        committed_generations: Vec<u64>,
+        poisoned: bool,
+    }
+
+    impl CoredllGuestMemory for FailingPrivateVmMemory {
+        fn read_u8(&self, addr: u32) -> Result<u8> {
+            self.guest.read_u8(addr)
+        }
+
+        fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+            self.guest.write_u8(addr, value)
+        }
+
+        fn read_u16(&self, addr: u32) -> Result<u16> {
+            self.guest.read_u16(addr)
+        }
+
+        fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+            self.guest.write_u16(addr, value)
+        }
+
+        fn read_u32(&self, addr: u32) -> Result<u32> {
+            self.guest.read_u32(addr)
+        }
+
+        fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+            self.guest.write_u32(addr, value)
+        }
+
+        fn ensure_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
+            self.guest.ensure_mapped(addr, len)
+        }
+
+        fn validate_writable_u32(&self, addr: u32) -> Result<()> {
+            self.guest.validate_writable_u32(addr)
+        }
+
+        fn apply_prepared_private_vm(
+            &mut self,
+            _kernel: &CeKernel,
+            prepared: &PreparedPrivateVm,
+        ) -> Result<()> {
+            if self.poisoned {
+                return Err(Error::Backend(
+                    "mock private VM owner is poisoned".to_owned(),
+                ));
+            }
+            self.allocation_attempts += 1;
+            for (index, _) in prepared.new_page_pins().iter().enumerate() {
+                self.native_actions_attempted += 1;
+                if self.fail_alloc_at_pin == Some(index) {
+                    return Err(Error::Backend(format!(
+                        "mock native map failed at page {index}"
+                    )));
+                }
+            }
+            Ok(())
+        }
+
+        fn apply_prepared_private_vm_change(
+            &mut self,
+            _kernel: &CeKernel,
+            change: &PreparedPrivateVmChange,
+        ) -> Result<()> {
+            if self.poisoned {
+                return Err(Error::Backend(
+                    "mock private VM owner is poisoned".to_owned(),
+                ));
+            }
+            self.change_attempts += 1;
+            for (index, _) in change.native_page_changes().iter().enumerate() {
+                self.native_actions_attempted += 1;
+                if self.fail_change_at_action == Some(index) {
+                    return Err(Error::Backend(format!(
+                        "mock native change failed at action {index}"
+                    )));
+                }
+            }
+            Ok(())
+        }
+
+        fn note_private_vm_transaction_failure(&mut self, _error: Error) {
+            self.terminal_failures += 1;
+            self.poisoned = true;
+        }
+
+        fn private_vm_commit_complete(&mut self, generation: u64) {
+            self.committed_generations.push(generation);
+        }
+    }
+
     fn kernel_with_sdmmc_volume() -> (CeKernel, u32) {
         let config = RuntimeConfig::load_default().expect("load default config");
         let mut kernel = CeKernel::boot(config);
@@ -70006,6 +70106,184 @@ mod tests {
         assert_eq!(ptr, 0);
         assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
         assert_eq!(kernel.memory.virtual_allocations_for(owner).count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn public_private_vm_second_page_map_failure_never_publishes_pointer() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut memory = FailingPrivateVmMemory {
+            fail_alloc_at_pin: Some(1),
+            ..Default::default()
+        };
+        let base = 0x5500_0000;
+        let generation = kernel.memory.virtual_generation();
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                &mut memory,
+                1,
+                VirtualAllocationSource::Private,
+                base,
+                0x2000,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            ),
+            0
+        );
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert!(kernel.memory.virtual_allocation(owner, base).is_none());
+        assert!(kernel.memory.private_page_pin(owner, base).is_none());
+        assert_eq!(kernel.memory.virtual_generation(), generation);
+        assert_eq!(memory.allocation_attempts, 1);
+        assert_eq!(memory.native_actions_attempted, 2);
+        assert_eq!(memory.terminal_failures, 1);
+        assert!(memory.poisoned);
+        assert!(memory.committed_generations.is_empty());
+
+        // The failed active owner cannot continue with another native map.
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                &mut memory,
+                1,
+                VirtualAllocationSource::Private,
+                base + 0x10000,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            ),
+            0
+        );
+        assert_eq!(memory.allocation_attempts, 1);
+        assert_eq!(memory.native_actions_attempted, 2);
+        assert_eq!(kernel.memory.virtual_generation(), generation);
+        Ok(())
+    }
+
+    #[test]
+    fn public_private_vm_native_protect_failure_keeps_old_state_and_output() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut memory = FailingPrivateVmMemory::default();
+        let base = 0x5510_0000;
+        let old_protect_ptr = 0x0001_1100;
+        memory.guest.map_bytes(old_protect_ptr, 4);
+        memory.write_u32(old_protect_ptr, 0xfeed_beef)?;
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                &mut memory,
+                1,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            ),
+            base
+        );
+        let generation = kernel.memory.virtual_generation();
+        memory.fail_change_at_action = Some(0);
+        assert!(!virtual_protect_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            base,
+            0x1000,
+            0x02,
+            old_protect_ptr,
+        ));
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(memory.read_u32(old_protect_ptr)?, 0xfeed_beef);
+        assert_eq!(
+            kernel
+                .memory
+                .private_vm_query(owner, base)
+                .unwrap()
+                .page_protect,
+            Some(PAGE_READWRITE)
+        );
+        assert_eq!(kernel.memory.virtual_generation(), generation);
+        assert_eq!(memory.change_attempts, 1);
+        assert_eq!(memory.terminal_failures, 1);
+        assert_eq!(memory.committed_generations, vec![generation]);
+
+        memory.fail_change_at_action = None;
+        assert!(!virtual_protect_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            base,
+            0x1000,
+            0x02,
+            old_protect_ptr,
+        ));
+        assert_eq!(memory.change_attempts, 1);
+        assert_eq!(memory.read_u32(old_protect_ptr)?, 0xfeed_beef);
+        Ok(())
+    }
+
+    #[test]
+    fn public_private_vm_second_unmap_failure_keeps_metadata_and_terminally_stops() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut memory = FailingPrivateVmMemory::default();
+        let base = 0x5520_0000;
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                &mut memory,
+                1,
+                VirtualAllocationSource::Private,
+                base,
+                0x2000,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            ),
+            base
+        );
+        let generation = kernel.memory.virtual_generation();
+        memory.fail_change_at_action = Some(1);
+        assert!(!virtual_free_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            base,
+            0x2000,
+            MEM_DECOMMIT,
+        ));
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(kernel.memory.virtual_generation(), generation);
+        assert_eq!(memory.change_attempts, 1);
+        assert_eq!(memory.native_actions_attempted, 4);
+        assert_eq!(memory.terminal_failures, 1);
+        assert_eq!(memory.committed_generations, vec![generation]);
+        for page in [base, base + 0x1000] {
+            assert!(kernel.memory.private_page_pin(owner, page).is_some());
+            assert_eq!(
+                kernel
+                    .memory
+                    .private_vm_query(owner, page)
+                    .unwrap()
+                    .page_protect,
+                Some(PAGE_READWRITE)
+            );
+        }
+
+        memory.fail_change_at_action = None;
+        assert!(!virtual_free_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            base,
+            0,
+            MEM_RELEASE,
+        ));
+        assert_eq!(memory.change_attempts, 1);
+        assert_eq!(memory.native_actions_attempted, 4);
+        assert!(kernel.memory.virtual_allocation(owner, base).is_some());
         Ok(())
     }
 
@@ -70267,7 +70545,10 @@ mod tests {
         memory.write_u32(private_base + 4, THSNAP_SIZE as u32)?;
         memory.write_u32(private_base + 8, 0x1000)?;
         memory.write_u32(private_base + 12, THSNAP_RESERVE)?;
-        assert_eq!(get_heap_snapshot_raw(&mut kernel, &mut memory, 1, private_base), 0);
+        assert_eq!(
+            get_heap_snapshot_raw(&mut kernel, &mut memory, 1, private_base),
+            0
+        );
         assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_PARAMETER);
         assert!(!memory.bytes.contains_key(&(private_base + 0x1000)));
 
@@ -70294,10 +70575,18 @@ mod tests {
         );
         memory.write_u32(snapshot + 4, owned_size - 1)?;
         memory.write_u32(snapshot + 8, owned_size)?;
-        assert_eq!(get_heap_snapshot_raw(&mut kernel, &mut memory, 1, snapshot), 0);
+        assert_eq!(
+            get_heap_snapshot_raw(&mut kernel, &mut memory, 1, snapshot),
+            0
+        );
         assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
         assert!(!memory.bytes.contains_key(&adjacent_private));
-        assert!(kernel.memory.private_page_pin(owner, adjacent_private).is_none());
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(owner, adjacent_private)
+                .is_none()
+        );
         Ok(())
     }
 
@@ -70678,6 +70967,52 @@ mod tests {
                 .unwrap()
                 .source,
             VirtualAllocationSource::PrivateExCompatibility
+        );
+        let self_protect = ex_arm(
+            &mut kernel,
+            &mut memory,
+            ORD_VIRTUAL_PROTECT_EX,
+            &[
+                crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                0x5400_0000,
+                0x1000,
+                0x02,
+                query_buf,
+            ],
+        );
+        assert!(matches!(self_protect, Some(CoredllValue::Bool(true))));
+        assert_eq!(memory.read_u32(query_buf)?, PAGE_READWRITE);
+        let self_query = ex_arm(
+            &mut kernel,
+            &mut memory,
+            ORD_VIRTUAL_QUERY_EX,
+            &[
+                crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                0x5400_0000,
+                query_buf,
+                28,
+            ],
+        );
+        assert!(matches!(self_query, Some(CoredllValue::U32(28))));
+        assert_eq!(memory.read_u32(query_buf + 16)?, MEM_COMMIT_FLAG);
+        assert_eq!(memory.read_u32(query_buf + 20)?, 0x02);
+        let self_free = ex_arm(
+            &mut kernel,
+            &mut memory,
+            ORD_VIRTUAL_FREE_EX,
+            &[
+                crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                0x5400_0000,
+                0,
+                MEM_RELEASE,
+            ],
+        );
+        assert!(matches!(self_free, Some(CoredllValue::Bool(true))));
+        assert!(
+            kernel
+                .memory
+                .virtual_allocation(child_owner, 0x5400_0000)
+                .is_none()
         );
         Ok(())
     }
