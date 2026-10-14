@@ -23853,6 +23853,35 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         return false;
     }
 
+    let Some(captured_native_birth) =
+        verified_native_register_birth(kernel, current_thread_id, thread_id)
+    else {
+        tracing::error!(target: "ce.scheduler", thread_id, current = ?current_thread_id.get(), "MsgWait has no verified register birth");
+        current_thread_id.set_unverified(thread_id);
+        let _ = uc.emu_stop();
+        return true;
+    };
+    if pending_returns.borrow().iter().any(|pending| {
+        pending.worker_thread_id == thread_id && pending.worker_birth != captured_native_birth
+    }) {
+        tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, "MsgWait disagrees with pending worker birth");
+        current_thread_id.set_unverified(thread_id);
+        let _ = uc.emu_stop();
+        return true;
+    }
+    if let Some((running_thread_id, _)) = *running_thread.borrow()
+        && running_thread_id != thread_id
+    {
+        tracing::error!(target: "ce.scheduler", thread_id, running_thread_id, "MsgWait running owner differs from native registers");
+        current_thread_id.set_unverified(thread_id);
+        let _ = uc.emu_stop();
+        return true;
+    }
+    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
+        current_thread_id.set_unverified(thread_id);
+        return true;
+    }
+
     kernel.pump_timers_to_gwe(thread_id);
     let has_input = if input_available {
         kernel.gwe.has_queue_input(thread_id, wake_mask)
@@ -23889,9 +23918,6 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
     }
 
     let wait_started_ms = kernel.timers.tick_count();
-    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, thread_id) {
-        return true;
-    }
     let pending_callout = pending_returns
         .borrow()
         .iter()
@@ -23909,6 +23935,12 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             Ok(prepared) => prepared,
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
+        if prepared.owner_birth() != Some(captured_native_birth) {
+            tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "MsgWait pending owner changed before publication");
+            current_thread_id.set_unverified(thread_id);
+            let _ = uc.emu_stop();
+            return true;
+        }
         let Some(callout) = pop_pending_guest_thread_return_for_thread(
             pending_returns,
             prepared.kernel_mut(),
@@ -23964,6 +23996,12 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             Ok(prepared) => prepared,
             Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
         };
+        if prepared.owner_birth() != Some(captured_native_birth) {
+            tracing::error!(target: "ce.scheduler", thread_id, ?captured_native_birth, wait_birth = ?prepared.owner_birth(), "MsgWait running owner changed before publication");
+            current_thread_id.set_unverified(thread_id);
+            let _ = uc.emu_stop();
+            return true;
+        }
         prepared
             .kernel_mut()
             .record_blocked_msg_wait(count, timeout);
@@ -25134,6 +25172,28 @@ fn try_resume_blocked_wait_with_native_mapping<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn verified_native_blocked_wait_birth(
+    kernel: &CeKernel,
+    candidate: &BlockedWaitThread,
+) -> Option<crate::ce::object::ThreadBirthKey> {
+    let wait = kernel.blocked_waiter(candidate.wait_id)?;
+    let birth = wait.owner_birth?;
+    (wait.id == candidate.wait_id
+        && wait.thread_id == candidate.thread_id
+        && wait.thread_handle == candidate.thread_handle
+        && wait.wait_handles == candidate.wait_handles
+        && wait.kind == scheduler_blocked_wait_kind(candidate.kind)
+        && wait.wait_started_ms == candidate.wait_started_ms
+        && wait.timeout_ms == candidate.timeout_ms
+        && birth.thread_id() == candidate.thread_id
+        && kernel.handles.thread_birth_key_by_id(candidate.thread_id) == Some(birth)
+        && kernel
+            .handles
+            .thread_execution_live_by_id(candidate.thread_id))
+    .then_some(birth)
+}
+
+#[cfg(feature = "unicorn")]
 #[allow(clippy::too_many_arguments)]
 fn try_resume_blocked_wait_with_active_pc<D>(
     kernel: &mut CeKernel,
@@ -25158,6 +25218,34 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         return false;
     }
 
+    // Pumping a timer can create a message edge for a reused TID. Retire a
+    // stale native MsgWait before that pump, not only after it becomes ready.
+    let rejected_msg_wait = {
+        let waits = blocked_waits.borrow();
+        waits.iter().enumerate().find_map(|(index, blocked)| {
+            (matches!(blocked.kind, BlockedWaitKind::MsgWait { .. })
+                && verified_native_blocked_wait_birth(kernel, blocked).is_none())
+            .then(|| (index, blocked.clone()))
+        })
+    };
+    if let Some((index, rejected)) = rejected_msg_wait {
+        blocked_waits.borrow_mut().remove(index);
+        let _ = kernel.remove_blocked_waiter(rejected.wait_id);
+        tracing::error!(
+            target: "ce.scheduler",
+            wait_id = rejected.wait_id,
+            thread_id = rejected.thread_id,
+            "retired MsgWait with stale or mismatched captured birth before timer pump"
+        );
+        if let Some(mapping) = private_vm_mapping {
+            *mapping.terminal_error.borrow_mut() = Some(Error::Backend(format!(
+                "native MsgWait {} has stale or mismatched captured birth",
+                rejected.wait_id
+            )));
+        }
+        let _ = uc.emu_stop();
+        return true;
+    }
     let blocked_msg_wait_thread_ids: Vec<u32> = blocked_waits
         .borrow()
         .iter()
@@ -25208,25 +25296,10 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     let candidate = blocked_waits.borrow()[index].clone();
     let birth_checked_wait = matches!(
         candidate.kind,
-        BlockedWaitKind::Sleep | BlockedWaitKind::Kernel
+        BlockedWaitKind::Sleep | BlockedWaitKind::Kernel | BlockedWaitKind::MsgWait { .. }
     );
     let resumed_birth = if birth_checked_wait {
-        kernel.blocked_waiter(ready_wait_id).and_then(|wait| {
-            let birth = wait.owner_birth?;
-            (wait.id == candidate.wait_id
-                && wait.thread_id == candidate.thread_id
-                && wait.thread_handle == candidate.thread_handle
-                && wait.wait_handles == candidate.wait_handles
-                && wait.kind == scheduler_blocked_wait_kind(candidate.kind)
-                && wait.wait_started_ms == candidate.wait_started_ms
-                && wait.timeout_ms == candidate.timeout_ms
-                && birth.thread_id() == candidate.thread_id
-                && kernel.handles.thread_birth_key_by_id(candidate.thread_id) == Some(birth)
-                && kernel
-                    .handles
-                    .thread_execution_live_by_id(candidate.thread_id))
-            .then_some(birth)
-        })
+        verified_native_blocked_wait_birth(kernel, &candidate)
     } else {
         None
     };
@@ -25245,11 +25318,11 @@ fn try_resume_blocked_wait_with_active_pc<D>(
             wait_id = candidate.wait_id,
             thread_id = candidate.thread_id,
             ?rejected_owner_birth,
-            "retired Sleep/object wait with stale or mismatched captured birth"
+            "retired native wait with stale or mismatched captured birth"
         );
         if let Some(mapping) = private_vm_mapping {
             *mapping.terminal_error.borrow_mut() = Some(Error::Backend(format!(
-                "native Sleep/object wait {} has stale or mismatched captured birth",
+                "native wait {} has stale or mismatched captured birth",
                 candidate.wait_id
             )));
         }
@@ -25264,7 +25337,7 @@ fn try_resume_blocked_wait_with_active_pc<D>(
                 target: "ce.scheduler",
                 active_thread_id,
                 current = ?current_thread_id.get(),
-                "Sleep/object wait cannot park active registers without verified birth"
+                "native wait cannot park active registers without verified birth"
             );
             current_thread_id.set_unverified(active_thread_id);
             let _ = uc.emu_stop();
@@ -29969,7 +30042,11 @@ mod wait_scheduler_tests {
         uc.mem_write(handles_ptr.into(), &event.to_le_bytes())
             .unwrap();
         let thread_id = 7;
-        let thread_handle = 0x707;
+        let thread_handle = registered_test_thread(&mut kernel, thread_id);
+        let thread_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("registered worker birth");
         let return_pc = 0x0040_7000u32;
         uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
             .unwrap();
@@ -29978,7 +30055,10 @@ mod wait_scheduler_tests {
 
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            thread_id,
+            Some(thread_birth),
+        ));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -30701,9 +30781,16 @@ mod wait_scheduler_tests {
         );
         let thread_id = super::MAIN_GUEST_THREAD_ID;
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let thread_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("boot thread birth");
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, None));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            thread_id,
+            Some(thread_birth),
+        ));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
@@ -35365,6 +35452,410 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn stale_msg_wait_capture_does_not_publish_reused_tid_birth() -> crate::error::Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker A birth");
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x11));
+        assert!(kernel.close_handle(old_handle)?);
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_4000, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker B birth");
+        assert_ne!(old_birth, new_birth);
+
+        let event = kernel.create_event_w(None, true, false);
+        let current_thread_id =
+            std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, old_handle))));
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let suspended_queue =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let handles_ptr = 0x3000_0100_u32;
+        uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(handles_ptr), &event.to_le_bytes())
+            .unwrap();
+        let old_pc = 0x0040_3000_u32;
+        let old_sp = 0x3000_0a00_u32;
+        let old_s0 = 0xaaaa_1111_u32;
+        uc.reg_write(RegisterMIPS::PC, u64::from(old_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::SP, u64::from(old_sp)).unwrap();
+        uc.reg_write(RegisterMIPS::S0, u64::from(old_s0)).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(old_pc + 4))
+            .unwrap();
+
+        let _ = super::try_block_msg_wait_for_multiple_objects_ex(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX),
+            &[1, handles_ptr, INFINITE, QS_POSTMESSAGE, 0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &suspended_queue,
+            &running_thread,
+            std::time::Instant::now(),
+            Some(std::time::Duration::ZERO),
+            true,
+        );
+
+        assert!(
+            kernel
+                .blocked_waiters()
+                .all(|wait| wait.thread_id != thread_id || wait.owner_birth != Some(new_birth)),
+            "A's native registers must not be published as B's MsgWait frame",
+        );
+        assert!(
+            blocked_waits
+                .borrow()
+                .iter()
+                .all(|wait| wait.thread_id != thread_id || wait.regs.regs[16] != old_s0),
+        );
+        assert_eq!(kernel.is_wait_ready(event, thread_id), Some(false));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, old_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, old_sp);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, old_s0);
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_msg_wait_inline_timeout_does_not_complete_reused_tid() -> crate::error::Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker A birth");
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x11));
+        assert!(kernel.close_handle(old_handle)?);
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_4000, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker B birth");
+        assert_ne!(old_birth, new_birth);
+
+        let current_thread_id =
+            std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, old_handle))));
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let suspended_queue =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let old_pc = 0x0040_3000_u32;
+        let old_sp = 0x3000_0a00_u32;
+        let old_v0 = 0x1234_5678_u32;
+        uc.reg_write(RegisterMIPS::PC, u64::from(old_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::SP, u64::from(old_sp)).unwrap();
+        uc.reg_write(RegisterMIPS::V0, u64::from(old_v0)).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(old_pc + 4))
+            .unwrap();
+
+        let _ = super::try_block_msg_wait_for_multiple_objects_ex(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX),
+            &[0, 0, 1, QS_POSTMESSAGE, 0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &suspended_queue,
+            &running_thread,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            false,
+        );
+
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(kernel.blocked_waiters().all(|wait| wait.thread_id != thread_id));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, old_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, old_sp);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, old_v0);
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_msg_wait_does_not_consume_input_or_restore_reused_tid() -> crate::error::Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker A birth");
+        assert!(kernel.mark_guest_thread_exited_by_id(thread_id, 0x11));
+        assert!(kernel.close_handle(old_handle)?);
+        assert!(!kernel.handles.contains_thread_birth(old_birth));
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_4000, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker B birth");
+        assert_ne!(old_birth, new_birth);
+
+        // Normal exit cancels A's wait. Reinsert an escaped frame with A's
+        // captured registers while the same numeric TID belongs to B.
+        let wait_started_ms = kernel.timers.tick_count();
+        let kind = BlockedWaitKind::MsgWait {
+            wake_mask: QS_POSTMESSAGE,
+            input_available: false,
+        };
+        let stale_wait_id = kernel.scheduler.register_blocked_wait_with_keys_and_pins(
+            thread_id,
+            Some(old_birth),
+            old_handle,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            super::scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            INFINITE,
+        );
+        let mut old_regs = super::MipsGuestContext::zero();
+        old_regs.regs[16] = 0xaaaa_1111;
+        old_regs.regs[29] = 0x3000_0a00;
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id: stale_wait_id,
+            thread_id,
+            thread_handle: old_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms: INFINITE,
+            regs: old_regs,
+            return_pc: 0x0040_3004,
+        }]));
+        kernel.gwe.post_message(
+            thread_id,
+            crate::ce::gwe::Message::new(0, crate::ce::gwe::WM_USER + 0x91, 0, 0, 10),
+        );
+        assert!(kernel.gwe.has_new_queue_input(thread_id, QS_POSTMESSAGE));
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(
+                active_thread_id,
+                kernel.timers.tick_count(),
+                |wait, kernel| scheduler_blocked_wait_is_ready(wait, kernel),
+            ),
+            Some(stale_wait_id),
+        );
+
+        let boot_birth = kernel
+            .handles
+            .thread_birth_key_by_id(active_thread_id)
+            .expect("boot thread birth");
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            active_thread_id,
+            Some(boot_birth),
+        ));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let new_pc = 0x0040_4000_u32;
+        let new_sp = 0x3000_0f00_u32;
+        let new_s0 = 0xbbbb_2222_u32;
+        uc.reg_write(RegisterMIPS::PC, u64::from(new_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::SP, u64::from(new_sp)).unwrap();
+        uc.reg_write(RegisterMIPS::S0, u64::from(new_s0)).unwrap();
+
+        let _ = super::try_resume_blocked_wait_with_active_pc(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            None,
+            active_thread_id,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            None,
+            &running_thread,
+            None,
+            false,
+        );
+
+        assert!(kernel.blocked_waiter(stale_wait_id).is_none());
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(kernel.gwe.has_new_queue_input(thread_id, QS_POSTMESSAGE));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, new_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, new_sp);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, new_s0);
+        assert_eq!(
+            current_thread_id.get(),
+            (active_thread_id, Some(boot_birth)),
+        );
+        assert!(running_thread.borrow().is_none());
+        assert!(suspended_thread.borrow().is_none());
+        assert!(kernel.handles.contains_thread_birth(new_birth));
+        assert_eq!(
+            kernel.guest_thread_exit_code(new_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ready_msg_wait_resumes_with_verified_worker_birth() -> crate::error::Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let (worker_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let worker_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker birth");
+        let wait_started_ms = kernel.timers.tick_count();
+        let kind = BlockedWaitKind::MsgWait {
+            wake_mask: QS_POSTMESSAGE,
+            input_available: false,
+        };
+        let wait_id = kernel.register_opaque_compatibility_waiter(
+            thread_id,
+            worker_handle,
+            Vec::new(),
+            super::scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            INFINITE,
+        );
+        assert_eq!(
+            kernel.blocked_waiter(wait_id).and_then(|wait| wait.owner_birth),
+            Some(worker_birth),
+        );
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[16] = 0xaaaa_1111;
+        regs.regs[29] = 0x3000_0a00;
+        let return_pc = 0x0040_3004_u32;
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle: worker_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms: INFINITE,
+            regs,
+            return_pc,
+        }]));
+        kernel.gwe.post_message(
+            thread_id,
+            crate::ce::gwe::Message::new(0, crate::ce::gwe::WM_USER + 0x92, 0, 0, 10),
+        );
+        assert!(kernel.gwe.has_new_queue_input(thread_id, QS_POSTMESSAGE));
+
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let boot_birth = kernel
+            .handles
+            .thread_birth_key_by_id(active_thread_id)
+            .expect("boot thread birth");
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            active_thread_id,
+            Some(boot_birth),
+        ));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+
+        assert!(super::try_resume_blocked_wait_with_active_pc(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            None,
+            active_thread_id,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            None,
+            &running_thread,
+            None,
+            false,
+        ));
+
+        assert_eq!(current_thread_id.get(), (thread_id, Some(worker_birth)));
+        assert_eq!(*running_thread.borrow(), Some((thread_id, worker_handle)));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0xaaaa_1111);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, WAIT_OBJECT_0);
+        assert!(!kernel.gwe.has_new_queue_input(thread_id, QS_POSTMESSAGE));
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        Ok(())
+    }
+
+    #[test]
     fn stale_sleep_capture_does_not_publish_replacement_thread_birth() -> crate::error::Result<()> {
         use unicorn_engine::RegisterMIPS;
 
@@ -35666,10 +36157,15 @@ mod wait_scheduler_tests {
         .unwrap();
 
         let blocked_thread_id = 9;
-        let blocked_thread_handle = 0x209;
+        let blocked_thread_handle = registered_test_thread(&mut kernel, blocked_thread_id);
+        let blocked_birth = kernel
+            .handles
+            .thread_birth_key_by_id(blocked_thread_id)
+            .expect("registered blocked thread birth");
         let return_pc = 0x4040_2020_u32;
         let first_event = kernel.create_event_w(None, true, false);
         let second_event = kernel.create_event_w(None, true, false);
+        let wait_started_ms = kernel.timers.tick_count();
         let wait_id = kernel.register_blocked_waiter(
             blocked_thread_id,
             blocked_thread_handle,
@@ -35678,7 +36174,7 @@ mod wait_scheduler_tests {
                 wake_mask: QS_POSTMESSAGE,
                 input_available: false,
             },
-            kernel.timers.tick_count(),
+            wait_started_ms,
             crate::ce::timer::INFINITE,
         );
         let mut regs = super::MipsGuestContext::zero();
@@ -35692,12 +36188,19 @@ mod wait_scheduler_tests {
                 wake_mask: QS_POSTMESSAGE,
                 input_available: false,
             },
-            wait_started_ms: kernel.timers.tick_count(),
+            wait_started_ms,
             timeout_ms: crate::ce::timer::INFINITE,
             regs,
             return_pc,
         }]));
-        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(1_u32, None));
+        let boot_birth = kernel
+            .handles
+            .thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID)
+            .expect("boot thread birth");
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            super::MAIN_GUEST_THREAD_ID,
+            Some(boot_birth),
+        ));
         let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
 
@@ -35724,7 +36227,7 @@ mod wait_scheduler_tests {
 
         assert!(kernel.blocked_waiter(wait_id).is_none());
         assert!(blocked_waits.borrow().is_empty());
-        assert_eq!(current_thread_id.get().0, blocked_thread_id);
+        assert_eq!(current_thread_id.get(), (blocked_thread_id, Some(blocked_birth)));
         assert_eq!(
             *running_thread.borrow(),
             Some((blocked_thread_id, blocked_thread_handle))
