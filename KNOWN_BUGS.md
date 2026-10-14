@@ -76,9 +76,10 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   no execution-stop handshake: a looping child may keep running and a waiter
   may remain blocked. The current-process pseudo-handle uses a separate
   synchronous compatibility path. Boot-main enumeration, last-public-handle
-  wait pins, exact worker identity across same-process TID reuse, root-process
-  completion, clone relineage, complete GMS reclamation and live-app behavior
-  remain open. This bounded slice is not full Stage 3 acceptance.
+  wait pins, intra-slice unpinned-worker lineage (currently fails closed),
+  generic parked-wait continuation, root-process completion, clone relineage,
+  complete GMS reclamation and live-app behavior remain open. This bounded
+  slice is not full Stage 3 acceptance.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
   (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been

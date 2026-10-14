@@ -16,7 +16,7 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 scheduler migration. The bounded
    child-exit sweep has source controls, but real-handle `TerminateProcess`
    still needs a checked CPU execution-stop handshake and CE-compatible caller
-   wait/timeout semantics. Then complete exact intra-slice worker lineage,
+   wait/timeout semantics. Then complete unpinned intra-slice worker lineage,
    generic parked-wait continuation, O-K3 wait-target pins, and root-process
    completion. The E-8/E-11/E-26 controls remain the acceptance baseline, not
    a reason to treat the design as parked.
