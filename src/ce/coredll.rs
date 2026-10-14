@@ -64033,13 +64033,14 @@ fn write_paint_struct<M: CoredllGuestMemory>(
         })
 }
 
-/// Look at the next message without consuming it. Only host-owned payloads
-/// need the metadata-only heap high-water committed before Get/Peek writes
-/// their LPARAM bytes; empty polls must not charge another process's cursor.
-fn preflight_ready_message_heap_payload<M: CoredllGuestMemory>(
+/// Look at the next message without consuming it. Prepare a ready MSG output
+/// span, and commit heap high-water only for a known host-owned LPARAM.
+/// Empty polls must not charge another process's cursor.
+fn preflight_ready_message_output<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,
+    msg_ptr: u32,
     hwnd: Option<u32>,
     min_msg: u32,
     max_msg: u32,
@@ -64065,6 +64066,12 @@ fn preflight_ready_message_heap_payload<M: CoredllGuestMemory>(
             .ensure_heap_mapped_with_kernel(kernel, message.lparam, size)
             .map_err(|_| ERROR_NOT_ENOUGH_MEMORY)?;
     }
+    // The queued MSG is 28 bytes, not seven independent outputs. Prepare
+    // its complete destination before Get/Peek can remove this candidate;
+    // a later stack page must not fail after earlier fields were written.
+    memory
+        .prepare_host_write(kernel, msg_ptr, 28)
+        .map_err(|_| ERROR_INVALID_PARAMETER)?;
     Ok(candidate)
 }
 
@@ -64078,10 +64085,10 @@ fn get_message_w_raw<M: CoredllGuestMemory>(
     let hwnd = parse_get_message_hwnd_filter(raw_arg(args, 1));
     let min_msg = raw_arg(args, 2);
     let max_msg = raw_arg(args, 3);
-    // Preflight only a ready host-owned payload before dequeue. No-message
-    // polls and ordinary guest pointers must not commit the global heap span.
-    let candidate = match preflight_ready_message_heap_payload(
-        kernel, memory, thread_id, hwnd, min_msg, max_msg,
+    // Preflight only when a candidate is ready. Known host-owned payloads
+    // additionally need their heap span committed before dequeue.
+    let candidate = match preflight_ready_message_output(
+        kernel, memory, thread_id, msg_ptr, hwnd, min_msg, max_msg,
     ) {
         Ok(candidate) => candidate,
         Err(error) => {
@@ -64113,8 +64120,8 @@ fn peek_message_w_raw<M: CoredllGuestMemory>(
     let min_msg = raw_arg(args, 2);
     let max_msg = raw_arg(args, 3);
     let flags = PeekFlags::from_bits_truncate(raw_arg(args, 4));
-    let candidate = match preflight_ready_message_heap_payload(
-        kernel, memory, thread_id, hwnd, min_msg, max_msg,
+    let candidate = match preflight_ready_message_output(
+        kernel, memory, thread_id, msg_ptr, hwnd, min_msg, max_msg,
     ) {
         Ok(candidate) => candidate,
         Err(error) => {
@@ -70694,6 +70701,7 @@ mod tests {
         terminal_failures: usize,
         committed_generations: Vec<u64>,
         prepared_host_writes: Vec<(u32, u32)>,
+        fail_host_write_span: Option<(u32, u32)>,
         poisoned: bool,
     }
 
@@ -70733,6 +70741,11 @@ mod tests {
             len: u32,
         ) -> Result<()> {
             self.prepared_host_writes.push((addr, len));
+            if self.fail_host_write_span == Some((addr, len)) {
+                return Err(Error::Backend(
+                    "mock host output span preparation failed".to_owned(),
+                ));
+            }
             Ok(())
         }
 
@@ -70971,6 +70984,67 @@ mod tests {
         assert_eq!(memory.guest.read_u32(msg_ptr + 12)?, ptr);
         assert!(kernel.memory.private_page_pin(owner, heap_base).is_some());
         assert_eq!(kernel.memory.private_commit_used_bytes(), 0x1000);
+        Ok(())
+    }
+
+    #[test]
+    fn get_and_peek_remove_preserve_message_when_full_output_span_fails() -> Result<()> {
+        const MSG_PTR: u32 = 0x0002_0ff0;
+        const MSG: u32 = crate::ce::gwe::WM_USER + 77;
+        for peek_remove in [false, true] {
+            let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+            let owner = kernel.current_process_birth_key().expect("boot birth");
+            assert!(kernel.post_thread_message_w(1, MSG, 0x12, 0x34));
+            let mut memory = FailingPrivateVmMemory {
+                fail_host_write_span: Some((MSG_PTR, 28)),
+                ..Default::default()
+            };
+            memory.guest.map_bytes(MSG_PTR, 28);
+            for offset in 0..28 {
+                memory.guest.write_u8(MSG_PTR + offset, 0xa5)?;
+            }
+            let attempted = if peek_remove {
+                peek_message_w_raw(
+                    &mut kernel,
+                    &mut memory,
+                    1,
+                    &[MSG_PTR, 0, 0, 0, PeekFlags::REMOVE.bits()],
+                )
+            } else {
+                get_message_w_raw(&mut kernel, &mut memory, 1, &[MSG_PTR, 0, 0, 0])
+            };
+            assert!(!attempted);
+            assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_PARAMETER);
+            assert_eq!(memory.prepared_host_writes, vec![(MSG_PTR, 28)]);
+            assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
+            assert!(kernel.memory.private_page_pins_for(owner).is_empty());
+            for offset in 0..28 {
+                assert_eq!(memory.guest.read_u8(MSG_PTR + offset)?, 0xa5);
+            }
+            let queued = kernel
+                .gwe
+                .peek_message_filtered(1, None, 0, 0, PeekFlags::NO_REMOVE)
+                .expect("rejected MSG span must not remove the queued message");
+            assert_eq!((queued.msg, queued.wparam, queued.lparam), (MSG, 0x12, 0x34));
+
+            memory.fail_host_write_span = None;
+            let retried = if peek_remove {
+                peek_message_w_raw(
+                    &mut kernel,
+                    &mut memory,
+                    1,
+                    &[MSG_PTR, 0, 0, 0, PeekFlags::REMOVE.bits()],
+                )
+            } else {
+                get_message_w_raw(&mut kernel, &mut memory, 1, &[MSG_PTR, 0, 0, 0])
+            };
+            assert!(retried);
+            assert_eq!(memory.guest.read_u32(MSG_PTR + 4)?, MSG);
+            assert!(kernel
+                .gwe
+                .peek_message_filtered(1, None, 0, 0, PeekFlags::NO_REMOVE)
+                .is_none());
+        }
         Ok(())
     }
 
