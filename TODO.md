@@ -43,9 +43,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    checks captured thread birth and process lease before native `ExitThread`
    decisions and the guest return-stub no-exit-candidate fallback. Add an
    end-to-end return-stub hook control and make pending-return KData PID follow
-   the captured lease, not mutable process selection. Separately gate
-   `BlockedSendMessageTimeout`, receiver-side delivery and broader GWE
-   lifecycle. Other blocked payloads remain separate. Raw synchronous/nonblocking
+   the captured lease, not mutable process selection. The bounded
+   [native SMT gate](evidence/stage3-smt-birth-20261015/validation.receipt.md)
+   checks eligible parked producer/re-entry/resume birth and exact wait/send
+   pairing, with exact-ID GWE abandon. Close the occupied-slot raw fallback,
+   global expiry-as-ready ambiguity, and receiver-side `DestroyWindow`
+   completed-result writes before claiming full SMT semantics. Receiver-side
+   delivery, broader GWE lifecycle, and other blocked payloads remain
+   separate. Raw synchronous/nonblocking
    queue/socket paths and raw synchronous/nonblocking/overlapped serial paths,
    opaque non-task pins, generic parked-wait closure and caller parity remain
    separate. O-K3 execution and registered Thread/Process

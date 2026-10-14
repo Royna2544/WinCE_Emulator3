@@ -200,8 +200,15 @@ close only their named gates, not Stage 2 or live acceptance.
   1,399/0/3 ignored tests. The return-stub hook lacks an end-to-end control,
   and pending-return KData PID still uses mutable process selection rather
   than the captured lease.
-  Ordinary `BlockedSendMessageTimeout`, receiver-side delivery and broader
-  GWE lifecycle remain separate.
+  The bounded [native SMT source gate](../evidence/stage3-smt-birth-20261015/validation.receipt.md)
+  verifies eligible parked producer/re-entry/resume against captured birth and
+  exact scheduler/native/GWE transaction, abandoning only an exact stale GWE
+  send ID. Captured HEAD `d5738222` plus the sealed patch was incorporated as
+  the same source at final HEAD `7533b528`; clean full release a02 passed
+  1,929/0/9 ignored and no-feature a01 passed 1,402/0/3 ignored tests. An
+  occupied native slot can still fall back to raw SMT, global expiry may be
+  misreported as ready/success, and receiver-side `DestroyWindow` result
+  writes and broader GWE lifecycle remain separate.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE

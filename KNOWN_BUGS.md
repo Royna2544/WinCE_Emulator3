@@ -118,10 +118,13 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   checks captured thread birth and process lease before native `ExitThread`
   decisions and the guest return-stub no-exit-candidate fallback. Its
   return-stub hook has no end-to-end control, and pending-return KData PID still
-  uses mutable process selection rather than the captured lease. Ordinary
-  `BlockedSendMessageTimeout`, receiver-side delivery and broader GWE send
-  lifecycle remain outside these
-  gates. Boot-main
+  uses mutable process selection rather than the captured lease. The bounded
+  [native SMT source gate](evidence/stage3-smt-birth-20261015/validation.receipt.md)
+  checks eligible parked producer/re-entry/resume birth and exact wait/send
+  pairing, with exact-ID GWE abandon. An occupied native slot can still use
+  the raw path; global timeout can be reported as ready/success; receiver-side
+  `DestroyWindow` completed-result writes and delivery remain ungated. Broader
+  GWE send lifecycle remains outside these gates. Boot-main
   enumeration, aliasless Sleep-suspend, unpinned-worker lineage (currently
   fails closed), other parked-wait continuation, raw
   synchronous/nonblocking queue/socket and synchronous/nonblocking/overlapped

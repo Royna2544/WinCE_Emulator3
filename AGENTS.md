@@ -179,9 +179,15 @@ checks captured thread birth and process lease before native `ExitThread` or
 guest return-stub no-exit-candidate decisions; the return-stub hook itself has
 no end-to-end test, and pending-return KData PID still follows the mutable
 selected process.
+The bounded [native SMT gate](evidence/stage3-smt-birth-20261015/validation.receipt.md)
+checks eligible parked `BlockedSendMessageTimeout` publication, re-entry and
+resume against captured birth and the exact wait/send pair; stale cleanup
+abandons only the exact GWE send ID. An occupied native slot can still use the
+raw fallback, global timeout may appear as ready/success, and receiver-side
+`DestroyWindow` completed-result writes remain ungated.
 Raw synchronous/nonblocking/overlapped serial paths, raw queue/socket and
-MsgWait fallbacks, aliasless Sleep-suspend, `BlockedSendMessageTimeout`,
-receiver-side delivery, and other parked-wait families remain open. These
+MsgWait fallbacks, aliasless Sleep-suspend, other SMT semantics, receiver-side
+delivery, and other parked-wait families remain open. These
 slices do not complete the machine-owned Task/continuation/scheduler core,
 Stage 3, or live-app acceptance. See `PROGRESS.md` and `docs/PLAN.md` for
 current gates.

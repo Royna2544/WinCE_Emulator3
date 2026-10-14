@@ -4,6 +4,30 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 native parked SendMessageTimeout birth source slice
+
+- For eligible cross-thread nonzero-timeout `BlockedSendMessageTimeout` calls, the
+  native producer checks captured thread birth and process lease before send
+  preparation. Re-entry and resume verify the exact scheduler/native/GWE pair
+  before readiness, result consumption, guest writes or register restoration;
+  stale retirement abandons only the exact GWE send ID. The bounded
+  [receipt](evidence/stage3-smt-birth-20261015/validation.receipt.md) captured
+  HEAD `d57382227f99bcf46f3b306bf9db33508ef50740` plus the exact
+  [source patch](evidence/stage3-smt-birth-20261015/source-at-seal.patch)
+  (SHA-256 `20A8831A2097252B4DB494BC74E3547ED92797389552DD0FE70535E18C579A7B`);
+  concurrent commits incorporated that same source at final HEAD
+  `7533b528df0d1485099065a95ea9166ea814a19e`. Clean full
+  [release a02](evidence/stage3-smt-birth-20261015/release-a02.raw.log)
+  passed 1,929/0/9 ignored and full
+  [no-feature a01](evidence/stage3-smt-birth-20261015/nofeature-a01.raw.log)
+  passed 1,402/0/3 ignored. Release a01 had green tests but a nonzero wrapper
+  exit after HEAD moved, so it is not the passing gate. The release EXE/PDB
+  pair is SHA-preserved in the receipt. When the single native SMT slot is
+  occupied, an eligible call may still use the raw fallback; global GWE expiry
+  can be misclassified as ready/success; receiver-side delivery and
+  `DestroyWindow` completed-result writes, full Stage 3 and live-app behavior
+  remain open.
+
 ## 2026-10-15 Stage 3 native guest-exit birth source slice
 
 - Native `ExitThread` now verifies the live captured `NativeCurrentThread`
@@ -23,8 +47,9 @@ references for historical reconstruction.
   receipt. The guest return-stub hook was not exercised end-to-end: its
   no-exit-candidate gate has only a helper-level control. Pending-return KData
   PID writes still use the mutable selected process, not the captured lease
-  PID. `BlockedSendMessageTimeout`, receiver-side delivery, full Stage 3 and
-  live-app behavior remain open.
+  PID. The later bounded native SMT gate above does not cover raw fallback or
+  full timeout semantics; receiver-side delivery, full Stage 3 and live-app
+  behavior remain open.
 
 ## 2026-10-15 Stage 3 kernel sender-exit cleanup source slice
 
@@ -41,10 +66,9 @@ references for historical reconstruction.
   passed 1,920/0/9 ignored; full
   [no-feature a01](evidence/stage3-send-exit-20261015/nofeature-a01.raw.log)
   passed 1,399/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
-  receipt. The later bounded native exit gate above checks captured birth and
-  process lease before exit decisions; `BlockedSendMessageTimeout`,
-  receiver-side delivery, broader GWE lifecycle, full Stage 3 and live-app
-  behavior remain unaccepted.
+  receipt. The later bounded native exit and SMT gates above cover their named
+  paths only; receiver-side delivery, broader GWE lifecycle, full Stage 3 and
+  live-app behavior remain unaccepted.
 
 ## 2026-10-15 Stage 3 parked SendMessage birth source slice
 
@@ -61,9 +85,9 @@ references for historical reconstruction.
   passed 1,916/0/9 ignored and full
   [no-feature attempt a02](evidence/stage3-send-birth-20261015/nofeature-a02.raw.log)
   passed 1,395/0/3 ignored. The release EXE/PDB pair is SHA-preserved in the
-  receipt. Ordinary `BlockedSendMessageTimeout` and receiver-side delivery
-  remain open; the later bounded kernel sender-exit slice above covers one
-  queued-send cleanup boundary, not full Stage 3 or live-app acceptance.
+  receipt. Later bounded sender-exit and native SMT slices above cover separate
+  named boundaries, not receiver-side delivery, full Stage 3 or live-app
+  acceptance.
 
 ## 2026-10-15 Stage 3 parked serial birth source slice
 
