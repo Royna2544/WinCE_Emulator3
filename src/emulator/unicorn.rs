@@ -80522,6 +80522,280 @@ mod unicorn_tests {
         Ok(())
     }
 
+    fn checked_stale_native_window_creation_import(ordinal: u32) -> crate::Result<()> {
+        use crate::ce::{
+            coredll::{CoredllDispatch, CoredllRawContext, CoredllValue, CoredllExportTable},
+            coredll_ordinals::{
+                ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_WINDOW_EX_W,
+                ORD_DIALOG_BOX_INDIRECT_PARAM_W,
+            },
+        };
+        use crate::emulator::imports::ImportModuleKind;
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let process_birth = kernel.current_process_birth_key().expect("boot process birth");
+        let (a_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let a_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(a_handle)
+            .expect("A thread birth");
+        let native_caller = super::NativeCurrentThread::new(thread_id, Some(a_birth));
+
+        assert!(kernel.mark_guest_thread_exited_by_birth(a_birth, 0));
+        assert!(kernel.close_handle(a_handle)?);
+        let b_handle = kernel.handles.try_create_thread_in_birth(
+            process_birth,
+            thread_id,
+            0x0040_4000,
+            0,
+            false,
+        )?;
+        let b_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(b_handle)
+            .expect("B thread birth");
+        assert_ne!(a_birth, b_birth);
+        assert_eq!(native_caller.get(), (thread_id, Some(a_birth)));
+        assert!(
+            super::verified_native_register_birth(&kernel, &native_caller, thread_id).is_none()
+        );
+
+        const TEMPLATE_PTR: u32 = 0x3000_0100;
+        const SENTINEL_ERROR: u32 = 0x5151_1024;
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, Prot::ALL).unwrap();
+        let mut template = [0u8; 24];
+        template[0..4].copy_from_slice(&crate::ce::gwe::WS_POPUP.to_le_bytes());
+        template[10..12].copy_from_slice(&4u16.to_le_bytes());
+        template[12..14].copy_from_slice(&8u16.to_le_bytes());
+        template[14..16].copy_from_slice(&120u16.to_le_bytes());
+        template[16..18].copy_from_slice(&64u16.to_le_bytes());
+        uc.mem_write(u64::from(TEMPLATE_PTR), &template).unwrap();
+        let args = match ordinal {
+            ORD_CREATE_WINDOW_EX_W => vec![0, 0x82, 0, 0, 4, 8, 40, 24, 0, 0, 0, 0],
+            ORD_CREATE_DIALOG_INDIRECT_PARAM_W | ORD_DIALOG_BOX_INDIRECT_PARAM_W => vec![
+                0,
+                TEMPLATE_PTR,
+                0,
+                crate::ce::gwe::DEFAULT_WNDPROC,
+                0,
+            ],
+            _ => panic!("unexpected native window creator ordinal {ordinal}"),
+        };
+        kernel.threads.set_last_error(thread_id, SENTINEL_ERROR);
+        let before_windows: Vec<_> = kernel
+            .gwe
+            .windows_snapshot()
+            .iter()
+            .map(|window| (window.hwnd, window.thread_id, window.process_id))
+            .collect();
+
+        // This is the exact predicate used by the native import hook before
+        // raw COREDLL dispatch. A full run cannot start with A's stale saved
+        // registers: its earlier saved-context preflight rejects them. Keep
+        // this control at the import seam without weakening that preflight.
+        let requires_birth = super::native_queue_or_thread_timer_import_requires_verified_birth(
+            ImportModuleKind::Coredll,
+            Some(ordinal),
+            args[0],
+        );
+        let returned = if requires_birth
+            && super::verified_native_register_birth(&kernel, &native_caller, thread_id).is_none()
+        {
+            None
+        } else {
+            let mut memory = super::UnicornGuestMemory::new(&mut uc);
+            Some(
+                CoredllExportTable::default().dispatch_raw_ordinal_with_framebuffer_and_context(
+                    &mut kernel,
+                    &mut memory,
+                    None,
+                    CoredllRawContext {
+                        thread_id,
+                        caller_birth: Some(a_birth),
+                        ..Default::default()
+                    },
+                    ordinal,
+                    args,
+                ),
+            )
+        };
+        if let Some(result) = returned.as_ref() {
+            assert!(
+                matches!(
+                    result,
+                    CoredllDispatch::Returned {
+                        value: CoredllValue::Handle(hwnd),
+                        ..
+                    } if *hwnd != 0
+                ),
+                "fixture must reach a valid window-creating raw ordinal: {result:?}"
+            );
+        }
+
+        let after_windows: Vec<_> = kernel
+            .gwe
+            .windows_snapshot()
+            .iter()
+            .map(|window| (window.hwnd, window.thread_id, window.process_id))
+            .collect();
+        assert_eq!(
+            after_windows, before_windows,
+            "stale native creator ordinal {ordinal} published a window under reused B TID {thread_id}"
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            SENTINEL_ERROR,
+            "stale native creator ordinal {ordinal} changed B's LastError"
+        );
+        assert!(returned.is_none(), "stale native import reached raw dispatch");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "expected red: W-B1a stale native CreateWindowExW birth"]
+    fn stale_native_create_window_ex_w_birth() -> crate::Result<()> {
+        checked_stale_native_window_creation_import(
+            crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W,
+        )
+    }
+
+    #[test]
+    #[ignore = "expected red: W-B1a stale native CreateDialogIndirectParamW birth"]
+    fn stale_native_create_dialog_indirect_param_w_birth() -> crate::Result<()> {
+        checked_stale_native_window_creation_import(
+            crate::ce::coredll_ordinals::ORD_CREATE_DIALOG_INDIRECT_PARAM_W,
+        )
+    }
+
+    #[test]
+    #[ignore = "expected red: W-B1a stale native DialogBoxIndirectParamW birth"]
+    fn stale_native_dialog_box_indirect_param_w_birth() -> crate::Result<()> {
+        checked_stale_native_window_creation_import(
+            crate::ce::coredll_ordinals::ORD_DIALOG_BOX_INDIRECT_PARAM_W,
+        )
+    }
+
+    #[test]
+    #[ignore = "expected red: W-B1a native self-termination before CreateWindowExW"]
+    fn stale_native_create_window_ex_w_after_self_termination_import() -> crate::Result<()> {
+        use crate::ce::coredll_ordinals::{ORD_CREATE_WINDOW_EX_W, ORD_TERMINATE_THREAD};
+        use crate::emulator::imports::{ImportModuleKind, ImportTrap};
+
+        let terminate_trap = super::IMPORT_TRAP_BASE + 0x400;
+        let create_trap = terminate_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let mut image_bytes = tiny_mips_spinner_pe();
+        let words = [
+            0x3c19_0000 | (terminate_trap >> 16), // lui t9,TerminateThread trap
+            0x3739_0000 | (terminate_trap & 0xffff),
+            0x0320_f809, // jalr t9: A exits inside this native attempt
+            0,
+            0x2404_0000, // addiu a0,zero,0: dwExStyle
+            0x2405_0082, // addiu a1,zero,0x82: nonempty class atom
+            0x2406_0000, // addiu a2,zero,0: no title
+            0x2407_0000, // addiu a3,zero,0: no style
+            0x3c19_0000 | (create_trap >> 16), // lui t9,CreateWindowExW trap
+            0x3739_0000 | (create_trap & 0xffff),
+            0x0320_f809, // jalr t9: stale A registers must not create
+            0,
+            0x1000_ffff, // bounded safety spinner
+            0,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut image_bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("stale-native-create.exe", &image_bytes)?;
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let (a_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let a_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(a_handle)
+            .expect("live native A birth");
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.set_initial_thread_id(thread_id);
+        for (address, ordinal, name) in [
+            (terminate_trap, ORD_TERMINATE_THREAD, "TerminateThread"),
+            (create_trap, ORD_CREATE_WINDOW_EX_W, "CreateWindowExW"),
+        ] {
+            cpu.import_traps.insert(ImportTrap {
+                address,
+                module_kind: ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(ordinal),
+                name: Some(name.to_owned()),
+                iat_va: 0,
+            });
+        }
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let stack_pointer = cpu.stack_top.expect("fixture stack") - 0x100;
+        let stack_args = [4u32, 8, 40, 24, 0, 0, 0, 0]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+        write_guest_fixture_stack_bytes(&cpu, &mut kernel, stack_pointer + 16, &stack_args);
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = a_handle;
+        regs.regs[5] = 0x71;
+        regs.regs[29] = stack_pointer;
+        cpu.saved_context = Some(super::SavedCpuContext {
+            pc: cpu.entry.expect("fixture entry"),
+            regs,
+        });
+        stamp_synthetic_saved_context(&mut cpu, &kernel);
+        assert_eq!(cpu.saved_context_thread_birth, Some(a_birth));
+        cpu.running_guest_thread = Some((thread_id, a_handle));
+        let before_windows: Vec<_> = kernel
+            .gwe
+            .windows_snapshot()
+            .iter()
+            .map(|window| (window.hwnd, window.thread_id, window.process_id))
+            .collect();
+
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        let imports: Vec<_> = cpu
+            .last_debug_snapshot()
+            .expect("native attempt must publish import evidence")
+            .last_imports
+            .iter()
+            .filter_map(|import| import.ordinal)
+            .collect();
+        assert!(
+            imports
+                .windows(2)
+                .any(|pair| pair == [ORD_TERMINATE_THREAD, ORD_CREATE_WINDOW_EX_W]),
+            "fixture must execute both native imports in order: {imports:?}; result={:?}",
+            attempt.result
+        );
+        assert!(!kernel.is_live_thread_birth(a_birth));
+        let after_windows: Vec<_> = kernel
+            .gwe
+            .windows_snapshot()
+            .iter()
+            .map(|window| (window.hwnd, window.thread_id, window.process_id))
+            .collect();
+        assert_eq!(
+            after_windows, before_windows,
+            "CreateWindowExW published a window after its native caller A exited in the same slice"
+        );
+        assert!(
+            matches!(attempt.result, Err(Error::Backend(_))),
+            "stale native window creation must end in a backend error: {:?}",
+            attempt.result
+        );
+        Ok(())
+    }
+
     #[test]
     fn native_thread_timer_import_requires_exact_birth_only_without_hwnd() -> crate::Result<()> {
         use crate::ce::coredll_ordinals::{ORD_KILL_TIMER, ORD_SET_TIMER};
