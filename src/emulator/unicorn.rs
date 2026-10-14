@@ -988,10 +988,12 @@ enum BlockedWaitKind {
         buffer: u32,
         requested: u32,
         transferred_ptr: u32,
+        owner_birth: Option<crate::ce::object::ProcessBirthKey>,
     },
     SerialCommEvent {
         handle: u32,
         event_ptr: u32,
+        owner_birth: Option<crate::ce::object::ProcessBirthKey>,
     },
     WinsockRead {
         socket: u32,
@@ -8327,6 +8329,13 @@ impl UnicornMips {
                 unsafe { &mut *kernel_ptr },
                 uc,
                 &sealed_host_write_guard_timeslice_hook,
+                native_owner_birth.map(|owner| UnicornPrivateVmMapping {
+                    mapped: mapped_kernel_memory_timeslice_hook.as_ref(),
+                    owner,
+                    native_pins: &native_mapping_pins_timeslice_hook,
+                    active_guards: active_private_page_guards_timeslice_hook.as_ref(),
+                    terminal_error: immediate_process_sync_error_timeslice_hook.as_ref(),
+                }),
                 active_thread_id,
                 &current_thread_id_timeslice_hook,
                 &blocked_wait_threads_timeslice_hook,
@@ -9718,6 +9727,13 @@ impl UnicornMips {
                         unsafe { &mut *kernel_ptr },
                         uc,
                         &sealed_host_write_guard_import,
+                        native_owner_birth.map(|owner| UnicornPrivateVmMapping {
+                            mapped: mapped_kernel_memory_hook.as_ref(),
+                            owner,
+                            native_pins: &native_mapping_pins_import,
+                            active_guards: active_private_page_guards_import.as_ref(),
+                            terminal_error: immediate_process_sync_error_hook.as_ref(),
+                        }),
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9736,6 +9752,13 @@ impl UnicornMips {
                         unsafe { &mut *kernel_ptr },
                         uc,
                         &sealed_host_write_guard_import,
+                        native_owner_birth.map(|owner| UnicornPrivateVmMapping {
+                            mapped: mapped_kernel_memory_hook.as_ref(),
+                            owner,
+                            native_pins: &native_mapping_pins_import,
+                            active_guards: active_private_page_guards_import.as_ref(),
+                            terminal_error: immediate_process_sync_error_hook.as_ref(),
+                        }),
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -10501,10 +10524,17 @@ impl UnicornMips {
                     return;
                 }
                 if pending_wndproc_returns_hook.borrow().is_empty() {
-                    if try_resume_blocked_wait(
+                    if try_resume_blocked_wait_with_native_mapping(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
                         &sealed_host_write_guard_import,
+                        native_owner_birth.map(|owner| UnicornPrivateVmMapping {
+                            mapped: mapped_kernel_memory_hook.as_ref(),
+                            owner,
+                            native_pins: &native_mapping_pins_import,
+                            active_guards: active_private_page_guards_import.as_ref(),
+                            terminal_error: immediate_process_sync_error_hook.as_ref(),
+                        }),
                         active_thread_id,
                         &current_thread_id_hook,
                         &blocked_wait_threads_hook,
@@ -10859,6 +10889,13 @@ impl UnicornMips {
                 kernel,
                 &mut uc,
                 &sealed_host_write_guard,
+                native_owner_birth.map(|owner| UnicornPrivateVmMapping {
+                    mapped: mapped_kernel_memory.as_ref(),
+                    owner,
+                    native_pins: &native_mapping_pins,
+                    active_guards: active_private_page_guards.as_ref(),
+                    terminal_error: immediate_process_sync_error.as_ref(),
+                }),
                 active_thread_id,
                 &current_thread_id,
                 &blocked_wait_threads,
@@ -22508,6 +22545,7 @@ fn try_block_serial_read_file<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -22546,6 +22584,7 @@ fn try_block_serial_read_file<D>(
             kernel,
             uc,
             sealed_host_write_guard,
+            private_vm_mapping,
             args,
             thread_id,
             blocked_waits,
@@ -22568,6 +22607,7 @@ fn try_block_serial_read_file<D>(
         kernel,
         uc,
         sealed_host_write_guard,
+        private_vm_mapping,
         args,
         thread_id,
         blocked_waits,
@@ -22588,6 +22628,7 @@ fn block_serial_read_file<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
     _args: &[u32],
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
@@ -22610,6 +22651,7 @@ fn block_serial_read_file<D>(
         buffer,
         requested,
         transferred_ptr,
+        owner_birth: kernel.current_process_birth_key(),
     };
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
@@ -22681,10 +22723,11 @@ fn block_serial_read_file<D>(
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
-        if try_resume_blocked_wait(
+        if try_resume_blocked_wait_with_native_mapping(
             kernel,
             uc,
             sealed_host_write_guard,
+            private_vm_mapping,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -22709,8 +22752,13 @@ fn block_serial_read_file<D>(
             };
             let blocked = blocked_waits.borrow_mut().remove(index);
             let _ = kernel.remove_blocked_waiter(blocked.wait_id);
-            let result =
-                complete_blocked_serial_read(&blocked, kernel, uc, sealed_host_write_guard);
+            let result = complete_blocked_serial_read(
+                &blocked,
+                kernel,
+                uc,
+                sealed_host_write_guard,
+                private_vm_mapping,
+            );
             restore_mips_gprs(uc, &blocked.regs);
             let writes = [
                 uc.reg_write(RegisterMIPS::V0, u64::from(result)),
@@ -22734,6 +22782,7 @@ fn try_block_wait_comm_event<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -22763,6 +22812,7 @@ fn try_block_wait_comm_event<D>(
         kernel,
         uc,
         sealed_host_write_guard,
+        private_vm_mapping,
         thread_id,
         blocked_waits,
         pending_returns,
@@ -22779,6 +22829,7 @@ fn block_wait_comm_event<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
     thread_id: u32,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
@@ -22793,7 +22844,11 @@ fn block_wait_comm_event<D>(
     let timeout_ms = crate::ce::timer::INFINITE;
     kernel.record_blocked_single_wait(timeout_ms);
     let wait_started_ms = kernel.timers.tick_count();
-    let kind = BlockedWaitKind::SerialCommEvent { handle, event_ptr };
+    let kind = BlockedWaitKind::SerialCommEvent {
+        handle,
+        event_ptr,
+        owner_birth: kernel.current_process_birth_key(),
+    };
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
@@ -22864,10 +22919,11 @@ fn block_wait_comm_event<D>(
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
-        if try_resume_blocked_wait(
+        if try_resume_blocked_wait_with_native_mapping(
             kernel,
             uc,
             sealed_host_write_guard,
+            private_vm_mapping,
             thread_id,
             current_thread_id,
             blocked_waits,
@@ -23327,10 +23383,37 @@ fn try_resume_blocked_wait<D>(
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
+    try_resume_blocked_wait_with_native_mapping(
+        kernel,
+        uc,
+        sealed_host_write_guard,
+        None,
+        active_thread_id,
+        current_thread_id,
+        blocked_waits,
+        suspended_thread,
+        running_thread,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_resume_blocked_wait_with_native_mapping<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
+    active_thread_id: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
     try_resume_blocked_wait_with_active_pc(
         kernel,
         uc,
         sealed_host_write_guard,
+        private_vm_mapping,
         active_thread_id,
         current_thread_id,
         blocked_waits,
@@ -23348,6 +23431,7 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
     active_thread_id: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
@@ -23380,10 +23464,25 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     let now_ms = kernel.timers.tick_count();
     let Some(ready_wait_id) =
         kernel.select_ready_blocked_waiter(active_thread_id, now_ms, |blocked, kernel| {
-            !matches!(
-                blocked.kind,
-                crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage { .. }
-            ) && scheduler_blocked_wait_is_ready(blocked, kernel)
+            let needs_native_output = blocked_waits.borrow().iter().any(|candidate| {
+                candidate.wait_id == blocked.id
+                    && matches!(
+                        candidate.kind,
+                        BlockedWaitKind::SerialRead {
+                            owner_birth: Some(_),
+                            ..
+                        } | BlockedWaitKind::SerialCommEvent {
+                            owner_birth: Some(_),
+                            ..
+                        }
+                    )
+            });
+            (!needs_native_output || private_vm_mapping.is_some())
+                && !matches!(
+                    blocked.kind,
+                    crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage { .. }
+                )
+                && scheduler_blocked_wait_is_ready(blocked, kernel)
         })
     else {
         return false;
@@ -23450,11 +23549,29 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         consume_blocked_msg_wait_input(&blocked, kernel);
         crate::ce::timer::WAIT_OBJECT_0 + blocked.wait_handles.len() as u32
     } else if serial_read_ready {
-        complete_blocked_serial_read(&blocked, kernel, uc, sealed_host_write_guard)
+        complete_blocked_serial_read(
+            &blocked,
+            kernel,
+            uc,
+            sealed_host_write_guard,
+            private_vm_mapping,
+        )
     } else if serial_read_timed_out {
-        complete_blocked_serial_read(&blocked, kernel, uc, sealed_host_write_guard)
+        complete_blocked_serial_read(
+            &blocked,
+            kernel,
+            uc,
+            sealed_host_write_guard,
+            private_vm_mapping,
+        )
     } else if serial_comm_event_ready {
-        complete_blocked_serial_comm_event(&blocked, kernel, uc, sealed_host_write_guard)
+        complete_blocked_serial_comm_event(
+            &blocked,
+            kernel,
+            uc,
+            sealed_host_write_guard,
+            private_vm_mapping,
+        )
     } else if winsock_read_ready {
         complete_blocked_winsock_read(&blocked, kernel, uc, sealed_host_write_guard)
     } else if winsock_read_timed_out {
@@ -24039,14 +24156,33 @@ fn complete_blocked_serial_comm_event<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
 ) -> u32 {
-    let BlockedWaitKind::SerialCommEvent { handle, event_ptr } = blocked.kind else {
+    let BlockedWaitKind::SerialCommEvent {
+        handle,
+        event_ptr,
+        owner_birth,
+    } = blocked.kind
+    else {
         return 0;
     };
-    if sealed_host_write_guard
-        .check_write(u64::from(event_ptr), std::mem::size_of::<u32>())
-        .is_err()
+    let mut memory = UnicornGuestMemory::new(uc)
+        .with_sealed_host_write_guard(sealed_host_write_guard)
+        .with_optional_private_vm_mapping(private_vm_mapping);
+    if owner_birth != kernel.current_process_birth_key()
+        || owner_birth.is_some() && owner_birth != private_vm_mapping.map(|mapping| mapping.owner)
     {
+        memory.note_private_vm_transaction_failure(Error::Backend(
+            "blocked serial comm-event process birth changed before completion".to_owned(),
+        ));
+        return 0;
+    }
+    if let Err(err) = prepare_blocked_host_output(&mut memory, kernel, event_ptr, 4) {
+        if matches!(err, Error::Backend(_)) {
+            memory.note_private_vm_transaction_failure(Error::Backend(format!(
+                "blocked serial comm-event output preparation failed: {err}"
+            )));
+        }
         return 0;
     }
     let event = if kernel.take_comm_event_mask_changed_wait(blocked.wait_id) {
@@ -24054,14 +24190,7 @@ fn complete_blocked_serial_comm_event<D>(
     } else {
         kernel.serial_comm_event_value(handle)
     };
-    if checked_host_write(
-        uc,
-        sealed_host_write_guard,
-        u64::from(event_ptr),
-        &event.to_le_bytes(),
-    )
-    .is_err()
-    {
+    if memory.write_u32(event_ptr, event).is_err() {
         kernel.threads.set_last_error(
             blocked.thread_id,
             crate::ce::thread::ERROR_INVALID_PARAMETER,
@@ -24078,22 +24207,76 @@ fn complete_blocked_serial_read<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
+    private_vm_mapping: Option<UnicornPrivateVmMapping<'_>>,
 ) -> u32 {
     let BlockedWaitKind::SerialRead {
         handle,
         buffer,
         requested,
         transferred_ptr,
+        owner_birth,
     } = blocked.kind
     else {
         return crate::ce::timer::WAIT_FAILED;
     };
 
-    let mut memory =
-        UnicornGuestMemory::new(uc).with_sealed_host_write_guard(sealed_host_write_guard);
+    let mut memory = UnicornGuestMemory::new(uc)
+        .with_sealed_host_write_guard(sealed_host_write_guard)
+        .with_optional_private_vm_mapping(private_vm_mapping);
+    if owner_birth != kernel.current_process_birth_key()
+        || owner_birth.is_some() && owner_birth != private_vm_mapping.map(|mapping| mapping.owner)
+    {
+        memory.note_private_vm_transaction_failure(Error::Backend(
+            "blocked serial read process birth changed before RX consumption".to_owned(),
+        ));
+        return 0;
+    }
+
+    // `read_file_into` removes serial RX before invoking its writer. First
+    // pull remote bytes into the non-consuming device queue, then prepare at
+    // most the bytes already queued. A concurrent later arrival stays queued
+    // for the next ReadFile instead of outrunning the prepared stack span.
+    kernel.poll_host_serial_to_handle(handle, requested as usize);
+    kernel.drain_remote_serial_to_handle(handle, requested as usize);
+    let ready = match kernel.handles.get(handle) {
+        Ok(crate::ce::object::KernelObject::Device(device)) if device.is_serial() => {
+            requested.min(device.rx_len().min(u32::MAX as usize) as u32)
+        }
+        _ => {
+            kernel
+                .threads
+                .set_last_error(blocked.thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+            return 0;
+        }
+    };
+    let preflight = (|| -> Result<()> {
+        if transferred_ptr != 0 {
+            prepare_blocked_host_output(&mut memory, kernel, transferred_ptr, 4)?;
+        }
+        if ready != 0 {
+            prepare_blocked_host_output(&mut memory, kernel, buffer, ready)?;
+        }
+        Ok(())
+    })();
+    if let Err(err) = preflight {
+        if matches!(err, Error::Backend(_)) {
+            memory.note_private_vm_transaction_failure(Error::Backend(format!(
+                "blocked serial read output preparation failed before RX consumption: {err}"
+            )));
+        }
+        kernel.threads.set_last_error(
+            blocked.thread_id,
+            if matches!(err, Error::Backend(_)) {
+                crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY
+            } else {
+                crate::ce::thread::ERROR_INVALID_PARAMETER
+            },
+        );
+        return 0;
+    }
     let mut cursor = buffer;
     let mut write_failed = false;
-    let transferred = match kernel.read_file_into(handle, requested, |bytes| {
+    let transferred = match kernel.read_file_into(handle, ready, |bytes| {
         if memory.write_bytes(cursor, bytes).is_err() {
             write_failed = true;
             return Err(Error::InvalidArgument(
@@ -24128,6 +24311,26 @@ fn complete_blocked_serial_read<D>(
     }
     kernel.threads.set_last_error(blocked.thread_id, 0);
     1
+}
+
+#[cfg(feature = "unicorn")]
+fn prepare_blocked_host_output<D>(
+    memory: &mut UnicornGuestMemory<'_, '_, D>,
+    kernel: &mut CeKernel,
+    addr: u32,
+    len: u32,
+) -> Result<()> {
+    if len == 0 {
+        return Ok(());
+    }
+    memory.prepare_host_write(kernel, addr, len)?;
+    if memory.private_vm_mapping.is_none() {
+        memory
+            .sealed_host_write_guard
+            .check_write(u64::from(addr), len as usize)?;
+        validate_heap_destination(memory.uc, None, addr, len, false)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "unicorn")]
@@ -24406,7 +24609,11 @@ mod wait_scheduler_tests {
             thread_id: 51,
             thread_handle: 0x351,
             wait_handles: Vec::new(),
-            kind: BlockedWaitKind::SerialCommEvent { handle, event_ptr },
+            kind: BlockedWaitKind::SerialCommEvent {
+                handle,
+                event_ptr,
+                owner_birth: None,
+            },
             wait_started_ms: 0,
             timeout_ms: crate::ce::timer::INFINITE,
             regs: super::MipsGuestContext::zero(),
@@ -24587,7 +24794,7 @@ mod wait_scheduler_tests {
                 &blocked,
                 &mut kernel,
                 &mut uc,
-                &super::SealedHostWriteGuard::default()
+                &super::SealedHostWriteGuard::default(),
             ),
             4
         );
@@ -25049,7 +25256,7 @@ mod wait_scheduler_tests {
                 &blocked,
                 &mut kernel,
                 &mut uc,
-                &super::SealedHostWriteGuard::default()
+                &super::SealedHostWriteGuard::default(),
             ),
             4
         );
@@ -27297,7 +27504,8 @@ mod wait_scheduler_tests {
                 &blocked,
                 &mut kernel,
                 &mut uc,
-                &super::SealedHostWriteGuard::default()
+                &super::SealedHostWriteGuard::default(),
+                None,
             ),
             1
         );
@@ -27342,7 +27550,8 @@ mod wait_scheduler_tests {
                 &blocked,
                 &mut kernel,
                 &mut uc,
-                &super::SealedHostWriteGuard::default()
+                &super::SealedHostWriteGuard::default(),
+                None,
             ),
             1
         );
@@ -27393,13 +27602,14 @@ mod wait_scheduler_tests {
         blocked.kind = BlockedWaitKind::SerialCommEvent {
             handle: 0,
             event_ptr: output_ptr,
+            owner_birth: None,
         };
         let comm_guard = super::SealedHostWriteGuard {
             ranges: std::rc::Rc::new(vec![(u64::from(output_ptr), u64::from(output_ptr) + 4)]),
             violation: std::rc::Rc::new(std::cell::RefCell::new(None)),
         };
         assert_eq!(
-            complete_blocked_serial_comm_event(&blocked, &mut kernel, &mut uc, &comm_guard),
+            complete_blocked_serial_comm_event(&blocked, &mut kernel, &mut uc, &comm_guard, None),
             0
         );
         assert!(comm_guard.poison_error().is_some());
@@ -27467,6 +27677,7 @@ mod wait_scheduler_tests {
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
+            None,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_WAIT_COMM_EVENT),
             &[com, event_ptr],
@@ -27491,7 +27702,8 @@ mod wait_scheduler_tests {
             blocked.kind,
             BlockedWaitKind::SerialCommEvent {
                 handle,
-                event_ptr: actual_event_ptr
+                event_ptr: actual_event_ptr,
+                ..
             } if handle == com && actual_event_ptr == event_ptr
         ));
         assert!(kernel.blocked_waiter(blocked.wait_id).is_some());
@@ -27567,6 +27779,7 @@ mod wait_scheduler_tests {
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
+            None,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_WAIT_COMM_EVENT),
             &[com, event_ptr],
@@ -27650,6 +27863,7 @@ mod wait_scheduler_tests {
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
+            None,
             &[],
             thread_id,
             &blocked_waits,
@@ -27759,6 +27973,7 @@ mod wait_scheduler_tests {
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
+            None,
             &[],
             active_thread_id,
             &blocked_waits,
@@ -29560,6 +29775,7 @@ mod wait_scheduler_tests {
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
+            None,
             active_thread_id,
             &current_thread_id,
             &blocked_waits,
@@ -29666,6 +29882,7 @@ mod wait_scheduler_tests {
             &mut kernel,
             &mut uc,
             &super::SealedHostWriteGuard::default(),
+            None,
             active_thread_id,
             &current_thread_id,
             &blocked_waits,
@@ -56996,6 +57213,7 @@ mod unicorn_tests {
                 &mut self.kernel.borrow_mut(),
                 uc,
                 &super::SealedHostWriteGuard::default(),
+                None,
                 1,
                 &self.current_thread_id,
                 &self.blocked_waits,
@@ -69035,6 +69253,212 @@ mod unicorn_tests {
         assert_eq!(
             fresh.reg_read(RegisterMIPS::T4).unwrap() as u32,
             0xa5a5_a5a5
+        );
+        drop(fresh);
+        drop(fresh_guards);
+        drop(fresh_ledger);
+        drop(fresh_pins);
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_serial_nmea_writes_two_untouched_stack_pages_and_survives_fresh_owner()
+    -> crate::Result<()> {
+        use crate::ce::object::KernelObject;
+
+        const CODE: u32 = 0x0001_0000;
+        const STACK: u32 = 0x7000_0000;
+        const NMEA: &[u8] = b"$GPRMC,123519,A*00\r\n";
+        let buffer = STACK + 0x0ff8;
+        let transferred_ptr = STACK + 0x1018;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.map_region(
+            CODE,
+            0x1000,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+            "blocked-serial-stack-code",
+        )?;
+        cpu.map_region(
+            super::GUEST_HEAP_ARENA_BASE,
+            super::GUEST_HEAP_ARENA_SIZE,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "ce-heap-arena",
+        )?;
+        cpu.map_region(
+            STACK,
+            0x3000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "guest-stack",
+        )?;
+        let mut kernel = phase1_kernel("blocked-serial-stack.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let ranges = super::reserve_fixed_system_slabs(
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &mut kernel,
+            Some(owner),
+        )?;
+        let budget_before = kernel.memory.private_commit_available_bytes();
+        let serial = kernel.create_file_w(
+            "COM7:",
+            crate::ce::file::GENERIC_READ | crate::ce::file::GENERIC_WRITE,
+            crate::ce::file::CREATE_ALWAYS,
+        )?;
+        let Ok(KernelObject::Device(device)) = kernel.handles.get_mut(serial) else {
+            panic!("serial device handle");
+        };
+        device.enqueue_rx(NMEA);
+        let blocked = super::BlockedWaitThread {
+            wait_id: 1,
+            thread_id: 1,
+            thread_handle: crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            wait_handles: Vec::new(),
+            kind: super::BlockedWaitKind::SerialRead {
+                handle: serial,
+                buffer,
+                requested: NMEA.len() as u32,
+                transferred_ptr,
+                owner_birth: Some(owner),
+            },
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: super::MipsGuestContext::zero(),
+            return_pc: CODE,
+        };
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mapped = RefCell::new(super::KernelMemoryMappings::new(&cpu.mapped_blobs));
+        {
+            let mut ledger = mapped.borrow_mut();
+            ledger.system_slab_owner = Some(owner);
+            ledger.system_slab_ranges = ranges.clone();
+            ledger.ranges =
+                super::reconcile_persistent_native_memory_with_private_and_system_slabs(
+                    &mut uc,
+                    &cpu.memory,
+                    &cpu.mapped_blobs,
+                    &HashSet::new(),
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
+                    &ranges,
+                )?;
+        }
+        assert_eq!(super::native_page_perms(&uc, STACK)?, None);
+        assert_eq!(super::native_page_perms(&uc, STACK + 0x1000)?, None);
+        let pins = super::NativeMappingPins::default();
+        let guards = RefCell::new(BTreeMap::new());
+        let terminal_error = RefCell::new(None);
+        // No unqualified adapter may consume RX for a real process birth.
+        assert_eq!(
+            super::complete_blocked_serial_read(
+                &blocked,
+                &mut kernel,
+                &mut uc,
+                &super::SealedHostWriteGuard::default(),
+                None,
+            ),
+            0
+        );
+        assert_eq!(
+            kernel
+                .handles
+                .get(serial)
+                .ok()
+                .and_then(|object| match object {
+                    KernelObject::Device(device) => Some(device.rx_len()),
+                    _ => None,
+                }),
+            Some(NMEA.len())
+        );
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget_before
+        );
+        assert_eq!(
+            super::complete_blocked_serial_read(
+                &blocked,
+                &mut kernel,
+                &mut uc,
+                &super::SealedHostWriteGuard::default(),
+                Some(super::UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                }),
+            ),
+            1
+        );
+        assert!(terminal_error.borrow().is_none());
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget_before - 2 * 0x1000
+        );
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(owner, STACK + 0x2000)
+                .is_none()
+        );
+        assert!(cpu.mapped_blobs.is_empty());
+        drop(uc);
+        drop(guards);
+        drop(mapped);
+        drop(pins);
+
+        let mut fresh = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let fresh_pins = super::NativeMappingPins::default();
+        let fresh_guards = RefCell::new(BTreeMap::new());
+        let mut fresh_ledger = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+        fresh_ledger.system_slab_owner = Some(owner);
+        fresh_ledger.system_slab_ranges = ranges.clone();
+        fresh_ledger.ranges =
+            super::reconcile_persistent_native_memory_with_private_and_system_slabs(
+                &mut fresh,
+                &cpu.memory,
+                &cpu.mapped_blobs,
+                &HashSet::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &ranges,
+            )?;
+        super::map_private_slab_pages(
+            &mut fresh,
+            &kernel,
+            &mut fresh_ledger,
+            owner,
+            &fresh_pins,
+            Some(&fresh_guards),
+        )?;
+        let code = [
+            0x8d0a_0ff8u32, // lw t2,0xff8(t0): first output page
+            0x8d0b_1000,    // lw t3,0x1000(t0): second output page
+            0x8d0c_1018,    // lw t4,0x1018(t0): transfer count
+        ];
+        fresh
+            .mem_write(
+                u64::from(CODE),
+                &code
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        fresh.reg_write(RegisterMIPS::T0, u64::from(STACK)).unwrap();
+        fresh
+            .emu_start(u64::from(CODE), u64::from(CODE + 12), 0, 0)
+            .unwrap();
+        assert_eq!(
+            fresh.reg_read(RegisterMIPS::T2).unwrap() as u32,
+            u32::from_le_bytes(NMEA[0..4].try_into().unwrap())
+        );
+        assert_eq!(
+            fresh.reg_read(RegisterMIPS::T3).unwrap() as u32,
+            u32::from_le_bytes(NMEA[8..12].try_into().unwrap())
+        );
+        assert_eq!(
+            fresh.reg_read(RegisterMIPS::T4).unwrap() as u32,
+            NMEA.len() as u32
         );
         drop(fresh);
         drop(fresh_guards);
