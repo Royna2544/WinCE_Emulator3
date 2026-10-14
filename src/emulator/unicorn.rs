@@ -52124,6 +52124,213 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         self.private_vm_mapping.map(|mapping| mapping.owner)
     }
 
+    fn prepare_host_write(&mut self, kernel: &mut CeKernel, addr: u32, len: u32) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+        let Some(mapping) = self.private_vm_mapping else {
+            // Compatibility adapters without a native owner cannot publish a
+            // fixed stack page. Their ordinary write still checks the guest VA.
+            return Ok(());
+        };
+        let end = addr
+            .checked_add(len)
+            .ok_or_else(|| Error::InvalidArgument("host output range wraps guest VA".to_owned()))?;
+        self.sealed_host_write_guard
+            .check_write(u64::from(addr), len as usize)?;
+        if kernel.current_process_birth_key() != Some(mapping.owner)
+            || kernel.handles.process_birth_key(mapping.owner.process_id()) != Some(mapping.owner)
+        {
+            return Err(Error::Backend(
+                "host output owner differs from selected process birth".to_owned(),
+            ));
+        }
+        let first = addr & !0xfff;
+        let last = (end - 1) & !0xfff;
+        let mut existing = Vec::new();
+        let mut missing_stack = Vec::new();
+        let mut page = first;
+        loop {
+            let (is_system_slab, recorded, slab_owner) = {
+                let mapped = mapping.mapped.borrow();
+                (
+                    overlaps_fixed_system_slab(&mapped, page, 0x1000),
+                    mapped.private_pages.get(&page).copied(),
+                    mapped.system_slab_owner,
+                )
+            };
+            let native_perms = native_page_perms(self.uc, page)?;
+            if is_system_slab {
+                if slab_owner != Some(mapping.owner) {
+                    return Err(Error::Backend(
+                        "host output fixed slab has another native owner".to_owned(),
+                    ));
+                }
+                let allocation = kernel
+                    .memory
+                    .virtual_allocations_visible_to(mapping.owner)
+                    .find(|allocation| {
+                        page >= allocation.base
+                            && allocation
+                                .base
+                                .checked_add(allocation.size)
+                                .is_some_and(|end| page < end)
+                    })
+                    .ok_or_else(|| {
+                        Error::Backend(format!(
+                            "host output fixed page 0x{page:08x} has no owner reservation"
+                        ))
+                    })?;
+                if allocation.backing != VirtualAllocationBacking::StablePrivateSlab
+                    || !matches!(
+                        allocation.source,
+                        VirtualAllocationSource::ProcessHeapArena
+                            | VirtualAllocationSource::ThreadStack
+                    )
+                {
+                    return Err(Error::Backend(format!(
+                        "host output fixed page 0x{page:08x} has another byte authority"
+                    )));
+                }
+                if self.heap_mapping.is_some_and(|heap| {
+                    // SAFETY: sequential import dispatch owns this vector.
+                    unsafe { &*heap.mapped_blobs }.iter().any(|blob| {
+                        let blob_start = u64::from(blob.base);
+                        let blob_end = blob_start + blob.bytes.len() as u64;
+                        u64::from(page) < blob_end && blob_start < u64::from(page) + 0x1000
+                    })
+                }) {
+                    return Err(Error::Backend(format!(
+                        "host output fixed page 0x{page:08x} overlaps a byte blob"
+                    )));
+                }
+                match kernel.memory.private_page_pin(mapping.owner, page) {
+                    Some(pin) => {
+                        if let Some(record) = recorded {
+                            let needed = unicorn_engine::Prot::WRITE.0 as u32;
+                            if record.identity != pin.identity()
+                                || record.host_address != pin.native_ptr() as usize
+                                || record.perms & needed != needed
+                                || native_perms != Some(record.perms)
+                            {
+                                return Err(Error::Backend(format!(
+                                    "host output fixed page 0x{page:08x} differs from native ledger"
+                                )));
+                            }
+                        } else if native_perms.is_some() {
+                            return Err(Error::Backend(format!(
+                                "host output fixed page 0x{page:08x} has an unowned native map"
+                            )));
+                        }
+                        existing.push(pin);
+                    }
+                    None if allocation.source == VirtualAllocationSource::ThreadStack => {
+                        if recorded.is_some() || native_perms.is_some() {
+                            return Err(Error::Backend(format!(
+                                "untouched stack page 0x{page:08x} already has native bytes"
+                            )));
+                        }
+                        missing_stack.push(page);
+                    }
+                    None => {
+                        return Err(Error::InvalidArgument(format!(
+                            "host output heap page 0x{page:08x} was not committed by HeapAlloc"
+                        )));
+                    }
+                }
+            } else {
+                let needed = unicorn_engine::Prot::WRITE.0 as u32;
+                if native_perms.is_none_or(|perms| perms & needed != needed)
+                    || recorded.is_some_and(|record| record.identity.owner() != mapping.owner)
+                {
+                    return Err(Error::InvalidArgument(format!(
+                        "host output page 0x{page:08x} is not writable guest memory"
+                    )));
+                }
+            }
+            if page == last {
+                break;
+            }
+            page = page.checked_add(0x1000).ok_or_else(|| {
+                Error::InvalidArgument("host output page wraps guest VA".to_owned())
+            })?;
+        }
+        let prepared = if let (Some(&first), Some(&last)) =
+            (missing_stack.first(), missing_stack.last())
+        {
+            let span_len = last
+                .checked_add(0x1000)
+                .and_then(|end| end.checked_sub(first))
+                .ok_or_else(|| Error::InvalidArgument("host stack span wraps VA".to_owned()))?;
+            let token = kernel
+                .memory
+                .prepare_fixed_private_span(mapping.owner, first, span_len)
+                .ok_or_else(|| {
+                    Error::Backend(format!(
+                        "host output stack span 0x{first:08x}+0x{span_len:x} exceeds guest RAM budget or reservation"
+                    ))
+                })?;
+            if token.new_page_pins().len() != missing_stack.len()
+                || !token
+                    .new_page_pins()
+                    .iter()
+                    .zip(&missing_stack)
+                    .all(|(pin, page)| pin.identity().page_base() == *page)
+            {
+                return Err(Error::Backend(
+                    "host stack batch proposal differs from preflighted pages".to_owned(),
+                ));
+            }
+            Some(token)
+        } else {
+            None
+        };
+        let map_result = {
+            let mut mapped = mapping.mapped.borrow_mut();
+            existing.into_iter().try_for_each(|pin| {
+                map_private_slab_page(
+                    self.uc,
+                    kernel,
+                    &mut mapped,
+                    mapping.owner,
+                    pin,
+                    mapping.native_pins,
+                    Some(mapping.active_guards),
+                )
+            })?;
+            if let Some(prepared) = prepared.as_ref() {
+                for pin in prepared.new_page_pins() {
+                    map_prepared_private_slab_page(
+                        self.uc,
+                        &mut mapped,
+                        prepared,
+                        pin,
+                        mapping.native_pins,
+                        mapping.active_guards,
+                    )?;
+                }
+            }
+            Ok::<(), Error>(())
+        };
+        if let Err(err) = map_result {
+            self.note_private_vm_transaction_failure(Error::Backend(format!(
+                "host output stack native map failed: {err}"
+            )));
+            return Err(err);
+        }
+        if let Some(prepared) = prepared {
+            let expected = prepared.result_ptr();
+            if kernel.memory.commit_prepared_private_vm(prepared) != Some(expected) {
+                let err = Error::Backend(format!(
+                    "host output stack page 0x{expected:08x} changed before publication"
+                ));
+                self.note_private_vm_transaction_failure(Error::Backend(format!("{err}")));
+                return Err(err);
+            }
+        }
+        self.validate_private_host_access(addr, len as usize, unicorn_engine::Prot::WRITE.0 as u32)
+    }
+
     fn ensure_heap_mapped_with_kernel(
         &mut self,
         kernel: &CeKernel,
@@ -68659,6 +68866,180 @@ mod unicorn_tests {
             .is_err()
         );
         assert!(fallback_blobs.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn peek_message_host_import_materializes_stack_and_batches_cross_page_output()
+    -> crate::Result<()> {
+        use crate::ce::coredll::{
+            CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue,
+        };
+
+        const CODE: u32 = 0x0001_0000;
+        const STACK: u32 = 0x7000_0000;
+        const MSG: u32 = crate::ce::gwe::WM_USER + 7;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.map_region(
+            CODE,
+            0x1000,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+            "stack-host-output-code",
+        )?;
+        cpu.map_region(
+            super::GUEST_HEAP_ARENA_BASE,
+            super::GUEST_HEAP_ARENA_SIZE,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "ce-heap-arena",
+        )?;
+        cpu.map_region(
+            STACK,
+            0x4000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "guest-stack",
+        )?;
+        let mut kernel = phase1_kernel("stack-host-peek-message.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let ranges = super::reserve_fixed_system_slabs(
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &mut kernel,
+            Some(owner),
+        )?;
+        let budget_before = kernel.memory.private_commit_available_bytes();
+        assert!(kernel.post_thread_message_w(1, MSG, 0x12, 0x34));
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mapped = RefCell::new(super::KernelMemoryMappings::new(&cpu.mapped_blobs));
+        {
+            let mut ledger = mapped.borrow_mut();
+            ledger.system_slab_owner = Some(owner);
+            ledger.system_slab_ranges = ranges.clone();
+            ledger.ranges =
+                super::reconcile_persistent_native_memory_with_private_and_system_slabs(
+                    &mut uc,
+                    &cpu.memory,
+                    &cpu.mapped_blobs,
+                    &HashSet::new(),
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
+                    &ranges,
+                )?;
+        }
+        assert_eq!(super::native_page_perms(&uc, STACK)?, None);
+        let pins = super::NativeMappingPins::default();
+        let guards = RefCell::new(BTreeMap::new());
+        let terminal_error = RefCell::new(None);
+        let mut blobs = Vec::new();
+        let mut memory =
+            unsafe { super::UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs) }
+                .with_private_vm_mapping(super::UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                });
+        let result = CoredllExportTable::default().dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            1,
+            crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W,
+            [STACK, 0, MSG, MSG, 0],
+        );
+        assert!(matches!(
+            result,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        assert!(terminal_error.borrow().is_none());
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget_before - 0x1000,
+            "one 4-KiB stack page is the entire GetSystemMemoryStatus available drop"
+        );
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(owner, STACK + 0x1000)
+                .is_none()
+        );
+        memory.prepare_host_write(&mut kernel, STACK + 0x1ff0, 32)?;
+        memory.write_bytes(STACK + 0x1ff0, &[0xa5; 32])?;
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget_before - 3 * 0x1000,
+            "one cross-page output commits two more pages atomically"
+        );
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(owner, STACK + 0x3000)
+                .is_none()
+        );
+        assert!(blobs.is_empty());
+        drop(memory);
+        drop(uc); // First owner closes before its raw-pointer pin registry.
+        drop(guards);
+        drop(mapped);
+        drop(pins);
+
+        let mut fresh = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let fresh_pins = super::NativeMappingPins::default();
+        let fresh_guards = RefCell::new(BTreeMap::new());
+        let mut fresh_ledger = super::KernelMemoryMappings::new(&blobs);
+        fresh_ledger.system_slab_owner = Some(owner);
+        fresh_ledger.system_slab_ranges = ranges.clone();
+        fresh_ledger.ranges =
+            super::reconcile_persistent_native_memory_with_private_and_system_slabs(
+                &mut fresh,
+                &cpu.memory,
+                &blobs,
+                &HashSet::new(),
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &ranges,
+            )?;
+        super::map_private_slab_pages(
+            &mut fresh,
+            &kernel,
+            &mut fresh_ledger,
+            owner,
+            &fresh_pins,
+            Some(&fresh_guards),
+        )?;
+        let words = [
+            0x8d0a_0004u32, // lw t2,4(t0): MSG ID
+            0x8d0b_1ff0,    // lw t3,0x1ff0(t0): first output page
+            0x8d0c_2000,    // lw t4,0x2000(t0): second output page
+        ];
+        fresh
+            .mem_write(
+                u64::from(CODE),
+                &words
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        fresh.reg_write(RegisterMIPS::T0, u64::from(STACK)).unwrap();
+        fresh
+            .emu_start(u64::from(CODE), u64::from(CODE + 12), 0, 0)
+            .unwrap();
+        assert_eq!(fresh.reg_read(RegisterMIPS::T2).unwrap() as u32, MSG);
+        assert_eq!(
+            fresh.reg_read(RegisterMIPS::T3).unwrap() as u32,
+            0xa5a5_a5a5
+        );
+        assert_eq!(
+            fresh.reg_read(RegisterMIPS::T4).unwrap() as u32,
+            0xa5a5_a5a5
+        );
+        drop(fresh);
+        drop(fresh_guards);
+        drop(fresh_ledger);
+        drop(fresh_pins);
         Ok(())
     }
 
