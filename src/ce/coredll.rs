@@ -37,8 +37,10 @@ use crate::{
             KeybdVKeyToUnicodeInfo,
         },
         memory::{
-            HEAP_ZERO_MEMORY, Heap, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, MemoryAllocation,
-            PROCESS_HEAP_HANDLE, PreparedAllocation, PreparedReallocation, VirtualAllocationSource,
+            HEAP_ZERO_MEMORY, Heap, MEM_COMMIT, MEM_DECOMMIT, MEM_RELEASE, MEM_RESERVE,
+            MemoryAllocation, PROCESS_HEAP_HANDLE, PreparedAllocation, PreparedPrivateVm,
+            PreparedPrivateVmChange, PreparedReallocation, PrivateVmChangeResult,
+            VirtualAllocationBacking, VirtualAllocationSource,
         },
         nled::{NledSettingsInfo, NledSupportsInfo, NledSystem},
         object::{
@@ -781,6 +783,49 @@ pub trait CoredllGuestMemory {
     fn ensure_heap_mapped(&mut self, addr: u32, len: u32) -> Result<()> {
         self.ensure_mapped(addr, len)
     }
+
+    /// Apply the exact detached private-VM proposal to the active native
+    /// owner before MemorySystem or the guest observes its returned pointer.
+    /// Adapters without a native owner must opt in explicitly; silently
+    /// succeeding here would publish a pointer without a checked mapping.
+    fn apply_prepared_private_vm(
+        &mut self,
+        _kernel: &CeKernel,
+        _prepared: &PreparedPrivateVm,
+    ) -> Result<()> {
+        Err(Error::Unsupported(
+            "public private VM needs a checked native mapping adapter".to_owned(),
+        ))
+    }
+
+    /// Apply a detached release/decommit/protection change to the active
+    /// native owner before MemorySystem commits that change.
+    fn apply_prepared_private_vm_change(
+        &mut self,
+        _kernel: &CeKernel,
+        _change: &PreparedPrivateVmChange,
+    ) -> Result<()> {
+        Err(Error::Unsupported(
+            "private VM change needs a checked native mapping adapter".to_owned(),
+        ))
+    }
+
+    /// Validate the complete old-protection output slot before a native
+    /// VirtualProtect side effect. Host writes can bypass guest protection,
+    /// so native adapters must inspect the actual guest page permissions.
+    fn validate_writable_u32(&self, _addr: u32) -> Result<()> {
+        Err(Error::Unsupported(
+            "VirtualProtect needs a writable guest output preflight".to_owned(),
+        ))
+    }
+
+    /// Native adapters latch an uncertain VM side effect and force this
+    /// attempt to stop; memory-only adapters have no native state to poison.
+    fn note_private_vm_transaction_failure(&mut self, _error: Error) {}
+
+    /// Complete the ledger handoff after a matching detached private token
+    /// has been committed. No native operation may be attempted here.
+    fn private_vm_commit_complete(&mut self, _generation: u64) {}
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -5830,6 +5875,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_VIRTUAL_ALLOC => Some(CoredllValue::Handle(virtual_alloc_raw(
             kernel,
+            memory,
             thread_id,
             VirtualAllocationSource::Private,
             raw_arg(args, 0),
@@ -5845,6 +5891,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 if virtual_ex_targets_current(kernel, thread_id, raw_arg(args, 0)) {
                     virtual_alloc_raw(
                         kernel,
+                        memory,
                         thread_id,
                         VirtualAllocationSource::PrivateExCompatibility,
                         raw_arg(args, 1),
@@ -5861,6 +5908,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             virtual_ex_targets_current(kernel, thread_id, raw_arg(args, 0))
                 && virtual_free_raw(
                     kernel,
+                    memory,
                     thread_id,
                     raw_arg(args, 1),
                     raw_arg(args, 2),
@@ -5882,31 +5930,34 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_VIRTUAL_FREE => Some(CoredllValue::Bool(virtual_free_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_VIRTUAL_PROTECT => {
-            // CE doesn't enforce page protection at the API level in our emulator.
-            // Accept any protection change and report success with old_protect = PAGE_READWRITE.
-            let old_protect_ptr = raw_arg(args, 3);
-            if old_protect_ptr != 0 {
-                let _ = memory.write_u32(old_protect_ptr, PAGE_READWRITE);
-            }
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_VIRTUAL_PROTECT => Some(CoredllValue::Bool(virtual_protect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
         ORD_VIRTUAL_PROTECT_EX => {
             if !virtual_ex_targets_current(kernel, thread_id, raw_arg(args, 0)) {
                 Some(CoredllValue::Bool(false))
             } else {
-                let old_protect_ptr = raw_arg(args, 4);
-                if old_protect_ptr != 0 {
-                    let _ = memory.write_u32(old_protect_ptr, PAGE_READWRITE);
-                }
-                kernel.threads.set_last_error(thread_id, 0);
-                Some(CoredllValue::Bool(true))
+                Some(CoredllValue::Bool(virtual_protect_raw(
+                    kernel,
+                    memory,
+                    thread_id,
+                    raw_arg(args, 1),
+                    raw_arg(args, 2),
+                    raw_arg(args, 3),
+                    raw_arg(args, 4),
+                )))
             }
         }
         ORD_VIRTUAL_QUERY => Some(CoredllValue::U32(virtual_query_raw(
@@ -5943,6 +5994,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             // Delegate to regular VirtualAlloc (single-process: shared == private).
             Some(CoredllValue::Handle(virtual_alloc_raw(
                 kernel,
+                memory,
                 thread_id,
                 VirtualAllocationSource::SharedCompatibility,
                 raw_arg(args, 0),
@@ -29505,8 +29557,25 @@ fn heap_free_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32, flags: u32, p
     }
 }
 
-fn virtual_alloc_raw(
+fn prepared_private_vm_overlaps_file_view(kernel: &CeKernel, prepared: &PreparedPrivateVm) -> bool {
+    // DIB-section mapping views need not have a MemorySystem VM record. Check
+    // the handle directory itself before a private reservation is published;
+    // the legacy view sync still addresses those bytes by guest VA alone.
+    let allocation = prepared.allocation();
+    let private_start = u64::from(allocation.base);
+    let private_end = private_start + u64::from(allocation.size);
+    kernel.handles.file_mappings().any(|mapping| {
+        mapping.views.iter().any(|view| {
+            let view_start = u64::from(view.base);
+            let view_end = view_start + u64::from(view.size);
+            private_start < view_end && view_start < private_end
+        })
+    })
+}
+
+fn virtual_alloc_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     source: VirtualAllocationSource,
     address: u32,
@@ -29520,6 +29589,53 @@ fn virtual_alloc_raw(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
+    if matches!(
+        source,
+        VirtualAllocationSource::Private | VirtualAllocationSource::PrivateExCompatibility
+    ) {
+        let Some(prepared) = kernel.memory.prepare_private_vm(
+            owner,
+            source,
+            address,
+            size,
+            allocation_type,
+            protect,
+        ) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        };
+        if prepared_private_vm_overlaps_file_view(kernel, &prepared) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        }
+        if let Err(err) = memory.apply_prepared_private_vm(kernel, &prepared) {
+            memory.note_private_vm_transaction_failure(err);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return 0;
+        }
+        return match kernel.memory.commit_prepared_private_vm(prepared) {
+            Some(ptr) => {
+                memory.private_vm_commit_complete(kernel.memory.virtual_generation());
+                kernel.threads.set_last_error(thread_id, 0);
+                ptr
+            }
+            None => {
+                memory.note_private_vm_transaction_failure(Error::Backend(
+                    "private VM metadata changed after checked native mapping".to_owned(),
+                ));
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+                0
+            }
+        };
+    }
     match kernel
         .memory
         .virtual_alloc(owner, source, address, size, allocation_type, protect)
@@ -29556,8 +29672,9 @@ fn virtual_ex_targets_current(kernel: &mut CeKernel, thread_id: u32, handle: u32
     true
 }
 
-fn virtual_free_raw(
+fn virtual_free_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     address: u32,
     size: u32,
@@ -29569,6 +29686,40 @@ fn virtual_free_raw(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
+    if kernel.memory.private_vm_query(owner, address).is_some() {
+        let Some(prepared) = kernel
+            .memory
+            .prepare_private_vm_free(owner, address, size, free_type)
+        else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        if let Err(err) = memory.apply_prepared_private_vm_change(kernel, &prepared) {
+            memory.note_private_vm_transaction_failure(err);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return false;
+        }
+        return match kernel.memory.commit_prepared_private_vm_change(prepared) {
+            Some(PrivateVmChangeResult::Free) => {
+                memory.private_vm_commit_complete(kernel.memory.virtual_generation());
+                kernel.threads.set_last_error(thread_id, 0);
+                true
+            }
+            _ => {
+                memory.note_private_vm_transaction_failure(Error::Backend(
+                    "private VM free metadata changed after checked native unmap".to_owned(),
+                ));
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+                false
+            }
+        };
+    }
     if kernel.memory.virtual_free(owner, address, size, free_type) {
         true
     } else {
@@ -29579,8 +29730,92 @@ fn virtual_free_raw(
     }
 }
 
+fn virtual_protect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    address: u32,
+    size: u32,
+    new_protect: u32,
+    old_protect_ptr: u32,
+) -> bool {
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let end = address.checked_add(size);
+    let intersects_private = kernel.memory.private_vm_query(owner, address).is_some()
+        || end.is_some_and(|end| {
+            kernel
+                .memory
+                .virtual_allocations_for(owner)
+                .any(|allocation| {
+                    allocation.backing == VirtualAllocationBacking::StablePrivateSlab
+                        && u64::from(address)
+                            < u64::from(allocation.base) + u64::from(allocation.size)
+                        && u64::from(end) > u64::from(allocation.base)
+                })
+        });
+    if intersects_private {
+        if old_protect_ptr == 0 || memory.validate_writable_u32(old_protect_ptr).is_err() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        let Some(prepared) =
+            kernel
+                .memory
+                .prepare_private_vm_protect(owner, address, size, new_protect)
+        else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        if let Err(err) = memory.apply_prepared_private_vm_change(kernel, &prepared) {
+            memory.note_private_vm_transaction_failure(err);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return false;
+        }
+        let Some(PrivateVmChangeResult::Protect { old_protect }) =
+            kernel.memory.commit_prepared_private_vm_change(prepared)
+        else {
+            memory.note_private_vm_transaction_failure(Error::Backend(
+                "private VM protection metadata changed after checked native protect".to_owned(),
+            ));
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+            return false;
+        };
+        memory.private_vm_commit_complete(kernel.memory.virtual_generation());
+        if let Err(err) = memory.write_u32(old_protect_ptr, old_protect) {
+            memory.note_private_vm_transaction_failure(err);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    // Unmigrated shared/view callers retain the historical compatibility
+    // behavior; only the private slab family has checked page protection.
+    if old_protect_ptr != 0 {
+        let _ = memory.write_u32(old_protect_ptr, PAGE_READWRITE);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 const PAGE_READWRITE: u32 = 0x04;
 const MEM_COMMIT_FLAG: u32 = 0x0000_1000;
+const MEM_RESERVE_FLAG: u32 = 0x0000_2000;
 const MEM_FREE_FLAG: u32 = 0x0001_0000;
 const PAGE_NOACCESS: u32 = 0x01;
 
@@ -29611,28 +29846,53 @@ fn virtual_query_raw<M: CoredllGuestMemory>(
     //   BaseAddress(4), AllocationBase(4), AllocationProtect(4),
     //   RegionSize(4), State(4), Protect(4), Type(4)
     const MBI_SIZE: u32 = 28;
-    if buf_ptr == 0 || buf_len < MBI_SIZE {
+    if buf_ptr == 0 || buf_len < MBI_SIZE || buf_ptr.checked_add(MBI_SIZE - 1).is_none() {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    // Determine region state based on whether addr falls within a known virtual allocation.
-    let (state, protect, region_size) = kernel
-        .memory
-        .virtual_allocations_visible_to(owner)
-        .find(|a| addr >= a.base && addr < a.base.saturating_add(a.size))
-        .map(|a| (MEM_COMMIT_FLAG, a.protect, a.size))
-        .unwrap_or((MEM_FREE_FLAG, PAGE_NOACCESS, 0x1000));
     let page_base = addr & !0xfff;
+    // Stable private reservations expose the exact queried 4-KiB page state;
+    // a 64-KiB reservation is not itself 64 KiB of committed native memory.
+    let (base_address, allocation_base, allocation_protect, state, protect, region_size) =
+        if let Some(private) = kernel.memory.private_vm_query(owner, addr) {
+            (
+                private.region_base,
+                private.allocation_base,
+                private.allocation_protect,
+                if private.page_protect.is_some() {
+                    MEM_COMMIT_FLAG
+                } else {
+                    MEM_RESERVE_FLAG
+                },
+                private.page_protect.unwrap_or(0),
+                private.region_size,
+            )
+        } else if let Some(allocation) = kernel
+            .memory
+            .virtual_allocations_visible_to(owner)
+            .find(|a| addr >= a.base && addr < a.base.saturating_add(a.size))
+        {
+            (
+                page_base,
+                allocation.base,
+                allocation.protect,
+                MEM_COMMIT_FLAG,
+                allocation.protect,
+                allocation.size,
+            )
+        } else {
+            (page_base, 0, 0, MEM_FREE_FLAG, PAGE_NOACCESS, 0x1000)
+        };
     let writes = [
-        (buf_ptr, page_base),        // BaseAddress
-        (buf_ptr + 4, page_base),    // AllocationBase
-        (buf_ptr + 8, protect),      // AllocationProtect
-        (buf_ptr + 12, region_size), // RegionSize
-        (buf_ptr + 16, state),       // State
-        (buf_ptr + 20, protect),     // Protect
-        (buf_ptr + 24, 0x20000u32),  // Type = MEM_PRIVATE
+        (buf_ptr, base_address),           // BaseAddress
+        (buf_ptr + 4, allocation_base),    // AllocationBase
+        (buf_ptr + 8, allocation_protect), // AllocationProtect
+        (buf_ptr + 12, region_size),       // RegionSize
+        (buf_ptr + 16, state),             // State
+        (buf_ptr + 20, protect),           // Protect
+        (buf_ptr + 24, 0x20000u32),        // Type = MEM_PRIVATE
     ];
     for (offset, value) in writes {
         if !write_guest_u32(kernel, memory, thread_id, offset, value) {
@@ -29656,6 +29916,13 @@ fn is_bad_ptr_probe_from_ce_flag(flag: u32) -> PointerProbe {
         PointerProbe::Write
     } else {
         PointerProbe::Read
+    }
+}
+
+fn private_vm_protection_allows_probe(protect: u32, probe: PointerProbe) -> bool {
+    match probe {
+        PointerProbe::Read => matches!(protect & 0xff, 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80),
+        PointerProbe::Write => matches!(protect & 0xff, 0x04 | 0x08 | 0x40 | 0x80),
     }
 }
 
@@ -29683,6 +29950,51 @@ fn is_bad_ptr_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return true;
     };
+    if let Some(valid) = kernel.memory.heap_range_status(ptr, bytes) {
+        kernel
+            .threads
+            .set_last_error(thread_id, if valid { 0 } else { ERROR_INVALID_PARAMETER });
+        return !valid;
+    }
+    // A same-VA private allocation in another process is not a collision
+    // with this owner's committed pages. Inspect the owned slab first and
+    // honor every page's committed state and protection.
+    if kernel.memory.private_vm_query(owner, ptr).is_some() {
+        let end = ptr + bytes;
+        let mut cursor = ptr;
+        let mut valid = true;
+        while cursor < end {
+            let Some(page) = kernel.memory.private_vm_query(owner, cursor) else {
+                valid = false;
+                break;
+            };
+            let Some(protect) = page.page_protect else {
+                valid = false;
+                break;
+            };
+            if !private_vm_protection_allows_probe(protect, probe) {
+                valid = false;
+                break;
+            }
+            let Some(next) = page.region_base.checked_add(page.region_size) else {
+                valid = false;
+                break;
+            };
+            if next <= cursor {
+                valid = false;
+                break;
+            }
+            cursor = next.min(end);
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, if valid { 0 } else { ERROR_INVALID_PARAMETER });
+        return !valid;
+    }
+    if kernel.memory.contains_allocated_range(owner, ptr, bytes) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return false;
+    }
     // A foreign virtual region must not become valid merely because the old
     // global native map happens to expose bytes at the same address.
     if kernel
@@ -29693,16 +30005,6 @@ fn is_bad_ptr_raw<M: CoredllGuestMemory>(
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return true;
-    }
-    if let Some(valid) = kernel.memory.heap_range_status(ptr, bytes) {
-        kernel
-            .threads
-            .set_last_error(thread_id, if valid { 0 } else { ERROR_INVALID_PARAMETER });
-        return !valid;
-    }
-    if kernel.memory.contains_allocated_range(owner, ptr, bytes) {
-        kernel.threads.set_last_error(thread_id, 0);
-        return false;
     }
     if probe_guest_range(memory, ptr, bytes, probe) {
         kernel.threads.set_last_error(thread_id, 0);
@@ -69538,6 +69840,38 @@ mod tests {
             self.map_bytes(addr, len);
             Ok(())
         }
+
+        fn apply_prepared_private_vm(
+            &mut self,
+            _kernel: &CeKernel,
+            _prepared: &PreparedPrivateVm,
+        ) -> Result<()> {
+            // This adapter has no native engine. The MemorySystem's stable
+            // pages are the only backing used by its API-level tests.
+            Ok(())
+        }
+
+        fn apply_prepared_private_vm_change(
+            &mut self,
+            _kernel: &CeKernel,
+            _change: &PreparedPrivateVmChange,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn validate_writable_u32(&self, addr: u32) -> Result<()> {
+            for offset in 0..4u32 {
+                let byte = addr.checked_add(offset).ok_or_else(|| {
+                    Error::InvalidArgument("VirtualProtect output pointer overflow".to_owned())
+                })?;
+                if !self.bytes.contains_key(&byte) {
+                    return Err(Error::InvalidArgument(format!(
+                        "VirtualProtect output byte 0x{byte:08x} is unmapped"
+                    )));
+                }
+            }
+            Ok(())
+        }
     }
 
     fn kernel_with_sdmmc_volume() -> (CeKernel, u32) {
@@ -69566,6 +69900,225 @@ mod tests {
     }
 
     #[test]
+    fn public_private_virtual_alloc_rejects_adapter_without_native_mapping_capability() -> Result<()>
+    {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut memory = MessagePayloadMemory {
+            base: 0,
+            allocation_size: 0,
+            bytes: Vec::new(),
+        };
+        let ptr = virtual_alloc_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            VirtualAllocationSource::Private,
+            0,
+            0x1000,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        assert_eq!(ptr, 0);
+        assert_eq!(kernel.threads.get_last_error(1), ERROR_NOT_ENOUGH_MEMORY);
+        assert_eq!(kernel.memory.virtual_allocations_for(owner).count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn public_private_vm_reserve_commit_protect_decommit_recommit_and_release() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut memory = UnitGuestMemory::default();
+        let query_buf = 0x0001_1000;
+        let old_protect_buf = 0x0001_1100;
+        memory.map_bytes(query_buf, 28);
+        memory.map_bytes(old_protect_buf, 4);
+
+        let base = virtual_alloc_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            VirtualAllocationSource::Private,
+            0,
+            0x2000,
+            MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        assert_ne!(base, 0);
+        assert!(kernel.memory.private_page_pin(owner, base).is_none());
+        assert_eq!(
+            virtual_query_raw(&mut kernel, &mut memory, 1, &[base, query_buf, 28], false),
+            28
+        );
+        assert_eq!(memory.read_u32(query_buf + 16)?, MEM_RESERVE_FLAG);
+        assert_eq!(memory.read_u32(query_buf + 20)?, 0);
+
+        let page = base + 0x1000;
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                &mut memory,
+                1,
+                VirtualAllocationSource::Private,
+                page,
+                0x1000,
+                MEM_COMMIT,
+                PAGE_READWRITE,
+            ),
+            page
+        );
+        assert_eq!(
+            virtual_query_raw(&mut kernel, &mut memory, 1, &[page, query_buf, 28], false),
+            28
+        );
+        assert_eq!(memory.read_u32(query_buf + 16)?, MEM_COMMIT_FLAG);
+        assert_eq!(memory.read_u32(query_buf + 20)?, PAGE_READWRITE);
+        assert!(!virtual_protect_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            page,
+            0x1000,
+            0x02,
+            0x0001_1200,
+        ));
+        assert_eq!(
+            kernel
+                .memory
+                .private_vm_query(owner, page)
+                .unwrap()
+                .page_protect,
+            Some(PAGE_READWRITE),
+            "invalid output cannot change protection metadata"
+        );
+        assert!(virtual_protect_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            page,
+            0x1000,
+            0x02,
+            old_protect_buf,
+        ));
+        assert_eq!(memory.read_u32(old_protect_buf)?, PAGE_READWRITE);
+        assert!(!is_bad_ptr_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            page,
+            4,
+            PointerProbe::Read
+        ));
+        assert!(is_bad_ptr_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            page,
+            4,
+            PointerProbe::Write
+        ));
+        assert_eq!(
+            virtual_query_raw(&mut kernel, &mut memory, 1, &[page, query_buf, 28], false),
+            28
+        );
+        assert_eq!(memory.read_u32(query_buf + 20)?, 0x02);
+
+        assert!(virtual_free_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            page,
+            0x1000,
+            MEM_DECOMMIT
+        ));
+        assert!(kernel.memory.private_page_pin(owner, page).is_none());
+        assert_eq!(
+            virtual_query_raw(&mut kernel, &mut memory, 1, &[page, query_buf, 28], false),
+            28
+        );
+        assert_eq!(memory.read_u32(query_buf + 16)?, MEM_RESERVE_FLAG);
+        assert!(is_bad_ptr_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            page,
+            4,
+            PointerProbe::Read
+        ));
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                &mut memory,
+                1,
+                VirtualAllocationSource::Private,
+                page,
+                0x1000,
+                MEM_COMMIT,
+                PAGE_READWRITE,
+            ),
+            page
+        );
+        let pin = kernel
+            .memory
+            .private_page_pin(owner, page)
+            .expect("recommitted page");
+        let mut bytes = [0xff; 4];
+        pin.read_bytes(0, &mut bytes)
+            .expect("read new canonical page");
+        assert_eq!(bytes, [0; 4]);
+        assert!(virtual_free_raw(
+            &mut kernel,
+            &mut memory,
+            1,
+            base,
+            0,
+            MEM_RELEASE
+        ));
+        assert_eq!(
+            virtual_query_raw(&mut kernel, &mut memory, 1, &[page, query_buf, 28], false),
+            28
+        );
+        assert_eq!(memory.read_u32(query_buf + 16)?, MEM_FREE_FLAG);
+        Ok(())
+    }
+
+    #[test]
+    fn public_private_vm_rejects_file_view_without_virtual_allocation_record() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut memory = UnitGuestMemory::default();
+        let base = 0x5200_0000;
+        let mapping_handle = kernel.handles.create_file_mapping(None, 0x1000, 4, None);
+        let process_id = kernel.current_process_id();
+        kernel
+            .handles
+            .file_mapping_mut(mapping_handle)?
+            .views
+            .push(FileMappingView {
+                base,
+                size: 0x1000,
+                offset: 0,
+                process_id,
+            });
+        assert_eq!(
+            virtual_alloc_raw(
+                &mut kernel,
+                &mut memory,
+                1,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            ),
+            0
+        );
+        assert!(kernel.memory.virtual_allocation(owner, base).is_none());
+        Ok(())
+    }
+
+    #[test]
     fn virtual_allocation_producers_record_birth_and_distinct_sources() -> Result<()> {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
         let owner = kernel.current_process_birth_key().expect("boot birth");
@@ -69574,6 +70127,7 @@ mod tests {
 
         let private = virtual_alloc_raw(
             &mut kernel,
+            &mut memory,
             thread_id,
             VirtualAllocationSource::Private,
             0,
@@ -69641,6 +70195,7 @@ mod tests {
 
         let shared = virtual_alloc_raw(
             &mut kernel,
+            &mut memory,
             thread_id,
             VirtualAllocationSource::SharedCompatibility,
             0,
@@ -69663,6 +70218,7 @@ mod tests {
         let child_owner = kernel.current_process_birth_key().expect("child birth");
         let child_private = virtual_alloc_raw(
             &mut kernel,
+            &mut memory,
             thread_id,
             VirtualAllocationSource::Private,
             0,
@@ -69686,6 +70242,7 @@ mod tests {
         assert_eq!(
             virtual_alloc_raw(
                 &mut kernel,
+                &mut memory,
                 thread_id,
                 VirtualAllocationSource::Private,
                 0,
@@ -70002,7 +70559,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: ledger E-20, Stage 2"]
     fn public_private_virtual_alloc_and_query_follow_process_rotation() -> Result<()> {
         // CE6 VMAlloc takes a PPROCESS: equal user VAs in two processes are
         // separate private allocations, not a collision in one global map.

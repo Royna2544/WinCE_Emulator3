@@ -13,12 +13,22 @@ use crate::{
 pub const DEFAULT_REGISTRY_PATH: &str = "registry.reg";
 pub const DEFAULT_DEVICES_PATH: &str = "serial_devices.json";
 pub const DEFAULT_MOUNT_CONFIG_PATH: &str = "mounts.toml";
+/// The dumped device's physical RAM, not a guessed emulator size.
+/// `sources/SYSTEM.TXT:8` records `totalPhys=195350528`.
+pub const DEFAULT_GUEST_PHYSICAL_RAM_BYTES: u64 = 195_350_528;
+pub const GUEST_PHYSICAL_RAM_BYTES_ENV: &str = "WINCE_EMU_GUEST_PHYSICAL_RAM_BYTES";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeConfig {
     pub registry: RegistryDump,
     pub devices: DeviceConfigFile,
     pub storage: StorageConfig,
+    #[serde(default = "default_guest_physical_ram_bytes")]
+    pub guest_physical_ram_bytes: u64,
+}
+
+fn default_guest_physical_ram_bytes() -> u64 {
+    DEFAULT_GUEST_PHYSICAL_RAM_BYTES
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -113,10 +123,24 @@ impl RuntimeConfig {
         devices_path: impl AsRef<Path>,
         mount_path: Option<impl AsRef<Path>>,
     ) -> Result<Self> {
+        let guest_physical_ram_bytes = match std::env::var(GUEST_PHYSICAL_RAM_BYTES_ENV) {
+            Ok(value) => value.parse::<u64>().ok().filter(|bytes| *bytes >= 4096).ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "{GUEST_PHYSICAL_RAM_BYTES_ENV} must be a physical-RAM byte count of at least 4096"
+                ))
+            })?,
+            Err(std::env::VarError::NotPresent) => DEFAULT_GUEST_PHYSICAL_RAM_BYTES,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(Error::InvalidArgument(format!(
+                    "{GUEST_PHYSICAL_RAM_BYTES_ENV} must contain decimal digits"
+                )));
+            }
+        };
         Ok(Self {
             registry: read_registry(registry_path.as_ref())?,
             devices: read_json(devices_path.as_ref())?,
             storage: StorageConfig::load_or_default(mount_path)?,
+            guest_physical_ram_bytes,
         })
     }
 }

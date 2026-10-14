@@ -1171,6 +1171,8 @@ impl CeKernel {
     const MSGQUEUE_MAX_NUM_NODES: u32 = 0x0010_0000;
 
     pub fn boot(config: RuntimeConfig) -> Self {
+        let mut memory = MemorySystem::default();
+        memory.set_private_commit_limit_bytes(config.guest_physical_ram_bytes);
         let mut registry = Registry::from_dump(config.registry);
         seed_testime_sample_dictionary(&mut registry);
         let files = HostFileSystem::from_storage(config.storage);
@@ -1189,7 +1191,7 @@ impl CeKernel {
             resources: ResourceSystem::default(),
             shell: ShellSystem::default(),
             com: ComSystem::default(),
-            memory: MemorySystem::default(),
+            memory,
             keybd: KeybdSystem::default(),
             nled: NledSystem::default(),
             remote_server: None,
@@ -10585,6 +10587,7 @@ mod tests {
                 },
                 mounts: Vec::new(),
             },
+            guest_physical_ram_bytes: crate::config::DEFAULT_GUEST_PHYSICAL_RAM_BYTES,
         }
     }
 
