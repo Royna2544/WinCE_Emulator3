@@ -36,11 +36,16 @@ One per-TID FIFO keeps each post's exact-birth, fixture-only legacy-unknown or u
 Get/Peek, status/new-input, timestamp, wait wake/readiness and exact exit use birth-eligible state; A retirement preserves B and unscoped work, while window-originated status remains compatibility state.
 Unknown-target return/LastError parity, window/broadcast/HWND-owned-timer/keyboard/remote/sent/paint/modal producer births and full GWES/live iNavi acceptance remain open. [Thread-post receipt](../../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md): release 1,952/0/9; no-feature 1,417/0/3. [HWND-less timer receipt](../../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md): release 1,960/0/9; no-feature 1,424/0/3.
 
-The next [window-owner birth design](../evidence/window-owner-birth-design-20261015.md)
-has completed independent contract review, but has no source implementation or
-runtime result. W-B1a is limited to checked guest window creation, explicit
-HWND posts, frozen typed-recipient authority and post-only exit isolation;
-remote input and owner-filtered teardown remain W-B1b.
+### W-B1 window-owner birth (reviewed; not source-tested)
+
+One immutable Window owner is exact `(ThreadBirthKey, creation ProcessBirthKey)`, explicit legacy-unknown, or system desktop; numeric TID/PID are creation-only projections, never a second owner authority.
+W-B1a preflights the captured native caller birth for `CreateWindowExW`, `CreateDialogIndirectParamW`, and `DialogBoxIndirectParamW` before any GWES/LastError effect; absent birth is a fixture-only compatibility path.
+Verified explicit HWND posts enter the existing FIFO as Birth-owned work, committing status, ready time, trace, and exact-birth wake together; stale ordinary HWNDs publish nothing, while desktop/legacy compatibility stays explicit.
+Typed-payload recipient and native CreateWindow callback ownership use the frozen process birth, never a current numeric PID lookup; CE6 return/LastError parity remains unverified where local GWES source is silent.
+Exact A exit retires A's Birth-owned posts and makes later explicit posts ineligible; it must not recursively destroy a B-owned descendant or sweep by numeric TID.
+W-B1b later validates remote touch/key target birth before focus or input mutation, explicitly drops stale input without rerouting, and adds owner-filtered host teardown.
+Broadcast, HWND timers, hotkeys, sent/paint/modal producers, full GWES, and live iNavi acceptance remain open.
+Expected-red controls: `checked_window_hwnd_post_does_not_cross_reused_tid_birth`; `stale_native_create_window_ex_w_birth`; `stale_native_create_dialog_indirect_param_w_birth`; `stale_native_dialog_box_indirect_param_w_birth`.
 
 ## Failure and lifetime rules
 
