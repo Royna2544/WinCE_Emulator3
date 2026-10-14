@@ -14628,6 +14628,157 @@ fn map_private_slab_page<D>(
     Ok(())
 }
 
+/// Map a contiguous, uniformly protected portion of one fixed heap/stack
+/// host block. A later collision or stale page ends the prefix: the valid
+/// earlier pages are still mapped before the same ordered error is returned.
+/// Every page is independently recorded and pinned before the one FFI call.
+#[cfg(feature = "unicorn")]
+fn map_private_block_run<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    mapped: &mut KernelMemoryMappings,
+    owner: crate::ce::object::ProcessBirthKey,
+    run: &[StablePrivatePagePin],
+    native_pins: &NativeMappingPins,
+    active_guards: Option<&ActivePrivatePageGuards>,
+    mut checked_protect: impl FnMut(&StablePrivatePagePin) -> Result<u32>,
+) -> Result<()> {
+    #[cfg(test)]
+    let profile_started = std::time::Instant::now();
+    let Some(first) = run.first() else {
+        return Ok(());
+    };
+    #[cfg(test)]
+    let native_region_query_started = std::time::Instant::now();
+    let regions = uc
+        .mem_regions()
+        .map_err(|err| Error::Backend(format!("inspect private block run: {err:?}")))?;
+    #[cfg(test)]
+    let native_region_query_elapsed = native_region_query_started.elapsed();
+    let mut expected = Vec::new();
+    expected
+        .try_reserve_exact(run.len())
+        .map_err(|_| Error::Backend("reserve private block run ledger failed".to_owned()))?;
+    let mut stopped = None;
+    #[cfg(test)]
+    let mapped_range_query_started = std::time::Instant::now();
+    for (index, pin) in run.iter().enumerate() {
+        let page = pin.identity().page_base();
+        let validate = (|| {
+            if pin.identity().owner() != owner
+                || !pin.is_host_block_backed()
+                || page as usize % STABLE_PRIVATE_PAGE_SIZE != 0
+                || (pin.native_ptr() as usize) % STABLE_PRIVATE_PAGE_SIZE != 0
+                || index > 0 && !run[index - 1].contiguous_in_same_host_block(pin)
+            {
+                return Err(Error::Backend(format!(
+                    "private block run page 0x{page:08x} has stale identity or alignment"
+                )));
+            }
+            let protect = checked_protect(pin)?;
+            let perms = unicorn_perms(virtual_allocation_perms(protect)).0 as u32;
+            if expected
+                .first()
+                .is_some_and(|record: &NativePrivatePageRecord| record.perms != perms)
+            {
+                return Err(Error::Backend(format!(
+                    "private block run page 0x{page:08x} changed protection"
+                )));
+            }
+            let begin = u64::from(page);
+            let end = begin + STABLE_PRIVATE_PAGE_SIZE as u64 - 1;
+            if mapped.private_pages.contains_key(&page)
+                || regions
+                    .iter()
+                    .any(|region| region.begin <= end && region.end >= begin)
+                || is_guest_page_mapped(mapped, page)
+            {
+                return Err(Error::Backend(format!(
+                    "private block run page 0x{page:08x} collides with an unowned native mapping"
+                )));
+            }
+            Ok(NativePrivatePageRecord {
+                identity: pin.identity(),
+                host_address: pin.native_ptr() as usize,
+                perms,
+            })
+        })();
+        match validate {
+            Ok(record) => expected.push(record),
+            Err(err) => {
+                stopped = Some(err);
+                break;
+            }
+        }
+    }
+    #[cfg(test)]
+    let mapped_range_query_elapsed = mapped_range_query_started.elapsed();
+    if !expected.is_empty() {
+        for (record, pin) in expected.iter().zip(run) {
+            if let Some(guards) = active_guards {
+                let mut guards = guards.borrow_mut();
+                if guards.contains_key(&record.host_address) {
+                    return Err(Error::Backend(format!(
+                        "private block run page 0x{:08x} already has an active guard",
+                        record.identity.page_base()
+                    )));
+                }
+                let guard = pin.begin_native_execution().map_err(|err| {
+                    Error::Backend(format!(
+                        "fence private block run page 0x{:08x}: {err:?}",
+                        record.identity.page_base()
+                    ))
+                })?;
+                guards.insert(record.host_address, guard);
+            }
+            if !native_pins.pin_private(record.identity, record.host_address, pin.clone()) {
+                return Err(Error::Backend(format!(
+                    "private block run page 0x{:08x} already has a native pin",
+                    record.identity.page_base()
+                )));
+            }
+        }
+        let base = first.identity().page_base();
+        let len = u32::try_from(expected.len() * STABLE_PRIVATE_PAGE_SIZE)
+            .map_err(|_| Error::Backend("private block run exceeds guest u32".to_owned()))?;
+        let perms = unicorn_engine::Prot(expected[0].perms as i32);
+        // SAFETY: all pages in this run are contiguous in the same reserved
+        // host block, physically committed, and strongly pinned before FFI.
+        #[cfg(test)]
+        let mem_map_ptr_started = std::time::Instant::now();
+        let result =
+            unsafe { uc.mem_map_ptr(u64::from(base), u64::from(len), perms, first.native_ptr()) };
+        #[cfg(test)]
+        let mem_map_ptr_elapsed = mem_map_ptr_started.elapsed();
+        result.map_err(|err| {
+            Error::Backend(format!(
+                "map private block run 0x{base:08x}+0x{len:x}: {err:?}"
+            ))
+        })?;
+        for record in &expected {
+            mapped
+                .private_pages
+                .insert(record.identity.page_base(), *record);
+        }
+        mapped.ranges.push((base, len));
+        #[cfg(test)]
+        NATIVE_PRIVATE_MAP_PROFILE.with(|slot| {
+            if let Some(profile) = slot.borrow_mut().as_mut() {
+                let total = profile_started.elapsed();
+                profile.mapped_pages += expected.len() as u64;
+                profile.native_map_calls += 1;
+                profile.rust_setup_ns += total.as_nanos() - mem_map_ptr_elapsed.as_nanos();
+                profile.native_region_query_ns += native_region_query_elapsed.as_nanos();
+                profile.mapped_range_query_ns += mapped_range_query_elapsed.as_nanos();
+                profile.mem_map_ptr_ns += mem_map_ptr_elapsed.as_nanos();
+            }
+        });
+    }
+    match stopped {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
 #[cfg(feature = "unicorn")]
 fn map_prepared_private_slab_page<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -14710,6 +14861,92 @@ fn map_prepared_private_slab_page<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn map_prepared_private_slab_pages<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    mapped: &mut KernelMemoryMappings,
+    prepared: &PreparedPrivateVm,
+    native_pins: &NativeMappingPins,
+    active_guards: &ActivePrivatePageGuards,
+) -> Result<()> {
+    let pins = prepared.new_page_pins();
+    let fixed = prepared.allocation().backing == VirtualAllocationBacking::StablePrivateSlab
+        && matches!(
+            prepared.allocation().source,
+            VirtualAllocationSource::ProcessHeapArena | VirtualAllocationSource::ThreadStack
+        );
+    let mut index = 0;
+    while index < pins.len() {
+        let first = &pins[index];
+        let protect = prepared.protection_for_page(first.identity().page_base());
+        if !fixed
+            || !first.is_host_block_backed()
+            || protect.is_none()
+            || mapped
+                .private_pages
+                .contains_key(&first.identity().page_base())
+        {
+            map_prepared_private_slab_page(
+                uc,
+                mapped,
+                prepared,
+                first,
+                native_pins,
+                active_guards,
+            )?;
+            index += 1;
+            continue;
+        }
+        let mut end = index + 1;
+        while end < pins.len()
+            && pins[end - 1].contiguous_in_same_host_block(&pins[end])
+            && !mapped
+                .private_pages
+                .contains_key(&pins[end].identity().page_base())
+            && prepared.protection_for_page(pins[end].identity().page_base()) == protect
+        {
+            end += 1;
+        }
+        if end == index + 1 {
+            map_prepared_private_slab_page(
+                uc,
+                mapped,
+                prepared,
+                first,
+                native_pins,
+                active_guards,
+            )?;
+        } else {
+            map_private_block_run(
+                uc,
+                mapped,
+                prepared.owner(),
+                &pins[index..end],
+                native_pins,
+                Some(active_guards),
+                |pin| {
+                    let identity = pin.identity();
+                    let page = identity.page_base();
+                    if identity.allocation_base() != prepared.base()
+                        || identity.allocation_incarnation() != prepared.allocation().incarnation
+                    {
+                        return Err(Error::Backend(format!(
+                            "prepared fixed page 0x{page:08x} has stale allocation identity"
+                        )));
+                    }
+                    prepared.protection_for_page(page).ok_or_else(|| {
+                        Error::Backend(format!(
+                            "prepared fixed page 0x{page:08x} has no protection"
+                        ))
+                    })
+                },
+            )?;
+        }
+        index = end;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
 fn map_private_slab_pages<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &CeKernel,
@@ -14718,8 +14955,171 @@ fn map_private_slab_pages<D>(
     native_pins: &NativeMappingPins,
     active_guards: Option<&ActivePrivatePageGuards>,
 ) -> Result<()> {
-    for pin in kernel.memory.stable_page_pins_for(owner) {
-        map_private_slab_page(uc, kernel, mapped, owner, pin, native_pins, active_guards)?;
+    let pins = kernel.memory.stable_page_pins_for(owner);
+    let mut index = 0;
+    while index < pins.len() {
+        let first = &pins[index];
+        let identity = first.identity();
+        let allocation = kernel
+            .memory
+            .virtual_allocation(owner, identity.allocation_base());
+        let fixed = allocation.is_some_and(|allocation| {
+            allocation.backing == VirtualAllocationBacking::StablePrivateSlab
+                && matches!(
+                    allocation.source,
+                    VirtualAllocationSource::ProcessHeapArena
+                        | VirtualAllocationSource::ThreadStack
+                )
+                && allocation.incarnation == identity.allocation_incarnation()
+        });
+        let protect = allocation.and_then(|allocation| {
+            allocation
+                .private_committed_pages
+                .get(&identity.page_base())
+                .copied()
+        });
+        if !fixed
+            || !first.is_host_block_backed()
+            || protect.is_none()
+            || mapped.private_pages.contains_key(&identity.page_base())
+        {
+            map_private_slab_page(
+                uc,
+                kernel,
+                mapped,
+                owner,
+                first.clone(),
+                native_pins,
+                active_guards,
+            )?;
+            index += 1;
+            continue;
+        }
+        let mut end = index + 1;
+        while end < pins.len()
+            && pins[end - 1].contiguous_in_same_host_block(&pins[end])
+            && !mapped
+                .private_pages
+                .contains_key(&pins[end].identity().page_base())
+            && allocation.and_then(|allocation| {
+                allocation
+                    .private_committed_pages
+                    .get(&pins[end].identity().page_base())
+                    .copied()
+            }) == protect
+        {
+            end += 1;
+        }
+        if end == index + 1 {
+            map_private_slab_page(
+                uc,
+                kernel,
+                mapped,
+                owner,
+                first.clone(),
+                native_pins,
+                active_guards,
+            )?;
+        } else {
+            map_private_block_run(
+                uc,
+                mapped,
+                owner,
+                &pins[index..end],
+                native_pins,
+                active_guards,
+                |pin| {
+                    let page = pin.identity().page_base();
+                    if !kernel.memory.contains_private_page_pin(pin) {
+                        return Err(Error::Backend(format!(
+                            "stale fixed private page 0x{page:08x} before native map"
+                        )));
+                    }
+                    allocation
+                        .and_then(|allocation| allocation.private_committed_pages.get(&page))
+                        .copied()
+                        .ok_or_else(|| {
+                            Error::Backend(format!(
+                                "fixed private page 0x{page:08x} has no protection"
+                            ))
+                        })
+                },
+            )?;
+        }
+        index = end;
+    }
+    Ok(())
+}
+
+/// Unicorn may split a pointer-backed run by unmapping its original region
+/// and remapping the prefix/suffix. Do not release even the requested page's
+/// pin until the entire affected private run still matches the owner ledger.
+#[cfg(feature = "unicorn")]
+fn unmap_private_slab_page_checked<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    mapped: &KernelMemoryMappings,
+    page: u32,
+) -> Result<()> {
+    let before = uc
+        .mem_regions()
+        .map_err(|err| Error::Backend(format!("inspect private unmap 0x{page:08x}: {err:?}")))?;
+    let region = before
+        .iter()
+        .find(|region| region.begin <= u64::from(page) && region.end >= u64::from(page) + 0xfff)
+        .ok_or_else(|| {
+            Error::Backend(format!(
+                "private unmap page 0x{page:08x} has no full native region"
+            ))
+        })?;
+    let target = mapped.private_pages.get(&page).ok_or_else(|| {
+        Error::Backend(format!(
+            "private unmap page 0x{page:08x} has no native owner ledger"
+        ))
+    })?;
+    if region.perms != target.perms {
+        return Err(Error::Backend(format!(
+            "private unmap page 0x{page:08x} differs from native owner permissions"
+        )));
+    }
+    let siblings = mapped
+        .private_pages
+        .range((region.begin as u32)..=(region.end.min(u64::from(u32::MAX)) as u32))
+        .filter(|(other, _)| **other != page)
+        .map(|(other, record)| (*other, record.perms))
+        .collect::<Vec<_>>();
+    uc.mem_unmap(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64)
+        .map_err(|err| Error::Backend(format!("unmap private slab page 0x{page:08x}: {err:?}")))?;
+    let after = uc.mem_regions().map_err(|err| {
+        Error::Backend(format!(
+            "inspect private unmap result 0x{page:08x}: {err:?}"
+        ))
+    })?;
+    let covers = |probe: u32, perms: Option<u32>| {
+        let begin = u64::from(probe);
+        let end = begin + STABLE_PRIVATE_PAGE_SIZE as u64 - 1;
+        let mut intersecting = after
+            .iter()
+            .filter(|region| region.begin <= end && region.end >= begin);
+        let first = intersecting.next();
+        match (first, perms) {
+            (None, None) => true,
+            (Some(region), Some(perms)) => {
+                region.begin <= begin
+                    && region.end >= end
+                    && region.perms == perms
+                    && intersecting.next().is_none()
+            }
+            _ => false,
+        }
+    };
+    if !covers(page, None)
+        || siblings
+            .iter()
+            .any(|(sibling, perms)| !covers(*sibling, Some(*perms)))
+    {
+        return Err(Error::Backend(format!(
+            "private unmap 0x{page:08x} changed surviving native run; retain all affected pins"
+        )));
     }
     Ok(())
 }
@@ -14747,12 +15147,7 @@ fn reclaim_stale_private_slab_pages<D>(
         }) {
             continue;
         }
-        uc.mem_unmap(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64)
-            .map_err(|err| {
-                Error::Backend(format!(
-                    "unmap stale private slab page 0x{page:08x}: {err:?}"
-                ))
-            })?;
+        unmap_private_slab_page_checked(uc, mapped, page)?;
         if !native_pins.release_private_after_unmap(recorded.identity, recorded.host_address) {
             return Err(Error::Backend(format!(
                 "checked unmap of private slab 0x{page:08x} has no matching native pin"
@@ -35408,6 +35803,15 @@ mod guest_thread_stack_tests {
         assert_eq!(profile.mapped_pages as usize, PAGE_COUNT);
         assert_eq!(mapped.private_pages.len(), PAGE_COUNT);
         assert_eq!(pins.private_len(), PAGE_COUNT);
+        assert_eq!(guards.borrow().len(), PAGE_COUNT);
+        assert!(
+            kernel
+                .memory
+                .private_page_pins_for(owner)
+                .iter()
+                .all(StablePrivatePagePin::is_host_block_backed),
+            "fixed heap must not silently fall back to per-page backing"
+        );
         let native_regions_after = uc.mem_regions().unwrap().len();
         let rust_other_ns = profile
             .rust_setup_ns
@@ -35442,10 +35846,221 @@ mod guest_thread_stack_tests {
             native_close.as_secs_f64() * 1000.0,
             pins_drop_started.elapsed().as_secs_f64() * 1000.0,
         );
+        let old_layout = std::alloc::Layout::from_size_align(HEAP_BYTES as usize, 0x1000)
+            .expect("aligned 32-MiB old-shape backing");
+        // SAFETY: the target remains alive until after old_uc closes.
+        let old_host = std::ptr::NonNull::new(unsafe { std::alloc::alloc_zeroed(old_layout) })
+            .expect("old-shape host backing");
+        let old_seed = vec![0x5a; HEAP_BYTES as usize];
+        let mut old_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let old_map_started = std::time::Instant::now();
+        // SAFETY: the 32-MiB target is page-aligned and retained until close.
+        unsafe {
+            old_uc.mem_map_ptr(
+                u64::from(heap_base),
+                u64::from(HEAP_BYTES),
+                Prot::READ | Prot::WRITE,
+                old_host.as_ptr().cast(),
+            )
+        }
+        .unwrap();
+        let old_map = old_map_started.elapsed();
+        let old_copy_started = std::time::Instant::now();
+        // SAFETY: independent live 32-MiB source and target allocations.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                old_seed.as_ptr(),
+                old_host.as_ptr(),
+                HEAP_BYTES as usize,
+            );
+        }
+        let old_copy = old_copy_started.elapsed();
+        assert_eq!(
+            old_uc.mem_read_as_vec(u64::from(heap_base), 1).unwrap(),
+            [0x5a]
+        );
+        let old_close_started = std::time::Instant::now();
+        drop(old_uc);
+        let old_close = old_close_started.elapsed();
+        // SAFETY: the old native owner is closed and this is the exact layout.
+        unsafe { std::alloc::dealloc(old_host.as_ptr(), old_layout) };
+        println!(
+            "OM2_OLD_SHAPE_32M_CONTROL map_ms={:.3} memcpy_seed_ms={:.3} \
+             map_plus_copy_ms={:.3} native_close_ms={:.3}",
+            old_map.as_secs_f64() * 1000.0,
+            old_copy.as_secs_f64() * 1000.0,
+            (old_map + old_copy).as_secs_f64() * 1000.0,
+            old_close.as_secs_f64() * 1000.0,
+        );
         assert!(
             profile.native_map_calls <= 32,
             "1-MiB block design should map a uniform 32-MiB heap in at most 32 native calls"
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opt-in 8192-page prepared in-slice heap-growth mapper profile"]
+    fn profile_fixed_heap_8192_pages_prepared_growth() -> Result<()> {
+        use crate::ce::memory::PROCESS_HEAP_HANDLE;
+
+        const PAGE_COUNT: usize = 8192;
+        const HEAP_BYTES: u32 = (PAGE_COUNT * STABLE_PRIVATE_PAGE_SIZE) as u32;
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
+        let mapped = canonical_heap_test_mapping(&mut kernel)?;
+        let budget_before = kernel.memory.private_commit_available_bytes();
+        let heap_base = kernel
+            .memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, HEAP_BYTES)
+            .expect("32-MiB heap allocation");
+        let prepared = kernel
+            .memory
+            .prepare_fixed_heap_growth(owner, kernel.memory.heap_high_water_mark(owner))
+            .expect("32-MiB detached growth proposal");
+        assert_eq!(prepared.new_page_pins().len(), PAGE_COUNT);
+        assert!(
+            prepared
+                .new_page_pins()
+                .iter()
+                .all(StablePrivatePagePin::is_host_block_backed)
+        );
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget_before - u64::from(HEAP_BYTES),
+            "detached pages charge their exact budget before publication"
+        );
+        {
+            let mut ledger = mapped.borrow_mut();
+            ledger.heap_generation = kernel.memory.heap_generation();
+            ledger.virtual_generation = kernel.memory.virtual_generation();
+        }
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let pins = NativeMappingPins::default();
+        let guards = RefCell::new(BTreeMap::new());
+        let terminal_error = RefCell::new(None);
+        let mut blobs = Vec::new();
+        NATIVE_PRIVATE_MAP_PROFILE.with(|slot| {
+            assert!(slot.borrow().is_none());
+            *slot.borrow_mut() = Some(NativePrivateMapProfile::default());
+        });
+        let map_started = std::time::Instant::now();
+        {
+            let mut guest = unsafe {
+                super::UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs)
+            }
+            .with_private_vm_mapping(super::UnicornPrivateVmMapping {
+                mapped: &mapped,
+                owner,
+                native_pins: &pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            });
+            guest.apply_prepared_private_vm(&kernel, &prepared)?;
+            assert_eq!(
+                kernel.memory.commit_prepared_private_vm(prepared),
+                Some(heap_base + HEAP_BYTES)
+            );
+            guest.private_vm_commit_complete(kernel.memory.virtual_generation());
+        }
+        let map_wall = map_started.elapsed();
+        let profile = NATIVE_PRIVATE_MAP_PROFILE.with(|slot| slot.borrow_mut().take().unwrap());
+        assert!(terminal_error.borrow().is_none());
+        assert_eq!(profile.mapped_pages as usize, PAGE_COUNT);
+        assert_eq!(mapped.borrow().private_pages.len(), PAGE_COUNT);
+        assert_eq!(pins.private_len(), PAGE_COUNT);
+        assert_eq!(guards.borrow().len(), PAGE_COUNT);
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget_before - u64::from(HEAP_BYTES)
+        );
+        assert_eq!(
+            uc.mem_regions().unwrap().len(),
+            profile.native_map_calls as usize,
+            "one native region per maximal block run"
+        );
+        println!(
+            "OM2_PREPARED_GROWTH_PROFILE pages={PAGE_COUNT} native_map_calls={} \
+             map_wall_ms={:.3} mem_map_ptr_ms={:.3} native_regions={}",
+            profile.native_map_calls,
+            map_wall.as_secs_f64() * 1000.0,
+            profile.mem_map_ptr_ns as f64 / 1_000_000.0,
+            uc.mem_regions().unwrap().len(),
+        );
+        let native_close_started = std::time::Instant::now();
+        drop(uc);
+        println!(
+            "OM2_PREPARED_GROWTH_TEARDOWN native_close_ms={:.3}",
+            native_close_started.elapsed().as_secs_f64() * 1000.0,
+        );
+        drop(guards);
+        drop(pins);
+        assert!(
+            profile.native_map_calls <= 32,
+            "uniform prepared heap growth should map at most 32 native runs"
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fixed_block_middle_unmap_keeps_suffix_and_failed_check_keeps_pins() -> Result<()> {
+        use crate::ce::memory::PROCESS_HEAP_HANDLE;
+
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
+        let mut mapped = canonical_heap_test_mapping(&mut kernel)?.into_inner();
+        let base = kernel
+            .memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 0x3000)
+            .unwrap();
+        let prepared = kernel
+            .memory
+            .prepare_fixed_heap_growth(owner, base + 0x3000)
+            .unwrap();
+        assert_eq!(
+            kernel.memory.commit_prepared_private_vm(prepared),
+            Some(base + 0x3000)
+        );
+        for (page, byte) in [(base, 0x11), (base + 0x1000, 0x22), (base + 0x2000, 0x33)] {
+            kernel
+                .memory
+                .private_page_pin(owner, page)
+                .unwrap()
+                .write_bytes(0, &[byte])
+                .unwrap();
+        }
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let pins = NativeMappingPins::default();
+        map_private_slab_pages(&mut uc, &kernel, &mut mapped, owner, &pins, None)?;
+        assert_eq!(uc.mem_regions().unwrap().len(), 1);
+        assert_eq!(pins.private_len(), 3);
+        super::unmap_private_slab_page_checked(&mut uc, &mapped, base + 0x1000)?;
+        let middle = mapped.private_pages.remove(&(base + 0x1000)).unwrap();
+        assert!(pins.release_private_after_unmap(middle.identity, middle.host_address));
+        super::remove_mapped_guest_page(&mut mapped, base + 0x1000);
+        assert_eq!(uc.mem_read_as_vec(u64::from(base), 1).unwrap(), [0x11]);
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(base + 0x1000), 1),
+            Err(unicorn_engine::uc_error::READ_UNMAPPED)
+        );
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(base + 0x2000), 1).unwrap(),
+            [0x33]
+        );
+
+        // A ledger/native mismatch cannot release the surviving run's pins.
+        uc.mem_unmap(u64::from(base + 0x2000), 0x1000).unwrap();
+        let error =
+            super::unmap_private_slab_page_checked(&mut uc, &mapped, base + 0x2000).unwrap_err();
+        assert!(format!("{error}").contains("no full native region"));
+        assert_eq!(pins.private_len(), 2);
+        assert_eq!(mapped.private_pages.len(), 2);
+        kernel.memory.retire_fixed_private_ranges_for_owner(owner);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0x2000);
+        drop(uc);
+        drop(pins);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
         Ok(())
     }
     #[test]
@@ -52606,16 +53221,13 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                 )
             })?;
             if let Some(prepared) = prepared.as_ref() {
-                for pin in prepared.new_page_pins() {
-                    map_prepared_private_slab_page(
-                        self.uc,
-                        &mut mapped,
-                        prepared,
-                        pin,
-                        mapping.native_pins,
-                        mapping.active_guards,
-                    )?;
-                }
+                map_prepared_private_slab_pages(
+                    self.uc,
+                    &mut mapped,
+                    prepared,
+                    mapping.native_pins,
+                    mapping.active_guards,
+                )?;
             }
             Ok::<(), Error>(())
         };
@@ -52789,16 +53401,13 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                 STABLE_PRIVATE_PAGE_SIZE,
             )?;
         }
-        for pin in prepared.new_page_pins() {
-            map_prepared_private_slab_page(
-                self.uc,
-                &mut mapped,
-                prepared,
-                pin,
-                mapping.native_pins,
-                mapping.active_guards,
-            )?;
-        }
+        map_prepared_private_slab_pages(
+            self.uc,
+            &mut mapped,
+            prepared,
+            mapping.native_pins,
+            mapping.active_guards,
+        )?;
         self.private_vm_applied_generation = Some(applied_generation);
         Ok(())
     }
@@ -52873,11 +53482,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                             "injected checked private VM unmap failure".to_owned(),
                         ));
                     }
-                    self.uc
-                        .mem_unmap(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64)
-                        .map_err(|err| {
-                            Error::Backend(format!("unmap private VM page 0x{page:08x}: {err:?}"))
-                        })?;
+                    unmap_private_slab_page_checked(self.uc, &mapped, page)?;
                     mapping
                         .active_guards
                         .borrow_mut()
