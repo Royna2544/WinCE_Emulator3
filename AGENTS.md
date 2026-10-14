@@ -132,38 +132,31 @@ cargo run --release --features unicorn,trace,win32-desktop -- `
 | `tests/` | raw-API and subsystem tests, PE fixtures (`tests/test_progs`) |
 | `host_progs/` | host-side helper programs (not part of the emulator build) |
 
-## Current architecture status (refreshed 2026-10-13)
+## Current architecture status (refreshed 2026-10-15)
 
-Latest user direction is to begin the scheduler-core rewrite, retaining the
-earlier plan-first/common-anchor requirement and its measured dependency gates.
-The reviewed docs bundle describes target contracts and staged gates, not
-completed architecture. The earlier experimental persistent-owner freeze
-passed 1,618 tests, but executable 650 host-crashed at 129.108 s with
-`0xC0000005` and 1,662.59 MiB RSS. Those historical results do not validate
-the current source. The latest frozen E-19 source passed 1,634 release tests
-(0 failed, 4 ignored), both no-trace release checks and 1,239 no-feature tests
-(0 failed, 1 ignored); its focused global-hook stop controls also passed three
-serial runs. E-7's count-stop and native-error controls are now green in this
-D: source, but O-P1 classification is incomplete. E-16's injected same-VA
-native-view control is green; the explicitly rerun ignored E-18 private-byte
-control remains red (`0x11223345` written, stale `0x11223344` read after a
-test-only fresh-owner closure). The production engine owner is still retained
-between slices. None of these results accepts fresh-engine default ownership,
-O-P1/O-P4/O-M1 as a whole, Stage 2 or the live app. Exact failed 650
-binary/symbols/evidence are preserved; BED2 is the hash-preserved, measured
-splash-only fallback, not the current source's release executable. No bounded
-application run has validated the E-19 source. Rebuilding current source does
-NOT reproduce BED2. See ledger E-7, E-16, E-18 and E-19 for source-bound evidence.
-Native crash/cache measurement is a diagnostic lane (decision D-003: it no longer
-gates the Task/clock stages); hold each production feature migration
-until its design/consumer/test gate is reviewed. Do not mistake unit success,
-native handle reuse or decorative splash for runtime acceptance.
-Thirteen Task/handle controls provide the expected-red Stage 3 baseline
-(12 failures, one close-source preservation pass; ledger E-8 and E-11). No
-canonical Task implementation or Stage 3 acceptance follows. Isolated native handler tests
-directly exercised a clipped commit tail, including a leaf-thunk candidate,
-but they have not passed full-backend or app gates. See `PROGRESS.md` and
-`docs/PLAN.md` for the current gate state.
+The user authorized the scheduler-core rewrite with plan-first/common-anchor
+dependency gates. The reviewed docs describe target contracts and staged
+gates, not completed architecture. The historical persistent-owner 650 trial
+passed 1,618 tests but host-crashed at 129.108 s with `0xC0000005` and
+1,662.59 MiB RSS. D-003 keeps native crash/cache work in a diagnostic lane:
+fresh engine per slice is now the source-gated default, while persistent
+engines are deferred to Stage 8. BED2 is the hash-preserved, measured
+splash-only fallback, not the current source's release executable. E-38 is
+the only bounded fresh-default iNavi run; the combined current source has
+not been live-tested. Do not mistake unit success, native handle reuse or a
+decorative splash for runtime acceptance.
+
+Thirteen Task/handle controls formed the historical expected-red Stage 3
+baseline (12 failures, one close-source preservation pass; ledger E-8/E-11).
+The current D: source has source-gated canonical thread/process aliases,
+checked creation ownership, exact-birth child completion, a bounded
+`TerminateProcess` execution-stop handshake, and O-K3 execution/registered
+Thread/Process wait pins
+([receipt](evidence/stage3-pins-20261015/validation.receipt.md)). Opaque
+non-task wait slots remain unpinned; aliasless Sleep-suspend and stale
+intra-slice TID continuation remain open. These slices do not complete the
+machine-owned Task/continuation/scheduler core, Stage 3, or live-app
+acceptance. See `PROGRESS.md` and `docs/PLAN.md` for current gates.
 
 The scheduler, message delivery, and CPU slicing are the weak spine. Measured
 facts an agent must not re-derive or contradict (numbers and run conditions in
@@ -185,9 +178,9 @@ facts an agent must not re-derive or contradict (numbers and run conditions in
   it stays opt-in until the scheduler has a real time-based quantum.
 - Historical fresh-per-slice runs rebuilt Unicorn and lost the translation
   cache: fixed per-slice cost was 3.6% at ~300 ms slices but 15–25% at the
-  65–140 ms slices fair round-robin produced. The current experimental source
-  retains a process owner; neither cache benefit nor fresh-default safety has
-  been accepted from that change.
+  65–140 ms slices fair round-robin produced. The current source uses a fresh
+  native owner per slice; persistent-owner cache benefits remain a Stage 8
+  measurement, not an accepted performance claim.
 - TimerSystem mixes boot wall time with a sleep-driven virtual offset;
   there is no coherent centralized virtual scheduler or idle fast-forward.
   The former growing sensor-init retries are corrected by packed samples;
@@ -196,7 +189,7 @@ facts an agent must not re-derive or contradict (numbers and run conditions in
   Matched 330 s live profiles reduced peak host RSS from ~1,300 to 562 MiB.
   The preserved BED2 run observed the first splash by +4.358 s, sampled peak
   RSS 555.633 MiB and a single FIFO tap's first callback after 0.397 s; these
-  are not current E-19 runtime results or controlled improvements. All its
+  are not current-source runtime results or controlled improvements. All its
   sampled and terminal frames remained splash. Do not call splash timing full
   CE boot, or conflate guest heap, host RSS and virtual reservation.
 - Blocking/callbacks are hand-built per API (`pending_*_returns` x16,
@@ -216,15 +209,12 @@ authorized beginning phase 1 on 2026-10-13 after discussion):
    continuation frames) replacing the ad hoc vectors, CE priority/round-robin
    in virtual time with opt-in fast-idle. Persistent per-process engines are
    deferred to Stage 8 behind the CPU interface.
-   Experimental source contains process-owned native engine leases and
-   task-owned compatibility wait storage, but its first live trial failed;
-   it is not the installed accepted runtime. Per docs/DECISIONS.md D-003, continue
-   through the common design gates on the fresh-engine-per-slice lifetime;
-   persistent engines are a later swap (plan Stage 8). Run mode is live-first
-   with an opt-in fast-idle (D-002).
-   Full task state/continuations/virtual time are not yet implemented. Keep
-   instruction count and current scheduling policy unchanged during the first
-   ownership validation. Removing/reinstalling global hooks invalidates hooked
+   The source-gated fresh-engine-per-slice lifetime (D-003) carries bounded
+   canonical task identity and registered-wait pin slices; persistent engines
+   are a later Stage 8 swap. Run mode is live-first with opt-in fast-idle
+   (D-002). Full task state, continuations and virtual time are not yet
+   implemented. Keep instruction count and current scheduling policy until
+   their separate gates. Removing/reinstalling global hooks invalidates hooked
    translations, so persistence alone is not a cache/performance claim.
 2. **Move the HLE boundary to the CE 6 syscall layer** (spike first): run the
    real `coredll.dll` over a Rust kernel (trap addresses `0xFFFFxxxx`,

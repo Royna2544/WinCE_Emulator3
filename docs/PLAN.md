@@ -133,7 +133,8 @@ close only their named gates, not Stage 2 or live acceptance.
   debug no-default gate passed 1,364/0/5 and release unicorn/trace/desktop
   passed 1,829/0/11, with desktop no-trace check also green
   ([receipt](../evidence/stage3-owner-20261014/validation.receipt.md)).
-  Four ownership/pin controls remain deliberately ignored. A later bounded
+  Four ownership/pin controls were deliberately ignored at that owner-slice
+  checkpoint; the later O-K3 pin gate activated two of them. A bounded
   child-exit slice adds exact-birth completion, worker retirement at verified
   exit, request-only parked-child retention and deferred real-process signaling.
   A subsequent bounded, source-tested `TerminateProcess` handshake stops an
@@ -144,11 +145,18 @@ close only their named gates, not Stage 2 or live acceptance.
   no-feature 1,375/0/5 ignored and release Unicorn/trace/desktop
   1,858/0/11 ignored, with the no-trace desktop check green
   ([receipt](../evidence/stage3-terminate-20261015/validation.receipt.md));
-  no live-app behavior has been measured. CE caller
+  no live-app behavior has been measured. A subsequent O-K3 source gate
+  retains execution-live task births after final public-alias closure and
+  pins registered Thread/Process wait targets by exact birth before publishing
+  a wait. Completion, timeout, cancellation and failed preparation release
+  only acquired pins ([receipt](../evidence/stage3-pins-20261015/validation.receipt.md)).
+  Opaque non-task wait slots and duplicated native wait payloads remain
+  unpinned. CE caller
   wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
-  generic parked-wait continuation and O-K3 wait pins remain open. These
-  bounded slices are not full Stage 3 acceptance.
+  aliasless Sleep-suspend, stale intra-slice TID continuation and generic
+  parked-wait continuation remain open. These bounded source slices are not
+  full Stage 3 or live-app acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full
