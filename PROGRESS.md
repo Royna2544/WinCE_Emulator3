@@ -4,277 +4,40 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-14 E-44 Fixed Heap/Stack Slab Source Gate
+## 2026-10-14 Stage 2 source gates E-30 to E-44
 
-- The source reserves the initial 16-MiB `ProcessHeapArena` and
-  4-MiB `ThreadStack` as owner-qualified fixed ranges in `virtual_allocations`
-  instead of adding `ram:ce-heap-arena` and `ram:guest-stack` owner blobs.
-  Heap pages commit at allocation; stack pages commit lazily on a native fault.
-  Native mappings retain their backing pins through the checked owner/unmap
-  lifetime. Queued payload delivery checks fixed-slab overlap and permits its
-  prepared heap path, rather than silently writing a stale copied blob.
-- On the formatted six-file source snapshot, the serial release
-  `unicorn,trace,win32-desktop` all-target suite passed **1,785/0/17 ignored**
-  across 17 result blocks, paired debug no-feature passed **1,321/0/13
-  ignored** across 17, and the debug `unicorn,win32-desktop` no-trace check
-  passed. The first release run's **803/28/4** was diagnostic: 24 outdated
-  heap/stack/budget fixtures and four wait fixtures without birth context
-  were repaired, not production guards weakened. An audited startup boundary
-  routes registry, time, geometry, find-data and module/path outputs through
-  guarded hooks with whole-span preflight. Unconverted direct-import outputs
-  can still fail closed on an untouched stack page; full host-write coverage
-  is not claimed ([E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md)).
-- A bounded synthetic 56-MiB sealed-RX profile passed **1/1** in release after
-  fixed-slab setup. Its owned blob capacity, fresh blob writes, and fresh/reused
-  readback were each **77,824 B**, versus **21,049,344 B** owned capacity,
-  fresh writes and readback in the E-43 pre-slab debug control: a **20,971,520 B
-  (20 MiB)** logical reduction for those fields. A same-mode post-slab debug
-  control also passed **1/1** with the same 77,824-B fields. Its single setup
-  samples were 16.740/25.249 ms fresh/reused versus old debug 33.246/37.971
-  ms, but fixed-slab reservation is outside the timed setup section; no speed
-  or host-RSS gain follows. A separate exact-path blocked serial/NMEA test
-  passed **1/1**, writing two previously untouched stack pages and surviving
-  a fresh owner. Stale different-birth behavior was not independently tested.
-  The global heap cursor and ownerless allocation metadata remain O-M2 work,
-  heap spillover remains copy-backed, and there was no E-44 iNavi run, RSS or
-  map-readiness measurement.
+Suite tallies, hashes and receipts are in `docs/evidence/ledger.md` (E-30 to
+E-44); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
 
-## 2026-10-14 E-43 Final-Byte Main-Image Source Gate
-
-- The main EXE loader now partitions its final import- and trampoline-patched
-  bytes into sealed R/RX and mutable copy-backed runs. Final one-time branch
-  rewrites are eligible; IAT thunk pages and stub tails beyond `SizeOfImage`
-  are not. An opt-in, parse/load-only probe of the verified iNavi EXE plus
-  seven DLLs sealed **1,379/2,168** image pages and **1,379/1,379** eligible
-  non-writable-section pages: **5,648,384 B (5.386719 MiB)**. **1,224** of
-  those sealed pages contain final bytes changed by loader patching. The old
-  155-page result measured the now-superseded original-byte equality filter
-  ([attempt-06 log](evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-06.raw.log)).
-- At E-43, the same load-only owner inventory totaled **26 blobs, 36,679,680 B
-  (34.980469 MiB)**, including 16 MiB of heap-arena backing, 4 MiB of stack
-  backing, and 5,648,384 B sealed main-image backing. Runtime heap spillover
-  and later DLL loads are not in that startup inventory. E-38's 55.78-MiB
-  PID-1 `blob_mb` mean is an older live, per-slice truncated total, not a
-  matched byte or speed comparison.
-- The final source passed the serial release `unicorn,trace,win32-desktop`
-  workspace suite **1,761/0/17 ignored** across 17 result blocks, paired
-  debug no-feature **1,303/0/13 ignored** across 17 blocks, and the debug
-  `unicorn,win32-desktop` no-trace check. Focused patched-branch, mutable-IAT,
-  direct native-write overlap, file-view and malformed-blob controls passed.
-  Earlier reds are diagnostics, not signoff. The [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md)
-  pins exact source, PE-input and raw-log hashes. Exhaustive host-write audit,
-  `PrivatePageBudget` treatment and matched app behavior remain open; there
-  was no new app launch, mount write, boot timing or map-readiness claim.
-
-## 2026-10-14 E-42 Immutable Image-Page Eligibility Source Gate
-
-- A pure PE-loader selector now borrows complete 4-KiB candidate pages from
-  caller-supplied image bytes. Section characteristics, not names, determine
-  R/RX eligibility; headers, writable or execute-only sections, partial or
-  mixed pages, and patch-overlapping pages are excluded. Overflow and
-  out-of-image layouts fail closed. The synthetic test manually changed a
-  supplied `Vec` before selection; it does not execute actual relocation,
-  import or trampoline patching.
-- The expected-red missing-selector compile control preceded final focused
-  **5/0** no-feature and **5/0** debug Unicorn-feature runs. The full
-  no-feature suite passed **1,302/0/13 ignored** across 17 blocks on
-  `src/emulator/pe_loader.rs` SHA-256
-  `30791E94E6F47DD0A8B4B2DA0F1CA42253F4B07519B48CC12C2A083C0F68016A`
-  ([E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
-  A later test accidentally overwrote the expected-red raw log; its original
-  bytes are gone. The four passing logs remain hash-verified in that receipt.
-- At E-42 this was a selector-only source gate: runtime image mapping still
-  used the RWX/copy path, with no sealed backing or native pointer mapping.
-  Later work added those paths and the final-byte coverage above. E-42 did
-  not run the app or access writable mounts; Stage 2 live acceptance remains
-  open.
-
-## 2026-10-14 D-008 Public Shared-View Slab Source Gate
-
-- Public named `CreateFileMappingW`/`MapViewOfFile` views now use one canonical,
-  budget-charged shared-page authority. Focused real-MIPS A→B→A tests prove
-  isolation at a shared guest VA across fresh owners and unflushed same-
-  mapping alias bytes within a slice. DIB-to-public migration, file-backed
-  prefix/tail preservation, budget-failure rollback and raw Flush alias
-  controls passed. The fixture manually selects the child; it does not prove
-  guest `CreateProcessW` handoff or CE same-VA guarantees.
-- The final serial broad gates passed **1,744/0/14 ignored** in release with
-  `unicorn,trace,win32-desktop` and **1,297/0/13 ignored** with no features on
-  one nine-file source/test/lock hash snapshot (`src/ce/memory.rs` SHA-256
-  `CF7CF08F6D80D9D4183ADE958A4BD92B5CCBB298660D724693B3AA774D3884B6`).
-  An earlier release attempt found stale assertions; a later no-feature run
-  caught a debug-only offset underflow that release had wrapped. The guarded
-  subtraction passed both final suites. The earlier logs are diagnostics,
-  not signoff ([D-008 receipt](evidence/d008-shared-view-20261014/validation.receipt.md)).
-- This closes the D-008 **source gate only**. No D-008 iNavi run or writable-
-  mount access occurred, so no new boot, frame, memory-peak or readiness claim
-  follows. E-38 remains the last bounded live run and stayed on the splash.
-  Image/heap backing, full Stage 2 acceptance, and Stage 3 task authority
-  remain open.
-
-## 2026-10-14 E-39 Native Same-VA Controls and GMS Broad Gate
-
-- E-20's real-MIPS A→B→A controls passed across fresh native owners: public
-  `VirtualAlloc` in distinct process births isolated bytes at the same VA,
-  while an injected `FileMappingView` pair validated owner-qualified native
-  view seeding/readback at one VA. The view fixture does not prove public
-  `MapViewOfFile`, named mapping reopen, same-mapping aliases, guest
-  `CreateProcessW` handoff or shared-view slab coherence. Focused controls
-  each passed 1/0; frozen-source full release passed **1,742/0/14 ignored**
-  and no-feature **1,296/0/13 ignored**. There was no E-20 production fix or
-  app run ([ledger E-39](docs/evidence/ledger.md),
-  [E-20 receipt](evidence/e20-native-same-va-20261014/validation.receipt.md)).
-- The separate GMS follow-up passed its four public API tests in both broad
-  suites above, after a focused 4/0/0 gate. Boot-reserved physical RAM and
-  stable private pages share one admission/reporting budget; it does **not**
-  charge heap, image or legacy file-view backing and is not a full
-  guest-memory census. No GMS app run occurred
-  ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
-
-## 2026-10-14 E-38 Bounded E-37 Live Run
-
-- A separate one-run approval and fresh adjacent SHA-verified ZIP backups
-  enabled a 330-second iNavi run of the **preserved E-37 release EXE**, not
-  later `target/` output. It exited 0 after 330.392 s, with no watchdog trip
-  or guest CPU error and a completed observer. The sampled RSS/private peaks
-  were **430.676/444.953 MiB**; the previous persistent 330-second runs
-  peaked around 1.49–1.54 GiB RSS. The first genuine iNavi SE splash appeared
-  at input-ready +4.967 s and stayed through the end; **no map** appeared.
-  Guest traces retained nine positive COM7 reads (2,262 B) and the tap's
-  down/up WNDPROC returns. The 1,714 busy slices give 17.120 weighted MIPS
-  and 7.278 ms setup+hooks per busy slice. This 17.120 MIPS counts `run_ms`
-  only, excluding setup; E-9's same-field hookless fresh-engine busy range
-  was 22–34 MIPS **for iNavi** in a different two-minute phase. E-38's
-  corresponding iNavi-only figure was **26.359 MIPS**, inside that range;
-  the overall 17.120 MIPS includes slower helper processes and does not
-  establish a regression. The prior persistent runs lack matched
-  per-slice profiles. The [E-38 receipt](evidence/e37-live-20261014T051228Z/analysis.receipt.md)
-  records authority, backup/bin hashes, timing, limits and caveats. That
-  launch approval is spent; map readiness and Stage 2 acceptance remain open.
-
-## 2026-10-14 E-37 Fresh-Default View/Legacy-Page Sync
-
-- The first approved fresh-default iNavi run exited after 2.934 s with
-  `READ_UNMAPPED` on an untouched file view, before NMEA or tap. The three
-  original writable mounts had fresh adjacent SHA-verified ZIP backups;
-  [live evidence](evidence/e22-live-20261014T041105Z/analysis.receipt.md)
-  distinguishes its short startup samples from a full run.
-- Outbound view readback and inbound seeding now touch only native mapped
-  spans; unmapped lazy-seed mismatches still fail. The first-import generation
-  mapper seeds only newly mapped pages, preserving earlier guest stores.
-  Direct and public controls passed; full release passed **1,739/0/14
-  ignored**, no-feature **1,294/0/13 ignored**, both no-trace checks and the
-  release build exited 0. The [E-37 receipt](evidence/op4-fresh-view-readback-20261014/validation.receipt.md)
-  holds exact source, log, EXE and PDB hashes and coverage limits.
-- This closes a source-bound sync gate, **not** live or Stage 2 acceptance.
-  No second app run occurred; a new run needs fresh human approval and new
-  adjacent verified mount backups. GMS, E-20 A→B→A isolation and shared-view
-  slab coherence remain separate ([ledger E-37](docs/evidence/ledger.md)).
-
-## 2026-10-14 E-36 O-P4 Source-Bound Fresh Default
-
-- `ProcessNativeEngine::new` now selects a fresh native owner for each slice;
-  `WINCE_EMU_PERSISTENT_NATIVE_ENGINE=1` is the explicit Stage 8 experiment.
-  Fresh finish/abort closes the owning wrapper while run callback boxes and
-  private-page pins remain alive, then releases them; it does not individually
-  remove hooks first. This close proof is specific to the pinned, statically
-  built vendored Unicorn 2.1.5 C source, not a general checked-close API.
-  The ordinary closed-owner Context/MIPS continuation and 200-slice pointer-
-  backed churn controls passed. Full release passed **1,730/0/14 ignored**,
-  no-feature **1,292/0/13 ignored**; both no-trace checks and release build
-  exited 0. The [O-P4 receipt](evidence/op4-fresh-default-20261014/validation.receipt.md)
-  retains exact source, log, EXE and PDB hashes and limits.
-- This closes the frozen-source O-P4 gate only. No post-switch bounded iNavi
-  run, host-memory comparison or map-readiness measurement occurred. Such a
-  writable-mount run needs fresh human approval and fresh adjacent ZIP backups.
-  Real native two-process same-VA A→B→A bytes, shared-view coherence, Stage 3
-  checkpoint relineage and full Stage 2 acceptance remain open
-  ([ledger E-36](docs/evidence/ledger.md)).
-
-## 2026-10-14 E-35 Public Private-VM Slab Gate
-
-- Public COREDLL private `VirtualAlloc` and current-target Ex now use
-  owner-qualified stable 4-KiB page backing with checked native map/change
-  publication; the former internal test-only slab selector is gone. The
-  public fresh-native-owner ordinal first failed at the intended pre-switch
-  canonical-backing assertion, then passed 1/0/0 on frozen source. The raw
-  integration control also passed 1/0/0. Full release passed **1,727/0/15
-  ignored**, no-feature **1,292/0/13 ignored**; both no-trace checks and the
-  release build passed. [E-35 receipt](evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)
-  records exact source/log/EXE hashes and commands.
-- Negative monitor checkpoint guards, independent private-page clone bytes,
-  64 checked unmap cycles, and a pre-`uc.mem_unmap` failure retaining the pin
-  and budget charge passed in the release suite. This closes only the bounded
-  E-35 public private-family gate. O-P4 checked close/fresh-default, native
-  two-process A→B→A same-VA byte isolation, shared-view slabs, Stage 3
-  checkpoint relineage, and live-app readiness remain open. No app run or
-  writable-mount operation occurred ([ledger E-35](docs/evidence/ledger.md)).
-
-## 2026-10-14 E-34 O-P1 Stop Classification
-
-- Typed JR repair and a real-MIPS mixed deadline/peer-yield continuation control close O-P1 stop classification only; report/failure hardening, Stage 2 and app readiness remain open ([ledger E-34](docs/evidence/ledger.md)).
-
-## 2026-10-14 E-33 Windows TCG Commit-Tail Repair
-
-- The pristine vendored Windows handler's final-commit branch requested the
-  full 4 MiB beyond a small reserved code arena. A one-MiB real-MIPS native
-  test reproduced host `0xC0000005` before the fix. The narrow local clamp
-  now limits each commit to the remaining reserved bytes; independent 1/2-MiB
-  and combined 1/2/8-MiB/default MIPS controls passed. Full release passed
-  **1,695/0/17 ignored**, no-feature **1,265/0/14 ignored**; alternate feature
-  checks, release build, format and diff checks passed. The default arena size
-  was not changed. The E-32 crash dump does not prove this branch caused its
-  failure, and no app rerun occurred. [E-33 receipt](evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)
-  records source/test/build hashes and limits.
-
-## 2026-10-14 E-32 Bounded iNavi Run and Native TCG Crash
-
-- On the source-matched E-31 build, the one newly approved original-mount
-  read/write run ended early with host `0xC0000005` at 135.282 s; it did not
-  reach the +153 s tap or map. The settled image remained genuine iNavi
-  splash. With `ce.slice_profile=debug`, 121 native slices completed after
-  input-ready +120 s through +130.896 s across outgoing PIDs 1/67/68, so
-  complete post-120 native idleness is disproved for this run. The final
-  ~3.9-s no-completion gap remains unlocalized. Sixteen raw-NMEA posts were
-  accepted and the retained ring shows 11 positive guest COM7 reads/2,784 B.
-  Peak sampled RSS was 1,655,271,424 B, below the 2-GiB guard. The matching
-  dump/PDB identify a host Unicorn TCG code-emission write crossing a page;
-  arena bounds/VEH return are absent, so the known Windows commit-tail defect
-  is plausible but not yet attributed. Three fresh adjacent ZIPs passed
-  source-entry SHA checks; mounted file-content hashes stayed unchanged.
-  [E-32 receipt](evidence/e22-live-20261014T002535Z/analysis.receipt.md)
-  retains exact hashes, symbols, input/frame/memory and limits. No second app
-  run is authorized by that one-run approval.
-
-## 2026-10-14 E-31 O-P1 JR-Repair Red Baseline
-
-- The first native-deadline JR-thunk repair predicate was extracted with
-  unchanged production behavior. A pure typed-peer-yield/deadline control
-  failed at its intended marker-based decision and was ignored at that
-  checkpoint pending a genuine real-MIPS mixed-stop PC fixture. The second
-  unconditional JR repair was still untested; O-P1 was **not closed** at E-31.
-  The final E-31 source passed release **1,691/0/17
-  ignored**, no-feature **1,265/0/14 ignored**, both no-trace checks, format
-  and diff checks. The executable was rebuilt, but no app run occurred.
-  [Expected red](evidence/e31-native-deadline-jr-repair-20261014/expected-red.receipt.md)
-  and [validation](evidence/e31-native-deadline-jr-repair-20261014/validation.receipt.md)
-  retain exact hashes and raw logs.
-
-## 2026-10-14 E-30 Detached Report Host Consumer
-
-- The live and monitor loops now consume the CPU's outgoing
-  `AttemptExecution` and offer its immutable report/result to an optional
-  host observer before their existing error or success handling. Production
-  passes `None`; scheduling and `LegacyUnbound` Task/Frame authority did not
-  change. Two no-feature host-consumer controls first failed at zero
-  observed reports and now pass 2/0. On the final source, full release passed
-  **1,691/0/16 ignored** and no-feature **1,265/0/14 ignored**; both
-  no-trace Unicorn checks, format, and diff checks passed. Exact hashes and
-  raw logs are in
-  [E-30 validation](evidence/e30-native-attempt-observer-20261014/validation.receipt.md).
-  This is not yet the opt-in bounded writer/native-stage/heartbeat trace;
-  nested child attempts are still uncollected, and no new app run occurred.
-
+- Native attempt reports reach an optional host observer (E-30). O-P1 stop
+  classification is closed; hardening remains (E-31, E-34).
+- E-33 clamps the vendored Windows TCG commit tail to the reserved arena
+  (D-009). It is not proven to be E-32's crash cause; E-32 (persistent owner)
+  crashed at 135.3 s with 1.65 GB RSS on the splash.
+- Public private `VirtualAlloc` uses owner-qualified stable pages (E-35). Fresh
+  native owner per slice is the default; the persistent owner is an explicit
+  Stage 8 opt-in (E-36).
+- Fresh-owner view sync reads and seeds only natively mapped pages, and the
+  generation mapper seeds only newly mapped pages (E-37).
+- E-38, the only live run on the fresh default (preserved E-37 EXE): exit 0 at
+  330 s, splash only, no map; RSS peak 430.7 MiB (BED2 555.6 MiB, persistent
+  runs ~1.5 GiB); iNavi busy-slice 26.4 MIPS, inside E-9's 22–34; live heap
+  reached 31.5 MB. That approval is spent.
+- Real native two-process same-VA A→B→A isolation holds for public private
+  pages and injected views (E-39). GlobalMemoryStatus uses one budget with
+  the device boot reservation (E-40).
+- Public named file-mapping views use canonical shared slabs, with
+  `MappingBacking` Legacy|Slab one-way (E-41). Sparse anonymous migration was
+  dropped: CE documents whole-section `SEC_COMMIT` (ms923951).
+- Main-EXE non-writable pages are sealed from final post-trampoline bytes and
+  pointer-mapped R/RX: real iNavi 1,379/2,168 pages, 5.39 MiB (E-42 selector,
+  E-43).
+- The initial heap arena and thread stacks are owner-qualified fixed slabs;
+  heap commits at the allocation high-water, stack on fault or guarded host
+  writes (E-44). Synthetic owned-blob copy fell from 21,049,344 B to 77,824 B.
+- Open: O-M2 per-birth heap (in progress), heap spillover, unconverted direct
+  stack outputs, writable image/DLL pages, Stage 3, and a combined live run
+  (needs fresh approval).
 ## 2026-10-13 Parallel Continuation
 
 - Stage 2 facts on the D: checkout, 2026-10-13/14. Details, receipts and suite
