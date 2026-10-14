@@ -5792,6 +5792,8 @@ impl UnicornMips {
                 last_debug: self.last_debug.take(),
                 last_wall_clock_debug: self.last_wall_clock_debug.take(),
                 last_native_slice_outcome: std::mem::take(&mut self.last_native_slice_outcome),
+                #[cfg(all(test, feature = "unicorn"))]
+                native_mixed_jr_stop_probe: self.native_mixed_jr_stop_probe.take(),
                 private_slab_attempt_poisoned: std::mem::take(
                     &mut self.private_slab_attempt_poisoned,
                 ),
@@ -11484,6 +11486,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             last_debug: None,
             last_wall_clock_debug: None,
             last_native_slice_outcome: NativeSliceOutcome::NoAttempt,
+            #[cfg(test)]
+            native_mixed_jr_stop_probe: None,
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
@@ -56823,6 +56827,222 @@ mod unicorn_tests {
             ),
             "a typed safe peer yield must not be overridden by a concurrent native deadline even when it has no debug marker"
         );
+    }
+
+    /// A real MIPS jump reaches a safe JR block while a visible parked peer
+    /// requests a checked hook stop and Unicorn's own timer also expires.
+    /// The outgoing attempt must retain both raw facts without promoting the
+    /// deadline-only debug marker or rewriting the peer's raw JR continuation;
+    /// resuming that continuation must dispatch the real import exactly once.
+    #[test]
+    #[ignore = "expected red: E-34 mixed real-MIPS peer yield/native deadline still rewrites the checked JR continuation"]
+    fn mixed_native_deadline_visible_peer_yield_preserves_checked_jr_continuation()
+    -> crate::Result<()> {
+        use super::{AttemptObservation, NativeHookStopReason, NativeMixedJrStopProbe};
+
+        let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let mut bytes = tiny_mips_spinner_pe();
+        let entry = 0x0040_1000u32;
+        let jump_pc = entry + 8;
+        let jr_pc = entry + 16;
+        // The setup attempt executes lui/ori and stops before this jump. The
+        // mixed attempt executes j/nop, then enters the real JR block.
+        write_vec_u32(&mut bytes, 0x200, 0x3c19_0000 | (trap >> 16)); // lui t9,trap_hi
+        write_vec_u32(&mut bytes, 0x204, 0x3739_0000 | (trap & 0xffff)); // ori t9,t9,trap_lo
+        write_vec_u32(
+            &mut bytes,
+            0x208,
+            0x0800_0000 | ((jr_pc >> 2) & 0x03ff_ffff),
+        ); // j jr_pc
+        write_vec_u32(&mut bytes, 0x20c, 0); // delay-slot nop
+        write_vec_u32(&mut bytes, 0x210, 0x0320_0008); // jr t9
+        write_vec_u32(&mut bytes, 0x214, 0); // delay-slot nop
+        write_vec_u32(&mut bytes, 0x218, 0x2610_0001); // addiu s0,s0,1 after import return
+        write_vec_u32(&mut bytes, 0x21c, 0x1000_ffff); // bounded by count on resume
+        write_vec_u32(&mut bytes, 0x220, 0);
+        let image = crate::pe::PeImage::parse_bytes("e34-mixed-jr-parent.exe", &bytes)?;
+        assert_eq!(image.entry_point_va(), entry);
+        let mut kernel = phase1_kernel("e34-mixed-jr-parent.exe")?;
+        let parent_state = kernel.current_process_state();
+        let parent_birth = kernel.current_process_birth_key().expect("boot birth");
+        let mut active = super::UnicornMips::new()?;
+        active.load_pe_image(&image)?;
+        active
+            .import_traps
+            .insert(crate::emulator::imports::ImportTrap {
+                address: trap,
+                module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT),
+                name: Some("GetTickCount".to_owned()),
+                iat_va: 0,
+            });
+        super::refresh_import_trap_page_blob(&mut active.mapped_blobs, &active.import_traps);
+        assert!(active.trampoline_origins_all_direct());
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[29] = active.stack_top.expect("stack") - 0x100;
+        regs.regs[31] = entry + 24;
+        active.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        active.running_guest_thread = Some((1, u32::MAX));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let setup = active.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(jump_pc),
+                live_pump: false,
+            },
+        );
+        setup.result?;
+        assert_eq!(setup.report.final_outcome(), super::NativeSliceOutcome::RequestedPcStop);
+        assert_eq!(active.saved_context_pc(), Some(jump_pc));
+        assert_eq!(
+            active.last_debug_snapshot().expect("setup snapshot").t9,
+            trap,
+            "the real MIPS lui/ori pair must establish the import target"
+        );
+        assert!(
+            active
+                .last_debug_snapshot()
+                .expect("setup snapshot")
+                .import_counts
+                .is_empty(),
+            "setup must not dispatch the import"
+        );
+
+        let launch = kernel.queue_process_launch(Some("\\Test\\e34-visible-peer.exe".to_owned()), None);
+        assert!(kernel.take_pending_process_launches().iter().any(|queued| queued.process_id == launch.process_id));
+        let peer_state = crate::ce::kernel::CurrentProcessState {
+            process_id: launch.process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        };
+        kernel.set_current_process_state(peer_state);
+        let peer_window = kernel.create_window_ex_w_with_rect(
+            launch.thread_id,
+            "e34_visible_peer",
+            "",
+            None,
+            0,
+            crate::ce::gwe::WS_VISIBLE,
+            0,
+            crate::ce::gwe::Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert!(kernel.gwe.validate_window(peer_window));
+        kernel.set_current_process_state(parent_state);
+        let mut peer = phase1_counter_cpu(0x2000, "e34-visible-peer.exe")?;
+        peer.set_initial_thread_id(launch.thread_id);
+        let mut peer_regs = super::MipsGuestContext::zero();
+        peer_regs.regs[29] = peer.stack_top.expect("peer stack") - 0x100;
+        peer.saved_context = Some(super::SavedCpuContext {
+            pc: peer.entry.expect("peer entry"),
+            regs: peer_regs,
+        });
+        active.parked_child_processes.push_back(super::ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: peer_state,
+            thread_id: launch.thread_id,
+            cpu: Box::new(peer),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\Test\\e34-visible-peer.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from("e34-visible-peer.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+        assert!(active.active_should_yield_to_visible_parked_process(&kernel));
+        let probe = Rc::new(std::cell::Cell::new(NativeMixedJrStopProbe {
+            jr_pc,
+            pause_after_checked_stop: std::time::Duration::from_millis(1_500),
+            service_forced: false,
+            checked_stop_seen: false,
+        }));
+        active.native_mixed_jr_stop_probe = Some(Rc::clone(&probe));
+        // A prior slice-end selection keeps the parent for exactly this
+        // native attempt instead of rotating to the visible peer in preflight.
+        active.slice_end_rotation_pending = true;
+        let mixed = active.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 0,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        mixed.result?;
+        let report = mixed.report;
+        assert!(probe.get().service_forced && probe.get().checked_stop_seen);
+        assert!(report.attempt_id().is_some());
+        assert_eq!(report.start_process_id(), Some(parent_state.process_id));
+        assert_eq!(report.end_process_id(), Some(parent_state.process_id));
+        assert_eq!(report.start_process_birth(), Some(parent_birth));
+        assert_eq!(report.end_process_birth(), Some(parent_birth));
+        assert_eq!(report.start_pc(), Some(jump_pc));
+        assert_eq!(report.native_result(), &AttemptObservation::Value(()));
+        assert_eq!(report.count_stop_query(), &AttemptObservation::Value(false));
+        assert_eq!(
+            report.timeout_query(),
+            &AttemptObservation::Value(true),
+            "Unicorn's own timer must expire during this native attempt"
+        );
+        assert_eq!(report.hook_stop_reason(), Some(NativeHookStopReason::VisibleParkedPeerYield));
+        assert_eq!(report.requested_pc_stop(), None);
+        assert_eq!(report.raw_stop_pc(), &AttemptObservation::Value(jr_pc));
+        assert_eq!(kernel.current_process_id(), launch.process_id);
+        let outgoing = active
+            .parked_child_processes
+            .iter()
+            .find(|process| process.process_state.process_id == parent_state.process_id)
+            .expect("outgoing parent is parked after real native handoff");
+        let snapshot = outgoing.cpu.last_debug_snapshot().expect("parent snapshot");
+        let saved_pc = outgoing.cpu.saved_context_pc().expect("parent continuation");
+        let native = outgoing.cpu.native_engine.lease().expect("parent native owner");
+        let native_pc = native.reg_read(RegisterMIPS::PC).expect("native PC") as u32;
+        native.finish().expect("finish parent inspection lease");
+        eprintln!(
+            "E34 mixed JR: raw={:?} saved=0x{saved_pc:08x} native=0x{native_pc:08x} snapshot=0x{:08x} marker={} outcome={:?}",
+            report.raw_stop_pc(), snapshot.pc, snapshot.host_wall_clock_stop.is_some(), report.final_outcome()
+        );
+        assert!(
+            snapshot.host_wall_clock_stop.is_none(),
+            "a checked typed peer yield cannot acquire the deadline-only debug marker"
+        );
+        assert_eq!(saved_pc, jr_pc, "the checked JR continuation must not be rewritten");
+        assert_eq!(native_pc, jr_pc);
+        assert_eq!(snapshot.pc, jr_pc);
+        assert!(snapshot.import_counts.is_empty(), "the import must not dispatch before resume");
+
+        // The slice-end handoff selected the peer; explicitly return to the
+        // parked parent before testing the saved raw JR continuation.
+        assert!(active.rotate_to_next_parked_process(&mut kernel));
+        assert_eq!(kernel.current_process_id(), parent_state.process_id);
+        active.slice_end_rotation_pending = true;
+        active.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        )?;
+        assert!(
+            active
+                .last_debug_snapshot()
+                .expect("resumed parent snapshot")
+                .import_counts
+                .iter()
+                .any(|count| count.ordinal == Some(crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT) && count.count == 1),
+            "resuming the protected JR must dispatch exactly one real GetTickCount import"
+        );
+        Ok(())
     }
 
     #[test]
