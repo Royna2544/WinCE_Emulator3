@@ -220,9 +220,11 @@ close only their named gates, not Stage 2 or live acceptance.
   exit/modal-HWND cleanup does not sweep a reused TID. A failed a01 attempt
   remains preserved. The separate bounded thread-directed GWE birth
   [source gate](../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md)
-  passed release 1,952/0/9 and no-feature 1,417/0/3; remaining numeric GWE
-  producers, native continuation payloads, wait-ID wrap/reuse and live modal
-  behavior remain later gates
+  passed release 1,952/0/9 and no-feature 1,417/0/3. The separate HWND-less thread-timer
+  [source gate](../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md)
+  passed release 1,960/0/9 and no-feature 1,424/0/3 while preserving the
+  HWND-owned/legacy path. Remaining numeric GWE producers, native continuation
+  payloads, wait-ID wrap/reuse and live modal behavior remain later gates
   ([tasks-scheduler](subsystems/tasks-scheduler.md)). Opaque non-task targets
   remain unpinned, while synchronous finite inline timeout paths are outside
   the published-wait pin transaction. CE

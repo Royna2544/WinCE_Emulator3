@@ -34,7 +34,7 @@ per-task SMT frames remain required. Controls: `occupied_send_message_timeout_sl
 `PostThreadMessageW`, `PostMessageW(hwnd=0)` and self `PostQuitMessage` capture a live `ThreadBirthKey`; stale births reject queue, quit, status, timestamp, trace and wake publication.
 One per-TID FIFO keeps each post's exact-birth, fixture-only legacy-unknown or unscoped compatibility owner; sent → posted → quit → paint priority and HWND/message filtering remain.
 Get/Peek, status/new-input, timestamp, wait wake/readiness and exact exit use birth-eligible state; A retirement preserves B and unscoped work, while window-originated status remains compatibility state.
-Unknown-target return/LastError parity, window/broadcast/timer/keyboard/remote/sent/paint/modal producer births and full GWES/live iNavi acceptance remain open. [Receipt](../../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md): release 1,952/0/9; no-feature 1,417/0/3.
+Unknown-target return/LastError parity, window/broadcast/HWND-owned-timer/keyboard/remote/sent/paint/modal producer births and full GWES/live iNavi acceptance remain open. [Thread-post receipt](../../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md): release 1,952/0/9; no-feature 1,417/0/3. [HWND-less timer receipt](../../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md): release 1,960/0/9; no-feature 1,424/0/3.
 
 ## Failure and lifetime rules
 
