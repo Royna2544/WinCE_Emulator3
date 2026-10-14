@@ -7,28 +7,17 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Fresh-default view and legacy-page sync (KNOWN_BUGS, top two entries).
-   These are separate changes, and all of them come before any live re-run:
-   (a) outbound readback of mapped pages only (code and focused tests done);
-   (b) inbound seed of mapped spans only, with a positive and a negative unit
-   test;
-   (c) the generation mapper seeds only `newly_mapped` pages, the same per-page
-   rule as fault repair. Its test is a public `MapViewOfFile`, then a page-0
-   store, then an unrelated import, then a page-0 load in the same slice that
-   must see the store.
-   Then run the full release and no-feature suites with raw logs, and record
-   one ledger entry (E-37) for the live failure and these fixes.
-1. Only after fresh human approval and fresh adjacent ZIP backups of the
+0. Only after fresh human approval and fresh adjacent ZIP backups of the
    original SD, ResidentFlash and emulator-root writable mounts, re-run the
-   bounded iNavi comparison on a build with item 0 fixed. The O-P4 EXE run
+   bounded iNavi comparison on the E-37 build. The O-P4 EXE run
    failed at 2.9 s (`evidence/e22-live-20261014T041105Z`). Compare sampled
    host memory, busy-slice guest MIPS, fixed per-slice setup cost and guest/map
    progress with the persistent-owner runs (about 1.5 GiB; E-22, E-27, E-29)
    and BED2 (E-1); retain exact binary, input and run evidence. The
-   source-bound O-P4 suite alone is not live acceptance.
-2. Then finish the remaining D-008 families: real native E-20 two-PID same-VA
+   source-bound E-37 suite alone is not live acceptance.
+1. Then finish the remaining D-008 families: real native E-20 two-PID same-VA
    A→B→A byte isolation, shared file views on slabs, and image/heap blobs.
-3. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
+2. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
 ## Parallel lanes (never gate the queue above)

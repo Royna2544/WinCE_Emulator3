@@ -4,6 +4,25 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-37 Fresh-Default View/Legacy-Page Sync
+
+- The first approved fresh-default iNavi run exited after 2.934 s with
+  `READ_UNMAPPED` on an untouched file view, before NMEA or tap. The three
+  original writable mounts had fresh adjacent SHA-verified ZIP backups;
+  [live evidence](evidence/e22-live-20261014T041105Z/analysis.receipt.md)
+  distinguishes its short startup samples from a full run.
+- Outbound view readback and inbound seeding now touch only native mapped
+  spans; unmapped lazy-seed mismatches still fail. The first-import generation
+  mapper seeds only newly mapped pages, preserving earlier guest stores.
+  Direct and public controls passed; full release passed **1,739/0/14
+  ignored**, no-feature **1,294/0/13 ignored**, both no-trace checks and the
+  release build exited 0. The [E-37 receipt](evidence/op4-fresh-view-readback-20261014/validation.receipt.md)
+  holds exact source, log, EXE and PDB hashes and coverage limits.
+- This closes a source-bound sync gate, **not** live or Stage 2 acceptance.
+  No second app run occurred; a new run needs fresh human approval and new
+  adjacent verified mount backups. GMS, E-20 A→B→A isolation and shared-view
+  slab coherence remain separate ([ledger E-37](docs/evidence/ledger.md)).
+
 ## 2026-10-14 E-36 O-P4 Source-Bound Fresh Default
 
 - `ProcessNativeEngine::new` now selects a fresh native owner for each slice;
