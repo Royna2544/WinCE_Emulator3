@@ -19,9 +19,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    semantics. Implement CE-compatible caller wait/timeout behavior, a safe
    old-MIPS direct-kernel real-handle continuation, and root-process
    real-handle completion. Then complete unpinned intra-slice worker lineage,
-   generic parked-wait continuation, and O-K3 wait-target pins. The
-   E-8/E-11/E-26 controls remain the acceptance baseline, not a reason to
-   treat the design as parked.
+   aliasless Sleep-suspend and stale intra-slice TID continuation, and generic
+   parked-wait continuation. O-K3 execution and registered Thread/Process
+   wait-target pins passed a bounded source gate
+   ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); opaque
+   non-task wait slots remain compatibility-only and unpinned. The historical
+   E-8/E-11/E-26 reds remain the acceptance baseline, not a reason to treat
+   the design as parked. Full Stage 3 and live behavior remain unaccepted.
 
 ## Parallel lanes (never gate the queue above)
 

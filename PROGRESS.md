@@ -4,6 +4,24 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 O-K3 execution and wait pins source slice
+
+- Canonical Thread/Process task records now retain execution-live state after
+  final public-alias closure and checked, birth-qualified references for
+  registered object waits. Ordered task wait slots acquire pins before wait
+  publication; partial preparation rolls back, and completion, timeout or
+  cancellation releases each acquired pin once. A completed aliasless target
+  retires after its last wait reference releases. The two historical E-11
+  last-public-handle and wait-pin controls are active and green; the bounded
+  source gate is recorded in the
+  [receipt](evidence/stage3-pins-20261015/validation.receipt.md). Opaque
+  non-task wait slots and duplicated native wait payloads are not pinned.
+  Final broad gates passed no-feature 1,390/0/3 ignored and release
+  Unicorn/trace/desktop 1,874/0/9 ignored, with the desktop no-trace check
+  green; a matching release EXE/PDB pair was preserved in the receipt folder.
+  Aliasless Sleep-suspend, stale intra-slice TID continuation, full Stage 3
+  and live-app behavior remain unaccepted.
+
 ## 2026-10-15 Stage 3 TerminateProcess source slice
 
 - Focused source controls now cover an owned active child's request at run

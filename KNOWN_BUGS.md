@@ -63,10 +63,13 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
 - The canonical thread/process alias and bounded creation-owner slices passed
-  their source gates: eight named Task controls are active and four remain
-  ignored (ledger E-8, E-11, E-26;
+  their source gates: eight named Task controls became active at those gates.
+  The later O-K3 execution/wait-pin source gate activated two more, leaving
+  boot-main enumeration and durable child-primary identity ignored (ledger
+  E-8, E-11, E-26;
   [alias receipt](evidence/stage3-alias-20261014/validation.receipt.md),
-  [owner receipt](evidence/stage3-owner-20261014/validation.receipt.md)).
+  [owner receipt](evidence/stage3-owner-20261014/validation.receipt.md),
+  [pin receipt](evidence/stage3-pins-20261015/validation.receipt.md)).
   Thread aliases share one mutable record and canonical wake index. Production
   thread births retain a checked ProcessBirthKey, including aliasless boot TID
   1 and child primary, and registered Toolhelp/GetProcessIdOfThread read it.
@@ -80,10 +83,14 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   wait/timeout behavior is not implemented; an old-MIPS direct-kernel
   real-handle continuation fails closed because no safe return is available.
   The root process has no owned child-launch handoff for real-handle requests.
-  Boot-main enumeration, last-public-handle/O-K3 wait pins, intra-slice
-  unpinned-worker lineage (currently fails closed), generic parked-wait
-  continuation, clone relineage, complete GMS reclamation and live-app behavior
-  remain open. Neither bounded slice is full Stage 3 acceptance.
+  Registered Thread/Process waits now pin exact task births through public
+  alias closure and release acquired references on completion, timeout,
+  cancellation or failed preparation. Opaque non-task wait slots and duplicated
+  native wait payloads remain unpinned. Boot-main enumeration, aliasless
+  Sleep-suspend, stale intra-slice TID continuation and unpinned-worker lineage
+  (currently fails closed), generic parked-wait continuation, clone relineage,
+  complete GMS reclamation and live-app behavior remain open. None of these
+  bounded source gates is full Stage 3 acceptance.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
   (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been
