@@ -4012,6 +4012,41 @@ fn handle_table_event_open_file_mapping_views_thread_process_exit_and_set_reset_
 }
 
 #[test]
+fn file_mapping_backing_transition_requires_no_legacy_view() {
+    use wince_emulation_v3::ce::object::{FileMappingView, HandleTable};
+
+    let mut table = HandleTable::default();
+    let handle = table.create_file_mapping(Some("backing-transition".to_owned()), 16, 4, None);
+    {
+        let mapping = table.file_mapping_mut(handle).unwrap();
+        assert!(!mapping.is_slab());
+        assert_eq!(mapping.legacy_data(), Some(&[0; 16][..]));
+        mapping.legacy_data_mut().unwrap()[0] = 0xAB;
+        mapping.views.push(FileMappingView {
+            base: 0xA000_0000,
+            size: 16,
+            offset: 0,
+            process_id: 1,
+            process_birth: None,
+        });
+        assert!(!mapping.transition_to_slab());
+        assert_eq!(mapping.legacy_data().unwrap()[0], 0xAB);
+    }
+    assert!(table.remove_file_mapping_view(0xA000_0000).is_some());
+    let mapping = table.file_mapping_mut(handle).unwrap();
+    assert!(mapping.transition_to_slab());
+    assert!(mapping.is_slab());
+    assert!(mapping.legacy_data().is_none());
+    assert!(mapping.legacy_data_mut().is_none());
+    assert!(!mapping.transition_to_slab());
+    assert_eq!(
+        table.create_file_mapping(Some("backing-transition".to_owned()), 16, 4, None),
+        handle
+    );
+    assert!(table.file_mapping(handle).unwrap().is_slab());
+}
+
+#[test]
 fn thread_system_allocate_id_set_last_error_and_tls_call_alloc_free() {
     use wince_emulation_v3::ce::thread::{TLS_MINIMUM_AVAILABLE, TLS_OUT_OF_INDEXES, ThreadSystem};
 

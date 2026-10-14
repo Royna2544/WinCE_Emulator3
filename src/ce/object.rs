@@ -912,7 +912,7 @@ impl HandleTable {
                 .views
                 .iter()
                 .copied()
-                .find(|view| view.base == base)
+                .find(|view| view.base == base && view.process_birth.is_none())
                 .map(|view| (mapping, view)),
             _ => None,
         })
@@ -965,7 +965,7 @@ impl HandleTable {
                 .views
                 .iter()
                 .copied()
-                .find(|view| view.base == base)
+                .find(|view| view.base == base && view.process_birth.is_none())
                 .map(|view| (mapping, view)),
             _ => None,
         })
@@ -979,7 +979,36 @@ impl HandleTable {
                 KernelObject::FileMapping(mapping) => mapping
                     .views
                     .iter()
-                    .position(|view| view.base == base)
+                    .position(|view| view.base == base && view.process_birth.is_none())
+                    .map(|index| (*handle, mapping.views.remove(index))),
+                _ => None,
+            })?;
+        if matches!(
+            self.objects.get(&handle),
+            Some(KernelObject::FileMapping(mapping)) if mapping.closed && mapping.views.is_empty()
+        ) {
+            let _ = self.objects.remove(&handle);
+        }
+        Some(view)
+    }
+
+    pub fn remove_file_mapping_legacy_view_for_pid(
+        &mut self,
+        process_id: u32,
+        base: u32,
+    ) -> Option<FileMappingView> {
+        let (handle, view) = self
+            .objects
+            .iter_mut()
+            .find_map(|(handle, object)| match object {
+                KernelObject::FileMapping(mapping) => mapping
+                    .views
+                    .iter()
+                    .position(|view| {
+                        view.base == base
+                            && view.process_id == process_id
+                            && view.process_birth.is_none()
+                    })
                     .map(|index| (*handle, mapping.views.remove(index))),
                 _ => None,
             })?;
