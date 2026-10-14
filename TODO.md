@@ -118,12 +118,20 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 
 ## Cleanup Queue
 
-- After the view-sync gate, clear the existing release-build warnings in one
-  change: the unused `kernel` parameters in `try_enter_dpa_enum_callout` and
-  `try_enter_dsa_enum_callout` (`src/emulator/unicorn.rs`, from June), the
-  unused `MEM_DECOMMIT` import, and the unused
-  `pending_wndproc_returns_live_pump_hook` and `current_thread_id_code_hook`
-  bindings. These warnings show up in every raw suite log.
+- Clear the 21 release-build warnings in one change, between gates. The
+  inventory is in `evidence/stage3-thread-timer-birth-20261015/build-a01.raw.log`.
+  Dead code: `ArchHooks`/`ArmArch`/`ArmGuestContext`/`MipsArch` (`arch.rs`,
+  `cpu_arm.rs`, `cpu_mips.rs`), `map_kernel_memory_allocations`,
+  `fast_start_indirect_transfer_sites`, `ensure_mapped_ram_blob`,
+  `reconcile_persistent_native_memory{,_with_private}`, `DPAS_SORTED`
+  (`unicorn.rs`), `NativeMappingPins::{pin, release_image_after_unmap,
+  private_len}`, `range_contains` and an unread `bytes` field (`pe_loader.rs`),
+  `measure_text_units_width` and `PopupMenuModalState::cursor` (`coredll.rs`).
+  Unused or misused bindings: the `MEM_DECOMMIT` import, `blobs`,
+  `pending_wndproc_returns_live_pump_hook`, `current_thread_id_code_hook`, the
+  dead first `fixed_ranges` assignment and one needless `mut`. Delete dead
+  items unless a planned production caller is named; do not hide them with
+  `allow(dead_code)`.
 - Keep the five-file small-intermediate recovery archive/receipt. Larger cache
   cleanup requires fresh ownership/idle checks; D debug/build showed other
   editor/compiler activity. The five inventoried legacy paths were retired
