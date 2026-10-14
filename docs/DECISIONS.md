@@ -32,9 +32,12 @@ E35 then validated the public COREDLL private `VirtualAlloc` slab family
 The O-P4 source-bound fresh-default owner and teardown code/test gate has now
 passed ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md));
 this is not a generic checked-close API or a reopening of D-009's deferred
-persistent arena lane. O-M1 shared views, real native
-two-process same-VA bytes, bounded live validation and full Stage 2 acceptance
-remain open.
+persistent arena lane. E-39 later proved public private and injected view
+two-process same-VA A→B→A bytes across fresh native owners. D008's public
+named-reopen view and in-slice alias controls have focused passes, as do the
+legacy DIB-to-public migration controls; its frozen-source broad suites are
+still pending. Neither those focused controls nor E-38's splash-only live run
+closes the remaining image/heap, clone-lineage or full Stage 2 gates.
 
 ## Open questions by owner page
 
@@ -122,7 +125,7 @@ remain open.
 
 | ID | Question | Page | Status |
 | --- | --- | --- | --- |
-| O-M1 | D-008 selects AddressSpace-owned committed-page slabs as the backing design. E-16 turns the formerly red injected same-VA native file-view control green, but public same-VA `MapViewOfFile` remains open. E25 turned the formerly ignored E-18 private stale-byte control green under a test-only slab opt-in and fresh native owner ([corrected-source receipt](../evidence/e25-private-slab-20261014/broad-validation.receipt.md)); E35 validated the public private `VirtualAlloc` family and two-process same-VA metadata ([E35 receipt](../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)). O-P4's pinned-source fresh-default owner/teardown code gate also passed ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)), without a general checked-close API or live acceptance. Real native two-process A→B→A byte isolation, shared-view backing and full machine checkpoint relineage remain unproved. Less copying and lower memory remain unmeasured hypotheses. See [memory: O-M1 backing decision](subsystems/guest-memory.md). | [memory](subsystems/guest-memory.md) | E35 private-family and O-P4 code gates closed; broader O-M1/Stage 2 open |
+| O-M1 | D-008 selects one address-stable byte authority per migrated page. E25 validated the test-only private slab, E35 the public private family, O-P4 the fresh-owner teardown, and E-39 real native public-private/injected-view A→B→A same-VA bytes. D008's public named-reopen shared pages and in-slice aliases have focused passes, with broad suites pending. Its first public view migrates the whole legacy mapping into pages charged to the private-page budget or fails without retiring Legacy; `MappingBacking::Slab` drops the old Vec. File-backed pages seed lazily; raw guest adapters remain copies whose failed alias propagation can leave already-committed canonical/guest bytes. Image/heap backing, full owner/clone lineage, native failure breadth, live readiness and Stage 2 acceptance remain open. No memory or speed gain follows from these controls. See [memory: O-M1 backing decision](subsystems/guest-memory.md). | [memory](subsystems/guest-memory.md) | private/fresh-owner gates passed; D008 focused only; broader O-M1/Stage 2 open |
 | O-M2 | Authoritative reservation extent and allocation incarnation before any heap reuse. | [memory](subsystems/guest-memory.md) | open |
 | O-P1 | Explicit stop classification (count / yield / deadline / error / debugger). E-34 preserves a checked JR continuation when a typed peer yield and native deadline coincide. Report sealing and failure-path controls remain separate hardening. | [CPU](subsystems/cpu-engine.md) | classification closed (E-34); hardening open (Stage 2/5) |
 | O-P2 | Stable hook rebinding for persistent engines. | [CPU](subsystems/cpu-engine.md) | deferred (Stage 8) |

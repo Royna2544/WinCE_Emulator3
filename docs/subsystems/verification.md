@@ -22,8 +22,9 @@ page owns only how to read it:
   readiness; the 650 failure (E-2) is positive evidence to preserve, and
   memory-growth correlation does not establish its cause. Later E-29 completed
   a bounded splash-only run, while E-32's E-31-source run host-crashed before
-  its tap; neither validates map readiness. The current E-33 native-patched
-  source has not completed a live-app run.
+  its tap. The separately approved E-38 fresh-owner run survived its 330 s
+  cap at a sampled 430.676 MiB RSS peak, but also stayed on the splash; none
+  validates map readiness or the current D008 source in a live app.
 - Isolated native controls (E-4 to E-6) establish bounded Stage 8 fixture behavior only.
   Their elapsed time includes native timeout service and observation overhead, so
   it is not application throughput or cache speed, and they did not run the
@@ -41,9 +42,13 @@ page owns only how to read it:
 - E-13's repaired-PC FPU continuation and E-16's owner-qualified injected
   same-VA native-view controls are narrow greens. E-18 was an expected red for
   stale private guest-written bytes after fresh-owner closure; E-25 made it
-  green only through a test-only slab opt-in. Public same-VA
-  `MapViewOfFile`, public `VirtualAlloc`, and production fresh-owner lifetime
-  remain open.
+  green only through a test-only slab opt-in at that historical checkpoint.
+  E35 later validated public private `VirtualAlloc`, O-P4 the fresh-owner
+  default, and E-39 native public-private/injected-view A→B→A same-VA bytes.
+  D008's public named-reopen view and in-slice alias fixture, plus DIB-to-
+  public migration/low-budget controls, have focused passes; its broad suites
+  remain pending. The fixture selects queued child state manually, so it is
+  not a guest `CreateProcessW` or scheduler handoff proof.
 - E-19's global deferred-stop slice types the first hook-observed remote or
   host-budget reason. On that frozen source, three serial focused runs passed;
   the full release suite passed 1,634 tests (0 failed, 4 ignored), both no-trace
@@ -87,6 +92,15 @@ persistent-owner clone/parked-process isolation and checked hook removal on
 every return. Unknown query/provenance must stay unknown. Native host crashes
 outside the Result path need separate failure artifacts, not fabricated guest
 RunOutcome success.
+
+For D008, validate the public named A→B→A native page and same-slice alias
+against the canonical mapping bytes; retain raw file/DIB controls separately.
+The first public view must migrate every legacy byte page, including outside
+the requested view, and charge each page to the same physical-page budget;
+insufficient budget must leave the Legacy mapping intact. A raw adapter's
+alias-copy failure is not an atomic rollback guarantee: canonical bytes and
+earlier guest writes can already have changed. Record that partial effect
+instead of upgrading a focused pass or a failing propagation into Stage 2.
 
 Kernel/GWES matrices cover canonical aliases and creation owners beyond diagnostic-ring lifetime; suspend while blocked with pending completion; exit/handle/wait target lifetime; nested same-task outer wait; typed payload/output readonly/cross-page failure before consumption; queue replacement/expiry exact ID; temporary allocation/scratch release; selected GDI object/backing lifetime and independent checkpoints. A new policy cannot silently delete existing continuation frames or starve a legitimate helper.
 

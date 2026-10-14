@@ -12,15 +12,15 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Item | State |
 | --- | --- |
 | Installed baseline | BED2: clean bounded 330 s run, still on the decorative splash (ledger E-1) |
-| App goal | E-29's 330 s run stayed on splash despite COM7 reads and a returned tap; the later E-32 E-31-source run also stayed on splash and host-crashed before its tap. Map and responsive navigation remain open |
-| Architecture implemented | Partial diagnostic/identity contracts exist (`ProcessBirthKey`, `NativeAttemptReport`, E-30 host consumer), but canonical Task/Frame authority and the Stage 2 VM/default-owner gates are not complete |
+| App goal | The latest approved E-38 fresh-owner run survived 330 s with COM7 reads and returned tap handlers, but stayed on the splash. Map and responsive navigation remain open |
+| Architecture implemented | Process-birth identity, public private slabs, fresh-owner default and focused public shared-view controls exist. Canonical Task/Frame authority, remaining VM families and full Stage 2 acceptance are not complete |
 | Experiment | Persistent-owner 650 passed 1,618 tests, then host-crashed at 129.108 s with 1.62 GiB RSS (E-2). Source preserved in the D: checkout; deferred to Stage 8 |
 | Plan position | Stage 0 evidence is diagnostic and ongoing; Stage 1 pages are written. E-21 migrated public process-birth aliases, not full Stage 2/3 Task ownership. Stages 3-6 run on fresh engines (D-003) |
-| Red baselines | Historical E-7 stop/error controls are green; E-18 private fresh-owner bytes are green only under a test-only slab opt-in. Public private/same-VA VM and Stage 3 Task gates remain open |
-| Decisions | D-001 to D-009 decided; D-008 selects the O-M1 backing design, not its implementation. E-34 closes O-P1 stop classification; next connected gates are public O-M1 and O-P4, then Stage 3 Task ownership |
+| Red baselines | Historical E-7 stop/error and E-18 private-byte reds became narrow greens; twelve Task/alias controls remain expected red for Stage 3. Focused D008 public views do not close the full Stage 2 VM gate |
+| Decisions | D-001 to D-009 decided; D-008's single-byte-authority design now has public private and focused shared-view implementations, while image/heap, clone lineage and broader acceptance remain open. E-34 closes O-P1 stop classification |
 | Source control | D-004 now permits an external supervisor's unsigned backup commits on `main`; those snapshots are not reviewed releases and do not replace frozen test evidence |
-| Source of truth | One active source dir (this repo) and one Cargo target dir (D-007). The D working tree still contains the persistent-owner experiment; O-P1 stop classification is closed (E-34), while report hardening and O-P4 fresh-default/VM coherence remain open |
-| Next action | Implement the connected public `VirtualAlloc` slab gate, then O-P4 fresh-default ownership. E-33's native repair has not been tested by another app run and E-32's crash remains unattributed. The E-29 attempt trace is a parallel app-evidence lane; any further original-mount run needs new approval. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
+| Source of truth | One active source dir (this repo) and one disposable Cargo target dir (D-007). Fresh native owners are the default; persistent reuse is a Stage 8 opt-in. O-P1 classification is closed, but report hardening and Stage 2 VM coherence remain open |
+| Next action | Finish D008 focused regressions and frozen-source broad validation; then advance remaining image/heap backing and identity/clone boundaries before Stage 2 acceptance. The E-29 attempt trace remains a parallel app-evidence lane. Any further original-mount run needs new approval and verified adjacent backups. Source map: [CPU page](subsystems/cpu-engine.md#stage-2-source-map-historical-fault-and-current-handoff) |
 
 ## Standalone boundaries
 

@@ -22,6 +22,11 @@ architecture is implemented.
   release/no-feature suites, native closed-owner Context and 200-slice pin
   controls passed ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
   This is a code/test gate, not a bounded iNavi run or Stage 2 acceptance.
+- E-39 then proved public private-VM and injected file-view A→B→A same-VA
+  bytes across fresh native owners. D008's public named mapping A→B→A plus
+  same-slice alias and legacy-DIB migration controls have focused passes;
+  its frozen-source broad suites are pending. These do not prove guest
+  `CreateProcessW` handoff, image/heap migration or full clone relineage.
 - Phase 0 hot-path hygiene is done (E-9): amortized scheduler block hook,
   hookless trampoline default, per-slice guest-MIPS logging. It changed no
   scheduling policy; the 1M-instruction slice count is still the round-robin tick.
@@ -48,7 +53,7 @@ and the durable status files.
 | --- | --- | --- | --- |
 | 0 Recovery/evidence | Crash ledger, preserved 650/BED2, scoped cleanup manifest | Diagnostic-only probes/fixtures; no architecture policy change | Exact crash symbol/source recorded in the ledger; clean fallback intact |
 | 1 Common boundaries | Anchor + subsystem ownership/interface/error pages, dependency review | Named interfaces only when they replace actual consumers | No duplicate state authority; no unresolved identity/time semantics hidden in defaults |
-| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | E35 private backing and O-P4 fresh-default owner landed; connect remaining cross-process/shared-view families and identity/failure boundaries | Keep E-7/E-18, E35 public private and O-P4 closed-owner Context/pin controls green; prove native A→B→A bytes, public shared views, full clone relineage and bounded live behavior before Stage 2 acceptance |
+| 2 CPU interface and VM coherence (fresh-engine lifetime) | Primary-native stop contract; D-008 committed-page backing, canonical birth identity, machine-level clone/relineage and native pin/lease design | E35 private backing, O-P4 fresh owner and E-39 native cross-process controls landed; D008 public shared views have focused passes, pending broad validation; connect image/heap and remaining identity/failure boundaries | Keep E-7/E-18, E35 public private, O-P4 closed-owner Context/pin, E-39 and D008 controls green; prove full clone relineage and bounded live behavior before Stage 2 acceptance |
 | 3 Task/object authority | Extend the Stage 2 canonical process-birth directory with Task/object execution/alias/wait pins | Migrate task, alias and lifecycle consumers to that same authority; do not re-mint boot/child identities | Ledger E-8 reds turn green; alias coherence, durable PID/primary identity, close/exit/wait lifetime, independent checkpoint clones |
 | 4 Continuation ownership | Raw-native vs synthesized frames; nested callback/wait state | One complete continuation family, removing old duplicate authority | Native wait→callback→resume/exit, FPU/HI/LO/branch correctness, cancellation and debugger exactness |
 | 5 Outcomes and scheduler | Explicit count/yield/deadline/error, ready indexes, CE6 priorities/quantum | Replace false timeout inference and policy heuristics together | Native errors hard-fail, equal-priority RR, higher-priority preemption, blocked/suspended eligibility; no starvation |
@@ -75,10 +80,13 @@ O-P4 then made a fresh native owner the default and passed its pinned-source
 close/pin/context code and test gate
 ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
 The pinned vendored C `uc_close` proof is not a general checked-close API.
-Unmigrated shared-view outgoing bytes, real native cross-process same-VA
-isolation, full machine checkpoint relineage, and live footprint/map readiness
-retain separate gates; Stage 2 is not complete. Stage 3 extends, rather than
-recreates, the process-birth authority.
+E-39 separately validated real native public-private and injected-file-view
+cross-process same-VA isolation. D008 now has focused public shared-view,
+same-slice alias and DIB migration controls, with broad validation pending.
+Unmigrated image/heap bytes, full machine checkpoint relineage, guest
+`CreateProcessW` handoff, and live footprint/map readiness retain separate
+gates; Stage 2 is not complete. Stage 3 extends, rather than recreates, the
+process-birth authority.
 
 ### Parallel lanes (never gate a stage)
 
@@ -116,9 +124,13 @@ close only their named gates, not Stage 2 or live acceptance.
   assertion, then passed on frozen source with the public private-slab
   transaction, negative checkpoint boundary and checked pin budget
   ([receipt](../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)).
-  Native A→B→A same-VA bytes and shared-view coherence remain open. D-008's
-  backing design is not Stage 2 acceptance or a demonstrated footprint/timing
-  improvement.
+  E-39's native public-private and injected-view A→B→A controls passed on
+  later source. D008's public named-reopen A→B→A and in-slice alias controls
+  passed focused runs, as did DIB-to-public whole-object migration/low-budget
+  rejection; its broad gate is pending. A raw adapter still copies guest
+  bytes, and alias propagation failure can leave already-committed effects.
+  None of these controls is Stage 2 acceptance or a demonstrated footprint/
+  timing improvement.
 - Native owner/arena: six Stage 0 owner controls, the pre-init budget
   differential and the commit-tail repair controls (E-4 to E-6) are isolated and
   diagnostic; they feed Stage 8 only.
@@ -128,8 +140,8 @@ close only their named gates, not Stage 2 or live acceptance.
   and pin churn, finish-failure, typed stops and broad feature suites passed
   on frozen source ([receipt](../evidence/op4-fresh-default-20261014/validation.receipt.md)).
   The source-specific vendored `uc_close` proof does not establish a generic
-  checked-close API, cross-task context, shared-view coherence, native
-  A→B→A isolation or application readiness.
+  checked-close API, cross-task context or application readiness. Later E-39
+  and focused D008 gates address native same-VA and shared views separately.
 
 ## Integration discipline
 

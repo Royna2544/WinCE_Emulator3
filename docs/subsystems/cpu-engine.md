@@ -134,8 +134,12 @@ At that checkpoint public `VirtualAlloc` still used `LegacySeed`. E35 later
 validated public private slabs and the fresh-native-owner ordinal
 ([E35 receipt](../../evidence/e35-public-virtualalloc-validation-20261014/validation.receipt.md)).
 Neither earlier gate exercised closed-owner exact-key Context transfer; O-P4
-subsequently did so under the pinned-source teardown proof above. No native
-A→B→A same-VA or shared-view acceptance follows.
+subsequently did so under the pinned-source teardown proof above. O-P4 alone
+did not prove native A→B→A same-VA or shared-view coherence. E-39 later
+validated public-private and injected-view A→B→A bytes; D008's public
+named-view A→B→A and in-slice alias controls passed focused runs, with its
+frozen-source broad gate pending. Guest process-handoff and full Stage 2
+acceptance remain distinct.
 
 ## Dependencies and prohibitions
 
@@ -403,10 +407,12 @@ its separate frozen source):
   memory. No cache or performance gain follows merely from same-handle reuse.
 - Stage 2 (fresh-engine lifetime): O-P4 now passes source-bound closed-owner
   Context, fresh ledger/pin reset, typed-stop and broad feature gates. E35
-  separately passes the public private-page family. Native two-process
-  A→B→A byte isolation, shared-view coherence, full Task/frame-qualified
-  continuation and failure gates, and bounded live validation remain open;
-  neither O-P4 nor the persistent-owner controls close Stage 2.
+  separately passes the public private-page family, and E-39 proves native
+  public-private/injected-view A→B→A bytes. D008's public shared-view
+  same-VA/alias fixture is focused green, not yet broad-gated. Full Task/frame-
+  qualified continuation and failure gates, image/heap coherence, machine
+  clone relineage and bounded live validation remain open; neither O-P4 nor
+  these narrow VM controls close Stage 2.
 - A future approved live run must report host memory peak, busy-slice MIPS
   and fixed per-slice setup cost, phase-matched against BED2 E-1 and the
   persistent E-22/E-27/E-29 runs; no footprint or speed claim exists yet.

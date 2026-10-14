@@ -8,7 +8,16 @@ Status: subsystem design for review, not a new filesystem implementation. The [c
 
 Read-only existing files use host handles with a bounded 64 KiB read window; larger transfers stream through bounded chunks rather than retain the whole file. Zero-length reads preserve preceding EOF state. Writable existing files in the current 1–128MiB range may use private full-file Vec buffers; other writable files use host handles. Private buffers become host-visible at flush/close, which invalidates read windows. This is current behavior, not a universal CE cache/coherence contract.
 
-duplicate_open_file clones its OpenFile state/backing; private buffers and read windows can be copied and host handles use try_clone. Current logical cursors/alias visibility require a separate CE open-context audit. Kernel file mappings have canonical mapping bytes and per-process views, but these are not the same authority as every private OpenFile buffer. Ordinary process parking moves CPU owners; optional checkpoints can clone filesystem state/resources.
+duplicate_open_file clones its OpenFile state/backing; private buffers and read windows can be copied and host handles use try_clone. Current logical cursors/alias visibility require a separate CE open-context audit. Public file mappings now use canonical VM-owned shared pages with birth-qualified per-process views in the focused D008 path; older DIB/injected views remain copy-backed until their object makes a one-way transition. Neither mapping backing is the same authority as every private OpenFile buffer. Ordinary process parking moves CPU owners; optional checkpoints can clone filesystem state/resources.
+
+The first public view after all DIB views are deleted migrates the entire
+legacy mapping byte store, including pages outside a tiny first view, into
+the same charged physical-page budget as private slabs. Insufficient budget
+leaves the legacy object unchanged; live DIB/public mixing and a new DIB on
+an already-migrated object fail instead of creating two writable authorities.
+File-backed pages are seeded from the host file when first needed, with any
+preexisting DIB bytes overlaid before the old store is discarded. Focused
+controls pass; broad D008 validation and live-app behavior are separate gates.
 
 Known transaction limit: file read_into commits its logical cursor only after the guest sink succeeds, but a streamed failure can leave an already-written guest prefix. ReadFile's transferred-count write can fail after bytes/cursor effects. No complete byte rollback is implemented. Host flush errors prevent successful close; current broad raw error mapping does not prove precise CE error parity.
 
@@ -33,6 +42,14 @@ Unmount/removal must distinguish namespace visibility from already-open volume r
 Host work may initially remain synchronous; converting it to typed accepted completion events is a reviewed later interface migration. Such events identify the actual object/operation, bytes or error and observed HostInstant. The machine assigns delivery under the anchor's clock mode; a storage worker neither sleeps the guest clock nor adds another elapsed offset.
 
 Guest writes are preflighted before irreversible publication where possible. If bytes were already written or a host write partially completed, return an honest failure/partial-transfer result according to the audited API; do not invent atomic disk/output rollback, guessed replays or success counts. Cancellation prevents stale delivery but cannot undo an already-committed external write. Bound staging and retained history; distinguish file length, Vec capacity, mapped view bytes and host RSS.
+
+A raw guest-memory adapter still has copied view bytes. Its Flush/Unmap
+commits the requested source range into canonical pages and then propagates
+overlapping bytes to same-birth guest aliases. If propagation fails, the API
+reports failure, but the canonical page and earlier guest alias writes may
+already have changed. This partial-effect limit does not apply to the native
+in-slice pointer aliases, which map the same host page, and must not be
+misreported as an atomic rollback or as independent file-buffer coherence.
 
 Read-only existence/attribute/open probes must not create marker files or directories. Guest-authorized create/write/delete is a separate real API effect under the mounted configuration; investigation/cleanup authority does not extend to user SD contents. Path component checks do not by themselves prove immunity to host junction/symlink escapes; establish resolved-root policy explicitly.
 

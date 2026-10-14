@@ -10,6 +10,14 @@ Current GDI objects/DC selection/save stacks/clips are part of `ResourceSystem` 
 
 GWE separately owns invalidation/paint windows and caret state. The native runner currently borrows raw framebuffer pointers into per-slice hooks for ticks/drawing. The persistent native owner must remove those hooks before their borrow ends; rendering references cannot become process-lifetime native callbacks.
 
+Section-backed DIB bits may still use a legacy copied mapping while that DIB
+view is live. The first public file view is permitted only after the legacy
+views are deleted; it then migrates the whole legacy byte store into VM-owned
+shared pages and drops the old copy. A later DIB request on that slab-backed
+mapping fails rather than creating a second writable authority. This is a
+focused D008 source/control boundary, not GDI rendering or map-screen acceptance;
+the [memory page](guest-memory.md) owns the backing and budget rules.
+
 ## Target ownership and interfaces
 
 | Owner | Responsibility | Must not own |
