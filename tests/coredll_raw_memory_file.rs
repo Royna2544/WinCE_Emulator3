@@ -489,10 +489,13 @@ fn coredll_raw_process_text_pointers_are_birth_scoped_and_replace_freed_cache() 
     kernel.set_current_process_id(2);
     let child = kernel.current_process_birth_key().expect("child birth");
     let heap = kernel.memory.get_process_heap();
-    let _offset = kernel
+    // A child allocation may legally occupy A's command-line VA; the key is
+    // the process birth, not the numeric pointer alone.
+    let offset = kernel
         .memory
         .heap_alloc(child, heap, 0, 0x100)
         .expect("child-only cursor offset");
+    assert_eq!(offset, parent_command);
     let child_command = allocation_return(table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -514,7 +517,7 @@ fn coredll_raw_process_text_pointers_are_birth_scoped_and_replace_freed_cache() 
         Some(child_command)
     );
     assert_eq!(kernel.process_name_guest_ptr_for(child), Some(child_name));
-    assert_eq!(kernel.memory.local_size(child, parent_command), None);
+    assert_eq!(kernel.memory.local_size(child, parent_command), Some(0x100));
     assert_eq!(kernel.memory.local_size(parent, child_command), None);
 
     // Restoration likewise writes A's strings while B is still selected.
@@ -19896,9 +19899,11 @@ fn coredll_raw_heap_re_alloc_shrinks_in_place_and_rejects_bad_params() -> Result
         ),
         "HEAP_REALLOC_IN_PLACE_ONLY must fail when growth requires a move"
     );
+    // The request is valid but cannot grow in place, so this is OOM rather
+    // than a malformed-parameter failure.
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
-        ERROR_INVALID_PARAMETER
+        ERROR_NOT_ENOUGH_MEMORY
     );
 
     assert!(
