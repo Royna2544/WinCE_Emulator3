@@ -8,14 +8,18 @@ Authority: [shared architecture](../ARCHITECTURE.md). Sequence: [migration plan]
 - [memory.rs](../../src/ce/memory.rs) holds allocation/virtual metadata; emulator
   [memory.rs](../../src/emulator/memory.rs) defines region layout and permissions.
 - [pe_loader.rs](../../src/emulator/pe_loader.rs) creates mapped blobs. Native mapping,
-  spillover, shared-view synchronization and byte adapters live in
+  fixed heap/stack slabs, spillover, shared-view synchronization and byte
+  adapters live in
   [unicorn.rs](../../src/emulator/unicorn.rs); [native_engine.rs](../../src/emulator/native_engine.rs)
   now uses a fresh native owner per slice by default and retains persistent
   reuse only as a Stage 8 opt-in; it is not a replacement memory authority.
 - Checked guest-backed raw/native initial/reallocation paths establish bytes before
   publication; metadata-only helpers still exist. Logical zero reserves one physical byte.
-- Failed prepared candidates leave monotonic holes. Existing heap free does not prove
-  address reuse, per-process ownership, immutable reserved extent or ABA protection.
+- Failed prepared candidates leave monotonic holes. The global heap cursor and
+  ownerless allocation metadata can cross-charge births or admit foreign
+  `HeapFree`/`HeapSize`; existing heap free does not prove address reuse,
+  immutable reserved extent or ABA protection. O-M2 must settle ownership
+  before Stage 3.
 - Four host-queued typed reservations materialize at delivery. Immediate guest-pointer
   publication must not bypass writable native backing or initialized payload bytes.
 - Persisted spillover can mirror a global high-water mark into multiple CPU images;
@@ -130,13 +134,34 @@ The raw test adapter still owns copied guest bytes, unlike the native pointer
 aliases. A raw Flush/Unmap commits the requested range into the canonical
 page before writing overlapping aliases of the same process birth. If an
 alias write fails, the API fails but canonical and earlier guest bytes may
-already have changed; there is no atomic rollback. Image/heap and older
-legacy-view backing, full machine checkpoint relineage, other native failure
-edges and live map readiness remain separate gates.
+already have changed; there is no atomic rollback. At D-008, image/heap and
+older legacy-view backing, full machine checkpoint relineage, other native
+failure edges and live map readiness remained separate gates.
 
 Sparse migration was dropped: Microsoft's [CE `CreateFileMapping` reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms923951%28v%3Dmsdn.10%29)
-documents default `SEC_COMMIT` for the whole section. The next Stage 2
-backing slice is immutable PE image pages, not a demand-zero file view.
+documents default `SEC_COMMIT` for the whole section. At D-008, the next
+Stage 2 backing slice was immutable PE image pages, not a demand-zero file
+view; E-43 later source-gated the final-byte sealed main-image family.
+
+### E-44 fixed initial heap/stack slab integration (gate pending)
+
+The in-progress source reserves the initial 16-MiB `ProcessHeapArena` and
+4-MiB `ThreadStack` as owner-qualified fixed ranges in `virtual_allocations`.
+The production native mapper no longer creates `ram:ce-heap-arena` and
+`ram:guest-stack` blobs. Heap pages commit at allocation; stack pages commit
+lazily on a native fault. Native backing pins persist for the checked
+owner/unmap lifetime, so logical decommit alone cannot release their budget.
+Queued payload delivery uses the prepared heap path and rejects other fixed-
+slab overlap instead of writing an unrelated persisted blob.
+
+This is an implementation inventory, not a frozen-source gate or live app
+result. Integrated clone/ownership, native host-write, readback, accounting
+and broad-suite checks are pending. A host-import write into an untouched
+reserved stack page is a required E-44 safety check; its behavior is not yet
+claimed. The global heap cursor and ownerless allocation metadata need O-M2
+birth-qualified authority before Stage 3. Heap spillover remains copy-backed;
+writable image sections and DLLs are separate later ownership slices. No
+E-44 iNavi, host RSS, speed or map-readiness result exists.
 
 ## Target authority and permitted interfaces
 
@@ -296,9 +321,10 @@ fault repair and outgoing readback remain checked, closed-handle live views
 retain their canonical page, and a foreign public view never overwrites
 private RAM at the same VA. A raw adapter's copied aliases are a separate
 boundary: failed propagation may leave canonical and prior guest-byte
-effects, which must be reported rather than rolled back by assertion. These
-requirements, full clone relineage and image/heap migration keep O-M1 and
-Stage 2 open after the D008 source gate.
+  effects, which must be reported rather than rolled back by assertion. These
+  requirements, full clone relineage, E-44 initial heap/stack validation and
+  remaining writable image, DLL and spillover migration keep O-M1 and Stage 2
+  open after the D008 source gate.
 
 ## O-M1 backing decision: AddressSpace-owned committed-page slabs (2026-10-13)
 
@@ -311,10 +337,11 @@ the selected native engine with `mem_map_ptr`. An `AddressSpace` owns private
 slabs and its view records; a canonical VM/file-mapping object owns shared
 slabs referenced by all corresponding views, including closed-handle live
 views. Ordinary private pages do not use per-slice `initial_bytes` copy-in or
-copy-back after migration. Public views now use stable shared pages; legacy
-DIB/injected views and image/heap blobs retain explicit copy boundaries until
-their own connected migration. Do not silently mix both authorities for one
-backing.
+  copy-back after migration. Public views now use stable shared pages. At this
+  O-M1 decision, legacy DIB/injected views and image/heap blobs retained copy
+  boundaries; E-43 later sealed the final-byte main-image R/RX family, and
+  E-44 initial heap/stack slabs are under validation. Do not silently mix both
+  authorities for one backing.
 
 This choice is supported, not proved in production, by the explicitly selected
 ignored `native_mem_map_ptr_boxed_slab_survives_splits_and_fresh_owner`
@@ -424,8 +451,9 @@ that use and its failures before matching CE behavior in the emulator.
   derived clones of `CeKernel`/`HandleTable`/`MemorySystem` cannot safely
   relineage a partial checkpoint. A source-machine key is stale in the clone.
   Shared aliases within that clone refer to one clone-local backing; no
-  mutable slab is shared with the original. Image/heap and file-view copy
-  paths remain explicit until their separate migration.
+  mutable slab is shared with the original. Remaining writable-image, DLL,
+  heap-spillover and legacy file-view copy paths remain explicit until their
+  separate migration.
 - At slice completion, stage the CPU snapshot and all outgoing bytes from any
   unmigrated copy-based family, check every sync and the source-bound owner
   teardown preconditions, and publish a successful continuation/VM state only
@@ -496,9 +524,11 @@ A D008 live-app run has not occurred. The remaining connected gates are:
    same-VA **distinct** mappings, closed-handle live views,
    checked lazy faults, raw-adapter partial-effect controls and foreign
    private/view collision. The focused same-file named-reopen, same-slice alias,
-   DIB transition and low-budget controls must stay green. Then migrate
-   image/heap blobs without leaving a second writable copy for any migrated
-   family.
+   DIB transition and low-budget controls must stay green. E-43 sealed the
+   final-byte main-image R/RX family; E-44 initial heap/stack slabs are under
+   validation. Migrate the remaining copy-backed spillover, writable image
+   and DLL families without leaving a second writable copy for any migrated
+   family. Resolve O-M2 heap ownership before Stage 3.
 4. Treat O-P4's fresh-default code/test result as complete only for its
    pinned-source boundary; persistent reuse stays an explicit Stage 8 opt-in.
    A bounded read/write iNavi run requires **fresh human approval** and fresh
