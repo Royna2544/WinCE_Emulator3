@@ -53,18 +53,25 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
 - GMS's boot-reserved physical RAM and stable private-page commit use one
   budget, with four public controls passing both E-39 broad suites. Only
   stable private pages and D-008 stable shared-view pages charge this budget;
-  heap, image and legacy-view memory do not reduce reported available physical
-  memory. It is not a complete guest-memory census
+  the E-44 initial heap/stack slab budget treatment is not yet source-gated,
+  while image, spillover and legacy-view memory do not reduce reported
+  available physical memory. It is not a complete guest-memory census
   ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
 - The new main-EXE sealed R/RX path does not cover mutable image pages,
-  preloaded or runtime DLLs, trap pages, heap, or stack; those remain
-  copy-backed. A read-only production-loader probe sealed 1,379/2,168 real
-  iNavi image pages (5.386719 MiB), including 1,224 with final patched
-  bytes, and counted 36,679,680 B (34.980469 MiB) in the initial owner's
-  mapped blobs. Focused direct native-write overlap controls and final-source
-  broad gates passed; an exhaustive host-write inventory, memory-mode
-  checkpoint relineage, `PrivatePageBudget` treatment, and an approved matched
-  app run remain open.
+  preloaded or runtime DLLs, trap pages, heap spillover, or stack/heap slabs.
+  At E-43, the initial heap and stack were still copy-backed: a read-only
+  production-loader probe sealed 1,379/2,168 real iNavi image pages
+  (5.386719 MiB), including 1,224 with final patched bytes, and counted
+  36,679,680 B (34.980469 MiB) in the initial owner's mapped blobs. E-44
+  source now replaces those initial heap/stack blobs with owner-qualified
+  fixed slabs, but its native safety and broad gates are pending. Heap
+  spillover remains copy-backed. The native pins must remain retained through
+  checked owner/unmap closure; persistent-pin budget release is deferred until
+  that closure. Exhaustive host-write inventory, memory-mode checkpoint
+  relineage, `PrivatePageBudget` treatment, and an approved matched app run
+  remain open.
+  A host-import write into an untouched reserved stack page is a required
+  E-44 native safety gate, not a demonstrated or accepted behavior.
   The earlier 155-page original-byte filter result is historical; no new app
   memory, speed, or map-readiness gain has been measured
   ([E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
@@ -84,9 +91,12 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   E-31.
 - HeapFree does not reuse addresses or release per-process spillover pages.
   Initial/reallocation mapping, ZERO and metadata ordering are now validated,
-  but global allocation metadata lacks authoritative private-process ownership,
-  immutable reservation footprint and incarnation identity needed for safe reuse.
-  No free list, cross-process page reuse or speculative unmapping has landed.
+  but the global heap cursor and ownerless allocation metadata can cross-charge
+  process births or admit foreign `HeapFree`/`HeapSize`. O-M2 must give these
+  operations birth-qualified authority before Stage 3. Failed prepared
+  allocations can leave monotonic high-water/OOM holes; immutable reservation
+  footprint and incarnation identity are still needed for safe reuse. No free
+  list, cross-process page reuse or speculative unmapping has landed.
 - Host footprint and phase behavior still need work. Older persistent-owner
   bounded 330 s runs peaked at about 1.49-1.55 GiB working set (E-22, E-27,
   E-29), and E-32 crashed at 1.65 GiB. The preserved fresh-default E-37

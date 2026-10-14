@@ -7,18 +7,23 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Migrate the 16-MiB initial heap arena and 4-MiB guest stack from copied
-   owner blobs to per-birth slabs, each with focused clone, native ownership,
-   host-write, readback and accounting controls. Preserve writable semantics
-   and existing process/thread isolation; do not infer a speed or RSS gain
-   from the E-43 load-only 34.980469-MiB blob census.
-1. Migrate heap spillover, writable image sections and DLLs as separate
-   per-birth ownership slices, each with focused controls and memory
+0. Finish the E-44 fixed initial heap/stack slab gate: frozen-source broad
+   suites and focused clone, native ownership, host-write, readback and
+   accounting controls. A native host-import write into an untouched reserved
+   stack page is a required safety check, not an accepted limitation. Preserve
+   writable semantics and process/thread isolation; no speed or RSS inference
+   follows from the E-43 load-only 34.980469-MiB blob census.
+1. O-M2: move the global heap cursor and ownerless allocation metadata to
+   birth-qualified authority before Stage 3. Prove foreign `HeapFree`/
+   `HeapSize` rejection and prevent one birth's allocation high-water from
+   charging another; retain the monotonic-OOM-hole and safe-reuse controls.
+2. Migrate copy-backed heap spillover, writable image sections and DLLs as
+   separate per-birth ownership slices, each with focused controls and memory
    accounting. Finish the direct native-write/restore/rebinding inventory,
    and decide/document `PrivatePageBudget` treatment before live acceptance.
    Matched iNavi timing requires a separate run approval and fresh adjacent
    mount backups.
-2. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
+3. Stage 3 entry: the 12 expected-red Task controls (ledger E-26). The E-26
    scheduler design draft stays parked until this step.
 
 ## Parallel lanes (never gate the queue above)

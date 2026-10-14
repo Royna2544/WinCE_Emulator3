@@ -4,6 +4,22 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-44 Fixed Heap/Stack Slabs (validation pending)
+
+- The in-progress source reserves the initial 16-MiB `ProcessHeapArena` and
+  4-MiB `ThreadStack` as owner-qualified fixed ranges in `virtual_allocations`
+  instead of adding `ram:ce-heap-arena` and `ram:guest-stack` owner blobs.
+  Heap pages commit at allocation; stack pages commit lazily on a native fault.
+  Native mappings retain their backing pins through the checked owner/unmap
+  lifetime. Queued payload delivery checks fixed-slab overlap and permits its
+  prepared heap path, rather than silently writing a stale copied blob.
+- This is an implementation inventory, **not** an E-44 source gate. Frozen
+  source hashes and integrated test results are pending, including the required
+  native host-import write into an untouched reserved stack page. The global
+  heap cursor and ownerless allocation metadata still need O-M2 ownership
+  work; heap spillover remains copy-backed. There has been no E-44 iNavi run,
+  RSS, speed, or map-readiness measurement.
+
 ## 2026-10-14 E-43 Final-Byte Main-Image Source Gate
 
 - The main EXE loader now partitions its final import- and trampoline-patched
@@ -15,7 +31,7 @@ references for historical reconstruction.
   those sealed pages contain final bytes changed by loader patching. The old
   155-page result measured the now-superseded original-byte equality filter
   ([attempt-06 log](evidence/sealed-main-image-20261014/coverage-real-inavi-loader-attempt-06.raw.log)).
-- The same load-only owner inventory totals **26 blobs, 36,679,680 B
+- At E-43, the same load-only owner inventory totaled **26 blobs, 36,679,680 B
   (34.980469 MiB)**, including 16 MiB of heap-arena backing, 4 MiB of stack
   backing, and 5,648,384 B sealed main-image backing. Runtime heap spillover
   and later DLL loads are not in that startup inventory. E-38's 55.78-MiB
