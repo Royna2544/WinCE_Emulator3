@@ -64739,6 +64739,29 @@ pub(crate) fn send_message_timeout_block_target_thread(
         .map(|window| window.thread_id)
 }
 
+/// Read-only classification for a native SendMessageTimeout call that would
+/// actually park its sender. An already-hung SMTO_ABORTIFHUNG receiver is an
+/// immediate raw-API timeout, not a blocked send.
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
+pub(crate) fn send_message_timeout_parkable_target_thread(
+    kernel: &CeKernel,
+    thread_id: u32,
+    args: &[u32],
+) -> Option<u32> {
+    let target_thread = send_message_timeout_block_target_thread(kernel, thread_id, args)?;
+    const CE_HUNG_THRESHOLD_MS: u32 = 5000;
+    if raw_arg(args, 4) & SMTO_ABORTIFHUNG != 0
+        && kernel.gwe.is_thread_hung(
+            target_thread,
+            kernel.timers.tick_count(),
+            CE_HUNG_THRESHOLD_MS,
+        )
+    {
+        return None;
+    }
+    Some(target_thread)
+}
+
 fn translate_message_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,

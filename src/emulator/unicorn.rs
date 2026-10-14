@@ -10675,7 +10675,7 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
-                    try_block_for_send_message_timeout_wait(
+                    try_block_for_send_message_timeout_wait_with_terminal_error(
                         unsafe { &mut *kernel_ptr },
                         uc,
                         &sealed_host_write_guard_import,
@@ -10686,6 +10686,7 @@ impl UnicornMips {
                         &current_thread_id_hook,
                         &blocked_send_message_timeout_hook,
                         &running_guest_thread_hook,
+                        &immediate_process_sync_error_hook,
                     )
                 }) {
                     return;
@@ -20789,7 +20790,7 @@ fn retire_stale_send_message_timeout_wait(
 
 #[cfg(feature = "unicorn")]
 #[allow(clippy::too_many_arguments)]
-fn try_block_for_send_message_timeout_wait<D>(
+fn try_block_for_send_message_timeout_wait_with_terminal_error<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
@@ -20800,6 +20801,7 @@ fn try_block_for_send_message_timeout_wait<D>(
     current_thread_id: &std::rc::Rc<NativeCurrentThread>,
     blocked_smt: &std::rc::Rc<std::cell::RefCell<Option<BlockedSendMessageTimeout>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -20813,6 +20815,26 @@ fn try_block_for_send_message_timeout_wait<D>(
     let blocked_state = { blocked_smt.borrow().clone() };
     if let Some(blocked) = blocked_state {
         if blocked.thread_id != thread_id {
+            if crate::ce::coredll::send_message_timeout_parkable_target_thread(
+                kernel, thread_id, args,
+            )
+            .is_some()
+            {
+                // A single legacy slot cannot own B's independent return
+                // frame. Never silently dispatch B through the asynchronous
+                // raw handler: it would return before B's send completes and
+                // may write a retained result pointer after B continued.
+                let mut failure = terminal_error.borrow_mut();
+                if failure.is_none() {
+                    *failure = Some(Error::Backend(format!(
+                        "native SendMessageTimeout slot occupied by thread {} while thread {thread_id} needs an independent blocked frame",
+                        blocked.thread_id
+                    )));
+                }
+                drop(failure);
+                let _ = uc.emu_stop();
+                return true;
+            }
             return false;
         }
         let running_handle = native_send_message_timeout_running_handle(
@@ -20976,6 +20998,37 @@ fn try_block_for_send_message_timeout_wait<D>(
     *blocked_smt.borrow_mut() = Some(blocked);
     let _ = uc.emu_stop();
     true
+}
+
+// Keep the pre-existing direct helper controls concise. Production import
+// dispatch always supplies the attempt's real terminal-error latch above.
+#[cfg(all(test, feature = "unicorn"))]
+#[allow(clippy::too_many_arguments)]
+fn try_block_for_send_message_timeout_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    thread_id: u32,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
+    blocked_smt: &std::rc::Rc<std::cell::RefCell<Option<BlockedSendMessageTimeout>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    try_block_for_send_message_timeout_wait_with_terminal_error(
+        kernel,
+        uc,
+        sealed_host_write_guard,
+        module_kind,
+        ordinal,
+        args,
+        thread_id,
+        current_thread_id,
+        blocked_smt,
+        running_thread,
+        &std::cell::RefCell::new(None),
+    )
 }
 
 #[cfg(feature = "unicorn")]
@@ -77099,6 +77152,230 @@ mod unicorn_tests {
             .unwrap();
         assert_eq!(u32::from_le_bytes(result_bytes), 0x2468_ace0);
         assert!(kernel.take_completed_send_message_result(send_id).is_none());
+    }
+
+    #[test]
+    fn occupied_send_message_timeout_slot_fails_closed_for_second_sender() -> crate::Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let (a_handle, a_thread) = kernel.create_guest_thread(0x0040_9000, 0, false);
+        let (b_handle, b_thread) = kernel.create_guest_thread(0x0040_9100, 0, false);
+        let a_birth = kernel
+            .handles
+            .thread_birth_key_by_id(a_thread)
+            .expect("live sender A");
+        let b_birth = kernel
+            .handles
+            .thread_birth_key_by_id(b_thread)
+            .expect("live sender B");
+        assert_ne!(a_birth, b_birth);
+        let hwnd = kernel.gwe.create_window(1, "SMT_OCCUPIED", "receiver");
+        let a_result_ptr = 0x0001_a040;
+        let b_result_ptr = 0x0001_a044;
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x0001_a000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(b_result_ptr), &0xface_9090_u32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_9000).unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_9008).unwrap();
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(a_thread, Some(a_birth)));
+        let blocked_smt = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(Some((a_thread, a_handle))));
+        let a_args = [hwnd, crate::ce::gwe::WM_USER + 280, 0, 0, 0, 100, a_result_ptr];
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &a_args,
+            a_thread,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+        ));
+        let a_blocked = blocked_smt.borrow().as_ref().expect("A owns slot").clone();
+        let a_send_id = a_blocked.block_state.send_id;
+        assert!(kernel.gwe.sent_message(a_send_id).is_some());
+        assert!(kernel.blocked_waiter(a_blocked.wait_id).is_some());
+
+        current_thread_id.set_verified(b_birth);
+        *running_thread.borrow_mut() = Some((b_thread, b_handle));
+        kernel.threads.set_last_error(b_thread, 0x9090_1234);
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_9100).unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_9108).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0x9090_5678).unwrap();
+        let b_args = [hwnd, crate::ce::gwe::WM_USER + 281, 0, 0, 0, 100, b_result_ptr];
+        let terminal_error = RefCell::new(None);
+        assert!(super::try_block_for_send_message_timeout_wait_with_terminal_error(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &b_args,
+            b_thread,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+            &terminal_error,
+        ));
+        assert!(terminal_error.borrow().as_ref().is_some_and(|error| {
+            error.to_string().contains("slot occupied")
+        }));
+        assert_eq!(blocked_smt.borrow().as_ref().unwrap().wait_id, a_blocked.wait_id);
+        assert_eq!(kernel.blocked_waiters().count(), 1);
+        assert!(kernel.blocked_waiter(a_blocked.wait_id).is_some());
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![a_send_id]);
+        assert_eq!(kernel.threads.get_last_error(b_thread), 0x9090_1234);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x7fff_9100);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, 0x0040_9108);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0x9090_5678);
+        let mut result_bytes = [0; 4];
+        uc.mem_read(u64::from(b_result_ptr), &mut result_bytes).unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0xface_9090);
+
+        *terminal_error.borrow_mut() = Some(Error::Backend("prior terminal error".to_owned()));
+        assert!(super::try_block_for_send_message_timeout_wait_with_terminal_error(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &b_args,
+            b_thread,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+            &terminal_error,
+        ));
+        assert!(terminal_error.borrow().as_ref().is_some_and(|error| {
+            error.to_string().contains("prior terminal error")
+        }));
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![a_send_id]);
+        Ok(())
+    }
+
+    #[test]
+    fn occupied_send_message_timeout_slot_preserves_raw_compatibility() -> crate::Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let (a_handle, a_thread) = kernel.create_guest_thread(0x0040_9200, 0, false);
+        let (b_handle, b_thread) = kernel.create_guest_thread(0x0040_9300, 0, false);
+        let a_birth = kernel.handles.thread_birth_key_by_id(a_thread).unwrap();
+        let b_birth = kernel.handles.thread_birth_key_by_id(b_thread).unwrap();
+        let hwnd = kernel.gwe.create_window(1, "SMT_OCCUPIED_RAW", "receiver");
+        let self_hwnd = kernel.gwe.create_window(b_thread, "SMT_SELF_RAW", "sender");
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_9200).unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_9208).unwrap();
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(a_thread, Some(a_birth)));
+        let blocked_smt = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(Some((a_thread, a_handle))));
+        let a_args = [hwnd, crate::ce::gwe::WM_USER + 282, 0, 0, 0, 100, 0];
+        assert!(super::try_block_for_send_message_timeout_wait(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &a_args,
+            a_thread,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+        ));
+        let a_blocked = blocked_smt.borrow().as_ref().unwrap().clone();
+        let a_send_id = a_blocked.block_state.send_id;
+        current_thread_id.set_verified(b_birth);
+        *running_thread.borrow_mut() = Some((b_thread, b_handle));
+        kernel.threads.set_last_error(b_thread, 0x9292_1234);
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_9300).unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_9308).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0x9292_5678).unwrap();
+        let b_args = [hwnd, crate::ce::gwe::WM_USER + 283, 0, 0, 0, 100, 0];
+        assert_eq!(
+            crate::ce::coredll::send_message_timeout_parkable_target_thread(
+                &kernel, b_thread, &b_args,
+            ),
+            Some(1)
+        );
+        let mut cases = Vec::new();
+        let mut zero = b_args;
+        zero[5] = 0;
+        cases.push(("zero timeout", zero));
+        let mut same_thread = b_args;
+        same_thread[0] = self_hwnd;
+        cases.push(("same thread", same_thread));
+        let mut unsupported = b_args;
+        unsupported[4] = 0x8000_0000;
+        cases.push(("unsupported flags", unsupported));
+        let mut invalid = b_args;
+        invalid[0] = 0xdead_cafe;
+        cases.push(("invalid window", invalid));
+        let mut broadcast = b_args;
+        broadcast[0] = crate::ce::gwe::HWND_BROADCAST;
+        cases.push(("broadcast", broadcast));
+        for (case, args) in cases {
+            assert_eq!(
+                crate::ce::coredll::send_message_timeout_parkable_target_thread(
+                    &kernel, b_thread, &args,
+                ),
+                None,
+                "{case}"
+            );
+            let terminal_error = RefCell::new(None);
+            assert!(!super::try_block_for_send_message_timeout_wait_with_terminal_error(
+                &mut kernel,
+                &mut uc,
+                &super::SealedHostWriteGuard::default(),
+                crate::emulator::imports::ImportModuleKind::Coredll,
+                Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+                &args,
+                b_thread,
+                &current_thread_id,
+                &blocked_smt,
+                &running_thread,
+                &terminal_error,
+            ), "{case}");
+            assert!(terminal_error.borrow().is_none(), "{case}");
+            assert_eq!(blocked_smt.borrow().as_ref().unwrap().wait_id, a_blocked.wait_id, "{case}");
+            assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![a_send_id], "{case}");
+            assert_eq!(kernel.threads.get_last_error(b_thread), 0x9292_1234, "{case}");
+        }
+
+        kernel.timers.sleep_ms(5001);
+        kernel.gwe.record_thread_dispatched(1, kernel.timers.tick_count() - 5001);
+        assert!(kernel.gwe.is_thread_hung(1, kernel.timers.tick_count(), 5000));
+        let mut hung_abort = b_args;
+        hung_abort[4] = 0x0000_0002;
+        assert_eq!(
+            crate::ce::coredll::send_message_timeout_parkable_target_thread(
+                &kernel, b_thread, &hung_abort,
+            ),
+            None
+        );
+        let terminal_error = RefCell::new(None);
+        assert!(!super::try_block_for_send_message_timeout_wait_with_terminal_error(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &hung_abort,
+            b_thread,
+            &current_thread_id,
+            &blocked_smt,
+            &running_thread,
+            &terminal_error,
+        ));
+        assert!(terminal_error.borrow().is_none());
+        assert_eq!(blocked_smt.borrow().as_ref().unwrap().wait_id, a_blocked.wait_id);
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![a_send_id]);
+        assert_eq!(kernel.threads.get_last_error(b_thread), 0x9292_1234);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x7fff_9300);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0x9292_5678);
+        Ok(())
     }
 
     #[test]
