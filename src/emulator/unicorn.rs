@@ -33954,7 +33954,6 @@ mod guest_thread_stack_tests {
             signaled: false,
         });
         let owner = kernel.current_process_birth_key().expect("fixture birth");
-        let _fixed_heap = canonical_heap_test_mapping(&mut kernel)?;
         let heap = kernel.memory.get_process_heap();
         kernel.memory.heap_alloc(owner, heap, 0, 0x1000).unwrap();
         let receiver = if orphan { 1 } else { 4 };
@@ -34286,6 +34285,7 @@ mod guest_thread_stack_tests {
             for failure in [0, 1, 2] {
                 let (mut kernel, mut cpu, receiver, message) =
                     direct_payload_fixture(orphan, 0xff0)?;
+                let _fixed_heap = canonical_heap_test_mapping(&mut kernel)?;
                 let owner = kernel.current_process_birth_key().expect("fixture birth");
                 let page = message.lparam & !0xfff;
                 let prepared = kernel
@@ -34363,6 +34363,7 @@ mod guest_thread_stack_tests {
     fn direct_visible_message_payload_oversize_does_not_clear_unused_allocation_bytes() -> Result<()>
     {
         let (mut kernel, mut cpu, receiver, original) = direct_payload_fixture(false, 0)?;
+        let _fixed_heap = canonical_heap_test_mapping(&mut kernel)?;
         let owner = kernel.current_process_birth_key().expect("fixture birth");
         let payload = kernel
             .message_pointer_payload(owner, original.lparam)
@@ -34902,6 +34903,40 @@ mod guest_thread_stack_tests {
             assert_eq!(allocated, None, "foreign native page kind {kind}");
             assert!(kernel.memory.allocation(owner, candidate).is_none());
             assert_eq!(kernel.memory.heap_generation(), generation);
+            assert!(
+                terminal_error.borrow().is_some(),
+                "native failure is terminal"
+            );
+            if kind == 2 {
+                // Page zero was already pointer-mapped when the foreign page
+                // one collision was discovered. Its detached backing must
+                // remain charged and pinned until a checked native unmap.
+                assert_eq!(pins.private_len(), 1);
+                assert_eq!(
+                    kernel.memory.private_commit_available_bytes(),
+                    budget - STABLE_PRIVATE_PAGE_SIZE as u64
+                );
+                let record = mapped
+                    .borrow()
+                    .private_pages
+                    .get(&candidate)
+                    .copied()
+                    .expect("first page retains native owner record");
+                assert!(guards.borrow().contains_key(&record.host_address));
+                uc.mem_unmap(u64::from(candidate), STABLE_PRIVATE_PAGE_SIZE as u64)
+                    .expect("checked removal of first pointer-mapped page");
+                assert_eq!(native_page_perms(&uc, candidate)?, None);
+                assert!(pins.release_private_after_unmap(record.identity, record.host_address));
+                guards.borrow_mut().remove(&record.host_address);
+                mapped.borrow_mut().private_pages.remove(&candidate);
+                mapped
+                    .borrow_mut()
+                    .ranges
+                    .retain(|&(base, size)| (base, size) != (candidate, 0x1000));
+                assert_eq!(pins.private_len(), 0);
+            } else {
+                assert_eq!(pins.private_len(), 0, "first-page collision maps nothing");
+            }
             assert_eq!(kernel.memory.private_commit_available_bytes(), budget);
             assert_eq!(
                 uc.mem_read_as_vec(u64::from(collision), 32).unwrap(),
