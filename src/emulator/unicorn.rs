@@ -6245,6 +6245,11 @@ impl UnicornMips {
             {
                 return None;
             }
+            if matches!(blocked.kind, BlockedWaitKind::SendMessage { .. })
+                && verified_native_send_wait_birth(kernel, blocked).is_none()
+            {
+                return None;
+            }
             let wait = kernel.blocked_waiter(blocked.wait_id)?;
             (scheduler_blocked_wait_is_ready(wait, kernel)
                 || crate::ce::scheduler::blocked_wait_timed_out(wait, kernel.timers.tick_count()))
@@ -6445,6 +6450,14 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         send_id: u64,
     ) -> bool {
+        let Some(candidate) = cpu.blocked_wait_threads.iter().find(|blocked| {
+            matches!(blocked.kind, BlockedWaitKind::SendMessage { send_id: id, .. } if id == send_id)
+        }) else {
+            return false;
+        };
+        if verified_native_send_wait_birth(kernel, candidate).is_none() {
+            return Self::complete_blocked_send_for_parked_cpu(cpu, kernel, send_id, 0);
+        }
         if !kernel.sent_message_result_ready(send_id) {
             return false;
         }
@@ -6466,8 +6479,19 @@ impl UnicornMips {
         }) else {
             return false;
         };
+        let resumed_birth = verified_native_send_wait_birth(kernel, &cpu.blocked_wait_threads[index]);
         let blocked = cpu.blocked_wait_threads.remove(index);
         let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+        let Some(resumed_birth) = resumed_birth else {
+            tracing::error!(
+                target: "ce.gwe",
+                send_id,
+                wait_id = blocked.wait_id,
+                thread_id = blocked.thread_id,
+                "retired stale parked SendMessage wait without consuming result or restoring registers"
+            );
+            return true;
+        };
         kernel.record_resumed_wait(crate::ce::timer::WAIT_OBJECT_0);
         let previous_running_thread = match blocked.kind {
             BlockedWaitKind::SendMessage {
@@ -6476,8 +6500,9 @@ impl UnicornMips {
             } => previous_running_thread,
             _ => None,
         };
-        let running_thread =
-            previous_running_thread.or_else(|| blocked_running_thread(kernel, &blocked));
+        let running_thread = previous_running_thread
+            .filter(|(thread_id, _)| *thread_id == blocked.thread_id)
+            .or_else(|| blocked_running_thread(kernel, &blocked));
         let mut regs = blocked.regs;
         regs.set_v0(result);
         regs.regs[31] = blocked.return_pc;
@@ -6485,7 +6510,7 @@ impl UnicornMips {
             pc: blocked.return_pc,
             regs,
         });
-        cpu.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(blocked.thread_id);
+        cpu.saved_context_thread_birth = Some(resumed_birth);
         cpu.current_thread_id = blocked.thread_id;
         cpu.running_guest_thread = running_thread;
         true
@@ -25664,6 +25689,34 @@ fn verified_native_send_wait_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn verified_scheduler_send_wait_owner(
+    kernel: &CeKernel,
+    wait: &crate::ce::scheduler::SchedulerBlockedWait,
+) -> bool {
+    let crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } = wait.kind else {
+        return false;
+    };
+    let Some(birth) = wait.owner_birth else {
+        return false;
+    };
+    if birth.thread_id() != wait.thread_id
+        || kernel.handles.thread_birth_key_by_id(wait.thread_id) != Some(birth)
+        || !kernel.handles.thread_execution_live_by_id(wait.thread_id)
+    {
+        return false;
+    }
+    kernel.gwe.sent_message(send_id).is_none_or(|sent| {
+        kernel
+            .handles
+            .thread_creation_owner_by_id(wait.thread_id)
+            .is_some_and(|owner| {
+                sent.sender_thread_id == Some(wait.thread_id)
+                    && sent.sender_process_id == Some(owner.process_id())
+            })
+    })
+}
+
+#[cfg(feature = "unicorn")]
 #[allow(clippy::too_many_arguments)]
 fn try_resume_blocked_wait_with_active_pc<D>(
     kernel: &mut CeKernel,
@@ -25697,11 +25750,16 @@ fn try_resume_blocked_wait_with_active_pc<D>(
             (matches!(
                 blocked.kind,
                 BlockedWaitKind::MsgWait { .. }
+                    | BlockedWaitKind::SendMessage { .. }
                     | BlockedWaitKind::SerialRead { .. }
                     | BlockedWaitKind::SerialCommEvent { .. }
                     | BlockedWaitKind::MessageQueueIo { .. }
                     | BlockedWaitKind::WinsockRead { .. }
-            ) && verified_native_blocked_wait_birth(kernel, blocked).is_none())
+            ) && if matches!(blocked.kind, BlockedWaitKind::SendMessage { .. }) {
+                verified_native_send_wait_birth(kernel, blocked).is_none()
+            } else {
+                verified_native_blocked_wait_birth(kernel, blocked).is_none()
+            })
             .then(|| (index, blocked.clone()))
         })
     };
@@ -25776,12 +25834,15 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         BlockedWaitKind::Sleep
             | BlockedWaitKind::Kernel
             | BlockedWaitKind::MsgWait { .. }
+            | BlockedWaitKind::SendMessage { .. }
             | BlockedWaitKind::SerialRead { .. }
             | BlockedWaitKind::SerialCommEvent { .. }
             | BlockedWaitKind::MessageQueueIo { .. }
             | BlockedWaitKind::WinsockRead { .. }
     );
-    let resumed_birth = if birth_checked_wait {
+    let resumed_birth = if matches!(candidate.kind, BlockedWaitKind::SendMessage { .. }) {
+        verified_native_send_wait_birth(kernel, &candidate)
+    } else if birth_checked_wait {
         verified_native_blocked_wait_birth(kernel, &candidate)
     } else {
         None
@@ -26206,6 +26267,18 @@ fn has_ready_blocked_waiter(
                 .is_some_and(|candidate| {
                     verified_native_blocked_wait_birth(kernel, candidate).is_some()
                 })
+        } else if matches!(
+            blocked.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. }
+        ) {
+            blocked_waits
+                .borrow()
+                .iter()
+                .find(|candidate| candidate.wait_id == blocked.id)
+                .map_or_else(
+                    || verified_scheduler_send_wait_owner(kernel, blocked),
+                    |candidate| verified_native_send_wait_birth(kernel, candidate).is_some(),
+                )
         } else {
             true
         };
@@ -26828,6 +26901,13 @@ fn scheduler_blocked_wait_is_ready(
     }) {
         return false;
     }
+    if matches!(
+        blocked.kind,
+        crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. }
+    ) && !verified_scheduler_send_wait_owner(kernel, blocked)
+    {
+        return false;
+    }
     scheduler_blocked_wait_has_ready_handle(blocked, kernel)
         || scheduler_blocked_msg_wait_has_input(blocked, kernel)
         || match blocked.kind {
@@ -27054,15 +27134,8 @@ mod wait_scheduler_tests {
         let receiver_thread_id = 3;
         let receiver_process_id = 67;
         kernel.set_current_process_id(receiver_process_id);
-        let hwnd = kernel.create_window_ex_w(
-            receiver_thread_id,
-            "STALE_SEND_TARGET",
-            "",
-            None,
-            0,
-            0,
-            0,
-        );
+        let hwnd =
+            kernel.create_window_ex_w(receiver_thread_id, "STALE_SEND_TARGET", "", None, 0, 0, 0);
         assert!(
             kernel
                 .gwe
@@ -27090,10 +27163,8 @@ mod wait_scheduler_tests {
                 current_directory: None,
             },
         ])));
-        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
-            thread_id,
-            Some(old_birth),
-        ));
+        let current_thread_id =
+            std::rc::Rc::new(super::NativeCurrentThread::new(thread_id, Some(old_birth)));
         let running_thread =
             std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, old_handle))));
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -27135,12 +27206,19 @@ mod wait_scheduler_tests {
         assert!(blocked_waits.borrow().is_empty());
         assert!(pending_returns.borrow().is_empty());
         assert!(cross_process_send_yield.borrow().is_none());
-        assert!(kernel.blocked_waiters().all(|wait| wait.thread_id != thread_id));
+        assert!(
+            kernel
+                .blocked_waiters()
+                .all(|wait| wait.thread_id != thread_id)
+        );
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, old_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap() as u32, old_sp);
         assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, old_s0);
         assert_eq!(current_thread_id.get(), (thread_id, None));
-        assert_eq!(kernel.handles.thread_birth_key_by_id(thread_id), Some(new_birth));
+        assert_eq!(
+            kernel.handles.thread_birth_key_by_id(thread_id),
+            Some(new_birth)
+        );
         assert_eq!(
             kernel.guest_thread_exit_code(new_handle),
             Some(crate::ce::kernel::STILL_ACTIVE),
@@ -27149,8 +27227,7 @@ mod wait_scheduler_tests {
     }
 
     #[test]
-    fn stale_send_message_ready_wait_preserves_result_and_reused_tid()
-    -> crate::error::Result<()> {
+    fn stale_send_message_ready_wait_preserves_result_and_reused_tid() -> crate::error::Result<()> {
         use unicorn_engine::RegisterMIPS;
 
         let config = RuntimeConfig::load_default()?;
@@ -27158,7 +27235,9 @@ mod wait_scheduler_tests {
         let (thread_id, old_handle, old_birth, new_handle, new_birth) =
             retired_reused_native_test_thread(&mut kernel)?;
         let receiver_thread_id = super::MAIN_GUEST_THREAD_ID;
-        let hwnd = kernel.gwe.create_window(receiver_thread_id, "SendResume", "send");
+        let hwnd = kernel
+            .gwe
+            .create_window(receiver_thread_id, "SendResume", "send");
         let send_id = kernel
             .begin_cross_thread_send_message_w(
                 thread_id,
@@ -27169,7 +27248,11 @@ mod wait_scheduler_tests {
                 None,
             )
             .expect("queued send");
-        assert!(kernel.gwe.activate_sent_message_for_receiver(receiver_thread_id, send_id));
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_thread_id, send_id)
+        );
         assert_eq!(
             kernel.complete_active_sent_message(receiver_thread_id, 0x2468_ace0),
             Some(send_id),
@@ -27228,7 +27311,8 @@ mod wait_scheduler_tests {
         uc.mem_write(u64::from(result_ptr), &0xfeed_beefu32.to_le_bytes())
             .unwrap();
         let active_pc = 0x0040_4000_u32;
-        uc.reg_write(RegisterMIPS::PC, u64::from(active_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(active_pc))
+            .unwrap();
         uc.reg_write(RegisterMIPS::S0, 0xbbbb_2222).unwrap();
 
         assert!(super::try_resume_blocked_wait(
@@ -27247,14 +27331,23 @@ mod wait_scheduler_tests {
         assert_eq!(super::read_unicorn_u32(&uc, result_ptr), Some(0xfeed_beef));
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, active_pc);
         assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0xbbbb_2222);
-        assert_eq!(current_thread_id.get(), (receiver_thread_id, Some(receiver_birth)));
+        assert_eq!(
+            current_thread_id.get(),
+            (receiver_thread_id, Some(receiver_birth))
+        );
         assert!(running_thread.borrow().is_none());
-        assert_eq!(kernel.handles.thread_birth_key_by_id(thread_id), Some(new_birth));
+        assert_eq!(
+            kernel.handles.thread_birth_key_by_id(thread_id),
+            Some(new_birth)
+        );
         assert_eq!(
             kernel.guest_thread_exit_code(new_handle),
             Some(crate::ce::kernel::STILL_ACTIVE),
         );
-        assert_eq!(kernel.take_completed_send_message_result(send_id), Some(0x2468_ace0));
+        assert_eq!(
+            kernel.take_completed_send_message_result(send_id),
+            Some(0x2468_ace0)
+        );
         Ok(())
     }
 
@@ -27266,7 +27359,9 @@ mod wait_scheduler_tests {
         let (thread_id, old_handle, old_birth, new_handle, new_birth) =
             retired_reused_native_test_thread(&mut kernel)?;
         let receiver_thread_id = super::MAIN_GUEST_THREAD_ID;
-        let hwnd = kernel.gwe.create_window(receiver_thread_id, "SendResume", "send");
+        let hwnd = kernel
+            .gwe
+            .create_window(receiver_thread_id, "SendResume", "send");
         let send_id = kernel
             .begin_cross_thread_send_message_w(
                 thread_id,
@@ -27277,7 +27372,11 @@ mod wait_scheduler_tests {
                 None,
             )
             .expect("queued send");
-        assert!(kernel.gwe.activate_sent_message_for_receiver(receiver_thread_id, send_id));
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_thread_id, send_id)
+        );
         assert_eq!(
             kernel.complete_active_sent_message(receiver_thread_id, 0x1357_2468),
             Some(send_id),
@@ -27326,8 +27425,14 @@ mod wait_scheduler_tests {
         assert!(parked_cpu.saved_context.is_none());
         assert_ne!(parked_cpu.saved_context_thread_birth, Some(new_birth));
         assert!(kernel.sent_message_result_ready(send_id));
-        assert_eq!(kernel.take_completed_send_message_result(send_id), Some(0x1357_2468));
-        assert_eq!(kernel.handles.thread_birth_key_by_id(thread_id), Some(new_birth));
+        assert_eq!(
+            kernel.take_completed_send_message_result(send_id),
+            Some(0x1357_2468)
+        );
+        assert_eq!(
+            kernel.handles.thread_birth_key_by_id(thread_id),
+            Some(new_birth)
+        );
         assert_eq!(
             kernel.guest_thread_exit_code(new_handle),
             Some(crate::ce::kernel::STILL_ACTIVE),
@@ -43674,7 +43779,12 @@ mod guest_thread_stack_tests {
             wait_started_ms,
             crate::ce::timer::INFINITE,
         );
-        assert_eq!(kernel.blocked_waiter(wait_id).and_then(|wait| wait.owner_birth), Some(sender_birth));
+        assert_eq!(
+            kernel
+                .blocked_waiter(wait_id)
+                .and_then(|wait| wait.owner_birth),
+            Some(sender_birth)
+        );
         let mut sender_cpu = UnicornMips::new()?;
         sender_cpu.blocked_wait_threads.push(BlockedWaitThread {
             wait_id,
@@ -52577,6 +52687,28 @@ fn try_enter_send_message_callout<D>(
                 .iter()
                 .any(|process| process.process_state.process_id == target_process_id)
         {
+            let sender_birth = verified_native_register_birth(
+                kernel,
+                current_thread_id,
+                active_thread_id,
+            )
+            .filter(|_| {
+                kernel.handles.thread_creation_owner_by_id(active_thread_id)
+                    == kernel.current_process_birth_key()
+                    && running_thread
+                        .borrow()
+                        .is_none_or(|(thread_id, _)| thread_id == active_thread_id)
+            });
+            let Some(sender_birth) = sender_birth else {
+                current_thread_id.set_unverified(active_thread_id);
+                tracing::error!(
+                    target: "ce.gwe",
+                    active_thread_id,
+                    "rejected cross-process SendMessage from stale or mismatched sender birth"
+                );
+                let _ = uc.emu_stop();
+                return true;
+            };
             let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
             let Some(send_id) = kernel.begin_cross_thread_send_message_w(
                 active_thread_id,
@@ -52611,7 +52743,7 @@ fn try_enter_send_message_callout<D>(
                 wait_started_ms,
                 timeout_for_wait,
             );
-            blocked_waits.borrow_mut().push(BlockedWaitThread {
+            let blocked = BlockedWaitThread {
                 wait_id,
                 thread_id: active_thread_id,
                 thread_handle,
@@ -52621,7 +52753,23 @@ fn try_enter_send_message_callout<D>(
                 timeout_ms: timeout_for_wait,
                 regs: sender_regs,
                 return_pc,
-            });
+            };
+            if verified_native_send_wait_birth(kernel, &blocked) != Some(sender_birth) {
+                let _ = kernel.remove_blocked_waiter(wait_id);
+                let _ = kernel.gwe.timeout_sent_message(send_id);
+                let _ = kernel.take_completed_send_message_result(send_id);
+                current_thread_id.set_unverified(active_thread_id);
+                tracing::error!(
+                    target: "ce.gwe",
+                    active_thread_id,
+                    send_id,
+                    wait_id,
+                    "rejected cross-process SendMessage with mismatched scheduler/native wait"
+                );
+                let _ = uc.emu_stop();
+                return true;
+            }
+            blocked_waits.borrow_mut().push(blocked);
             kernel.threads.set_last_error(active_thread_id, 0);
             *cross_process_send_yield.borrow_mut() = Some(UnicornCrossProcessSendYield {
                 send_id,
@@ -52638,7 +52786,8 @@ fn try_enter_send_message_callout<D>(
                 uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
             ];
             if !writes.into_iter().all(|write| write.is_ok()) {
-                return false;
+                let _ = uc.emu_stop();
+                return true;
             }
             tracing::debug!(
                 target: "ce.gwe",
@@ -73577,7 +73726,9 @@ mod unicorn_tests {
             Some((sender_thread, sender_handle))
         );
         assert_eq!(
-            kernel.blocked_waiter(blocked.wait_id).and_then(|wait| wait.owner_birth),
+            kernel
+                .blocked_waiter(blocked.wait_id)
+                .and_then(|wait| wait.owner_birth),
             Some(sender_birth),
         );
         assert_eq!(current_thread_id.get(), (sender_thread, Some(sender_birth)));
@@ -75561,7 +75712,12 @@ mod unicorn_tests {
             wait_started_ms,
             crate::ce::timer::INFINITE,
         );
-        assert_eq!(kernel.blocked_waiter(wait_id).and_then(|wait| wait.owner_birth), Some(sender_birth));
+        assert_eq!(
+            kernel
+                .blocked_waiter(wait_id)
+                .and_then(|wait| wait.owner_birth),
+            Some(sender_birth)
+        );
         let blocked_waits = Rc::new(RefCell::new(vec![super::BlockedWaitThread {
             wait_id,
             thread_id: sender_thread,
@@ -76101,7 +76257,12 @@ mod unicorn_tests {
             wait_started_ms,
             crate::ce::timer::INFINITE,
         );
-        assert_eq!(kernel.blocked_waiter(wait_id).and_then(|wait| wait.owner_birth), Some(sender_birth));
+        assert_eq!(
+            kernel
+                .blocked_waiter(wait_id)
+                .and_then(|wait| wait.owner_birth),
+            Some(sender_birth)
+        );
         let blocked_waits = Rc::new(RefCell::new(vec![super::BlockedWaitThread {
             wait_id,
             thread_id: sender_thread,
