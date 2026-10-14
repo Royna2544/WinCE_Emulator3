@@ -4865,8 +4865,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_DUPLICATE_HANDLE => {
             // DuplicateHandle(hSourceProcess, hSource, hTargetProcess, lpTargetHandle,
             //                 dwDesiredAccess, bInheritHandle, dwOptions)
-            // Single-process: process handles/access masks are accepted, but the source
-            // kernel handle is still validated and duplicated.
+            // Typed task aliases require valid source/target process births.
+            // Legacy non-task duplication keeps its existing PID compatibility
+            // until the remaining object kinds acquire canonical ownership.
+            let h_source_process = raw_arg(args, 0);
             let h_source = raw_arg(args, 1);
             let h_target_process = raw_arg(args, 2);
             let lp_target = raw_arg(args, 3);
@@ -4877,7 +4879,25 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
                 return Some(CoredllValue::Bool(false));
             }
-            let target_process_id = if h_target_process == 0 || h_target_process == u32::MAX {
+            let typed_task_alias = matches!(
+                kernel.handles.get(h_source),
+                Ok(KernelObject::Thread(_) | KernelObject::Process(_))
+            );
+            let target_process_id = if typed_task_alias {
+                if kernel.process_id_for_handle(h_source_process).is_none() {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    return Some(CoredllValue::Bool(false));
+                }
+                let Some(target_process_id) = kernel.process_id_for_handle(h_target_process) else {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    return Some(CoredllValue::Bool(false));
+                };
+                target_process_id
+            } else if h_target_process == 0 || h_target_process == u32::MAX {
                 kernel.current_process_id()
             } else {
                 h_target_process
@@ -31354,7 +31374,21 @@ fn create_thread_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let (handle, created_thread_id) =
-        kernel.create_guest_thread(start_address, parameter, suspended);
+        match kernel.try_create_guest_thread(start_address, parameter, suspended) {
+            Ok(created) => created,
+            Err(Error::OutOfStructures(_)) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_OUT_OF_STRUCTURES);
+                return 0;
+            }
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            }
+        };
     if !write_optional_count(kernel, memory, thread_id, thread_id_ptr, created_thread_id) {
         let discarded = kernel.discard_unpublished_guest_thread(handle, created_thread_id);
         debug_assert!(

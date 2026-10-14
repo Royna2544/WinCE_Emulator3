@@ -6542,11 +6542,21 @@ impl CeKernel {
         parameter: u32,
         suspended: bool,
     ) -> (u32, u32) {
+        self.try_create_guest_thread(start_address, parameter, suspended)
+            .expect("guest thread birth allocation failed")
+    }
+
+    pub fn try_create_guest_thread(
+        &mut self,
+        start_address: u32,
+        parameter: u32,
+        suspended: bool,
+    ) -> Result<(u32, u32)> {
         let thread_id = self.threads.allocate_guest_thread_id();
-        let handle = self
-            .handles
-            .create_thread(thread_id, start_address, parameter, suspended);
-        (handle, thread_id)
+        let handle =
+            self.handles
+                .try_create_thread(thread_id, start_address, parameter, suspended)?;
+        Ok((handle, thread_id))
     }
 
     pub fn mark_guest_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {

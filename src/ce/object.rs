@@ -754,15 +754,27 @@ impl HandleTable {
         parameter: u32,
         suspended: bool,
     ) -> u32 {
-        assert!(
-            !self.threads.contains_key(&thread_id),
-            "thread TID must not alias an existing birth"
-        );
+        self.try_create_thread(thread_id, start_address, parameter, suspended)
+            .expect("thread birth allocation failed")
+    }
+
+    pub fn try_create_thread(
+        &mut self,
+        thread_id: u32,
+        start_address: u32,
+        parameter: u32,
+        suspended: bool,
+    ) -> Result<u32> {
+        if self.threads.contains_key(&thread_id) {
+            return Err(Error::InvalidArgument(format!(
+                "thread TID {thread_id} already has a live birth"
+            )));
+        }
         let incarnation = self.next_thread_incarnation;
-        self.next_thread_incarnation = self
+        let next_incarnation = self
             .next_thread_incarnation
             .checked_add(1)
-            .expect("thread incarnation exhausted");
+            .ok_or_else(|| Error::OutOfStructures("thread incarnation exhausted".to_owned()))?;
         self.threads.insert(
             thread_id,
             ThreadRecord {
@@ -780,10 +792,16 @@ impl HandleTable {
                 execution_live: true,
             },
         );
-        self.insert(KernelObject::Thread(ThreadHandleObject {
+        let handle = self.try_insert(KernelObject::Thread(ThreadHandleObject {
             thread_id,
             incarnation,
-        }))
+        }));
+        if handle.is_err() {
+            self.threads.remove(&thread_id);
+        } else {
+            self.next_thread_incarnation = next_incarnation;
+        }
+        handle
     }
 
     /// Undo a birth whose only alias has not yet been returned to the guest.
@@ -1630,6 +1648,34 @@ pub fn ce_thread_priority_to_win32(priority: i32) -> Option<u32> {
 #[cfg(test)]
 mod alias_tests {
     use super::*;
+
+    #[test]
+    fn unpublished_thread_rollback_removes_its_live_birth() {
+        let mut table = HandleTable::default();
+        let handle = table.create_thread(7, 0x1000, 0, false);
+        let birth = table.thread_birth_key_for_handle(handle).unwrap();
+        assert!(table.discard_unpublished_thread(handle, 7));
+        assert!(!table.contains_thread_birth(birth));
+        assert!(table.open_thread(7).is_none());
+        assert!(table.get(handle).is_err());
+
+        let published = table.create_thread(8, 0x2000, 0, false);
+        let alias = table.open_thread(8).unwrap();
+        assert!(!table.discard_unpublished_thread(published, 8));
+        assert_eq!(table.thread_id(alias), Some(8));
+    }
+
+    #[test]
+    fn exhausted_initial_thread_handle_does_not_publish_a_birth() {
+        let mut table = HandleTable::default();
+        table.next = u32::MAX - 1;
+        assert!(matches!(
+            table.try_create_thread(7, 0x1000, 0, false),
+            Err(Error::OutOfStructures(_))
+        ));
+        assert!(table.thread_birth_key_by_id(7).is_none());
+        assert!(table.is_empty());
+    }
 
     #[test]
     fn checked_thread_alias_exhaustion_publishes_no_reference() {
