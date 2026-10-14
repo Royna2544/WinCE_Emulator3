@@ -18206,7 +18206,7 @@ fn coredll_raw_file_mapping_multiple_views_share_flushed_backing() -> Result<()>
         }
     ));
     let mapping_state = kernel.handles.file_mapping(mapping)?;
-    assert_eq!(&mapping_state.data[32..42], b"unmap-sync");
+    assert_eq!(&mapping_state.legacy_data().unwrap()[32..42], b"unmap-sync");
     Ok(())
 }
 

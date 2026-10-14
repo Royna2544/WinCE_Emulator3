@@ -1,7 +1,7 @@
 use std::{
     alloc::{Layout, alloc_zeroed, dealloc},
     cell::Cell,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::c_void,
     fmt,
     ptr::NonNull,
@@ -1619,6 +1619,8 @@ impl MemorySystem {
         size: u32,
         protect: u32,
         initial_bytes: &[u8],
+        legacy_bytes: Option<&[u8]>,
+        legacy_underlay: Option<&[u8]>,
     ) -> Option<u32> {
         if size == 0 || offset & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0 {
             return None;
@@ -1638,41 +1640,65 @@ impl MemorySystem {
         let next_cursor = base.checked_add(reservation_size)?;
         let incarnation = self.next_virtual_incarnation;
         let next_incarnation = incarnation.checked_add(1)?;
-        let mut missing = Vec::new();
+        // The first public view retires the complete legacy byte store, not
+        // merely the range selected by this view. Keep this preflight local so
+        // an OOM leaves the Legacy object and all VM metadata untouched.
+        let legacy_size = match legacy_bytes {
+            Some(bytes) => Some(align_up(u32::try_from(bytes.len()).ok()?, page_size)?),
+            None => None,
+        };
+        let mut requested_pages = BTreeSet::new();
+        if let Some(legacy_size) = legacy_size {
+            let mut page_offset = 0;
+            while page_offset < legacy_size {
+                requested_pages.insert(page_offset);
+                page_offset = page_offset.checked_add(page_size)?;
+            }
+        }
         let mut delta = 0;
         while delta < mapped_size {
             let page_offset = offset.checked_add(delta)?;
-            if !self
-                .stable_shared_pages
-                .contains_key(&(mapping_handle, page_offset))
-            {
-                missing.push((page_offset, delta));
-            }
+            requested_pages.insert(page_offset);
             delta = delta.checked_add(page_size)?;
         }
+        let missing = requested_pages
+            .into_iter()
+            .filter(|page_offset| !self.stable_shared_pages.contains_key(&(mapping_handle, *page_offset)))
+            .collect::<Vec<_>>();
         if !self.private_page_budget.can_fit(missing.len()) {
             return None;
         }
         let mut new_pages = Vec::new();
         new_pages.try_reserve_exact(missing.len()).ok()?;
-        for (page_offset, delta) in missing {
+        for page_offset in missing {
             let page = Rc::new(StablePrivatePage::zeroed_shared(&self.private_page_budget)?);
-            let start = delta as usize;
-            let end = start
-                .saturating_add(STABLE_PRIVATE_PAGE_SIZE)
-                .min(initial_bytes.len());
+            let source = legacy_underlay
+                .filter(|bytes| (page_offset as usize) < bytes.len())
+                .map(|bytes| (bytes, page_offset as usize))
+                .or_else(|| {
+                (page_offset >= offset && page_offset < offset.saturating_add(mapped_size))
+                    .then_some((initial_bytes, (page_offset - offset) as usize))
+            });
+            let (seed, start) = source.unwrap_or((&[][..], 0));
+            let end = start.saturating_add(STABLE_PRIVATE_PAGE_SIZE).min(seed.len());
+            let pin = StablePrivatePagePin {
+                identity: PrivatePageIdentity {
+                    owner,
+                    allocation_base: base,
+                    allocation_incarnation: incarnation,
+                    page_base: base,
+                },
+                page: Rc::clone(&page),
+            };
             if start < end {
-                StablePrivatePagePin {
-                    identity: PrivatePageIdentity {
-                        owner,
-                        allocation_base: base,
-                        allocation_incarnation: incarnation,
-                        page_base: base.checked_add(delta)?,
-                    },
-                    page: Rc::clone(&page),
+                pin.write_bytes(0, &seed[start..end]).ok()?;
+            }
+            if let Some(legacy) = legacy_bytes {
+                let start = page_offset as usize;
+                let end = start.saturating_add(STABLE_PRIVATE_PAGE_SIZE).min(legacy.len());
+                if start < end {
+                    pin.write_bytes(0, &legacy[start..end]).ok()?;
                 }
-                .write_bytes(0, &initial_bytes[start..end])
-                .ok()?;
             }
             new_pages.push(((mapping_handle, page_offset), page));
         }

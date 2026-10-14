@@ -163,7 +163,8 @@ use wince_emulation_v3::{
         resource::{AcceleratorEntry, ResourceId},
         thread::{
             ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_ACCESS, ERROR_INVALID_HANDLE,
-            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_SUPPORTED,
+            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
+            ERROR_NOT_SUPPORTED,
             ERROR_RESOURCE_NAME_NOT_FOUND,
         },
     },
@@ -8871,7 +8872,8 @@ fn coredll_raw_create_dibsection_backs_bits_with_file_mapping_section() -> Resul
     ));
     let mapping_state = kernel.handles.file_mapping(mapping)?;
     assert_eq!(
-        &mapping_state.data[section_offset as usize..section_offset as usize + pixels.len()],
+        &mapping_state.legacy_data().expect("DIB backing is still legacy")
+            [section_offset as usize..section_offset as usize + pixels.len()],
         &pixels
     );
 
@@ -8923,6 +8925,7 @@ fn coredll_raw_create_dibsection_backs_bits_with_file_mapping_section() -> Resul
 #[test]
 fn coredll_raw_file_backed_dibsection_seeds_and_flushes_file_bytes() -> Result<()> {
     const DIB_RGB_COLORS: u32 = 0;
+    const FILE_MAP_ALL_ACCESS: u32 = 0x000f_001f;
     const PAGE_READWRITE: u32 = 0x04;
 
     let table = CoredllExportTable::default();
@@ -9041,6 +9044,29 @@ fn coredll_raw_file_backed_dibsection_seeds_and_flushes_file_bytes() -> Result<(
     ));
     assert!(!kernel.handles.has_file_mapping_view(bits_ptr));
 
+    // The legacy DIB store contains only its short touched prefix. On public
+    // migration, the rest of the page must still come from the backing file.
+    let public_view = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MAP_VIEW_OF_FILE,
+        [mapping, FILE_MAP_ALL_ACCESS, 0, 0, file_bytes.len() as u32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(base),
+            ..
+        } => base,
+        other => panic!("file-backed MapViewOfFile after DIB failed: {other:?}"),
+    };
+    assert_ne!(public_view, 0);
+    assert_eq!(
+        memory.read_bytes(public_view + section_offset, dirty_pixels.len()),
+        dirty_pixels
+    );
+    assert_eq!(memory.read_bytes(public_view, 8), vec![0xee; 8]);
+    assert_eq!(memory.read_bytes(public_view + 40, 8), vec![0xee; 8]);
+
     Ok(())
 }
 
@@ -9158,7 +9184,8 @@ fn coredll_raw_section_backed_dibsections_share_mapping_bytes() -> Result<()> {
     );
     let mapping_state = kernel.handles.file_mapping(mapping)?;
     assert_eq!(
-        &mapping_state.data[section_offset as usize..section_offset as usize + second_pixels.len()],
+        &mapping_state.legacy_data().expect("DIB backing is still legacy")
+            [section_offset as usize..section_offset as usize + second_pixels.len()],
         &second_pixels
     );
 
@@ -9336,7 +9363,9 @@ fn coredll_raw_section_backed_dib_survives_closed_mapping_handle() -> Result<()>
 #[test]
 fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
     const DIB_RGB_COLORS: u32 = 0;
+    const FILE_MAP_ALL_ACCESS: u32 = 0x000f_001f;
     const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
+    const MAPPING_SIZE: u32 = 8192;
     const PAGE_READWRITE: u32 = 0x04;
 
     let table = CoredllExportTable::default();
@@ -9344,13 +9373,15 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 9;
+    let mapping_name = 0x1_0200;
+    memory.write_wide_z(mapping_name, "d008-dib-migration");
 
     let mapping = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
         thread_id,
         ORD_CREATE_FILE_MAPPING_W,
-        [INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, 4096, 0],
+        [INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, MAPPING_SIZE, mapping_name],
     ) {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),
@@ -9432,7 +9463,8 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
     assert_eq!(memory.read_bytes(bits_b, dirty_pixels.len()), dirty_pixels);
     let mapping_state = kernel.handles.file_mapping(mapping)?;
     assert_eq!(
-        &mapping_state.data[section_offset as usize..section_offset as usize + dirty_pixels.len()],
+        &mapping_state.legacy_data().expect("DIB backing is still legacy")
+            [section_offset as usize..section_offset as usize + dirty_pixels.len()],
         &dirty_pixels
     );
 
@@ -9450,6 +9482,128 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
         }
     ));
     assert!(!kernel.handles.has_file_mapping_view(bits_b));
+
+    // Whole-object migration must fail atomically if both legacy pages cannot
+    // fit the private-page budget, leaving the old DIB bytes available.
+    let original_ram = kernel.memory.private_commit_limit_bytes();
+    let original_used = kernel.memory.private_commit_used_bytes();
+    kernel.memory.configure_guest_physical_ram_bytes(8192);
+    assert!((4096..8192).contains(&kernel.memory.private_commit_available_bytes()));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MAP_VIEW_OF_FILE,
+            [mapping, FILE_MAP_ALL_ACCESS, 0, 4096, 4096],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_NOT_ENOUGH_MEMORY);
+    assert!(!kernel.handles.file_mapping(mapping)?.is_slab());
+    assert!(!kernel.memory.has_shared_mapping(mapping));
+    assert_eq!(kernel.memory.private_commit_used_bytes(), original_used);
+    assert_eq!(
+        &kernel.handles.file_mapping(mapping)?.legacy_data().unwrap()
+            [section_offset as usize..section_offset as usize + dirty_pixels.len()],
+        &dirty_pixels
+    );
+    kernel.memory.configure_guest_physical_ram_bytes(original_ram);
+
+    // The first public view is disjoint from the old DIB bytes. Migration must
+    // still carry the entire legacy mapping into charged canonical pages.
+    let public_disjoint = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MAP_VIEW_OF_FILE,
+        [mapping, FILE_MAP_ALL_ACCESS, 0, 4096, 4096],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(base),
+            ..
+        } => base,
+        other => panic!("disjoint first MapViewOfFile failed: {other:?}"),
+    };
+    assert_ne!(public_disjoint, 0);
+    let public_a = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MAP_VIEW_OF_FILE,
+        [mapping, FILE_MAP_ALL_ACCESS, 0, 0, 4096],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(base),
+            ..
+        } => base,
+        other => panic!("MapViewOfFile after DeleteObject failed: {other:?}"),
+    };
+    assert_ne!(public_a, 0);
+    assert_eq!(
+        memory.read_bytes(public_a + section_offset, dirty_pixels.len()),
+        dirty_pixels
+    );
+    assert!(kernel.handles.file_mapping(mapping)?.is_slab());
+
+    // A new DIB view cannot reopen the old copy-backed path after migration.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_DIBSECTION,
+            [0, info, DIB_RGB_COLORS, bits_a_out, mapping, section_offset],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+
+    // A distinct process opens the named object and sees the DIB-written bytes.
+    let parent = kernel.current_process_state();
+    let child = kernel.queue_process_launch(Some("\\Windows\\d008-child.exe".to_owned()), None);
+    kernel.set_current_process_id(child.process_id);
+    let mut child_memory = TestGuestMemory::default();
+    child_memory.write_wide_z(mapping_name, "d008-dib-migration");
+    let reopened = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut child_memory,
+        child.thread_id,
+        ORD_CREATE_FILE_MAPPING_W,
+        [INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, MAPPING_SIZE, mapping_name],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("child named mapping reopen failed: {other:?}"),
+    };
+    assert_eq!(reopened, mapping);
+    let public_b = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut child_memory,
+        child.thread_id,
+        ORD_MAP_VIEW_OF_FILE,
+        [reopened, FILE_MAP_ALL_ACCESS, 0, 0, 4096],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(base),
+            ..
+        } => base,
+        other => panic!("child MapViewOfFile failed: {other:?}"),
+    };
+    assert_ne!(public_b, 0);
+    assert_eq!(
+        child_memory.read_bytes(public_b + section_offset, dirty_pixels.len()),
+        dirty_pixels
+    );
+    kernel.set_current_process_state(parent);
 
     Ok(())
 }
