@@ -306,6 +306,8 @@ pub struct ProcessObject {
     pub process_id: u32,
     pub exit_code: u32,
     pub signaled: bool,
+    /// TerminateProcess request, distinct from completed execution/signaling.
+    termination_requested_exit_code: Option<u32>,
     pub debugger_thread_id: Option<u32>,
     incarnation: u64,
     execution_live: bool,
@@ -952,6 +954,7 @@ impl HandleTable {
                 process_id,
                 exit_code: 259,
                 signaled: false,
+                termination_requested_exit_code: None,
                 debugger_thread_id: None,
                 incarnation,
                 execution_live: true,
@@ -975,9 +978,8 @@ impl HandleTable {
 
     pub fn open_process(&mut self, process_id: u32) -> Option<u32> {
         let process = self.processes.get(&process_id)?;
-        // A termination request can precede the scheduler's execution cleanup.
-        // Its birth remains pinned internally, but after the last public alias
-        // closes the terminated PID must not become externally reopenable.
+        // A termination request alone does not complete execution. An exited
+        // process remains reopenable only while some public alias pins it.
         if process.signaled && process.aliases.is_empty() {
             return None;
         }
@@ -1164,7 +1166,10 @@ impl HandleTable {
         exit_code: u32,
     ) -> Option<Vec<u32>> {
         let process = self.processes.get_mut(&process_id)?;
-        process.exit_code = exit_code;
+        process.exit_code = process
+            .termination_requested_exit_code
+            .take()
+            .unwrap_or(exit_code);
         process.signaled = true;
         process.execution_live = false;
         let aliases = process.aliases.iter().copied().collect();
@@ -1192,6 +1197,17 @@ impl HandleTable {
         self.processes
             .get(&process_id)
             .map(|process| process.exit_code)
+    }
+
+    pub fn process_termination_requested_exit_code_by_birth(
+        &self,
+        key: ProcessBirthKey,
+    ) -> Option<u32> {
+        self.processes.get(&key.process_id).and_then(|process| {
+            (process.incarnation == key.incarnation && process.execution_live)
+                .then_some(process.termination_requested_exit_code)
+                .flatten()
+        })
     }
 
     pub fn thread_snapshots(&self) -> Vec<ThreadObject> {
@@ -1515,9 +1531,26 @@ impl HandleTable {
             .is_some()
     }
 
-    /// TerminateProcess requests death and signals the object, but the machine
-    /// retains execution ownership until its actual child-completion boundary.
+    /// TerminateProcess requests death; only verified execution completion
+    /// publishes the exit code and signals the process object.
     pub fn request_process_termination_by_id(
+        &mut self,
+        process_id: u32,
+        exit_code: u32,
+    ) -> Option<Vec<u32>> {
+        let process = self.processes.get_mut(&process_id)?;
+        if process.execution_live {
+            process
+                .termination_requested_exit_code
+                .get_or_insert(exit_code);
+        }
+        Some(process.aliases.iter().copied().collect())
+    }
+
+    /// Compatibility for the existing current-process pseudo-handle exit lane.
+    /// Unlike a real-handle termination request, that lane publishes its
+    /// synchronous exit state before its CPU handoff is fully canonicalized.
+    pub fn signal_pseudo_process_exit_by_id(
         &mut self,
         process_id: u32,
         exit_code: u32,

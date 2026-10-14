@@ -3161,6 +3161,10 @@ impl CeKernel {
         {
             return false;
         }
+        let exit_code = self
+            .handles
+            .process_termination_requested_exit_code_by_birth(exiting_birth)
+            .unwrap_or(exit_code);
         let primary = launch.primary_thread_birth.or_else(|| {
             self.handles
                 .thread_birth_key_by_id(launch.thread_id)
@@ -3171,8 +3175,7 @@ impl CeKernel {
         let cleanup_thread_id = if launch.primary_thread_birth.is_some_and(|original| {
             original.thread_id() == launch.thread_id
                 && self.handles.thread_birth_key_by_id(launch.thread_id) == Some(original)
-                && self.handles.thread_creation_owner_by_id(launch.thread_id)
-                    == Some(exiting_birth)
+                && self.handles.thread_creation_owner_by_id(launch.thread_id) == Some(exiting_birth)
         }) {
             launch.thread_id
         } else {
@@ -3228,6 +3231,10 @@ impl CeKernel {
             } else {
                 0
             };
+            // A dead task cannot continue its own wait. Remove its numeric
+            // compatibility frame before the canonical thread retires; waiters
+            // in other tasks still observe the thread's exit signal below.
+            self.remove_blocked_waiters_for_thread(thread.thread_id());
             if !self.mark_guest_thread_exited_by_birth(thread, thread_exit_code) {
                 return false;
             }
@@ -6892,7 +6899,7 @@ impl CeKernel {
             let was_signaled = self.handles.process_signaled_by_id(self.current_process_id);
             if self
                 .handles
-                .request_process_termination_by_id(self.current_process_id, exit_code)
+                .signal_pseudo_process_exit_by_id(self.current_process_id, exit_code)
                 .is_some()
             {
                 if was_signaled == Some(false)
@@ -6909,19 +6916,12 @@ impl CeKernel {
         let Some(process_id) = self.handles.process_id(handle) else {
             return false;
         };
-        let process_key = self.handles.process_birth_key(process_id);
-        let was_signaled = self.handles.process_signaled_by_id(process_id);
         if self
             .handles
             .request_process_termination_by_id(process_id, exit_code)
             .is_none()
         {
             return false;
-        }
-        if was_signaled == Some(false)
-            && let Some(key) = process_key
-        {
-            self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(key));
         }
         true
     }
@@ -11603,21 +11603,24 @@ mod tests {
     }
 
     #[test]
-    fn terminated_child_pid_cannot_reopen_after_last_alias_closes() -> Result<()> {
+    fn termination_request_keeps_child_openable_until_completion() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let launch = kernel.queue_process_launch(Some("\\Windows\\helper.exe".to_owned()), None);
         let alias = kernel
             .open_process_handle(launch.process_id)
             .expect("live child");
         assert!(kernel.terminate_process(launch.process_handle, 9));
-        assert_eq!(kernel.process_exit_code(alias), Some(9));
-        assert_eq!(kernel.is_wait_ready(alias, 1), Some(true));
+        assert_eq!(kernel.process_exit_code(alias), Some(STILL_ACTIVE));
+        assert_eq!(kernel.is_wait_ready(alias, 1), Some(false));
         assert!(kernel.close_handle(launch.process_handle)?);
         assert!(kernel.close_handle(alias)?);
-        assert!(!kernel.handles.process_id_exists(launch.process_id));
-        assert_eq!(kernel.open_process_handle(launch.process_id), None);
-        // Completion still addresses the internal birth after public aliases end.
-        kernel.mark_process_launch_exited(&launch, 9);
+        assert!(kernel.handles.process_id_exists(launch.process_id));
+        let reopened = kernel
+            .open_process_handle(launch.process_id)
+            .expect("requested child remains execution-live");
+        assert_eq!(kernel.is_wait_ready(reopened, 1), Some(false));
+        assert!(kernel.close_handle(reopened)?);
+        assert!(kernel.mark_process_launch_exited(&launch, 9));
         assert_eq!(kernel.open_process_handle(launch.process_id), None);
         Ok(())
     }

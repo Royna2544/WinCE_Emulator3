@@ -1,12 +1,12 @@
-//! Stage 3 process-exit boundary controls. A termination request signals the
-//! process object; only the later execution-completion boundary may retire its
-//! workers and fixed-stack backing. These controls cover original launches;
-//! trace-reconstructed and parked child completion remain separate gates.
+//! Stage 3 process-exit boundary controls. A termination request records the
+//! requested code without signaling a process wait; only verified execution
+//! completion signals it and retires workers/fixed-stack backing.
 
 use wince_emulation_v3::{
     Result,
     ce::{
-        kernel::CeKernel,
+        gwe::{Rect, WS_VISIBLE},
+        kernel::{CeKernel, STILL_ACTIVE},
         memory::VirtualAllocationSource,
         scheduler::{SchedulerBlockedWaitKind, WaitObjectKey},
         timer::{INFINITE, WAIT_OBJECT_0},
@@ -19,7 +19,7 @@ fn boot() -> Result<CeKernel> {
 }
 
 #[test]
-fn termination_request_signals_process_once_without_claiming_worker_completion() -> Result<()> {
+fn termination_request_waits_for_verified_execution_completion() -> Result<()> {
     let mut kernel = boot()?;
     let launch = kernel.queue_process_launch(None, None);
     let child_birth = kernel
@@ -48,27 +48,35 @@ fn termination_request_signals_process_once_without_claiming_worker_completion()
     let wakes_before = kernel.scheduler_stats().object_wake_candidate_count;
 
     assert!(kernel.terminate_process(launch.process_handle, 0x55));
-    assert_eq!(kernel.process_exit_code(process_alias), Some(0x55));
-    assert_eq!(kernel.is_wait_ready(process_alias, 1), Some(true));
+    assert_eq!(kernel.process_exit_code(process_alias), Some(STILL_ACTIVE));
+    assert_eq!(kernel.is_wait_ready(process_alias, 1), Some(false));
     assert_eq!(
         kernel.scheduler_stats().object_wake_candidate_count,
-        wakes_before + 1
+        wakes_before
     );
     assert!(kernel.handles.thread_execution_live_by_id(worker_tid));
     assert_eq!(kernel.is_wait_ready(worker_handle, 1), Some(false));
 
     let signals_after_first_request = kernel.scheduler_stats().object_signal_count;
-    assert!(kernel.terminate_process(process_alias, 0x55));
+    assert!(kernel.terminate_process(process_alias, 0x77));
     assert_eq!(
         kernel.scheduler_stats().object_wake_candidate_count,
-        wakes_before + 1,
-        "repeated termination request must not enqueue the same process wait twice"
+        wakes_before,
+        "repeated termination request must not enqueue a completion wake"
     );
     assert_eq!(
         kernel.scheduler_stats().object_signal_count,
         signals_after_first_request
     );
     assert!(kernel.handles.thread_execution_live_by_id(worker_tid));
+
+    assert!(kernel.mark_process_launch_exited(&launch, 0x88));
+    assert_eq!(kernel.process_exit_code(process_alias), Some(0x55));
+    assert_eq!(kernel.is_wait_ready(process_alias, 1), Some(true));
+    assert_eq!(
+        kernel.scheduler_stats().object_wake_candidate_count,
+        wakes_before + 1
+    );
     assert!(kernel.remove_blocked_waiter(process_wait).is_some());
     Ok(())
 }
@@ -158,13 +166,13 @@ fn execution_completion_sweeps_only_its_birth_and_wakes_waiters_once() -> Result
     // TerminateProcess is a request boundary, not proof that parked or active
     // child CPU execution has ended. The worker wait must remain pending here.
     assert!(kernel.terminate_process(process_alias, 0x66));
-    assert_eq!(kernel.is_wait_ready(process_alias, 1), Some(true));
+    assert_eq!(kernel.is_wait_ready(process_alias, 1), Some(false));
     assert_eq!(kernel.is_wait_ready(first_alias, 1), Some(false));
     assert!(kernel.handles.contains_thread_birth(second_birth));
     assert!(kernel.blocked_waiter(aliasless_worker_wait).is_some());
     assert_eq!(
         kernel.scheduler_stats().object_wake_candidate_count,
-        wakes_before + 1
+        wakes_before
     );
 
     kernel.set_current_process_id(parent_birth.process_id());
@@ -421,5 +429,108 @@ fn reconstructed_launch_without_birth_cannot_retire_live_process() -> Result<()>
 
     assert!(kernel.mark_process_launch_exited(&launch, 0x33));
     assert!(!kernel.handles.process_execution_live_by_birth(birth));
+    Ok(())
+}
+
+#[test]
+fn process_completion_removes_owned_waits_but_wakes_external_waiters() -> Result<()> {
+    let mut kernel = boot()?;
+    let launch = kernel.queue_process_launch(None, None);
+    let (worker_handle, worker_tid) =
+        kernel.try_create_guest_thread_for_creator(launch.thread_id, 0x408000, 0, false)?;
+    let owned_wait = kernel.register_blocked_waiter(
+        worker_tid,
+        worker_handle,
+        vec![launch.process_handle],
+        SchedulerBlockedWaitKind::Kernel,
+        0,
+        INFINITE,
+    );
+    let external_wait = kernel.register_blocked_waiter(
+        1,
+        0,
+        vec![worker_handle],
+        SchedulerBlockedWaitKind::Kernel,
+        0,
+        INFINITE,
+    );
+    let wakes_before = kernel.scheduler_stats().object_wake_candidate_count;
+
+    assert!(kernel.mark_process_launch_exited(&launch, 0x44));
+    assert!(kernel.blocked_waiter(owned_wait).is_none());
+    assert!(kernel.blocked_waiter(external_wait).is_some());
+    assert!(kernel.scheduler_stats().object_wake_candidate_count > wakes_before);
+    assert_eq!(kernel.is_wait_ready(worker_handle, 1), Some(true));
+    Ok(())
+}
+
+#[test]
+fn process_completion_does_not_destroy_window_of_reused_primary_tid() -> Result<()> {
+    let mut kernel = boot()?;
+    let launch = kernel.queue_process_launch(None, None);
+    let old_window = kernel.gwe.create_window_ex_with_process_and_rect(
+        launch.thread_id,
+        launch.process_id,
+        "old_child",
+        "old",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 100, 100),
+    );
+    assert_ne!(old_window, 0);
+
+    assert!(kernel.mark_guest_thread_exited_by_id(launch.thread_id, 0));
+    assert!(kernel.close_handle(launch.thread_handle)?);
+    assert!(
+        kernel
+            .handles
+            .thread_birth_key_by_id(launch.thread_id)
+            .is_none()
+    );
+    let unrelated_process_handle = kernel.handles.create_process(99);
+    let unrelated_birth = kernel
+        .handles
+        .process_birth_key_for_handle(unrelated_process_handle)
+        .expect("unrelated process birth");
+    let unrelated_thread_handle = kernel.handles.try_create_thread_in_birth(
+        unrelated_birth,
+        launch.thread_id,
+        0x409000,
+        0,
+        false,
+    )?;
+    let unrelated_window = kernel.gwe.create_window_ex_with_process_and_rect(
+        launch.thread_id,
+        unrelated_birth.process_id(),
+        "new_child",
+        "new",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 100, 100),
+    );
+    assert_ne!(unrelated_window, 0);
+
+    assert!(kernel.mark_process_launch_exited(&launch, 0x55));
+    assert!(
+        kernel
+            .gwe
+            .window(old_window)
+            .is_none_or(|window| window.destroyed)
+    );
+    assert!(
+        kernel
+            .gwe
+            .window(unrelated_window)
+            .is_some_and(|window| !window.destroyed)
+    );
+    assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+    assert_eq!(
+        kernel.is_wait_ready(unrelated_thread_handle, 1),
+        Some(false)
+    );
     Ok(())
 }
